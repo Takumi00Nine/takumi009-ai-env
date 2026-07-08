@@ -1,0 +1,201 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__codex__codex",
+      "mcp__codex__codex-reply",
+      "WebSearch",
+      "WebFetch(domain:*)",
+      "Write(~/Data/**)",
+      "Edit(~/Data/**)",
+      "Skill(schedule)",
+      "Skill(update-config)",
+      "Skill(claude-api)"
+    ],
+    "deny": [
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.kube/**)",
+      "Read(~/.docker/**)",
+      "Read(~/Library/Keychains/**)",
+      "Read(~/Library/Application Support/**)",
+      "Read(~/Library/Containers/**)",
+      "Read(~/Library/Group Containers/**)",
+      "Read(~/Library/Mobile Documents/**)",
+      "Read(~/Library/CloudStorage/**)",
+      "Read(~/Library/Cookies/**)",
+      "Read(~/Library/HTTPStorages/**)",
+      "Read(~/Library/Safari/**)",
+      "Read(~/Library/Mail/**)",
+      "Read(~/Library/Messages/**)",
+      "Read(~/Library/Accounts/**)",
+      "Read(~/Library/IdentityServices/**)",
+      "Read(~/Library/Preferences/**)",
+      "Read(~/Library/Caches/**)",
+      "Read(~/Library/Suggestions/**)",
+      "Read(~/Library/Metadata/**)",
+      "Read(~/Library/Calendars/**)",
+      "Read(~/Library/Reminders/**)",
+      "Read(~/Library/Sharing/**)",
+      "Read(~/Library/Biome/**)",
+      "Read(~/Library/Passwords/**)",
+      "Read(~/Library/PersonalizationPortrait/**)",
+      "Read(~/Library/Autosave Information/**)",
+      "Read(~/Library/Saved Application State/**)",
+      "Read(~/Library/Daemon Containers/**)",
+      "Read(~/Library/WebKit/**)",
+      "Read(~/.netrc)",
+      "Read(~/.npmrc)",
+      "Read(~/.pypirc)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.zsh_sessions/**)",
+      "Read(**/.env)",
+      "Edit(~/.ssh/**)",
+      "Edit(~/.aws/**)",
+      "Edit(~/.gnupg/**)",
+      "Edit(~/.kube/**)",
+      "Edit(~/.docker/**)",
+      "Edit(~/Library/Keychains/**)",
+      "Edit(~/Library/Application Support/**)",
+      "Edit(~/Library/Containers/**)",
+      "Edit(~/Library/Group Containers/**)",
+      "Edit(~/Library/Mobile Documents/**)",
+      "Edit(~/Library/CloudStorage/**)",
+      "Edit(~/Library/Cookies/**)",
+      "Edit(~/Library/HTTPStorages/**)",
+      "Edit(~/Library/Safari/**)",
+      "Edit(~/Library/Mail/**)",
+      "Edit(~/Library/Messages/**)",
+      "Edit(~/Library/Accounts/**)",
+      "Edit(~/Library/IdentityServices/**)",
+      "Edit(~/Library/Preferences/**)",
+      "Edit(~/Library/Caches/**)",
+      "Edit(~/Library/Suggestions/**)",
+      "Edit(~/Library/Metadata/**)",
+      "Edit(~/Library/Calendars/**)",
+      "Edit(~/Library/Reminders/**)",
+      "Edit(~/Library/Sharing/**)",
+      "Edit(~/Library/Biome/**)",
+      "Edit(~/Library/Passwords/**)",
+      "Edit(~/Library/PersonalizationPortrait/**)",
+      "Edit(~/Library/Autosave Information/**)",
+      "Edit(~/Library/Saved Application State/**)",
+      "Edit(~/Library/Daemon Containers/**)",
+      "Edit(~/Library/Logs/**)",
+      "Edit(~/Library/WebKit/**)",
+      "Edit(~/.netrc)",
+      "Edit(~/.npmrc)",
+      "Edit(~/.pypirc)",
+      "Edit(~/.claude/.credentials.json)",
+      "Edit(~/.zsh_sessions/**)",
+      "Edit(**/.env)",
+      "mcp__note-post-mcp__publish_note"
+    ],
+    "ask": [
+      "Read(~/Downloads/**)",
+      "Read(~/Documents/**)",
+      "Read(~/Desktop/**)",
+      "Read(~/Movies/**)",
+      "Read(~/Music/**)",
+      "Read(~/Pictures/**)",
+      "Read(~/Public/**)",
+      "Read(~/Applications/**)",
+      "Read(~/.anyenv/**)",
+      "Read(~/.cache/**)",
+      "Read(~/.homebrew/**)",
+      "Read(~/.kindle/**)",
+      "Read(~/.local/**)",
+      "Read(~/.npm/**)",
+      "Read(~/.Trash/**)",
+      "Read(~/.vscode/**)",
+      "Read(~/.vscode-shared/**)"
+    ],
+    "defaultMode": "auto",
+    "additionalDirectories": [
+      "~/Data",
+      "~/.claude",
+      "~/Claude",
+      "~/work",
+      "~/.codex",
+      "~/Codex",
+      "~/Library/LaunchAgents"
+    ]
+  },
+  "model": "opus",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/bootstrap-vault.sh",
+            "timeout": 15,
+            "statusMessage": "外部脳ブートストラップ注入中"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); deny(){ printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' \"$1\"; exit 0; }; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+create' && printf '%s' \"$cmd\" | grep -Eq -- '--public([[:space:]]|=|$)'; then deny 'リポジトリの公開はブロックされています。publicにするにはユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflowルール）。'; fi; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+edit' && printf '%s' \"$cmd\" | grep -Eqi -- '--visibility[[:space:]=]+public'; then deny 'private→publicの変更はブロックされています。ユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflowルール）。'; fi; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+create' && ! printf '%s' \"$cmd\" | grep -Eq -- '--private([[:space:]]|=|$)'; then deny 'gh repo create は必ず --private を明示してください（private既定に依存しない方針）。public化は作成と分離し、ユーザーの明示許可後に行います（git-workflow/absolute-rulesルール）。'; fi; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+api' && printf '%s' \"$cmd\" | grep -Eqi 'visibility' && printf '%s' \"$cmd\" | grep -Eqi 'public'; then deny 'GitHub API(gh api)経由のpublic化はブロックされています。ユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflow/absolute-rulesルール）。'; fi; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])(curl|wget)' && printf '%s' \"$cmd\" | grep -Eqi 'api.github.com' && printf '%s' \"$cmd\" | grep -Eqi 'visibility' && printf '%s' \"$cmd\" | grep -Eqi 'public'; then deny 'curl/wget 経由のGitHub public化はブロックされています。ユーザーの明示許可が必要です（git-workflow/absolute-rulesルール）。'; fi",
+            "statusMessage": "公開コマンドのガード確認中"
+          },
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); is_pip=0; printf '%s' \"$cmd\" | grep -Eq '(^|[^[:alnum:]_])(pip|pip3)[[:space:]]+install' && is_pip=1; printf '%s' \"$cmd\" | grep -Eq '(^|[^[:alnum:]_])python[0-9.]*[[:space:]]+-m[[:space:]]+pip[[:space:]]+install' && is_pip=1; printf '%s' \"$cmd\" | grep -Eq '(^|[^[:alnum:]_])uv[[:space:]]+pip[[:space:]]' && is_pip=0; if [ \"$is_pip\" = \"1\" ]; then venv_ok=0; [ -n \"$VIRTUAL_ENV\" ] && venv_ok=1; [ -n \"$CONDA_PREFIX\" ] && venv_ok=1; printf '%s' \"$cmd\" | grep -Eq '(source|\\.)[[:space:]]+[^;&|]*activate' && venv_ok=1; printf '%s' \"$cmd\" | grep -Eq 'venv[^[:space:]]*/bin/(pip|python)' && venv_ok=1; printf '%s' \"$cmd\" | grep -Eq 'VIRTUAL_ENV=' && venv_ok=1; if [ \"$venv_ok\" = \"0\" ]; then printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' 'グローバルへの直接pip installはブロックされています。先に仮想環境を用意してください：python -m venv .venv && source .venv/bin/activate してから pip install。.venv/bin/pip 等の明示パスや uv pip も可（python-venvルール）。'; exit 0; fi; fi",
+            "statusMessage": "pip仮想環境ガード確認中"
+          },
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); if printf '%s' \"$cmd\" | grep -Eqi '(^|[^[:alnum:]_])brew[[:space:]]+(install|reinstall|upgrade)([[:space:]]|$)'; then set -f; args=$(printf '%s' \"$cmd\" | sed -E 's/.*brew[[:space:]]+(install|reinstall|upgrade)//; s/[;&|].*$//'); blocked=\"\"; for tok in $args; do case \"$tok\" in -*) continue ;; esac; base=$(printf '%s' \"$tok\" | sed -E 's/@.*$//' | tr 'A-Z' 'a-z'); case \"$base\" in openjdk|java|temurin|oracle-jdk|adoptopenjdk|go|golang|ruby|php|python|python3|node|nodejs|deno|perl|lua|erlang|elixir|scala|crystal|kotlin) blocked=\"$tok\"; break ;; esac; done; if [ -n \"$blocked\" ]; then reason=\"言語ランタイム(${blocked})をbrewで直接入れるのはブロックされています。anyenv経由で管理してください：anyenv install <言語env>（例 jenv/rbenv/goenv）→ その*envでバージョン導入（anyenv-runtimeルール）。\"; printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' \"$reason\"; exit 0; fi; fi",
+            "statusMessage": "ランタイム導入ガード確認中"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__codex__codex",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.prompt // \"\"'); if ! printf '%s' \"$cmd\" | grep -q 'absolute-rules'; then printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' 'Codex委任プロンプトに絶対厳守ルールノートの参照がありません。プロンプトに Preferences/absolute-rules.md（[[Preferences/absolute-rules]]）を読むよう明記してください（absolute-rulesルール）。'; exit 0; fi",
+            "statusMessage": "絶対ルール参照ガード確認中"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/delegation-gate-v2.sh",
+            "timeout": 10,
+            "statusMessage": "委任ゲート確認中"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__codex__codex-reply",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.prompt // \"\"'); if ! printf '%s' \"$cmd\" | grep -q 'absolute-rules'; then printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' '継続(codex-reply)プロンプトに絶対厳守ルールノートの参照がありません。継続スレッドでも各プロンプトに Preferences/absolute-rules.md（[[Preferences/absolute-rules]]）への参照を含めてください（absolute-rulesルール）。'; exit 0; fi",
+            "statusMessage": "絶対ルール参照ガード確認中(継続)"
+          }
+        ]
+      }
+    ]
+  },
+  "extraKnownMarketplaces": {
+    "obsidian-skills": {
+      "source": {
+        "source": "github",
+        "repo": "kepano/obsidian-skills"
+      }
+    }
+  },
+  "theme": "dark"
+}

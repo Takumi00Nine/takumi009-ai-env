@@ -1,0 +1,84 @@
+# Codex CLI/デスクトップ設定（ポータブル版）。
+#
+# 注意（重要）: この設定ファイルは config.toml パーサーが直接読むプレーンなTOMLで、
+# シェルコマンドとして実行される場所ではない（hooks.json の "command" 文字列とは違い、
+# $HOME 等のシェル変数展開は行われないと考えられる＝未確認・要検証。参照:
+# https://github.com/openai/codex/issues/7521）。そのため個人ホームパスが必要な箇所は
+# プレースホルダ __AIENV_HOME__ を置き、scripts/install-main.sh が symlink ではなく
+# インストール時にこのファイルをコピーして実ホームパスへ置換生成する（テンプレート方式）。
+#
+# 除外した項目（実ファイルにはあったが、この配布用テンプレートには含めていない。
+# いずれも秘密・トークンではなく、機械が自動再生成する一時状態のため）:
+#   - [marketplaces.*]  … プラグインのキャッシュパス・last_updated。次回起動時にCodexが再スキャンする。
+#   - [projects."..."]  … フォルダごとの信頼済み(trust_level)履歴。新しいMacでは初回アクセス時に
+#                          通常どおり信頼確認プロンプトが出るだけ（想定内の安全な挙動）。
+#   - [hooks.state."..."] … hooks.json の信頼ハッシュキャッシュ。新しいMacでは初回に一度だけ
+#                            信頼確認が求められる（hooks.jsonの内容は同一なので実害なし）。
+#   - [tui.model_availability_nux] … オンボーディング通知の既読カウンタ（実質的な設定ではない）。
+# 個人のMCPトークン・APIキー等の秘密情報は元ファイルに存在しなかった（点検済み・2026-07-08）。
+
+service_tier = "default"
+approval_policy = "never"
+
+# DISABLED 2026-07-05（ユーザー指定＝Codex のターン終了ごとの通知がうるさい。
+# 通知運用は「判断・レビュー待ちのみ」に統一＝Vault Preferences/cmux-notifications。
+# 戻すときはこの行の先頭 # を外す。パスは Codex.app 同梱の Computer Use クライアント。）
+# notify = ["__AIENV_HOME__/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
+
+[plugins."documents@openai-primary-runtime"]
+enabled = true
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = true
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = true
+
+# Disabled 2026-06-22: Codex escalated a light web task to Computer Use (get_app_state on
+# Chrome) and hung, blocking the synchronous MCP call from Claude (session became unusable).
+# User confirmed desktop Computer Use is not needed. See Vault Knowledge/codex-computer-use-hang-blocks-mcp.md
+[plugins."computer-use@openai-bundled"]
+enabled = false
+
+[plugins."pdf@openai-primary-runtime"]
+enabled = true
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+[plugins."chrome@openai-bundled"]
+enabled = false
+
+[plugins."template-creator@openai-primary-runtime"]
+enabled = true
+
+[features]
+hooks = true
+js_repl = false
+
+[mcp_servers.node_repl]
+args = []
+command = "/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl"
+startup_timeout_sec = 120
+
+[mcp_servers.node_repl.env]
+NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"
+NODE_REPL_NODE_MODULE_DIRS = "/Applications/Codex.app/Contents/Resources/cua_node/lib/node_modules"
+NODE_REPL_NODE_PATH = "/Applications/Codex.app/Contents/Resources/cua_node/bin/node"
+NODE_REPL_TRUSTED_CODE_PATHS = "__AIENV_HOME__/.codex"
+CODEX_HOME = "__AIENV_HOME__/.codex"
+BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
+NODE_REPL_INSTRUCTIONS_USE_CASE_BROWSER = "Control the in-app browser in conjunction with the Browser Plugin."
+NODE_REPL_INSTRUCTIONS_USE_CASE_CHROME = "Control the Chrome browser in conjunction with the Chrome Plugin. Prefer this method of controlling Chrome over alternatives (such as Computer Use) unless the user explicitly mentions an alternative."
+BROWSER_USE_CODEX_APP_BUILD_FLAVOR = "prod"
+CODEX_CLI_PATH = "/Applications/Codex.app/Contents/Resources/codex"
+
+[desktop]
+keepRemoteControlAwakeWhilePluggedIn = false
+preventSleepWhileRunning = false
+localeOverride = "ja-JP"
+dictationDictionary = []
+followUpQueueMode = "queue"
+
+[desktop.open-in-target-preferences]
+global = "systemDefault"

@@ -1,0 +1,21 @@
+# vault-public/ 配下の private 骨格フォルダは README.md 以外を追跡対象外にする。
+# サブ機がローカルに書いたノートは常に「未追跡ファイル」のままなので、
+# git は追跡ファイルの変更にしか競合を起こさず、pull と衝突しない
+# （設計: docs/takumi009-ai-env-vault-split-design.md §1-3 ステップ3）。
+vault-public/Personal/*
+vault-public/Knowledge/*
+vault-public/Decisions/*
+vault-public/Projects/*
+vault-public/Fragments/*
+vault-public/Explorations/*
+vault-public/Blogs/*
+!vault-public/*/README.md
+
+# --- takumi009-ai-env 全体の除外 ---
+.DS_Store
+# 私的パッチ側で管理（public 履歴に入れない）: プロジェクト作業文書・NG語定義
+docs
+scripts/ngwords.txt
+# export-public-vault.sh のステージング領域（本番昇格前の作業ディレクトリ。
+# EXIT trapで都度削除されるが、異常終了時の残骸が誤って追跡されないよう明示除外）
+.export-tmp.*
