@@ -1,11 +1,14 @@
 ---
 date: 2026-07-05
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, cmux, notifications]
 project: meta
 related:
   - "[[Decisions/2026-07-05-cmux-notifications-actionable-only]]"
   - "[[Knowledge/cmux-cli]]"
+aliases:
+  - "agentIdleReminder"
+  - "アクション可能時のみ通知"
 ---
 
 # cmux 通知の運用（SSOT）

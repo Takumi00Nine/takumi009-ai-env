@@ -1,12 +1,16 @@
 ---
 date: 2026-06-21
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, rule, strict, absolute, web-research, verification]
 project: meta
 related:
   - "[[Preferences/absolute-rules]]"
   - "[[Preferences/coding-delegation]]"
   - "[[Knowledge/mistakes]]"
+aliases:
+  - "裏取り担当分担"
+  - "軽い裏取り"
+  - "重い裏取り"
 ---
 
 # 必ずWebで裏取りしてから進める（裏取りは毎回必須・担当を軽重で分担）

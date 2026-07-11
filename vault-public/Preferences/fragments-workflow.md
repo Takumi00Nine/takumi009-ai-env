@@ -1,6 +1,6 @@
 ---
 date: 2026-06-23
-updated: 2026-07-08
+updated: 2026-07-11
 tags: [preference, fragments, blog, workflow, capture]
 project: external-brain
 related:
@@ -9,6 +9,10 @@ related:
   - "[[Preferences/note-canvas-workflow]]"
   - "[[Preferences/blog-writing-nudge]]"
   - "[[Knowledge/external-brain-guide]]"
+aliases:
+  - "即時capture"
+  - "Fragments昇格レビュー"
+  - "Fragments"
 ---
 
 # Fragments：未確定の断片を溜める入口層の運用
@@ -45,13 +49,13 @@ tags: [fragments]
 - 状態マーク：`生` / `promoted`（昇格済）/ `published`（記事化済）。
 
 ## 4. 昇格・記事化
-- **週1昇格レビュー**: 毎週月曜 03:30 に候補レポートが自動生成される（LaunchAgent `com.takumi009.fragments-review` → `Explorations/fragments-review/YYYY-MM-DD.md`・チェックリスト形式）。ユーザーがレポートを見て昇格/記事化するものを Claude に指示 → Claude が昇格先を作成し Fragments 側へ `status: promoted`＋相互リンクを付ける。**レポート生成は自動・昇格の判断と書込は人＋Claude**（書込はリーダーのみ＝[[Preferences/vault-operation]]）。昇格しないエントリが多数派で正常。
+- **週1昇格（完全自律・2026-07-11〜）**: 毎週月曜 03:30 に昇格候補リストが自動生成される（LaunchAgent `com.takumi009.fragments-log` → `~/.claude/logs/fragments-log/YYYY-MM-DD.md`・**Vault 外**。読まれない人間向け資料を Vault に置かないため）。**生成後の最初のセッションで、AI（リーダー）が昇格判断〜実行（昇格先作成＋`status: promoted`＋相互リンク）まで自律で行う。ユーザーの指示・確認・個別報告は不要**。Vault に残すのは Fragments 日次ファイルへの実施1行（例:「週次昇格: 3件昇格・12件見送り」）のみ。判断基準＝確定した知見のみ昇格・SSOT 矛盾チェック・フォルダ別ルール準拠。昇格しないエントリが多数派で正常。誤昇格は git で可逆。**処理完了の印＝レポートの frontmatter に `processed: YYYY-MM-DD` を1行追記**（frontmatter ブロック内のみ判定・未追記のレポートはセッション開始ヘルス行に「未処理」として表示される）。
 - 確定したら4フォルダへ昇格、記事の種は Blog へ（記事化は [[Preferences/note-canvas-workflow]]：Fragments を素材に Canvas → 下書き → ユーザー手直し）。
 - **append-only：元エントリは消さない**。昇格先と Fragments を相互リンクし、Fragments 側に `status: promoted`（＋昇格先リンク）を足すだけ。
 - 二重管理しない：**Fragments＝履歴/発生文脈／4フォルダ＝現在の確定版／Blog＝人間向け素材**、と役割を分ける。
 
 ## 5. 報告
-Fragments を読み書きしたらユーザーに明示報告（サイレント禁止＝[[Preferences/vault-operation]]）。
+セッション中の capture・作業に伴う読み書きはユーザーに明示報告（サイレント禁止＝[[Preferences/vault-operation]]）。**例外＝定常メンテナンス（週次昇格・棚卸し対処）は個別報告不要**（監査はレポート・git 履歴・Fragments の実施記録で担保）。
 
 **Why:** 種を都度の声かけで消さず、未確定の断片を時系列で残し、確定したものだけ昇格させる。記事構想は AI が Fragments を素材に組み立てる（[[Preferences/note-canvas-workflow]]）。即時 capture は後追いの記憶劣化・文脈喪失を防ぐため。
 **How to apply:** 作業の区切りで該当する断片をその場で日次ファイルに短く追記。整形・昇格は後で。記事化依頼時は Fragments を読んで種を束ねる。

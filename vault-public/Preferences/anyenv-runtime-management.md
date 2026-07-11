@@ -1,11 +1,16 @@
 ---
 date: 2026-06-16
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, runtime, anyenv]
 project: meta
 related:
   - "[[Preferences/python-venv]]"
   - "[[Knowledge/venv-breaks-on-folder-rename]]"
+aliases:
+  - "jenv"
+  - "rbenv"
+  - "goenv"
+  - "anyenv経由"
 ---
 
 # 言語ランタイムは anyenv で管理する

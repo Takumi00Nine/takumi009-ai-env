@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, cmux, layout, agent-teams]
 project: meta
 related:
@@ -8,6 +8,9 @@ related:
   - "[[Decisions/2026-07-05-show-in-cmux-pane]]"
   - "[[Preferences/coding-delegation]]"
   - "[[Knowledge/cmux-cli]]"
+aliases:
+  - "3列レイアウト"
+  - "cmuxワークスペース"
 ---
 
 # cmux ワークスペースの標準レイアウト（最大3列）

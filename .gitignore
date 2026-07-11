@@ -19,3 +19,4 @@ scripts/ngwords.txt
 # export-public-vault.sh のステージング領域（本番昇格前の作業ディレクトリ。
 # EXIT trapで都度削除されるが、異常終了時の残骸が誤って追跡されないよう明示除外）
 .export-tmp.*
+__pycache__/

@@ -1,11 +1,14 @@
 ---
 date: 2026-06-17
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, dotfiles]
 project: meta
 related:
   - "[[Knowledge/dotfiles]]"
   - "[[Preferences/file-placement]]"
+aliases:
+  - "dotfilesに追加"
+  - "dotfilesへ追加"
 ---
 
 # 設定ファイルを作ったら dotfiles へ入れるか最初に確認する

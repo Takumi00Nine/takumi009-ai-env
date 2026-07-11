@@ -130,7 +130,7 @@ echo "=== 5. メイン専用LaunchAgent類はインストールされない（�
 
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
 
-  for name in vault-backup vault-inventory fragments-review drift-check; do
+  for name in vault-backup vault-inventory fragments-log drift-check; do
     assert_true "メイン専用の $name.plist は入らない" \
       "$([[ ! -e "$FAKE_HOME/Library/LaunchAgents/com.takumi009.$name.plist" ]] && echo 1 || echo 0)"
   done

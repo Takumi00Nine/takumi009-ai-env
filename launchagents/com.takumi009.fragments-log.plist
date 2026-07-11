@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.takumi009.fragments-review</string>
+	<string>com.takumi009.fragments-log</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/bin/python3</string>
-		<string>__AIENV_HOME__/work/takumi009-ai-env/scripts/vault-agents/fragments_review.py</string>
+		<string>__AIENV_HOME__/work/takumi009-ai-env/scripts/vault-agents/fragments_log.py</string>
 	</array>
 	<key>StartCalendarInterval</key>
 	<dict>
@@ -21,8 +21,8 @@
 	<key>RunAtLoad</key>
 	<false/>
 	<key>StandardOutPath</key>
-	<string>__AIENV_HOME__/Library/Logs/fragments-review.log</string>
+	<string>__AIENV_HOME__/Library/Logs/fragments-log.log</string>
 	<key>StandardErrorPath</key>
-	<string>__AIENV_HOME__/Library/Logs/fragments-review.log</string>
+	<string>__AIENV_HOME__/Library/Logs/fragments-log.log</string>
 </dict>
 </plist>

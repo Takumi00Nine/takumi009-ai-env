@@ -38,6 +38,16 @@ assert_not_contains() {
   fi
 }
 
+# N日前/後のYYYY-MM-DD・ISO8601時刻（BSD date。⑥のfixture用。
+# tests/test-vault-inventory.sh と同じ考え方＝ハードコード日付を使わない）。
+d_date() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%F; }
+# 実際のフック（vault-recall.sh/vault-read-log.sh）は `date -u +...Z` でUTC時刻を
+# 書く。テストのfixtureも同じくUTCで生成する（`-u`無しのローカル時刻に'Z'を付けた
+# だけの値だと、check-drift.sh側の解析バグ〈N-5・ローカルTZとして誤解釈〉と
+# 対称に間違えてしまい、テストがバグを覆い隠してしまうため＝2026-07-10
+# 敵対的レビュー2回目 N-5 対応）。
+d_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -u -v"${n}"d +%Y-%m-%dT%H:%M:%SZ; }
+
 # 最小構成の「repo」フィクスチャを作る（check-drift.shが参照する
 # claude/・codex/・vault-public/・scripts/check-drift.sh本体だけをコピーする）。
 make_fake_repo() {
@@ -48,6 +58,8 @@ make_fake_repo() {
   echo '{}' > "$repo/claude/settings.json"
   echo '#!/bin/bash' > "$repo/claude/hooks/bootstrap-vault.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/delegation-gate-v2.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/vault-recall.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/vault-read-log.sh"
   echo '# agent' > "$repo/claude/agents/sample-agent.md"
   echo '# AGENTS' > "$repo/codex/AGENTS.md"
   echo '{}' > "$repo/codex/hooks.json"
@@ -66,6 +78,8 @@ install_fake_home() {
   ln -s "$repo/claude/settings.json" "$home/.claude/settings.json"
   ln -s "$repo/claude/hooks/bootstrap-vault.sh" "$home/.claude/hooks/bootstrap-vault.sh"
   ln -s "$repo/claude/hooks/delegation-gate-v2.sh" "$home/.claude/hooks/delegation-gate-v2.sh"
+  ln -s "$repo/claude/hooks/vault-recall.sh" "$home/.claude/hooks/vault-recall.sh"
+  ln -s "$repo/claude/hooks/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
   ln -s "$repo/claude/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/codex/AGENTS.md" "$home/.codex/AGENTS.md"
   ln -s "$repo/codex/hooks.json" "$home/.codex/hooks.json"
@@ -98,7 +112,7 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "symlink drift 0件" "$out" "symlink総数: 6件 / drift: 0件"
+  assert_contains "symlink drift 0件" "$out" "symlink総数: 8件 / drift: 0件"
   assert_contains "config.toml一致" "$out" "プレースホルダ展開を考慮すれば一致しています"
   assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
   assert_contains "総drift件数0" "$out" "総drift件数: 0"
@@ -134,7 +148,7 @@ echo "=== 2. ①symlinkが無い（未インストール）を検知する ==="
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "MISSING検知" "$out" "[MISSING]"
-  assert_contains "6件全部drift" "$out" "symlink総数: 6件 / drift: 6件"
+  assert_contains "8件全部drift" "$out" "symlink総数: 8件 / drift: 8件"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -600,6 +614,516 @@ echo "=== 18. ⑤解析できない/GitHub以外のURLに認証情報が含ま�
   assert_contains "代わりにredactedと表示される（私的パッチrepo側）" "$out" "<redacted>@gitlab.com"
 
   rm -rf "$REPO" "$HOME_DIR" "$PRIVATE_REPO"
+}
+
+echo "=== 19. ⑥vault-agentsが健全（レポート・ログとも新しい）ならdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date 0).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "棚卸しレポート健全メッセージ" "$out" "✅ 棚卸しレポート:"
+  assert_contains "fragments-logレポート健全メッセージ" "$out" "✅ fragments-logレポート:"
+  assert_contains "vault-reads.tsv健全メッセージ" "$out" "✅ vault-reads.tsv:"
+  assert_contains "vault-recall.tsv健全メッセージ" "$out" "✅ vault-recall.tsv:"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 20. ⑥棚卸しレポートが期限超過(STALE)だと検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  # 目安20日を超える25日前が最新レポート
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date -25).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-INVENTORY-STALEが検知される" "$out" "[VAULT-INVENTORY-STALE]"
+  assert_contains "確認コマンドが含まれる" "$out" "launchctl list | grep vault-inventory"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 21. ⑥棚卸しレポートが一度も生成されていない(DEAD)と検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # vault-inventory/ ディレクトリはあるが中身が空（一度もレポート生成されていない）
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-INVENTORY-DEADが検知される" "$out" "[VAULT-INVENTORY-DEAD]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 22. ⑥fragments-logレポートが期限超過(STALE)だと検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date 0).md"
+  # 目安10日を超える15日前が最新レビュー
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date -15).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "FRAGMENTS-LOG-STALEが検知される" "$out" "[FRAGMENTS-LOG-STALE]"
+  assert_contains "確認コマンドが含まれる" "$out" "launchctl list | grep fragments-log"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 22b. ⑥未処理レポート: 生成直後（猶予日数以内）はdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  # 生成から1日（既定の猶予3日以内）・processedマーカーなし
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date -1).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date -1).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "VAULT-INVENTORY-UNPROCESSEDは出ない（猶予内）" "$out" "[VAULT-INVENTORY-UNPROCESSED]"
+  assert_not_contains "FRAGMENTS-LOG-UNPROCESSEDは出ない（猶予内）" "$out" "[FRAGMENTS-LOG-UNPROCESSED]"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 22c. ⑥未処理レポート: 猶予日数を超えて未処理だとUNPROCESSEDを検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  # 生成から5日（既定の猶予3日超）・STALE閾値(棚卸し20日/週次10日)は超えていない
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date -5).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date -5).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-INVENTORY-UNPROCESSEDが検知される" "$out" "[VAULT-INVENTORY-UNPROCESSED]"
+  assert_contains "FRAGMENTS-LOG-UNPROCESSEDが検知される" "$out" "[FRAGMENTS-LOG-UNPROCESSED]"
+  assert_contains "総drift件数2" "$out" "総drift件数: 2"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 22d. ⑥未処理レポート: frontmatterに processed マーカーがあればdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  D="$(d_date -5)"
+  cat > "$HOME_DIR/.claude/logs/vault-inventory/${D}.md" <<EOF
+---
+date: ${D}
+processed: $(d_date -4)
+---
+
+# 外部脳 棚卸しレポート ${D}
+EOF
+  cat > "$HOME_DIR/.claude/logs/fragments-log/${D}.md" <<EOF
+---
+date: ${D}
+processed: $(d_date -4)
+---
+
+# Fragments 昇格レビュー ${D}
+EOF
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "棚卸しレポート処理済みメッセージ" "$out" "✅ 棚卸しレポート: 処理済みマーカーあり"
+  assert_contains "fragments-logレポート処理済みメッセージ" "$out" "✅ fragments-logレポート: 処理済みマーカーあり"
+  assert_not_contains "UNPROCESSEDは出ない" "$out" "UNPROCESSED"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 22e. ⑥未処理レポート: 既にSTALE扱いのレポートは二重にUNPROCESSED報告しない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  # 目安20日を超える25日前が最新レポート＝STALE（かつprocessedマーカーも無い）
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date -25).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-INVENTORY-STALEが検知される" "$out" "[VAULT-INVENTORY-STALE]"
+  assert_not_contains "同じレポートにVAULT-INVENTORY-UNPROCESSEDは重複して出ない" "$out" "[VAULT-INVENTORY-UNPROCESSED]"
+  assert_contains "総drift件数1（STALEのみ・重複無し）" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 23. ⑥reads/recallログの死活は個別に検知される（片方だけ停止・両方無し） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date 0).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  # reads: 目安7日を超える10日前が最終記録（STALE）／recall: 一度も記録が無い（DEAD）
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts -10)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-READS-LOG-STALEが検知される" "$out" "[VAULT-READS-LOG-STALE]"
+  assert_contains "VAULT-RECALL-LOG-DEADが検知される（ヒット0件と区別できない旨も明記）" \
+    "$out" "[VAULT-RECALL-LOG-DEAD]"
+  assert_contains "ヒット0件の日々と区別できない既知の限界が明記される" "$out" "ヒット0件"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 25. ⑥ログがERROR行だけ積み上がっている（鮮度は健全だが失敗し続けている）を検知する（Codexレビュー指摘） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date 0).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  # 直近のログ行は全てERROR行（3列目=空）。最終行の鮮度だけ見ると健全に見える。
+  {
+    printf '%s\tERROR\t\tsess1\tjq解析失敗\n' "$(d_ts -3)"
+    printf '%s\tERROR\t\tsess1\tjq解析失敗\n' "$(d_ts -1)"
+  } > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  {
+    printf '%s\tERROR\t\tsess1\tjq解析失敗\n' "$(d_ts -3)"
+    printf '%s\tERROR\t\tsess1\tjq解析失敗\n' "$(d_ts -1)"
+  } > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "readsのERRORING(失敗し続けている疑い)が検知される" "$out" "[VAULT-READS-LOG-ERRORING]"
+  assert_contains "recallのERRORING(失敗し続けている疑い)が検知される" "$out" "[VAULT-RECALL-LOG-ERRORING]"
+  assert_not_contains "ERROR行だけの場合はDEAD/STALEにはならない（別種別に分離）" "$out" "[VAULT-READS-LOG-STALE]"
+  assert_not_contains "ERROR行だけの場合はDEAD/STALEにはならない（別種別に分離）" "$out" "[VAULT-READS-LOG-DEAD]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 26. ⑥未来日時のレポート/ログは「健全」に誤判定せずFUTURE-DATEとして検知する（Codexレビュー指摘） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  # 10年後の日付（システム時計のズレ・ファイル破損を模擬）
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date 3650).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 3650)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "棚卸しレポートの未来日付が検知される" "$out" "[VAULT-INVENTORY-FUTURE-DATE]"
+  assert_contains "vault-reads.tsvの未来日時が検知される" "$out" "[VAULT-READS-LOG-FUTURE-DATE]"
+  assert_not_contains "未来日付はSTALE扱いにはしない（別種別に分離）" "$out" "[VAULT-INVENTORY-STALE]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 27. ⑥有効行だけが未来日時で最終行(ERROR)は現在時刻の境界ケース（Codexレビュー指摘・再レビュー分） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date 0).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  # 1行目=未来日時の有効行／2行目(最終行)=現在時刻のERROR行。最終行だけを見る
+  # チェックだと"新しすぎるので健全"に誤判定しうる境界ケース。
+  {
+    printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 3650)"
+    printf '%s\tERROR\t\tsess1\tjq解析失敗\n' "$(d_ts 0)"
+  } > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "有効行の未来日時がFUTURE-DATEとして検知される" "$out" "[VAULT-READS-LOG-FUTURE-DATE]"
+  assert_not_contains "健全(✅)扱いにはならない" "$out" "✅ vault-reads.tsv:"
+  assert_not_contains "ERRORING扱いにもならない（FUTURE-DATEを優先）" "$out" "[VAULT-READS-LOG-ERRORING]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 28. ⑥ログ時刻はUTCとして解析される（N-5・ローカルTZとして誤解釈するとJST環境で偽STALEになる境界ケース） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/vault-inventory" \
+           "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  # 棚卸し・fragments-logは任意機能（scripts/check-drift.sh ⑥の新ゲート＝
+  # LaunchAgent plist存在で判定。Codexレビュー指摘・Major対応）。このfixtureは
+  # 「導入済み」を模擬するためマーカーplistを置く。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  echo "# report" > "$HOME_DIR/.claude/logs/vault-inventory/$(d_date 0).md"
+  echo "# review" > "$HOME_DIR/.claude/logs/fragments-log/$(d_date 0).md"
+  # 目安7日(VAULT_AGENT_LOG_STALE_DAYS既定値)ぎりぎり内側＝UTCで7日15時間前。
+  # 正しくUTCとして解析すれば経過日数は7日(floor)＝閾値超過ではなく健全。
+  # ローカルTZ(JST=UTC+9)として誤解釈すると実際より9時間早い時刻に解釈され、
+  # 経過日数が8日(floor)に繰り上がり閾値超のSTALEに誤判定される
+  # （N-5：以前はこの誤判定が起き得た。9時間という差が日境界をまたぐよう
+  # あえて7日15時間に設定している）。
+  TS="$(date -u -v-7d -v-15H +%Y-%m-%dT%H:%M:%SZ)"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$TS" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  # ホストの実TZに関わらず再現できるよう、JST(UTC+9)を明示して実行する
+  # （ホストが既にUTC等でも本テストが同じ結果になることを保証するため）。
+  out="$(TZ="Asia/Tokyo" run_check "$REPO" "$HOME_DIR")"
+  assert_contains "UTCとして正しく解析されれば7日前(閾値以内)で健全と判定される" \
+    "$out" "✅ vault-reads.tsv: 最終記録 7日前"
+  assert_not_contains "ローカルTZ(JST)として誤解釈した場合に起きるSTALE誤判定は発生しない" \
+    "$out" "[VAULT-READS-LOG-STALE]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 24. ⑥vault-agentsの出力(fragments-log/vault-inventory/reads/recallログ)が1件も無ければ対象外（サブ機・未導入想定） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # $HOME_DIR/.claude/logs/{fragments-log,vault-inventory,vault-reads.tsv,vault-recall.tsv}
+  # は一切作らない（vault-agents未導入 or 純粋なサブ機想定。2026-07-11の出力先移設で
+  # 判定基準がExplorations有無から$HOME/.claude/logs配下の4種の有無へ変わった）
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "対象外メッセージが出る" "$out" "vault-agentsが一度も導入されていない想定ならチェック対象外"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 29. ⑥標準フック(reads/recall)は動いているが棚卸し・fragments-logの任意LaunchAgentは未導入 → レポート系はDEAD誤報しない（Codexレビュー指摘・Major） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # vault-recall.sh/vault-read-log.sh は install-main.sh で標準導入されるため、
+  # このfixtureのようにreads/recallログだけが存在するのはごく普通のmain機構成
+  # （棚卸し・fragments-logは任意機能＝scripts/install-vault-agents.sh を
+  # 実行していなければ$HOME/Library/LaunchAgents/com.takumi009.{vault-inventory,
+  # fragments-log}.plist は存在しない）。
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+  # $HOME_DIR/Library/LaunchAgents/com.takumi009.{vault-inventory,fragments-log}.plist
+  # は作らない（任意機能未導入を模擬）。$HOME_DIR/.claude/logs/{vault-inventory,
+  # fragments-log}ディレクトリも作らない（レポートが一度も生成されていない状態）。
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "任意機能未導入なのに棚卸しレポートがDEAD誤報されない" "$out" "[VAULT-INVENTORY-DEAD]"
+  assert_not_contains "任意機能未導入なのにfragments-logがDEAD誤報されない" "$out" "[FRAGMENTS-LOG-DEAD]"
+  assert_contains "棚卸しレポートは任意機能未導入の対象外メッセージが出る" "$out" "棚卸しレポート: 任意機能未導入"
+  assert_contains "fragments-logレポートも任意機能未導入の対象外メッセージが出る" "$out" "fragments-logレポート: 任意機能未導入"
+  assert_contains "reads/recallログの健全チェックは通常どおり実行される" "$out" "✅ vault-reads.tsv:"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 30. ⑥LaunchAgent plistは導入済みだが出力(レポート/ログ)がまだ1件も無い → DEADとして検知する（Codexレビュー指摘・Major再指摘） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # 棚卸し・fragments-logのLaunchAgent plistは導入済み（scripts/install-vault-agents.sh
+  # 実行済み想定）だが、初回実行前 or ジョブが一度も成功していないため
+  # $HOME/.claude/logs/{vault-inventory,fragments-log}・reads/recallログは
+  # 1件も存在しない。出力4種の不在だけで「一度も導入されていない」と誤判定し
+  # セクション全体を対象外にすると、本来出るべきDEADが出せなくなる
+  # （Codexレビュー指摘・Major再指摘）。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.vault-inventory.plist" \
+        "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "plist導入済みなのに出力が無い棚卸しレポートはDEADとして検知される" "$out" "[VAULT-INVENTORY-DEAD]"
+  assert_contains "同様にfragments-logもDEADとして検知される" "$out" "[FRAGMENTS-LOG-DEAD]"
+  assert_not_contains "「一度も導入されていない」という対象外メッセージにはならない（plistがあるため）" \
+    "$out" "vault-agentsが一度も導入されていない想定ならチェック対象外"
+
+  rm -rf "$REPO" "$HOME_DIR"
 }
 
 echo

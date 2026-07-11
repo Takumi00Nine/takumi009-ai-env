@@ -1,11 +1,15 @@
 ---
 date: 2026-06-14
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, strict, vrm, license, security]
 project: meta
 related:
   - "[[Preferences/absolute-rules]]"
   - "[[Preferences/coding-delegation]]"
+aliases:
+  - "VRM非公開"
+  - "3Dアバターデータ非公開"
+  - "VRMアバター"
 ---
 
 # VRM/3Dアバターデータは非公開（ライセンス基準・厳守）

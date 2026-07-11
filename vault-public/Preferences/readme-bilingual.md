@@ -2,9 +2,12 @@
 date: 2026-06-14
 tags: [preference, docs, readme]
 project: meta
-updated: 2026-06-27
+updated: 2026-07-10
 related:
   - "[[Knowledge/claude-codex-usage]]"
+aliases:
+  - "README日英併記"
+  - "言語ナビ"
 ---
 
 # READMEはバイリンガル

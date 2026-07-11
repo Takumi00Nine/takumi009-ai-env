@@ -1,13 +1,11 @@
 ---
 date: 2026-06-20
-updated: 2026-07-08
+updated: 2026-07-11
 tags: [preference, rule, strict, absolute]
 project: meta
-related:
-  - "[[Preferences/vrm-license-policy]]"
-  - "[[Preferences/git-workflow]]"
-  - "[[Preferences/coding-delegation]]"
-  - "[[Preferences/web-verify-before-acting]]"
+aliases:
+  - "絶対厳守"
+  - "非交渉ルール"
 ---
 
 # 絶対厳守ルール一覧

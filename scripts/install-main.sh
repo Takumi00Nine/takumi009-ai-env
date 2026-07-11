@@ -139,6 +139,11 @@ generate_config_toml() {
 link claude/settings.json               "$HOME/.claude/settings.json"
 link claude/hooks/bootstrap-vault.sh    "$HOME/.claude/hooks/bootstrap-vault.sh"
 link claude/hooks/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.sh"
+# 外部脳 想起支援(UserPromptSubmit)・利用ログ(PostToolUse Read) の2フック
+# （2026-07-10 追加。settings.json への hooks 登録はリーダーが別途行う＝
+# このスクリプトはsymlink配置のみを担当）。
+link claude/hooks/vault-recall.sh    "$HOME/.claude/hooks/vault-recall.sh"
+link claude/hooks/vault-read-log.sh  "$HOME/.claude/hooks/vault-read-log.sh"
 
 [ -d "$DIR/claude/agents" ] || fail "リポジトリのディレクトリが見つかりません（checkout破損の可能性）: $DIR/claude/agents"
 for f in "$DIR"/claude/agents/*.md; do
@@ -148,7 +153,8 @@ for f in "$DIR"/claude/agents/*.md; do
 done
 
 if [ "$DRY_RUN" != "1" ]; then
-  chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh"
+  chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh" \
+           "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh"
 fi
 
 # --- codex/ ---

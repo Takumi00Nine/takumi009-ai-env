@@ -1,10 +1,13 @@
 ---
 date: 2026-06-14
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, files, placement]
 project: meta
 related:
   - "[[Knowledge/codex-mcp]]"
+aliases:
+  - "成果物の置き場所"
+  - "~/work配下"
 ---
 
 # 成果物の置き場所ルール

@@ -1,10 +1,15 @@
 ---
 date: 2026-06-14
-updated: 2026-07-08
+updated: 2026-07-11
 tags: [preference, scheduling, cron]
 project: meta
 related:
   - "[[Projects/news-report-automation]]"
+aliases:
+  - "CronCreate"
+  - "スケジュール実行ルール"
+  - "スケジュール登録"
+  - "定期実行"
 ---
 
 # スケジュール実行ルール

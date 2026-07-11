@@ -121,7 +121,7 @@
       "~/Library/LaunchAgents"
     ]
   },
-  "model": "opus",
+  "model": "claude-fable-5[1m]",
   "hooks": {
     "SessionStart": [
       {
@@ -131,6 +131,31 @@
             "command": "$HOME/.claude/hooks/bootstrap-vault.sh",
             "timeout": 15,
             "statusMessage": "外部脳ブートストラップ注入中"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/vault-recall.sh",
+            "timeout": 2,
+            "statusMessage": "外部脳の関連ノート想起中"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/vault-read-log.sh",
+            "timeout": 3,
+            "statusMessage": "Vault利用ログ記録中"
           }
         ]
       }

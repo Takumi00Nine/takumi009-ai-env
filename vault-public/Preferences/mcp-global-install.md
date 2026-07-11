@@ -1,10 +1,14 @@
 ---
 date: 2026-06-14
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, mcp, install]
 project: meta
 related:
   - "[[Knowledge/codex-mcp]]"
+aliases:
+  - "npx禁止"
+  - "node直接起動"
+  - "MCPサーバー"
 ---
 
 # MCPサーバーは必ずグローバル導入する

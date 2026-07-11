@@ -12,10 +12,32 @@
 #      （export-public-vault.sh のエクスポート漏れ検知）
 #   ⑤ private であるべき remote（Vaultバックアップ・私的パッチrepo）が
 #      実際に GitHub 上で private のままか（`gh repo view --json visibility`）。
-#      ai-env 本体（このリポジトリ自身）は「public化予定」のため対象外。
+#      ai-env 本体（このリポジトリ自身）は「公開予定」のため対象外。
 #      remote未設定はチェック対象外（情報表示のみ）。gh 不在・未認証・API失敗は
 #      drift にはせず WARN 表示のみに留める（2026-07-08 adoption-critic指摘対応。
 #      「必須指摘」＝private repoの意図しない公開化を検知する恒久対策）。
+#   ⑥ vault-agents（棚卸し・fragments-log・想起/読取ログフック）の死活。
+#      「最新の棚卸しレポートが古すぎる」「fragments-logが古すぎる」
+#      「vault-reads.tsv/vault-recall.tsvの最終記録が古すぎる」のいずれかを検知する
+#      （2026-07-10 敵対的レビュー M-1/M-2 対応。3年ノーメンテ運用では「本人が定期的に
+#      レポートを見に行く」以外に死活を知る手段が無かった＝検知網そのものが無人だと
+#      無言で死ぬ穴を塞ぐ）。加えて「レポートは生成されているがリーダーに処理された
+#      形跡（frontmatterの processed: 行）が無いまま何日も放置されている」も検知する
+#      （2026-07-11 決定・claude/hooks/bootstrap-vault.sh の未処理レポート検知の
+#      二次安全網。判定基準は同じ）。棚卸し・fragments-logの出力先は同決定で
+#      Vault配下(Explorations/...)から $HOME/.claude/logs/ 配下へ移設済み
+#      （「読まれない人間向け資料をVaultに置かない」）。$VAULT が無い
+#      （サブ機・私的Vault未clone）場合は対象外。棚卸し・fragments-logは
+#      README.mdにも明記の「メイン専用・任意」機能（scripts/install-vault-agents.sh
+#      を実行していなければ対応LaunchAgent plistが無い）なので、reads/recallログ
+#      （install-main.shで標準導入・任意ではない）とは別に、LaunchAgent plistの
+#      実在で個別に導入判定してからチェックする（Codexレビュー指摘・Major:
+#      reads/recallログだけが存在する普通のmain構成で、未導入の任意機能まで
+#      毎回DEAD誤報していた）。
+#      ログの時刻(TSV1列目)はvault-recall.sh/vault-read-log.shがUTCで書くため、
+#      経過日数の算出は `TZ=UTC` を明示してパースする（2026-07-10 敵対的レビュー
+#      2回目 N-5 対応。以前はローカルTZとして解釈しており、JST環境では±9hずれ、
+#      日境界付近では経過日数が1日多くカウントされ得た＝日単位閾値の誤判定要因）。
 #
 # **fail-fast はしない**（1件でも検知したらexitさせる export-public-vault.sh とは
 # 役割が違う。本ツール自体は常にexit 0の「一覧表示するだけ」の手動確認用レポート
@@ -50,6 +72,8 @@ SYMLINKS=(
   "$HOME/.claude/settings.json|$DIR/claude/settings.json"
   "$HOME/.claude/hooks/bootstrap-vault.sh|$DIR/claude/hooks/bootstrap-vault.sh"
   "$HOME/.claude/hooks/delegation-gate-v2.sh|$DIR/claude/hooks/delegation-gate-v2.sh"
+  "$HOME/.claude/hooks/vault-recall.sh|$DIR/claude/hooks/vault-recall.sh"
+  "$HOME/.claude/hooks/vault-read-log.sh|$DIR/claude/hooks/vault-read-log.sh"
   "$HOME/.codex/AGENTS.md|$DIR/codex/AGENTS.md"
   "$HOME/.codex/hooks.json|$DIR/codex/hooks.json"
 )
@@ -344,6 +368,256 @@ for pair in "${VISIBILITY_TARGETS[@]}"; do
     item_drift "[VISIBILITY] ${vlabel} (${vowner_repo}) は private ではありません（現在: ${vvisibility}）。至急 'gh repo edit ${vowner_repo} --visibility private' 等で非公開化し、公開範囲に機密情報が既に露出していないか確認してください（Preferences/absolute-rules.md ③に関わる重大インシデントの可能性）"
   fi
 done
+
+echo
+echo "======================================================================"
+echo "⑥ vault-agents 死活チェック（棚卸し・fragments-log・reads/recallログ）"
+echo "======================================================================"
+
+# vault_inventory.py（隔週）・fragments_log.py（週次）のLaunchAgentと、
+# vault-recall.sh/vault-read-log.sh（UserPromptSubmit/PostToolUseフック）が
+# 「動いているはずなのに実は死んでいる」を検知する。vault_inventory.py 側にも
+# §12でreads/recallの死活を出すが、そちらは本人がレポートを開かないと見えない
+# （M-2で指摘された穴そのもの）。ここは既存の週次drift通知に相乗りさせ、
+# 見に行かなくても通知される経路にする。
+#
+# しきい値は vault_inventory.py §12（レポート本文内の参考情報・目安30日）より
+# 厳しくしている。ここは能動通知の発火条件＝早めに鳴らしてよい
+# （「誤報を恐れて沈黙するより軽い誤報を許容する側に倒す」設計方針）。
+: "${VAULT_INVENTORY_STALE_DAYS:=20}"    # 隔週(目安15日) + 猶予
+: "${FRAGMENTS_LOG_STALE_DAYS:=10}"      # 週次(目安7日) + 猶予
+: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"
+: "${VAULT_READS_LOG:=$HOME/.claude/logs/vault-reads.tsv}"
+: "${VAULT_RECALL_LOG:=$HOME/.claude/logs/vault-recall.tsv}"
+# fragments-log（旧fragments-review）・vault-inventory のレポート出力先
+# （2026-07-11 決定でVault配下(Explorations/...)から $HOME/.claude/logs/ 配下へ
+# 移設。claude/hooks/bootstrap-vault.sh・scripts/vault-agents/fragments_log.py・
+# vault_inventory.py と同じ既定値・同じ環境変数名）。
+: "${FRAGMENTS_LOG_DIR:=$HOME/.claude/logs/fragments-log}"
+: "${VAULT_INVENTORY_LOG_DIR:=$HOME/.claude/logs/vault-inventory}"
+# 未処理レポートの猶予日数（2026-07-11 決定・claude/hooks/bootstrap-vault.sh の
+# 未処理レポート検知と同じ判定基準＝frontmatter `processed: YYYY-MM-DD` の有無）。
+# bootstrap-vault.sh は毎セッション気づけるための一次検知、こちらは「気づいたのに
+# 何セッションも処理されないまま放置」を捕捉する二次の安全網。生成直後は未処理が
+# 正常（次回セッションで処理されるまでの間）なので、STALE系より短い猶予を持たせる。
+: "${UNPROCESSED_REPORT_GRACE_DAYS:=3}"
+
+# 棚卸し・fragments-logは README.md にも明記の「メイン専用・任意」機能で、
+# vault-reads.tsv/vault-recall.tsv を書くフック（vault-recall.sh/vault-read-log.sh。
+# install-main.shで標準導入・任意ではない）とは導入の必須性が異なる（Codexレビュー
+# 指摘・Major: reads/recallログだけが存在する状態＝任意機能は未導入だが標準フックは
+# 動いている、というごく普通の main機構成で、下のvault_agents_untouchedだけで
+# ゲートすると棚卸し/fragments-logのDEADが恒常的に誤報され続けてしまう）。
+# LaunchAgent plist（$HOME/Library/LaunchAgents/com.takumi009.<name>.plist）の
+# 実在をもって「この任意機能を導入したか」を個別に判定し、未導入ならレポート系の
+# 新鮮度・未処理チェックそのものをスキップする（reads/recallログの死活判定には
+# 影響しない＝任意機能の未導入で標準フックの死活検知まで消してしまわないため）。
+: "${LAUNCH_AGENTS_DIR:=$HOME/Library/LaunchAgents}"
+vault_agent_installed() {
+  [ -f "${LAUNCH_AGENTS_DIR}/com.takumi009.$1.plist" ]
+}
+
+# vault-agents関連のシグナル（棚卸し・fragments-logの出力2種＋reads/recallログ2種＋
+# 棚卸し・fragments-logのLaunchAgent plist2種＝計6種）が1つも無ければ「一度も
+# 導入されていない」とみなしてセクション全体を対象外にする（旧実装は
+# $VAULT/Explorations の有無で判定していたが、2026-07-11 決定で棚卸し・
+# fragments-logの出力先がVault配下から $HOME/.claude/logs/ 配下へ移り、
+# Explorations自体がもう作られなくなったため判定基準を移設先へ合わせた）。
+# plist2種もシグナルに含める（Codexレビュー指摘・Major再指摘: 出力4種だけで
+# 判定すると「plistは導入済みだが初回実行前・またはジョブが一度も成功していない」
+# ケースが出力側の不在と見分けられず、セクション全体が対象外になって本来出るべき
+# DEADが出せなくなる）。
+vault_agents_untouched=1
+[ -d "$FRAGMENTS_LOG_DIR" ] && vault_agents_untouched=0
+[ -d "$VAULT_INVENTORY_LOG_DIR" ] && vault_agents_untouched=0
+[ -f "$VAULT_READS_LOG" ] && vault_agents_untouched=0
+[ -f "$VAULT_RECALL_LOG" ] && vault_agents_untouched=0
+vault_agent_installed "vault-inventory" && vault_agents_untouched=0
+vault_agent_installed "fragments-log" && vault_agents_untouched=0
+
+if [ ! -d "$VAULT" ]; then
+  log "  -> Vaultが見つかりません（${VAULT}）。このマシンに私的Vaultが無い（サブ機）想定ならチェック対象外"
+elif [ "$vault_agents_untouched" = "1" ]; then
+  log "  -> vault-agentsの出力（${FRAGMENTS_LOG_DIR}・${VAULT_INVENTORY_LOG_DIR}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）が1件も見つかりません。vault-agentsが一度も導入されていない想定ならチェック対象外"
+else
+  # epoch(秒)から現在までの経過日数を返す。未来のepoch（時計ズレ・ファイル破損）
+  # では負値をそのまま返す＝呼び出し側で「未来日=異常」と判定できるようにする
+  # （Codexレビュー指摘・Major: 経過日数の閾値判定は上限（stale）しか見ていないと、
+  # 未来日時が「新しすぎるので健全」に誤判定される＝閾値ガードの下限漏れ。
+  # Knowledge/fail-open-and-observable-guards §1と同型の欠陥）。
+  # $1 は date +%s の出力（数字のみ）が前提。bash 3.2 の算術評価器は
+  # `$(コマンド置換) - "$1"` のように command substitution と quoted変数展開が
+  # 混在すると誤ってパースする既知の癖があるため（実測確認済み）、$1 はクォート
+  # せずに渡す（値は常に数字のみなのでword-splitting等のリスクは無い）。
+  age_days_from_epoch() {
+    local epoch=$1
+    echo $(( ( $(date -u +%s) - epoch ) / 86400 ))
+  }
+
+  # ディレクトリ内の最新 YYYY-MM-DD.md の日付から today までの経過日数を返す
+  # （BSD date。1件も無ければ非0で返し、呼び出し側で「一度も生成されていない」扱い）。
+  latest_report_age_days() {
+    local dir="$1" latest base epoch
+    latest="$(ls "$dir"/20*.md 2>/dev/null | sort | tail -1)"
+    [ -z "$latest" ] && return 1
+    base="$(basename "$latest")"
+    base="${base%.md}"
+    epoch="$(date -j -f "%Y-%m-%d" "$base" +%s 2>/dev/null)" || return 1
+    age_days_from_epoch "$epoch"
+  }
+
+  # TSVログの最終行1列目(ISO8601・末尾Z)の経過日数を返す（無ければ非0で返す）。
+  # ERROR行（vault-recall.sh/vault-read-log.shのlog_error()が書く行）も含めた
+  # 「ファイルに何か書かれた最終時刻」＝ログが死んでいるかどうかの一次判定に使う。
+  #
+  # ログの時刻は vault-recall.sh/vault-read-log.sh が `date -u +...Z` で書く
+  # UTC時刻（Codexレビュー指摘・N-5対応前は末尾Zを外しただけで `date -j -f`
+  # に渡していたため、実行環境のローカルTZ（例: JST=+9h）として誤って解釈
+  # されていた＝2026-07-10 敵対的レビュー2回目 N-5。`TZ=UTC` を明示して
+  # パースすることで、UTC時刻をUTCとして正しく経過日数に変換する）。
+  log_last_line_age_days() {
+    local f="$1" ts epoch
+    [ -f "$f" ] || return 1
+    ts="$(tail -1 "$f" 2>/dev/null | cut -f1)"
+    [ -z "$ts" ] && return 1
+    ts="${ts%Z}"
+    epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" +%s 2>/dev/null)" || return 1
+    age_days_from_epoch "$epoch"
+  }
+
+  # ERROR行以外（3列目=ノート相対パスが空でない行）の最終行の経過日数を返す。
+  # vault_inventory.py の read_log() と同じ判定基準（NF>=3 かつ 3列目が空でない）。
+  # フックは実行されているがERROR行しか出せていない（例: jq破損で毎回失敗）状態を
+  # log_last_line_age_days だけでは「鮮度は健全」と見誤ってしまうため分離する
+  # （Codexレビュー指摘・Major: 最終行だけを見ると、ERROR行を出し続ける壊れた
+  # フックでも「直近に記録あり＝健全」と誤判定してしまう）。
+  # log_last_line_age_days と同様、時刻はUTCとして明示的にパースする
+  # （N-5対応。ローカルTZ解釈による±9hのズレを避ける）。
+  log_last_valid_line_age_days() {
+    local f="$1" ts epoch
+    [ -f "$f" ] || return 1
+    ts="$(awk -F'\t' 'NF>=3 && $3!="" {t=$1} END{if (t!="") print t}' "$f" 2>/dev/null)"
+    [ -z "$ts" ] && return 1
+    ts="${ts%Z}"
+    epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" +%s 2>/dev/null)" || return 1
+    age_days_from_epoch "$epoch"
+  }
+
+  # レポート系（棚卸し・fragments-log）1件分の判定をまとめる。
+  #   $1=ディレクトリ $2=ラベル(drift種別プレフィクス) $3=しきい値(日) $4=表示名 $5=grep対象LaunchAgent名
+  check_report_freshness() {
+    local dir="$1" label="$2" threshold="$3" name="$4" agent="$5" age
+    if ! age="$(latest_report_age_days "$dir")"; then
+      item_drift "[${label}-DEAD] ${name}が一度も見つかりません（${dir}）＝com.takumi009.${agent} LaunchAgent停止の疑い。確認: launchctl list | grep ${agent}"
+      return
+    fi
+    if [ "$age" -lt 0 ]; then
+      item_drift "[${label}-FUTURE-DATE] ${dir} の最新ファイル名の日付が未来です＝ファイル名破損かシステム時計のズレの可能性。確認: ls ${dir}"
+      return
+    fi
+    if [ "$age" -gt "$threshold" ]; then
+      item_drift "[${label}-STALE] 最新の${name}が ${age} 日前（目安 ${threshold} 日）＝com.takumi009.${agent} LaunchAgent停止の疑い。確認: launchctl list | grep ${agent}"
+    else
+      log "  -> ✅ ${name}: ${age}日前（目安${threshold}日以内）"
+    fi
+  }
+
+  # ログ系（vault-reads.tsv・vault-recall.tsv）1件分の判定をまとめる。
+  #   $1=ログパス $2=ラベル $3=しきい値(日) $4=表示名 $5=フックパス $6=補足（recallのみ「ヒット0件」注記）
+  check_log_freshness() {
+    local f="$1" label="$2" threshold="$3" name="$4" hook="$5" extra_hint="${6:-}" age valid_age
+    if ! age="$(log_last_line_age_days "$f")"; then
+      item_drift "[${label}-DEAD] ${name} が無い、または記録が一度もありません（${f}）＝${hook} フック停止の疑い${extra_hint}。確認: tail -1 ${f}"
+      return
+    fi
+    if [ "$age" -lt 0 ]; then
+      item_drift "[${label}-FUTURE-DATE] ${name} の最終記録が未来日時です（${f}）＝ファイル破損かシステム時計のズレの可能性。確認: tail -5 ${f}"
+      return
+    fi
+    if [ "$age" -gt "$threshold" ]; then
+      # 最終行(ERROR含む)自体が古い＝STALE。有効行がそれより新しいことは
+      # log_last_line_age_days の定義上起きない（有効行もrows全体の一部）ため、
+      # ここでは素直にSTALEとして報告する。
+      item_drift "[${label}-STALE] ${name} の最終記録が ${age} 日前（目安 ${threshold} 日）＝${hook} フック停止の疑い${extra_hint}。確認: tail -1 ${f}"
+      return
+    fi
+    # 最終行(ERROR含む)は新しいが、有効な行（ERROR以外）が無い/古い＝動いてはいるが
+    # 失敗し続けている疑い。staleとは別種の異常として報告する（無言のfail-open防止）。
+    if valid_age="$(log_last_valid_line_age_days "$f")"; then
+      # 有効行はあるが、その時刻だけが未来（例: 一時的に未来日時の有効行が書かれ、
+      # 直後に現在日時のERROR行が追記された）ケースも「新しすぎるので健全」に
+      # 誤判定しない（Codexレビュー指摘・Major回帰: 最終行(age)側のFUTURE-DATE
+      # チェックだけでは valid_age 側の未来日時を見逃す）。
+      if [ "$valid_age" -lt 0 ]; then
+        item_drift "[${label}-FUTURE-DATE] ${name} の有効な記録の日時が未来です（${f}）＝ファイル破損かシステム時計のズレの可能性。確認: tail -5 ${f}"
+        return
+      fi
+    fi
+    if [ -z "${valid_age:-}" ] || [ "$valid_age" -gt "$threshold" ]; then
+      item_drift "[${label}-ERRORING] ${name} は最近書き込まれていますが、有効な記録（ERROR行以外）が無い/古い状態です＝${hook} は実行されているが失敗し続けている疑い。確認: tail -5 ${f}"
+      return
+    fi
+    log "  -> ✅ ${name}: 最終記録 ${age}日前"
+  }
+
+  # レポート系1件分の「未処理」判定（2026-07-11 決定・claude/hooks/bootstrap-vault.sh
+  # の未処理レポート検知と同じ基準＝最新レポートのfrontmatterに
+  # `processed: YYYY-MM-DD` 行が無ければ未処理）。bootstrap-vault.sh は毎セッションの
+  # 一次検知、こちらは「セッションが開かれても何日も処理されないまま放置」を捕捉する
+  # 二次の安全網（週次drift通知に相乗り）。DEAD/FUTURE-DATE/STALE は
+  # check_report_freshness 側で既に報告済みのため、ここでは二重報告しない
+  # （レポートが1件も無い・日付が未来・既にSTALE閾値を超えている場合は静かに戻る＝
+  # 「新しい報告が来ていない」という同一原因の症状を2種類のdrift項目で重複報告しない）。
+  # ファイル先頭のfrontmatter（先頭行が `---` の場合のみ、次の `---` 行の直前まで）を
+  # 標準出力へ書く。先頭行が `---` でない・読み取れない等はfrontmatter無し扱いで
+  # 空を返す（claude/hooks/bootstrap-vault.sh と同じ実装＝frontmatter外の本文に
+  # 偶然 `processed: YYYY-MM-DD` があってもマーカーと誤認しない。Codexレビュー
+  # 指摘・Major）。
+  report_frontmatter() {
+    awk 'NR==1 { if ($0 != "---") exit; next } /^---[[:space:]]*$/ { exit } { print }' "$1" 2>/dev/null
+  }
+
+  #   $1=ディレクトリ $2=ラベル(drift種別プレフィクス) $3=しきい値(日・freshnessと同じ値を渡す) $4=表示名
+  check_report_processed() {
+    local dir="$1" label="$2" threshold="$3" name="$4" latest age
+    latest="$(ls "$dir"/20*.md 2>/dev/null | sort | tail -1)"
+    [ -z "$latest" ] && return
+    age="$(latest_report_age_days "$dir")" || return
+    [ "$age" -ge 0 ] || return
+    [ "$age" -le "$threshold" ] || return  # STALE側で既に報告済み
+    if report_frontmatter "$latest" | grep -qE '^processed:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
+      log "  -> ✅ ${name}: 処理済みマーカーあり（$(basename "$latest" .md)）"
+      return
+    fi
+    if [ "$age" -gt "$UNPROCESSED_REPORT_GRACE_DAYS" ]; then
+      item_drift "[${label}-UNPROCESSED] 最新の${name}（$(basename "$latest" .md)）が生成から${age}日経過してもリーダーに処理された形跡（frontmatterの processed: 行）がありません（目安 ${UNPROCESSED_REPORT_GRACE_DAYS} 日）。次回セッションで確認・処理してください。"
+    else
+      log "  -> ${name}: 未処理（生成から${age}日・目安${UNPROCESSED_REPORT_GRACE_DAYS}日以内は許容）"
+    fi
+  }
+
+  if vault_agent_installed "vault-inventory"; then
+    check_report_freshness "$VAULT_INVENTORY_LOG_DIR" "VAULT-INVENTORY" \
+      "$VAULT_INVENTORY_STALE_DAYS" "棚卸しレポート" "vault-inventory"
+    check_report_processed "$VAULT_INVENTORY_LOG_DIR" "VAULT-INVENTORY" \
+      "$VAULT_INVENTORY_STALE_DAYS" "棚卸しレポート"
+  else
+    log "  -> 棚卸しレポート: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.vault-inventory.plist が無い。scripts/install-vault-agents.sh 未実行）のためチェック対象外"
+  fi
+  if vault_agent_installed "fragments-log"; then
+    check_report_freshness "$FRAGMENTS_LOG_DIR" "FRAGMENTS-LOG" \
+      "$FRAGMENTS_LOG_STALE_DAYS" "fragments-logレポート" "fragments-log"
+    check_report_processed "$FRAGMENTS_LOG_DIR" "FRAGMENTS-LOG" \
+      "$FRAGMENTS_LOG_STALE_DAYS" "fragments-logレポート"
+  else
+    log "  -> fragments-logレポート: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.fragments-log.plist が無い。scripts/install-vault-agents.sh 未実行）のためチェック対象外"
+  fi
+  check_log_freshness "$VAULT_READS_LOG" "VAULT-READS-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
+    "vault-reads.tsv" "claude/hooks/vault-read-log.sh"
+  check_log_freshness "$VAULT_RECALL_LOG" "VAULT-RECALL-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
+    "vault-recall.tsv" "claude/hooks/vault-recall.sh" \
+    "、またはヒット0件の日々が続いている可能性（ヒット時のみ記録する仕様のため区別できません）"
+fi
 
 echo
 echo "======================================================================"

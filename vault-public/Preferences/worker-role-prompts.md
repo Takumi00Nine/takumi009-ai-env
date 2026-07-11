@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -8,6 +8,10 @@ related:
   - "[[Decisions/2026-07-05-worker-stage-roles]]"
   - "[[Decisions/2026-07-05-delegation-gate-v2]]"
   - "[[Preferences/absolute-rules]]"
+aliases:
+  - "7ロール運用"
+  - "requirements-analyst"
+  - "adoption-critic"
 ---
 
 # ワーカー工程ロール運用（7ロール・agents定義＋本ノートSSOT）

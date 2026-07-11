@@ -1,12 +1,15 @@
 ---
 date: 2026-06-22
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, blog, note, canvas, workflow]
 project: blog-platform
 related:
   - "[[Projects/blog-platform]]"
   - "[[Knowledge/obsidian-canvas-to-note]]"
   - "[[Preferences/coding-delegation]]"
+aliases:
+  - "マインドマップCanvas"
+  - "章構成Canvas"
 ---
 
 # note記事を Canvas 経由で作るワークフロー

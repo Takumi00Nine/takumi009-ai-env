@@ -2,9 +2,13 @@
 date: 2026-06-14
 tags: [preference, git, github, security]
 project: meta
-updated: 2026-07-08
+updated: 2026-07-10
 related:
   - "[[Preferences/readme-bilingual]]"
+aliases:
+  - "privateから作成"
+  - "GitHub Release提案"
+  - "リポジトリをpublic"
 ---
 
 # git push運用と権限分担

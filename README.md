@@ -32,7 +32,7 @@ If a case arises on a sub machine where a rule needs fixing, don't fix it there 
 takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json (symlink target)
-│   ├── hooks/                 # bootstrap-vault.sh, delegation-gate-v2.sh
+│   ├── hooks/                 # bootstrap-vault.sh, delegation-gate-v2.sh, vault-recall.sh, vault-read-log.sh
 │   └── agents/                # Worker role definitions (7 roles)
 ├── codex/
 │   ├── AGENTS.md               # ~/.codex/AGENTS.md (symlink target)
@@ -56,7 +56,7 @@ takumi009-ai-env/
 ├── launchagents/
 │   ├── com.takumi009.vault-backup.plist       # Runs the Vault backup hourly (main only)
 │   ├── com.takumi009.vault-inventory.plist    # Generates the Vault inventory report twice a month (main only)
-│   ├── com.takumi009.fragments-review.plist   # Generates the Fragments promotion review weekly (main only)
+│   ├── com.takumi009.fragments-log.plist      # Generates the Fragments promotion candidate log weekly (main only)
 │   ├── com.takumi009.sub-update.plist         # Auto-refreshes the rules twice a day (sub only)
 │   └── com.takumi009.drift-check.plist        # Detects drift weekly and sends a macOS notification if drift>0 (main only; auto-installed by install-main.sh)
 ├── vault-public/                # Snapshot of the Vault's designated public folders (see below)
@@ -140,12 +140,12 @@ The user creates and configures the remote for the Vault's backup destination (a
 
 ### Vault Cultivation Tools (main only)
 
-`scripts/vault-agents/` contains 2 tools that periodically inventory and review the external brain (Obsidian Vault). All of them only read the Vault and write reports (Markdown/Canvas) under `Explorations/` — they never rewrite existing Vault notes.
+`scripts/vault-agents/` contains 2 tools that periodically inventory and log the external brain (Obsidian Vault). All of them only read the Vault and write reports (Markdown) under `$HOME/.claude/logs/` — they never write into the Vault itself (moved out of `Explorations/` on 2026-07-11; see [[Decisions/2026-07-11-vault-maintenance-hands-off]] in the Vault — "don't put human-facing docs nobody reads inside the Vault").
 
 | Script | Content | Schedule |
 |---|---|---|
 | `vault_inventory.py` | Inventory report of policy notes: missing `updated`, broken links, remnants of superseded policies, etc. | 1st and 15th of each month, 03:00 |
-| `fragments_review.py` | Weekly list of Fragments (daily fragments) promotion-review candidates | Every Monday, 03:30 |
+| `fragments_log.py` | Weekly log of Fragments (daily fragments) promotion candidates | Every Monday, 03:30 |
 
 The corresponding 2 LaunchAgents are installed by `scripts/install-vault-agents.sh` (main only, optional). Note: these plists hard-code `/usr/bin/python3` (macOS's system Python) as the interpreter.
 
@@ -256,7 +256,7 @@ None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the
 takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json （symlink先）
-│   ├── hooks/                 # bootstrap-vault.sh・delegation-gate-v2.sh
+│   ├── hooks/                 # bootstrap-vault.sh・delegation-gate-v2.sh・vault-recall.sh・vault-read-log.sh
 │   └── agents/                # ワーカー役割定義（7ロール）
 ├── codex/
 │   ├── AGENTS.md               # ~/.codex/AGENTS.md （symlink先）
@@ -280,7 +280,7 @@ takumi009-ai-env/
 ├── launchagents/
 │   ├── com.takumi009.vault-backup.plist       # Vaultバックアップを毎時実行（メイン専用）
 │   ├── com.takumi009.vault-inventory.plist    # Vault棚卸しレポートを月2回生成（メイン専用）
-│   ├── com.takumi009.fragments-review.plist   # Fragments昇格レビューを毎週生成（メイン専用）
+│   ├── com.takumi009.fragments-log.plist      # Fragments昇格候補ログを毎週生成（メイン専用）
 │   ├── com.takumi009.sub-update.plist         # ルールを1日2回自動最新化（サブ専用）
 │   └── com.takumi009.drift-check.plist        # ズレを週1で検知しdrift>0ならmacOS通知（メイン専用。install-main.shが自動設置）
 ├── vault-public/                # Vaultのpublic指定フォルダのスナップショット（後述）
@@ -364,12 +364,12 @@ Vault のバックアップ先（private repo）の作成・remote設定は本�
 
 ### Vault育成系ツール（メイン専用機能）
 
-`scripts/vault-agents/` には、外部脳(Obsidian Vault)を定期的に棚卸し・レビューするツール2種を収録しています。いずれも Vault を読み取ってレポート（Markdown/Canvas）を `Explorations/` 配下へ出力するだけで、Vault の既存ノートを書き換えることはありません。
+`scripts/vault-agents/` には、外部脳(Obsidian Vault)を定期的に棚卸し・記録するツール2種を収録しています。いずれも Vault を読み取ってレポート（Markdown）を `$HOME/.claude/logs/` 配下へ出力するだけで、Vault 自体には一切書き込みません（2026-07-11、`Explorations/` 配下から移設。「読まれない人間向け資料をVaultに置かない」方針＝Vault内 `Decisions/2026-07-11-vault-maintenance-hands-off` 参照）。
 
 | スクリプト | 内容 | 実行タイミング |
 |---|---|---|
 | `vault_inventory.py` | 方針ノートの updated 欠落・リンク切れ・旧方針の残存等の棚卸しレポート | 毎月1日・15日 03:00 |
-| `fragments_review.py` | Fragments（日次断片）の週次昇格レビュー候補リスト | 毎週月曜 03:30 |
+| `fragments_log.py` | Fragments（日次断片）の週次昇格候補ログ | 毎週月曜 03:30 |
 
 対応する LaunchAgent 2種は `scripts/install-vault-agents.sh` が配置します（メイン専用・任意）。注記: これらのplistはインタプリタとして `/usr/bin/python3`（macOS標準のPython）をハードコードしています。
 

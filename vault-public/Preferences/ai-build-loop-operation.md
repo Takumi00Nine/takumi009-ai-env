@@ -1,12 +1,15 @@
 ---
 date: 2026-07-07
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, ai-build-loop, orchestration, human-gate]
 project: ai-driven-workflow
 related:
   - "[[Decisions/2026-07-06-ai-build-loop-v1]]"
   - "[[Knowledge/three-layer-orchestration]]"
   - "[[Projects/ai-driven-workflow]]"
+aliases:
+  - "以上です方式"
+  - "request.md代筆"
 ---
 
 # ai-build-loop 進行役の運用ルール

@@ -1,12 +1,15 @@
 ---
 date: 2026-07-01
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, quality, design, prioritization]
 project: meta
 related:
   - "[[Preferences/profile]]"
   - "[[Projects/channel-strategy]]"
   - "[[Preferences/coding-delegation]]"
+aliases:
+  - "見られる面は作り込む"
+  - "荒削り許容"
 ---
 
 # 品質の割り振り：人に見られる面は作り込む／内部は荒削り許容

@@ -1,10 +1,12 @@
 ---
 date: 2026-06-28
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, tools, workflow, scripts]
 project: meta
 related:
   - "[[Preferences/coding-delegation]]"
+aliases:
+  - "~/work/tools集約"
 ---
 
 # ツール格納ルール

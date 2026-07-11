@@ -1,10 +1,12 @@
 ---
 date: 2026-06-14
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, review]
 project: meta
 related:
   - "[[Preferences/command-permissions]]"
+aliases:
+  - "VS Code自動起動しない"
 ---
 
 # 確認依頼時のVS Code自動オープンはしない

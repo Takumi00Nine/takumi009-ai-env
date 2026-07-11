@@ -1,10 +1,12 @@
 ---
 date: 2026-06-14
-updated: 2026-06-20
+updated: 2026-07-10
 tags: [preference, github]
 project: meta
 related:
   - "[[Knowledge/claude-codex-usage]]"
+aliases:
+  - "トークン権限更新URL"
 ---
 
 # GitHub手動操作はURL提示

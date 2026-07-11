@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, codex, review, delegation, protocol]
 project: meta
 related:
@@ -10,6 +10,9 @@ related:
   - "[[Knowledge/cmux-cli]]"
   - "[[Decisions/2026-07-05-worker-driven-codex-review]]"
   - "[[Decisions/2026-07-05-codex-reviewer-only]]"
+aliases:
+  - "レビュー委任プロトコル"
+  - "worker-driven呼び出し方"
 ---
 
 # Codex 一次レビュー委任プロトコル（SSOT）

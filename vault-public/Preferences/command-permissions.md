@@ -1,12 +1,16 @@
 ---
 date: 2026-06-15
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, permissions, commands, security, claude-code]
 project: meta
 related:
   - "[[Preferences/file-placement]]"
   - "[[Preferences/mcp-global-install]]"
   - "[[Preferences/review-open-vscode]]"
+aliases:
+  - "Auto mode許可方針"
+  - "3ティア構成"
+  - "additionalDirectories"
 ---
 
 # コマンド許可の方針（Claude Code）

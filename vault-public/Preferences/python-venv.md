@@ -1,11 +1,15 @@
 ---
 date: 2026-06-16
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, python, venv]
 project: meta
 related:
   - "[[Knowledge/venv-breaks-on-folder-rename]]"
   - "[[Preferences/mcp-global-install]]"
+aliases:
+  - "venv未有効ブロック"
+  - "グローバルpip禁止"
+  - "Python"
 ---
 
 # Python は必ず仮想環境で実行する

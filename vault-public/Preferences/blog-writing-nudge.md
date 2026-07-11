@@ -1,12 +1,16 @@
 ---
 date: 2026-06-20
-updated: 2026-07-08
+updated: 2026-07-10
 tags: [preference, blog, workflow, nudge]
 project: blog-platform
 related:
   - "[[Projects/blog-platform]]"
   - "[[Projects/channel-strategy]]"
   - "[[Preferences/profile]]"
+aliases:
+  - "ブログ書いたら提案"
+  - "作業完了後の一声"
+  - "完了報告"
 ---
 
 # 作業完了ごとに「ブログ書いたら？」と提案する
