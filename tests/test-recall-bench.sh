@@ -131,14 +131,22 @@ echo "=== 4. --alias-overlay: 実Vaultを書き換えずに仮想的にaliasを�
   BENCH="$(mktemp)"
   printf 'npxで都度起動していいですか、十分な長さのプロンプトです\tPreferences/mcp-global-install.md\n' > "$BENCH"
 
-  before_out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  # VAULT_RECALL_DISABLE_VECTORで実行環境の実Vault埋め込みインデックス
+  # （~/.cache/vault-embeddings/等）混入を遮断する。このテストは一時fixture Vaultに対して
+  # フックを実行するが、フックはVECTOR_HELPERの既定インデックス置き場（実Vault分と共通）を
+  # 参照するため、実インデックスに偶然relpathが一致するノートがあるとキーワード一致0件でも
+  # ベクトル想起経由で候補提示されてしまい、このテストが環境依存でflakyになっていた
+  # （実機で再現・原本コードでも同じ箇所が同じ理由で失敗することを確認済み）。本テストは
+  # キーワード照合(alias-overlay)の検証が目的でありベクトル想起の挙動とは無関係なため、
+  # 無効化してもテストの意図は変わらない。
+  before_out="$(VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
   assert_contains "overlay無しではFAIL（aliasが無いので提示されない）" "$before_out" "[ 1] FAIL"
 
   OVERLAY="$(mktemp)"
   printf 'Preferences/mcp-global-install.md\tnpxで都度起動\n' > "$OVERLAY"
   BEFORE_SUM="$(md5 -q "$VAULT_DIR/Preferences/mcp-global-install.md" 2>/dev/null || md5sum "$VAULT_DIR/Preferences/mcp-global-install.md" | cut -d' ' -f1)"
 
-  after_out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" --alias-overlay "$OVERLAY" 2>/dev/null)"
+  after_out="$(VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" --alias-overlay "$OVERLAY" 2>/dev/null)"
   assert_contains "overlay適用後はPASSになる" "$after_out" "[ 1] PASS"
 
   AFTER_SUM="$(md5 -q "$VAULT_DIR/Preferences/mcp-global-install.md" 2>/dev/null || md5sum "$VAULT_DIR/Preferences/mcp-global-install.md" | cut -d' ' -f1)"

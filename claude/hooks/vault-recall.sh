@@ -6,37 +6,24 @@
 # additionalContextの肥大化・切り詰め事故を防ぐ。bootstrap-vault.shと同じ教訓）。
 # 最終判断（実際にReadするか）はAI/リーダーに委ねる。
 #
-# 照合方式（全体一致＋トークン部分一致の二段構え・2026-07-11 8.0ラウンド改修）:
-# 各ノートの「照合キー」（frontmatterのaliases: リスト + ファイル名由来のキー）
-# について、まず従来どおり「キー全体がプロンプト文字列の中に部分文字列として
-# 含まれるか」を判定する（全体一致・スコア2＝最優先）。ここで不一致でも即座に
-# 見送らず、キーを空白/記号/ASCII-非ASCII境界でトークン分割し、各トークンが
-# 個別にプロンプトへ出現するかを追加で調べる（部分一致・スコア1）。キーの全
-# トークン中おおむね1/3以上が出現すれば部分一致とみなす（tokenize_key/
-# token_matches・整数演算 matched*3 >= total）。これにより「iPhoneのSafari」
-# （助詞が挟まって連続一致しない）・「pip installしちゃだめ？」（複数語キーの
-# 一部の語しかプロンプトに現れない）のような、連続部分文字列では拾えない
-# 言い換えに耐性を持たせる（敵対的レビュー2回目§3-5・第三者ホールドアウト
-# 0/10の主因＝照合方式が連続部分文字列一致のみだったこと）。
-# 日本語はスペース区切りが無いため、プロンプト側を分かち書きすることはしない
-# （キー側だけを分割し、プロンプトの中を素朴に探す・従来からの方針を維持）。
-# ASCIIキー/トークンは大小文字無視・3文字未満は対象外（"go" 等の一般語の誤爆を
-# 減らす）。非ASCIIキー/トークンは大小文字の区別が無いため素の一致・2文字未満
-# は対象外。加えて非ASCIIトークン(3文字以上)は「裏取り→裏を取る」「壊れる→
-# 壊れた」のような活用形ゆれを一部吸収するため、末尾1文字を落とした形（活用語尾
-# の変化を許容）でも一致を許容する（tokenize_key/token_matches実装を参照）。
+# 8.2ラウンド「統一リファクタリング」（リーダー承認済み設計）: 従来このファイルに
+# bashでインライン実装されていたキーワード照合ロジック（全体一致＋トークン部分一致の
+# 二段構え・8.0ラウンド改修）を scripts/vault-agents/keyword_recall_helper.py へ挙動
+# 完全維持のまま移植した。本スクリプトは以後、keyword_recall_helper.pyと
+# vector_recall_helper.py（柱①・8.1ラウンド追加・無改変）を並列にサブプロセス起動し、
+# 両方の結果をマージして従来と同一形式で表示するだけの薄い殻になる。移植元の全文は
+# claude/hooks/vault-recall-legacy.sh にロールバック用として保全してある（インストール
+# 対象外・各判断のコメントも含め無変更。詳細な設計理由（照合方式・tie-break・
+# fail-open方針等）を読みたい場合はそちらを参照）。
 #
-# やらないこと（判断根拠・過剰適合防止）: 1つの複合語トークン（例:「裏取り
-# 担当分担」のような助詞を含まない1続きの非ASCII文字列）をさらに細かく2分割し、
-# プロンプト中に離れて出現する場合まで一致とみなす gap-tolerant 一致は実装しない。
-# 「Webで裏を取る」vs alias「裏取り」型の言い換えの一部はこの方式では拾えない
-# ままだが、複合語の内部境界推定は日本語形態素解析なしでは精度が出ず、対象
-# ノートと無関係な誤ヒットを増やす副作用の方が大きいと判断した（8.0ラウンド
-# 設計時のトレードオフとして記録・リーダー報告）。
+# 照合方式そのもの（全体一致＋トークン部分一致・スコア計算・活用形/カタカナ境界の
+# フォールバック等）はkeyword_recall_helper.py側のdocstring・各関数コメントに移設した。
 #
 # fail-open + 可観測（Knowledge/fail-open-and-observable-guards）:
 # いかなるエラーでもプロンプト処理は妨げない（必ず exit 0）。ただし「無言の
 # fail-open」は禁止のため、エラー時は $VAULT_RECALL_LOG に ERROR 行を残す。
+# キーワード・ベクトルは互いに独立してfail-openする（片方が失敗してももう片方の
+# 結果は保持する）。
 #
 # 環境変数（すべて省略可・テスト用）:
 #   VAULT_RECALL_VAULT … Vaultのルート（既定 $HOME/Data/obsidian）
@@ -50,31 +37,46 @@
 VAULT="${VAULT_RECALL_VAULT:-$HOME/Data/obsidian}"
 LOG_FILE="${VAULT_RECALL_LOG:-$HOME/.claude/logs/vault-recall.tsv}"
 
-# 想起支援の対象フォルダ（README.mdは各フォルダの説明用で照合対象外）。
-SCAN_DIRS=(Knowledge Preferences Decisions Projects)
-
 # 1ノート内で複数ヒットしたキーを連結する際の内部区切り文字（表示直前まで使う）。
 # 半角スペースだと alias 自体に空白を含む場合（例: "fail, open"）に表示用の
 # スペース→", "置換でキー内部の空白まで壊れるため、通常のalias文字列にまず
 # 出現しない制御文字(Unit Separator)にする（Codexレビュー指摘・Major回帰）。
+# keyword_recall_helper.pyのJSON出力(keys配列)からこの区切りへ組み直して使う。
 KEY_SEP=$'\x1f'
 
-# 一致キー1件あたりのスコア。全体一致(キー全体が連続部分文字列として一致)を
-# 最優先し、トークン部分一致はそれより弱い信号として扱う（同点ならより多くの
-# 全体一致キーを持つノートが上位に来る・従来の「一致キー数の多い順」を維持）。
-KEY_SCORE_FULL=2
-KEY_SCORE_PARTIAL=1
-
 # 起動必読ファイル（bootstrap-vault.shと同じ6件）は毎セッション必ず全文Readされる
-# ため、想起候補として重複提示する意味が無い。Personal/profile-personal.md は
-# 上記4フォルダの対象外なので実質的な除外対象は5件。
+# ため、想起候補として重複提示する意味が無い。Personal/profile-personal.mdは
+# 2026-07-11のPersonal想起対象化（[[Decisions/2026-07-11-personal-recall-scope]]）
+# でSCAN_DIRSに含まれるようになったため、他5件と同様に除外対象へ追加した
+# （リーダー指示: 「必読profile-personalの候補除外ルールは既存の必読除外と同様の
+# 扱いでよい」）。keyword_recall_helper.py側にも同じ6件を独立に定義している
+# （ここではベクトル候補側の除外チェックにのみ使う。2箇所の完全同期は機械的には
+# 強制しない＝GENERIC_TOKENS等と同じ運用方針。更新時は両方見直すこと）。
 EXCLUDE_RELPATHS=(
   "Knowledge/mistakes.md"
   "Preferences/absolute-rules.md"
   "Preferences/profile.md"
   "Preferences/coding-delegation.md"
   "Preferences/vault-operation.md"
+  "Personal/profile-personal.md"
 )
+
+# 両helper(keyword/vector)の出力JSONを取り込む前に通すスキーマ検証式（jq -e用）。
+# トップレベルの型だけでなく候補配列の各要素までチェックする（Codexレビュー指摘・Major
+# 2巡目: トップレベルの型だけを見る検証だと `{"candidates":[{}]}` のような壊れた要素が
+# 素通りし、relpath/scoreが文字列"null"として候補表示・ログへ混入してしまう）。
+# helper自身が正常に動作している限り常に真になる契約であり、破損/差し替えhelperに
+# 対する防御的検証としてのみ働く（fail-open集約ログへ回すための判定・下記の使用箇所参照）。
+KW_SCHEMA_CHECK='type == "object" and (.candidates | type == "array") and
+  all(.candidates[]; type == "object"
+    and (.relpath | type == "string" and length > 0)
+    and (.score | type == "number")
+    and (.keys | type == "array")
+    and all(.keys[]; type == "object" and (.key | type == "string") and (.partial | type == "boolean")))'
+VEC_SCHEMA_CHECK='type == "object" and (.candidates | type == "array") and
+  all(.candidates[]; type == "object"
+    and (.relpath | type == "string" and length > 0)
+    and (.score | type == "number"))'
 
 # ISO8601時刻+TSV1行を$LOG_FILEへ追記する（ディレクトリ自動作成）。
 # 失敗しても握りつぶす（ログ書き込み自体がプロンプト処理を止めてはいけない）。
@@ -95,20 +97,141 @@ log_error() {
   log_row "ERROR		${SESSION_ID:-}	$1"
 }
 
+# ベクトル想起のfail-openをすべて1箇所へ集約するログ関数（付録A FR3の6ケース＝
+# Ollama不在／応答timeout／インデックス破損・JSON壊れ／埋め込み次元不一致／権限
+# エラー／削除済みノート残存、いずれもここを通る。ケースの区別はメッセージ文言のみで
+# 行い、bash側の分岐そのものは増やさない＝「1箇所に集約」）。全ケースで想起処理は
+# 継続しキーワード結果は維持する（exitしない）。
+log_vector_fail_open() {
+  log_error "ベクトル想起をfail-openでskipしました: $1"
+}
+
+# キーワード想起のfail-open集約ログ（8.2ラウンド新設・log_vector_fail_openと対の
+# 関数）。keyword_recall_helper.pyの起動失敗・timeout・異常終了・出力JSON壊れの
+# いずれもここを通す。全ケースで想起処理は継続しベクトル結果は維持する（exitしない・
+# 「片方が失敗してももう片方の枠は生かす」という設計判断のbash側実装）。
+log_keyword_fail_open() {
+  log_error "キーワード想起をfail-openでskipしました: $1"
+}
+
+# --- 予算・タイムアウト関連の設定 ---
+# キーワード想起(柱②・8.2ラウンド)・ベクトル想起(柱①・8.1ラウンド追加)は共通の
+# パターン（bash側でenv値を検証→サブプロセス起動→25msポーリングでの生死監視→
+# 予算超過時のみ強制kill）に従う。VAULT_RECALL_DISABLE_VECTOR=1でベクトル想起のみを
+# 無効化できる（AC1回帰確認用のキルスイッチ。既存4ベンチセットをキーワードのみ
+# モードで走らせ「無劣化」を確認するために使う＝設計書§4 AC1。recall_bench.py側から
+# この環境変数で切り替える想定）。キーワード想起には対応するキルスイッチは無い
+# （常に試みる＝FR2の「候補0件のプロンプトでもキーワード照合自体は毎回行う」を
+# 維持するため。無効化が必要になったことは無い）。
+VECTOR_DISABLED="${VAULT_RECALL_DISABLE_VECTOR:-0}"
+
+# 内部timeout（要件v2決定h・当初500ms暫定→2026-07-12に1000msへ変更・本人指示）。
+# 変更理由（本人立ち会い実測）: コールド時（Ollama既定keep_alive 5分切れ後）はモデル
+# 再ロード込みのembedが647〜648msで安定し、旧500ms予算では確実にtimeout→fail-open
+# していた（ウォームは65〜70ms）。1000msならコールドでも約35%のマージンで収まり、
+# 最悪ケースの待ち（1000+猶予150ms）もAC4の許容枠（プロンプト+2秒p95）内。
+# vector_recall_helper.py自身のmonotonic()予算としてそのまま渡す。bash側のハードkill
+# レースはこれに小さな猶予(GRACE_MS)を足した秒数で発火させる（helperが自らの予算超過を
+# 検知して自主終了する猶予を優先し、bashによる強制killは「それでも終わらない」場合の
+# 最終防衛線にする＝二重の予算超過対策）。
+VECTOR_BUDGET_MS="${VAULT_RECALL_VECTOR_BUDGET_MS:-1000}"
+VECTOR_KILL_GRACE_MS="${VAULT_RECALL_VECTOR_KILL_GRACE_MS:-150}"
+
+# キーワード想起にも同じ二重予算パターンを適用する（8.2ラウンド新設）。キーワード
+# 照合はローカルI/Oのみで通常は数十ms程度に収まるが、Vaultが極端に肥大化した場合等の
+# 保険として、ベクトル側と全く同じ検証・kill方式を用意する（既定値もVECTOR側と
+# 揃えて1000ms/150msにした＝「新しい閾値ノブは作らない」方針の範囲内で、既存パターンの
+# 素直な複製として扱う）。
+KEYWORD_BUDGET_MS="${VAULT_RECALL_KEYWORD_BUDGET_MS:-1000}"
+KEYWORD_KILL_GRACE_MS="${VAULT_RECALL_KEYWORD_KILL_GRACE_MS:-150}"
+
+# 非負整数であることを検証し、不正値（空文字/小数/負数/数字以外）は既定値へフォール
+# バックする（Codexレビュー指摘・Major: 後段でこれらの値をbashの算術展開$(( ))へ直接
+# 渡すポーリングループに変更したため、環境変数が不正だと算術構文エラーでフック自体が
+# 「いかなるエラーでもexit 0」というhook契約に反して異常終了しかねない。旧awkベースの
+# 実装は非数値でも構文エラーにならず`[ -z ... ] && KILL_AFTER_S="0.65"`で拾えていたが、
+# 整数演算化に伴い明示的な検証が必要になった）。
+case "$VECTOR_BUDGET_MS" in
+  ''|*[!0-9]*) VECTOR_BUDGET_MS=1000 ;;
+esac
+case "$VECTOR_KILL_GRACE_MS" in
+  ''|*[!0-9]*) VECTOR_KILL_GRACE_MS=150 ;;
+esac
+case "$KEYWORD_BUDGET_MS" in
+  ''|*[!0-9]*) KEYWORD_BUDGET_MS=1000 ;;
+esac
+case "$KEYWORD_KILL_GRACE_MS" in
+  ''|*[!0-9]*) KEYWORD_KILL_GRACE_MS=150 ;;
+esac
+MAX_VECTOR_EXTRA=3   # ベクトル候補のうちキーワード候補に無いものの表示上限（FR2）
+
+# claude/hooks/vault-recall.sh は install-main.sh により $HOME/.claude/hooks/ へ
+# シンボリックリンクされる（実体はリポジトリ内）ため、BASH_SOURCEをシンボリックリンク
+# 解決してからリポジトリルートを求める必要がある（macOSのBSD readlinkは-fを持たない
+# ため、手動でループ解決する定番のbash 3.2互換イディオム）。直接パス実行（テスト等）
+# でもシンボリックリンクが無いだけで同じロジックがそのまま正しく動く。
+resolve_repo_root() {
+  local src="${BASH_SOURCE[0]}" dir link
+  while [ -h "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    link="$(readlink "$src")"
+    case "$link" in
+      /*) src="$link" ;;
+      *) src="$dir/$link" ;;
+    esac
+  done
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  (cd -P "$dir/../.." && pwd)
+}
+REPO_ROOT="${VAULT_RECALL_REPO_ROOT:-$(resolve_repo_root 2>/dev/null)}"
+VECTOR_HELPER="${VAULT_RECALL_VECTOR_HELPER:-$REPO_ROOT/scripts/vault-agents/vector_recall_helper.py}"
+KEYWORD_HELPER="${VAULT_RECALL_KEYWORD_HELPER:-$REPO_ROOT/scripts/vault-agents/keyword_recall_helper.py}"
+PYTHON_BIN="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+
 INPUT="$(cat 2>/dev/null || true)"
 
 # session_id/promptを1回のjq呼び出しで取り出す（@tsvはフィールド内のタブ/改行を
 # エスケープするため、プロンプトに実改行があっても行が壊れない）。
-JQ_OUT="$(printf '%s' "$INPUT" | jq -r '[(.session_id // ""), (.prompt // "")] | @tsv' 2>/dev/null)"
+#
+# session_id側の値には固定の非空プレフィックス"S"を付けてから@tsvへ渡し、read後に
+# 取り除く（8.1ラウンド・リーダー実機発見の回帰修正: session_idがJSONに存在しない
+# 場合、@tsvの1列目が空文字列になり出力が先頭タブ始まり（例: "\tプロンプト"）に
+# なる。bashの`read`はIFSに空白類文字（タブは該当）を指定した場合、先頭の連続する
+# 区切り文字を「先頭の空白」として読み飛ばしてから分割する仕様があるため、この
+# 先頭タブが暗黙に無視されてしまい、本来2列目に入るはずのプロンプト全体が誤って
+# 1列目(SESSION_ID)へ詰まり、PROMPTが空文字になってしまっていた（＝候補があっても
+# 無言で無出力になる「無言のfail-open」バグ・実機Claude Codeは常にsession_idを
+# 送るため実害はなかったが、原則違反かつ手動テストを混乱させるため修正）。
+# プレフィックスにより1列目が常に非空になるため、この先頭空白読み飛ばしを回避できる。
+JQ_OUT="$(printf '%s' "$INPUT" | jq -r '[("S" + (.session_id // "")), (.prompt // "")] | @tsv' 2>/dev/null)"
 JQ_RC=$?
 IFS=$'\t' read -r SESSION_ID PROMPT <<< "$JQ_OUT"
+SESSION_ID="${SESSION_ID#S}"
 if [ "$JQ_RC" -ne 0 ]; then
   log_error "stdin JSONの解析に失敗しました（jq exit ${JQ_RC}）。想起支援をskipします。"
   exit 0
 fi
 
+# キーワード・ベクトル両helperへ渡す生プロンプト（@tsvエスケープを経由しない別ルート）。
+# 上のPROMPT変数は10文字未満チェック専用として無変更のまま維持し、両helperへの入力には
+# こちらを使う（8.1ラウンド2巡目Codexレビュー指摘・Major: @tsvはプロンプト中の実改行を
+# "\n"という2文字リテラルへエスケープし、その後の`read -r`はそれを実改行へ戻さないため、
+# PROMPTをそのままhelperへ渡すと改行を含む質問で入力が変質する。同じ$INPUTに対して
+# .promptだけを単独で取り出す追加のjq呼び出し1回で、実改行を保持した生のプロンプトを
+# 別変数として得る）。8.2ラウンドでキーワード照合もPythonへ移った際、変数名を
+# VECTOR_PROMPT→RAW_PROMPTへ改名した（ベクトル専用ではなく両helper共通の入力になった
+# ため。キーワード照合キーには改行が含まれ得ないため、旧実装がPROMPT(@tsvエスケープ済み)
+# を使っていたことによる挙動差は生じない＝リーダー承認済み設計の判断根拠）。
+RAW_PROMPT="$(printf '%s' "$INPUT" | jq -r '.prompt // ""' 2>/dev/null)"
+if [ $? -ne 0 ]; then
+  RAW_PROMPT=""  # 取得失敗時は空文字（helper側の「クエリが空です」経由でfail-open）
+fi
+
 # 文字数カウント(${#PROMPT})を多バイト正しく行うため、UTF-8ロケールを明示する
 # （実測: LC_ALLを明示しない環境ではbashが日本語をバイト単位で数えてしまう）。
+# このLC_ALLは以降起動するPythonサブプロセス(両helper)にも継承される。
+# keyword_recall_helper.py はこれを使ってファイル名グロブのソート順（bashの旧glob
+# 展開順と同じstrcoll順）を再現している（同ファイルのdocstring参照）。
 case "${LC_ALL:-}" in
   *UTF-8*) : ;;
   *)
@@ -129,441 +252,133 @@ if [ ! -d "$VAULT" ]; then
   exit 0
 fi
 
-# --- 候補ファイル一覧（フォークなしのbashグロブ。存在しないフォルダはnullglobで
-#     単に0件になる＝サブ機でDecisions等が無くてもエラーにならない） ---
-shopt -s nullglob
-FILES=()
-for d in "${SCAN_DIRS[@]}"; do
-  for f in "$VAULT/$d"/*.md; do
-    FILES+=("$f")
-  done
-done
-shopt -u nullglob
+# --- キーワード想起(柱②)・ベクトル想起(柱①)を並列に起動する ---
+# GNU timeout非依存のbashネイティブなタイムアウト実装。各helperをバックグラウンド
+# 起動し、追加のバックグラウンドプロセス（sleep watcher等）は一切使わず、親shell自身が
+# 25ms間隔で両方の生死を同期ポーリングする（8.1ラウンドでベクトル単体について確立した
+# 設計をそのまま2プロセス分に拡張しただけ・詳細な設計理由（孤児プロセス問題等）は
+# claude/hooks/vault-recall-legacy.sh の該当コメントを参照）。
 
-# インライン配列の中身（例: a, "b, c", d）を、クォート内のカンマでは分割しない
-# ように1文字ずつ走査してCUR_KEYSへ追加する（Codexレビュー指摘・Major: 単純な
-# IFS=,展開だと `aliases: ["foo, bar"]` のようなクォート内カンマを含むaliasが
-# 誤って2つに割れてしまう。scripts/vault-agents/apply_aliases.py の
-# split_flow_list() と同じ考え方をbashで実装）。
-emit_inline_alias_part() {
-  local part="$1"
-  part="${part#"${part%%[![:space:]]*}"}"   # 先頭空白除去
-  part="${part%"${part##*[![:space:]]}"}"   # 末尾空白除去
-  part="${part%\"}"; part="${part#\"}"
-  part="${part%\'}"; part="${part#\'}"
-  [ -n "$part" ] && CUR_KEYS+=("$part")
-}
-split_inline_aliases() {
-  local inner="$1" cur="" quote="" ch len i=0
-  len=${#inner}
-  while [ "$i" -lt "$len" ]; do
-    ch="${inner:$i:1}"
-    if [ -n "$quote" ]; then
-      if [ "$ch" = '\' ] && [ $((i + 1)) -lt "$len" ]; then
-        cur="${cur}${ch}${inner:$((i + 1)):1}"
-        i=$((i + 2))
-        continue
-      fi
-      cur="${cur}${ch}"
-      [ "$ch" = "$quote" ] && quote=""
-      i=$((i + 1))
-      continue
-    fi
-    case "$ch" in
-      '"' | "'") quote="$ch"; cur="${cur}${ch}" ;;
-      ,) emit_inline_alias_part "$cur"; cur="" ;;
-      *) cur="${cur}${ch}" ;;
-    esac
-    i=$((i + 1))
-  done
-  emit_inline_alias_part "$cur"
-}
-
-# --- 1ファイル分の照合キー(aliases + ファイル名由来)を CUR_KEYS へ詰める ---
-# フォーク・サブシェルを使わない（130ノート規模で実行時間目標300msを守るため）。
-# 読み取れなかったノート件数はUNREADABLE_NOTE_COUNTに積算し、末尾でまとめて
-# 1行だけログする（Codexレビュー指摘・Minor: 権限エラー等で本文が読めない場合
-# 無言でファイル名キーだけにフォールバックしていた＝無言のfail-open）。
-CUR_KEYS=()
+KW_RELPATHS=(); KW_SCORES=(); KW_KEYLISTS=()
 UNREADABLE_NOTE_COUNT=0
-collect_keys_for_file() {
-  local relpath="$1" f="$VAULT/$1"
-  CUR_KEYS=()
-  local stem="${relpath##*/}"
-  stem="${stem%.md}"
-  CUR_KEYS+=("$stem")
-  local nohy="${stem//-/}"
-  [ "$nohy" != "$stem" ] && CUR_KEYS+=("$nohy")
+KW_OUT_FILE=""; KW_ERR_FILE=""; KW_PID=""; KW_KILL_AFTER_MS=0; KW_RC=""
 
-  [ -f "$f" ] || return 0
-  if [ ! -r "$f" ]; then
-    UNREADABLE_NOTE_COUNT=$((UNREADABLE_NOTE_COUNT + 1))
-    return 0
+KW_OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/vault-recall-kw-out.XXXXXX" 2>/dev/null)"
+KW_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/vault-recall-kw-err.XXXXXX" 2>/dev/null)"
+if [ -n "$KW_OUT_FILE" ] && [ -n "$KW_ERR_FILE" ]; then
+  # `10#`接頭辞で明示的に10進数として評価する（先頭ゼロ付きの数値がbashの算術展開で
+  # 8進数と誤解釈されるのを防ぐ・ベクトル側と同じ対策。詳細はlegacyコメント参照）。
+  KW_KILL_AFTER_MS=$((10#$KEYWORD_BUDGET_MS + 10#$KEYWORD_KILL_GRACE_MS))
+  # クエリはCLI引数ではなくstdin経由で渡す（`ps`等からの覗き見防止・引数長上限回避。
+  # ベクトル側と同じ理由）。
+  "$PYTHON_BIN" "$KEYWORD_HELPER" --vault "$VAULT" \
+    --budget-ms "$KEYWORD_BUDGET_MS" > "$KW_OUT_FILE" 2>"$KW_ERR_FILE" <<< "$RAW_PROMPT" &
+  KW_PID=$!
+else
+  log_keyword_fail_open "一時ファイルの作成に失敗しました"
+fi
+
+VEC_RELPATHS=(); VEC_SCORES=(); VEC_EXTRA_RELPATHS=(); VEC_EXTRA_COUNT=0
+VEC_OUT_FILE=""; VEC_ERR_FILE=""; VEC_PID=""; VEC_KILL_AFTER_MS=0; VEC_RC=""
+if [ "$VECTOR_DISABLED" != "1" ] && [ -n "$REPO_ROOT" ]; then
+  VEC_OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/vault-recall-vec-out.XXXXXX" 2>/dev/null)"
+  VEC_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/vault-recall-vec-err.XXXXXX" 2>/dev/null)"
+  if [ -n "$VEC_OUT_FILE" ] && [ -n "$VEC_ERR_FILE" ]; then
+    VEC_KILL_AFTER_MS=$((10#$VECTOR_BUDGET_MS + 10#$VECTOR_KILL_GRACE_MS))
+    "$PYTHON_BIN" "$VECTOR_HELPER" --vault "$VAULT" \
+      --budget-ms "$VECTOR_BUDGET_MS" > "$VEC_OUT_FILE" 2>"$VEC_ERR_FILE" <<< "$RAW_PROMPT" &
+    VEC_PID=$!
+  else
+    log_vector_fail_open "一時ファイルの作成に失敗しました"
   fi
+fi
 
-  local in_fm=0 fm_line=0 mode=0 line val
-  while IFS= read -r line || [ -n "$line" ]; do
-    fm_line=$((fm_line + 1))
-    if [ "$fm_line" -eq 1 ]; then
-      [ "$line" = "---" ] && in_fm=1
-      continue
-    fi
-    [ "$in_fm" -eq 0 ] && break        # frontmatterが無いノート
-    [ "$line" = "---" ] && break       # frontmatter終端
-
-    # ブロックリスト形式（aliases:\n  - foo\n  - bar）の項目行
-    if [ "$mode" -eq 1 ]; then
-      if [[ "$line" =~ ^[[:space:]]+-[[:space:]]*(.*)$ ]]; then
-        val="${BASH_REMATCH[1]}"
-        val="${val%\"}"; val="${val#\"}"
-        val="${val%\'}"; val="${val#\'}"
-        [ -n "$val" ] && CUR_KEYS+=("$val")
-        continue
-      else
-        mode=0   # ブロックリスト終了。このlineは以下のチェックへフォールスルーする
-      fi
-    fi
-
-    # インライン配列形式（aliases: [foo, "bar baz"]）
-    if [[ "$line" =~ ^aliases:[[:space:]]*\[(.*)\][[:space:]]*$ ]]; then
-      split_inline_aliases "${BASH_REMATCH[1]}"
-      continue
-    fi
-
-    # ブロックリスト形式の開始行（aliases: の後に値が無い）
-    if [[ "$line" =~ ^aliases:[[:space:]]*$ ]]; then
-      mode=1
-      continue
-    fi
-  done < "$f"
-}
-
-# キー全体としては一致しない場合の部分一致判定に使う、区切り文字の集合。
-# ここに含まれる文字はトークンの一部にはせず、単なる区切りとして捨てる
-# （ASCII/非ASCIIの切り替わり自体も、区切り文字を介さず暗黙の境界として扱う＝
-# tokenize_key本体のクラス変化検出で処理する）。
-TOKEN_SEP_CHARS=$' \t\r\n-_/.,:;()[]{}"'"'"'!?~=+*&%#@|<>「」『』【】、。・〜～'
-
-# キーが「ASCII/非ASCII境界では一切分割できない、1続きの非ASCII文字列」の
-# 場合に限り、追加でカタカナ連続の境界でも分割を試みる（外部grepを1回だけ
-# fork・全キーに対して行うと130ノート規模の実行時間予算を超えるため、境界
-# 候補が他に無い場合の最後の手段としてのみ使う）。カタカナの連続（借用語・
-# 固有名詞由来が多い）は複合語の中でも独立した意味単位になりやすいという
-# 性質を利用する（例:「波及チェック定型化」→「波及」「チェック」「定型化」）。
-# 漢字とひらがなの間では分割しない＝活用形の語幹+送り仮名（例:「壊れる」
-# 「裏取り」）を壊さないため（末尾1文字ドロップの活用形吸収と両立させる）。
-# bash 3.2の文字クラス([[ ... ]]・case )はマルチバイト文字のUnicode範囲判定が
-# 壊れている（実機確認済み）ため、この用途だけは外部grep(BSD grep)に頼る。
-KATAKANA_CHARS="ァアィイゥウェエォオカガキギクグケゲコゴサザシジスズセゼソゾタダチヂッツヅテデトドナニヌネノハバパヒビピフブプヘベペホボポマミムメモャヤュユョヨラリルレロヮワヲンヴーヵヶ"
-
-# キーに片仮名とそれ以外の両方が混ざっている場合だけtrueを返す（純粋な漢字・
-# ひらがなのみのキー、または片仮名のみのキーではgrepをforkしても分割点が
-# 得られない＝無駄なforkを避ける事前チェック。Codexレビュー指摘・Minor:
-# 全体一致に失敗した非ASCII単一トークンすべてでforkしていたため、130ノート
-# 規模でも数百回forkし得た）。
-has_mixed_katakana() {
-  local s="$1" i=0 len ch has_kata=0 has_other=0
-  len=${#s}
-  while [ "$i" -lt "$len" ]; do
-    ch="${s:$i:1}"
-    case "$KATAKANA_CHARS" in
-      *"$ch"*) has_kata=1 ;;
-      *) has_other=1 ;;
-    esac
-    [ "$has_kata" -eq 1 ] && [ "$has_other" -eq 1 ] && return 0
-    i=$((i + 1))
-  done
-  return 1
-}
-
-tokenize_katakana_boundary() {
-  local key="$1" out part
-  TOK_ARR=()
-  out="$(LC_ALL=en_US.UTF-8 grep -oE '[ァ-ヶー]+|[^ァ-ヶー]+' <<< "$key" 2>/dev/null)"
-  if [ -z "$out" ]; then
-    TOK_ARR=("$key")
-    return 0
+# 両プロセスの生死を1つのループで同期ポーリングする（監視用の別プロセスを増やさない
+# という設計を2プロセス分でも維持するため、KW/VECそれぞれの完了フラグを見ながら
+# 1本のループで両方を扱う。片方が先に終わっていればkill -0が即座に失敗しdoneになる
+# ため、早期終了のレイテンシは単体時と同じく最大25ms）。
+POLL_INTERVAL_MS=25
+ELAPSED_MS=0
+KW_DONE=1; [ -n "$KW_PID" ] && KW_DONE=0
+VEC_DONE=1; [ -n "$VEC_PID" ] && VEC_DONE=0
+while [ "$KW_DONE" -eq 0 ] || [ "$VEC_DONE" -eq 0 ]; do
+  if [ "$KW_DONE" -eq 0 ] && ! kill -0 "$KW_PID" 2>/dev/null; then KW_DONE=1; fi
+  if [ "$VEC_DONE" -eq 0 ] && ! kill -0 "$VEC_PID" 2>/dev/null; then VEC_DONE=1; fi
+  [ "$KW_DONE" -eq 1 ] && [ "$VEC_DONE" -eq 1 ] && break
+  if [ "$KW_DONE" -eq 0 ] && [ "$ELAPSED_MS" -ge "$KW_KILL_AFTER_MS" ]; then
+    kill -9 "$KW_PID" 2>/dev/null
+    KW_DONE=1
   fi
-  while IFS= read -r part; do
-    [ -n "$part" ] && TOK_ARR+=("$part")
-  done <<< "$out"
-}
-
-# キー文字列を「トークン」の配列 TOK_ARR に分解する（bash 3.2純正・1文字ずつ
-# 走査。split_inline_aliasesと同じフォーク無し方針）。区切り文字で区切るほか、
-# ASCII文字と非ASCII文字が区切り文字を挟まず隣接している場合（例: "MCPサーバー"）
-# も、そこを暗黙の境界とみなして分割する。
-# 分割後、以下を除いたものだけをTOK_ARRに残す（誤ヒット源になりやすいため）:
-#   - 純数字のみのトークン（ファイル名の日付断片"2026""07""05"等）
-#   - ASCII 3文字未満・非ASCII 2文字未満のトークン（既存の最小長ルールと同じ）
-tokenize_key() {
-  local key="$1" i=0 len ch cur="" cur_class="" new_class
-  local raw=()
-  TOK_ARR=()
-  len=${#key}
-  while [ "$i" -lt "$len" ]; do
-    ch="${key:$i:1}"
-    case "$ch" in
-      *[![:ascii:]]*) new_class="N" ;;                # 非ASCII文字
-      *)
-        case "$TOKEN_SEP_CHARS" in
-          *"$ch"*) new_class="S" ;;                    # 区切り文字
-          *) new_class="A" ;;                          # ASCII英数字
-        esac
-        ;;
-    esac
-    if [ "$new_class" = "S" ]; then
-      [ -n "$cur" ] && raw+=("$cur")
-      cur=""; cur_class=""
-    elif [ "$new_class" != "$cur_class" ]; then
-      [ -n "$cur" ] && raw+=("$cur")
-      cur="$ch"; cur_class="$new_class"
-    else
-      cur="${cur}${ch}"
-    fi
-    i=$((i + 1))
-  done
-  [ -n "$cur" ] && raw+=("$cur")
-
-  # ASCII/非ASCII境界では1個も分割できなかった場合（キー全体が1続きの非ASCII
-  # 文字列）のみ、最後の手段としてカタカナ境界分割を試みる（fork予算対策の
-  # ため、既に複数トークンに分かれているキーには適用しない）。
-  if [ "${#raw[@]}" -eq 1 ]; then
-    local only="${raw[0]}"
-    case "$only" in
-      *[![:ascii:]]*)
-        if [ "${#only}" -ge 4 ] && has_mixed_katakana "$only"; then
-          tokenize_katakana_boundary "$only"
-          [ "${#TOK_ARR[@]}" -ge 2 ] && raw=("${TOK_ARR[@]}")
-        fi
-        ;;
-    esac
+  if [ "$VEC_DONE" -eq 0 ] && [ "$ELAPSED_MS" -ge "$VEC_KILL_AFTER_MS" ]; then
+    kill -9 "$VEC_PID" 2>/dev/null
+    VEC_DONE=1
   fi
-
-  local t tlen is_digit_only
-  TOK_ARR=()
-  for t in "${raw[@]}"; do
-    case "$t" in
-      *[![:digit:]]*) is_digit_only=0 ;;
-      *) is_digit_only=1 ;;
-    esac
-    [ "$is_digit_only" -eq 1 ] && continue
-
-    tlen=${#t}
-    case "$t" in
-      *[![:ascii:]]*) [ "$tlen" -ge 2 ] && TOK_ARR+=("$t") ;;
-      *) [ "$tlen" -ge 3 ] && TOK_ARR+=("$t") ;;
-    esac
-  done
-}
-
-# 汎用すぎるトークン（このVault内のほぼ全ノートに顔を出す道具名・役割名）は、
-# プロンプトに出現していても部分一致の根拠としては数えない（scripts/vault-agents/
-# generic-aliases.txt と目的が近いリストをここに複製・実測で判明した回帰への対処:
-# 例えば「claude-codex-usage」を尋ねただけで、"Claude"という1語だけを共有する
-# 無関係な別ノート群のaliasが軒並み部分一致してしまい、複数aliasにまたがる分
-# スコアが積み上がって正解ノートを押しのけていた。シンボリックリンク経由でも
-# 確実に動く必要がある＝相対パスで外部ファイルを読みに行かず定数として埋め込む。
-# 完全な同期は要求しない・alias品質チェックとは目的が別のため多少ズレても実害は
-# 小さい。更新する場合はgenerative-aliases.txtも合わせて見直すことが望ましい）。
-GENERIC_TOKENS_ASCII=(ai claude codex obsidian vault mcp)
-GENERIC_TOKENS_NONASCII=("ツール" "ルール" "設定" "配信" "メモ" "作業" "運用" "テスト" \
-  "レビュー" "ワークフロー" "エージェント" "ワーカー" "委任" "フック" "スクリプト" "外部脳")
-
-is_generic_token() {
-  local tok="$1" g
-  case "$tok" in
-    *[![:ascii:]]*)
-      for g in "${GENERIC_TOKENS_NONASCII[@]}"; do
-        [ "$tok" = "$g" ] && return 0
-      done
-      ;;
-    *)
-      shopt -s nocasematch
-      for g in "${GENERIC_TOKENS_ASCII[@]}"; do
-        if [[ "$tok" == "$g" ]]; then
-          shopt -u nocasematch
-          return 0
-        fi
-      done
-      shopt -u nocasematch
-      ;;
-  esac
-  return 1
-}
-
-# 活用語尾は必ずひらがな（送り仮名）で書かれるという日本語表記の性質を利用し、
-# 末尾1文字ドロップの活用形フォールバックは「トークンの最後の1文字がひらがな」
-# の場合だけに限定する（ノイズ検査の実測で判明: 例えば「配信前」の末尾「前」
-# （漢字）を落として「配信」にしてしまうと、活用形とは無関係な一般語が生まれて
-# 無関係プロンプトに誤ヒットする。「キャラ」の末尾「ラ」（カタカナ）を落として
-# 「キャ」にしてしまい、たまたま「ポッドキャスト」に含まれる「キャ」と誤って
-# 一致したケースも同様。末尾がひらがなのときだけに絞ることで、"壊れる"→
-# "壊れた"のような正規の活用ゆれ吸収はそのまま残しつつ、この2件の誤ヒットを
-# 塞げることを確認済み）。長音符「ー」は含めない（Codexレビュー指摘・Minor:
-# 含めると片仮名語の長音省略（"サーバー"→"サーバ"等）まで許容してしまい、
-# 「活用形のゆれ」という趣旨から外れて誤ヒット面を広げるだけになる）。
-HIRAGANA_CHARS="あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんがぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽゃゅょっ"
-
-is_hiragana_char() {
-  case "$HIRAGANA_CHARS" in
-    *"$1"*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-# 1トークンがプロンプト中に見つかるかを判定する。ASCIIトークンは大小文字無視の
-# 通常の部分文字列一致。非ASCIIトークン(3文字以上)は、通常一致に加えて「末尾
-# 1文字を落とした形」でも一致を許容する（"壊れる"→"壊れた"のような活用形の
-# ゆれを、複合語の内部分割はせず語尾のみの変化として吸収する・ヘッダコメント
-# の「やらないこと」参照）。末尾がひらがなの場合のみ許容する（上のコメント）。
-token_matches() {
-  local tok="$1" tlen=${#tok}
-  case "$tok" in
-    *[![:ascii:]]*)
-      [[ "$PROMPT" == *"$tok"* ]] && return 0
-      if [ "$tlen" -ge 3 ] && is_hiragana_char "${tok:$((tlen - 1)):1}"; then
-        local trimmed="${tok%?}"
-        [[ "$PROMPT" == *"$trimmed"* ]] && return 0
-      fi
-      return 1
-      ;;
-    *)
-      local rc=1
-      shopt -s nocasematch
-      [[ "$PROMPT" == *"$tok"* ]] && rc=0
-      shopt -u nocasematch
-      return "$rc"
-      ;;
-  esac
-}
-
-# --- 各ファイルについてプロンプトとの照合を行う ---
-RESULT_RELPATHS=()
-RESULT_SCORES=()
-RESULT_KEYLISTS=()
-
-for f in "${FILES[@]}"; do
-  relpath="${f#"$VAULT"/}"
-  base="${f##*/}"
-  [ "$base" = "README.md" ] && continue
-
-  excluded=0
-  for ex in "${EXCLUDE_RELPATHS[@]}"; do
-    if [ "$relpath" = "$ex" ]; then excluded=1; break; fi
-  done
-  [ "$excluded" -eq 1 ] && continue
-
-  collect_keys_for_file "$relpath"
-
-  # matched_keys の内部区切りには半角スペースではなく制御文字(Unit Separator \x1f)を
-  # 使う（Codexレビュー指摘・Major回帰で発覚: alias自体に空白を含む場合
-  # （例: "fail, open"）、スペース区切り+表示時のスペース→", "置換だと、キー内部の
-  # 空白まで誤って ", " に変換され表示が壊れる。\x1fは通常のalias文字列に
-  # まず出現しないため、区切り文字としても表示直前の置換対象としても安全）。
-  matched_keys=""
-  seen_keys=""
-  note_full_score=0
-  note_has_partial=0
-  for key in "${CUR_KEYS[@]}"; do
-    [ -z "$key" ] && continue
-
-    # 前後をKEY_SEPで挟んでから完全一致部分文字列として探す（Codexレビュー指摘・
-    # Minor回帰: 左境界だけの判定だと、既存キー"foobar"に対して新キー"foo"が
-    # prefix一致してしまい、別のaliasなのに重複扱いでskipされてしまっていた）。
-    case "${KEY_SEP}${seen_keys}${KEY_SEP}" in
-      *"${KEY_SEP}${key}${KEY_SEP}"*) continue ;;   # 同一ノート内の重複キーは1回だけ数える
-    esac
-
-    case "$key" in
-      *[![:ascii:]]*) is_ascii=0 ;;
-      *) is_ascii=1 ;;
-    esac
-    klen=${#key}
-
-    full_matched=0
-    if [ "$is_ascii" -eq 1 ]; then
-      if [ "$klen" -ge 3 ]; then
-        shopt -s nocasematch
-        [[ "$PROMPT" == *"$key"* ]] && full_matched=1
-        shopt -u nocasematch
-      fi
-    else
-      if [ "$klen" -ge 2 ]; then
-        [[ "$PROMPT" == *"$key"* ]] && full_matched=1
-      fi
-    fi
-
-    key_score=0
-    key_tag=""
-    is_partial=0
-    if [ "$full_matched" -eq 1 ]; then
-      key_score=$KEY_SCORE_FULL
-    else
-      # 全体一致しなかったキーだけ追加コストをかけてトークン部分一致を試す
-      # （大半のキーは全体一致で確定するか、ここでも不一致に終わる＝
-      # 130ノート規模での実行時間予算を守るため、全体一致に成功したキーでは
-      # トークン化を行わない）。
-      tokenize_key "$key"
-      tok_total=${#TOK_ARR[@]}
-      if [ "$tok_total" -ge 2 ]; then
-        tok_matched=0
-        for tok in "${TOK_ARR[@]}"; do
-          # 汎用トークン(is_generic_token)単独の一致は数えない（誤ヒット面拡大の
-          # 主因だったため・上のGENERIC_TOKENS定義のコメント参照）。
-          if token_matches "$tok" && ! is_generic_token "$tok"; then
-            tok_matched=$((tok_matched + 1))
-          fi
-        done
-        # ratio >= 1/3（整数演算 matched*3 >= total）。2語キーは1語一致で
-        # 部分一致とみなす一方、4語以上のキーは半数近くの一致を要求することに
-        # なり、単発の断片一致だけで長いキーが誤ヒットするのを防ぐ
-        # （ヘッダコメント参照・閾値は第三者ホールドアウト/回帰/ノイズ検査の
-        # 実測を見て決定）。
-        if [ "$tok_matched" -ge 1 ] && [ $((tok_matched * 3)) -ge "$tok_total" ]; then
-          key_score=$KEY_SCORE_PARTIAL
-          key_tag=" (部分一致)"
-          is_partial=1
-        fi
-      elif [ "$tok_total" -eq 1 ]; then
-        # 単一トークンキー（＝ASCII/非ASCII境界でもカタカナ境界でも分割できず、
-        # キー全体で1語のまま）でも、活用形フォールバック（token_matches内の
-        # 末尾ひらがな1文字ドロップ）だけは試す（Codexレビュー指摘・Major:
-        # これが無いと、複数語からなるキーの構成要素としてしか活用形フォール
-        # バックが機能せず、単独alias「壊れる」のようなケースに全く届かない）。
-        # トークンが1つしか無いため一致率の閾値判定は不要＝フォールバック自体が
-        # 成立した場合だけ部分一致として扱う。
-        tok="${TOK_ARR[0]}"
-        if ! is_generic_token "$tok" && token_matches "$tok"; then
-          key_score=$KEY_SCORE_PARTIAL
-          key_tag=" (部分一致)"
-          is_partial=1
-        fi
-      fi
-    fi
-
-    [ "$key_score" -eq 0 ] && continue
-
-    seen_keys="${seen_keys}${KEY_SEP}${key}"
-    matched_keys="${matched_keys}${KEY_SEP}${key}${key_tag}"
-    if [ "$is_partial" -eq 1 ]; then
-      # 1ノートにつき部分一致の加点は最大1回分だけ（Codexレビュー前の実測で
-      # 判明した回帰への対処: 同じ汎用トークンを共有する複数aliasを持つノートが、
-      # alias数だけスコアが積み上がって無関係なのに上位を独占していた。表示・
-      # ログには全ての部分一致キーを残す＝どの語で拾われたかは追える）。
-      note_has_partial=1
-    else
-      note_full_score=$((note_full_score + key_score))
-    fi
-  done
-  note_score=$((note_full_score + (note_has_partial * KEY_SCORE_PARTIAL)))
-
-  if [ "$note_score" -gt 0 ]; then
-    RESULT_RELPATHS+=("$relpath")
-    RESULT_SCORES+=("$note_score")
-    RESULT_KEYLISTS+=("$matched_keys")
-  fi
+  [ "$KW_DONE" -eq 1 ] && [ "$VEC_DONE" -eq 1 ] && break
+  sleep 0.025
+  ELAPSED_MS=$((ELAPSED_MS + POLL_INTERVAL_MS))
 done
+if [ -n "$KW_PID" ]; then
+  wait "$KW_PID" 2>/dev/null
+  KW_RC=$?
+fi
+if [ -n "$VEC_PID" ]; then
+  wait "$VEC_PID" 2>/dev/null
+  VEC_RC=$?
+fi
+
+# --- キーワード想起の結果を取り込む ---
+# keyword_recall_helper.pyは既にスコア降順・同点は走査順にソート済みのJSONを返すため、
+# bash側は先頭5件を切り出すだけでよい（旧実装のO(n²)選択ロジックは不要になった）。
+if [ -n "$KW_PID" ]; then
+  if [ "$KW_RC" -eq 0 ]; then
+    KW_JSON="$(cat "$KW_OUT_FILE" 2>/dev/null)"
+    # 出力が空、またはJSONスキーマが想定外（本来helperの成功パスでは起こらないが、
+    # 破損/差し替えhelperへの防御として検証する）の場合は「候補0件の正常応答」と
+    # 誤認せずfail-openとしてログに残す（Codexレビュー指摘・Major: jqは空stdinに
+    # 対してexit 0・出力なしを返すため、この検証が無いと無言のfail-openになる）。
+    if [ -z "$KW_JSON" ] || ! printf '%s' "$KW_JSON" \
+        | jq -e "$KW_SCHEMA_CHECK" >/dev/null 2>&1; then
+      log_keyword_fail_open "helper出力が空または想定外の形式です: $(printf '%s' "$KW_JSON" | head -c 200)"
+    else
+      # 各候補をJSON1行(JSON Lines)として取り出し、relpath/score/keysをそれぞれ
+      # jq -rで個別に復号する。@tsvは値中のバックスラッシュ・タブ・改行をエスケープ
+      # するが、後段の`read -r`はそれを実文字へ戻さないため、alias中にこれらの文字が
+      # 含まれると表示・ログが壊れる（Codexレビュー指摘・Major）。JSON文字列として
+      # やり取りし`jq -r`でデコードすれば、どんな文字が混ざっていても正しく復元できる。
+      KW_LINES="$(printf '%s' "$KW_JSON" | jq -c \
+        '.candidates[]? | {r: .relpath, s: (.score|tostring),
+          k: ((.keys // []) | map(.key + (if .partial then " (部分一致)" else "" end)))}' \
+        2>/dev/null)"
+      KW_JQ_RC=$?
+      if [ "$KW_JQ_RC" -eq 0 ]; then
+        while IFS= read -r kline; do
+          [ -z "$kline" ] && continue
+          krel="$(jq -r '.r' <<< "$kline" 2>/dev/null)"
+          kscore="$(jq -r '.s' <<< "$kline" 2>/dev/null)"
+          kkeys="$(jq -r '.k | join("")' <<< "$kline" 2>/dev/null)"
+          [ -z "$krel" ] && continue
+          KW_RELPATHS+=("$krel")
+          KW_SCORES+=("$kscore")
+          KW_KEYLISTS+=("${KEY_SEP}${kkeys}")
+        done <<< "$KW_LINES"
+
+        KW_UNREADABLE="$(printf '%s' "$KW_JSON" | jq -r '.unreadable_count // 0' 2>/dev/null)"
+        case "$KW_UNREADABLE" in
+          ''|*[!0-9]*) KW_UNREADABLE=0 ;;
+        esac
+        UNREADABLE_NOTE_COUNT=$((UNREADABLE_NOTE_COUNT + KW_UNREADABLE))
+      else
+        log_keyword_fail_open "helper出力のJSON解析に失敗しました: $(printf '%s' "$KW_JSON" | head -c 200)"
+      fi
+    fi
+  elif [ "$KW_RC" -eq 137 ]; then
+    log_keyword_fail_open "helperの応答が予算(${KEYWORD_BUDGET_MS}ms+猶予${KEYWORD_KILL_GRACE_MS}ms)を超えたため強制終了しました"
+  else
+    KW_ERR="$(head -c 200 "$KW_ERR_FILE" 2>/dev/null)"
+    log_keyword_fail_open "helperが異常終了しました（rc=${KW_RC}）: ${KW_ERR}"
+  fi
+fi
+rm -f "$KW_OUT_FILE" "$KW_ERR_FILE" 2>/dev/null
 
 # 読み取れなかったノートが1件以上あれば、ヒット件数に関わらず1回だけ要約ログを残す
 # （無言のfail-open防止。ファイルごとに出すとログが荒れるため件数のみ集約する）。
@@ -571,38 +386,129 @@ if [ "$UNREADABLE_NOTE_COUNT" -gt 0 ]; then
   log_error "${UNREADABLE_NOTE_COUNT}件のノートを読み取れませんでした（権限不足の可能性・ファイル名キーのみで照合しました）"
 fi
 
-N=${#RESULT_RELPATHS[@]}
-[ "$N" -eq 0 ] && exit 0
+N=${#KW_RELPATHS[@]}
+# 「候補0件なら即exit」はここではしない（設計書§2.1手順2-3・FR2）。ベクトル候補との
+# マージ後（下のFINAL_EMPTYチェック）にまとめて判定する＝キーワード0件のプロンプトでも
+# ベクトル想起は常に試みる。
 
-# --- 一致キー数の多い順に最大5件を選ぶ（外部sortを使わない選択法。件数が
-#     小規模なのでO(n^2)で十分＝300ms予算内） ---
-USED=()
-for ((i = 0; i < N; i++)); do USED[i]=0; done
 SELECTED_IDX=()
-for ((k = 0; k < 5 && k < N; k++)); do
-  best=-1
-  best_score=-1
-  for ((i = 0; i < N; i++)); do
-    if [ "${USED[i]}" -eq 0 ] && [ "${RESULT_SCORES[i]}" -gt "$best_score" ]; then
-      best=$i
-      best_score=${RESULT_SCORES[i]}
-    fi
-  done
-  [ "$best" -lt 0 ] && break
-  USED[$best]=1
-  SELECTED_IDX+=("$best")
+for ((i = 0; i < N && i < 5; i++)); do
+  SELECTED_IDX+=("$i")
 done
 
-CTX="外部脳の関連ノート候補（必要なら Read）:"
-for idx in "${SELECTED_IDX[@]}"; do
-  relpath="${RESULT_RELPATHS[$idx]}"
-  # matched_keys は先頭にKEY_SEPが付いた "${KEY_SEP}key1${KEY_SEP}key2..." 形式
-  # なので、区切りを人間向けの区切りへ置換した後、先頭の余分な区切りを取り除く。
-  keys_display="${RESULT_KEYLISTS[$idx]//$KEY_SEP/, }"
-  keys_display="${keys_display#, }"
-  CTX="${CTX}
+# キーワード枠のCTXは候補が1件以上ある場合のみ組み立てる（キーワード枠の見出し・
+# 順序・件数は従来どおり不変＝FR2）。
+KEYWORD_CTX=""
+if [ "${#SELECTED_IDX[@]}" -gt 0 ]; then
+  KEYWORD_CTX="外部脳の関連ノート候補（必要なら Read）:"
+  for idx in "${SELECTED_IDX[@]}"; do
+    relpath="${KW_RELPATHS[$idx]}"
+    # KW_KEYLISTS は先頭にKEY_SEPが付いた "${KEY_SEP}key1${KEY_SEP}key2..." 形式
+    # なので、区切りを人間向けの区切りへ置換した後、先頭の余分な区切りを取り除く。
+    keys_display="${KW_KEYLISTS[$idx]//$KEY_SEP/, }"
+    keys_display="${keys_display#, }"
+    KEYWORD_CTX="${KEYWORD_CTX}
 - ${relpath}（一致: ${keys_display}）"
+  done
+fi
+
+# --- ベクトル想起の結果を取り込む ---
+# 削除済みノートは helper 側でも実在確認しているが、検索側（ここ）でも防御的に
+# 二重チェックする（indexerの最大1時間ラグ対策・付録A FR3ケース6）。
+if [ -n "$VEC_PID" ]; then
+  if [ "$VEC_RC" -eq 0 ]; then
+    VEC_JSON="$(cat "$VEC_OUT_FILE" 2>/dev/null)"
+    # 出力が空、またはJSONスキーマが想定外の場合は「候補0件の正常応答」と誤認せず
+    # fail-openとしてログに残す（キーワード側と同じ理由・Codexレビュー指摘・Major:
+    # jqは空stdinに対してexit 0・出力なしを返すため、この検証が無いと無言のfail-open
+    # になる。vector_recall_helper.py自体は無改変＝この検証は呼び出し側の防御として
+    # 追加するだけで、helperの出力契約は変えない）。
+    if [ -z "$VEC_JSON" ] || ! printf '%s' "$VEC_JSON" \
+        | jq -e "$VEC_SCHEMA_CHECK" >/dev/null 2>&1; then
+      log_vector_fail_open "helper出力が空または想定外の形式です: $(printf '%s' "$VEC_JSON" | head -c 200)"
+    else
+      VEC_LINES="$(printf '%s' "$VEC_JSON" | jq -r '.candidates[]? | "\(.relpath)\t\(.score)"' 2>/dev/null)"
+      VEC_JQ_RC=$?
+      if [ "$VEC_JQ_RC" -eq 0 ]; then
+        while IFS=$'\t' read -r vrel vscore; do
+          [ -z "$vrel" ] && continue
+          VEC_RELPATHS+=("$vrel")
+          VEC_SCORES+=("$vscore")
+        done <<< "$VEC_LINES"
+        # 削除済みノートの除外件数もfail-open 6ケース(付録A FR3ケース6)の一部として
+        # 1箇所のログへ集約する（Codexレビュー指摘・Major: この事象だけが唯一
+        # 無言で正常終了扱いになっていたため、要件の「全ケースでexit0・ERRORログ」
+        # 6ケース目もログに残るようにする。ヒット自体は正常に成立するため、これは
+        # 候補提示を止めない=fail-openのままログだけ足す）。
+        EXCLUDED_MISSING="$(printf '%s' "$VEC_JSON" | jq -r '.excluded_missing // 0' 2>/dev/null)"
+        case "$EXCLUDED_MISSING" in
+          ''|*[!0-9]*) : ;;  # 数値以外(壊れた応答等)はログしない・素通り
+          0) : ;;
+          # これは失敗ではなく正常系（インデックスの最大1時間ラグを検索側が吸収した
+          # だけ）なので log_vector_fail_open は使わず、直接 log_error で事実だけ記録する
+          # （"fail-openでskipしました"という誤解を招く文言を避けるため）。
+          *) log_error "削除済みノートのベクトル残存を${EXCLUDED_MISSING}件除外しました（インデックスの最大1時間ラグ・付録A FR3ケース6・候補提示自体は正常）" ;;
+        esac
+      else
+        log_vector_fail_open "helper出力のJSON解析に失敗しました: $(printf '%s' "$VEC_JSON" | head -c 200)"
+      fi
+    fi
+  elif [ "$VEC_RC" -eq 137 ]; then
+    log_vector_fail_open "helperの応答が予算(${VECTOR_BUDGET_MS}ms+猶予${VECTOR_KILL_GRACE_MS}ms)を超えたため強制終了しました"
+  else
+    VEC_ERR="$(head -c 200 "$VEC_ERR_FILE" 2>/dev/null)"
+    log_vector_fail_open "helperが異常終了しました（rc=${VEC_RC}）: ${VEC_ERR}"
+  fi
+fi
+rm -f "$VEC_OUT_FILE" "$VEC_ERR_FILE" 2>/dev/null
+
+# --- キーワード候補∪(ベクトル候補のうちキーワード候補に無いもの・最大3件) ---
+# （設計書§2.1手順5）。
+VECTOR_CTX=""
+VN=${#VEC_RELPATHS[@]}
+for ((i = 0; i < VN && VEC_EXTRA_COUNT < MAX_VECTOR_EXTRA; i++)); do
+  vrel="${VEC_RELPATHS[$i]}"
+  already=0
+  for idx in "${SELECTED_IDX[@]}"; do
+    if [ "${KW_RELPATHS[$idx]}" = "$vrel" ]; then already=1; break; fi
+  done
+  [ "$already" -eq 1 ] && continue
+  # 起動必読ファイル（EXCLUDE_RELPATHS）はキーワード枠と同様にベクトル枠でも除外する
+  # （Personal想起対象化に伴うリーダー指示。従来はキーワード照合ループでしか
+  # チェックしておらず、ベクトル側は素通りする隙間があったため合わせて塞いだ）。
+  vexcluded=0
+  for ex in "${EXCLUDE_RELPATHS[@]}"; do
+    if [ "$vrel" = "$ex" ]; then vexcluded=1; break; fi
+  done
+  [ "$vexcluded" -eq 1 ] && continue
+  [ -f "$VAULT/$vrel" ] || continue
+  if [ "$VEC_EXTRA_COUNT" -eq 0 ]; then
+    VECTOR_CTX="意味的に近い候補（キーワード一致なし・必要なら Read）:"
+  fi
+  VECTOR_CTX="${VECTOR_CTX}
+- ${vrel}（類似度: ${VEC_SCORES[$i]}）"
+  VEC_EXTRA_RELPATHS[$VEC_EXTRA_COUNT]="$vrel"
+  VEC_EXTRA_COUNT=$((VEC_EXTRA_COUNT + 1))
 done
+
+# キーワード・ベクトルの両方が空なら、ここで初めて無出力exitする（従来の
+# 「候補0件なら即exit」相当の判定をマージ後の位置へ移動＝設計書§2.1手順2-3）。
+if [ -z "$KEYWORD_CTX" ] && [ -z "$VECTOR_CTX" ]; then
+  exit 0
+fi
+
+# キーワード枠とベクトル枠を別セクションとして連結する（見出しで区別できるように
+# する・設計書§2.1手順5「別枠表示」）。
+CTX="$KEYWORD_CTX"
+if [ -n "$VECTOR_CTX" ]; then
+  if [ -n "$CTX" ]; then
+    CTX="${CTX}
+
+${VECTOR_CTX}"
+  else
+    CTX="$VECTOR_CTX"
+  fi
+fi
 
 # 出力生成の失敗も「無言のfail-open」にしない（Codexレビュー指摘・Major:
 # スクリプト最後のコマンドがそのままexit codeになるため、jq自体がここで失敗
@@ -619,9 +525,12 @@ fi
 # CTX組み立てと同時にlog_rowしていたため、最終jqが失敗した場合に「提示して
 # いないのに提示済みとしてログされる」誤集計が起き得た）。
 for idx in "${SELECTED_IDX[@]}"; do
-  keys_log="${RESULT_KEYLISTS[$idx]//$KEY_SEP/,}"
+  keys_log="${KW_KEYLISTS[$idx]//$KEY_SEP/,}"
   keys_log="${keys_log#,}"
-  log_row "${SESSION_ID}	${RESULT_RELPATHS[$idx]}	${keys_log}"
+  log_row "${SESSION_ID}	${KW_RELPATHS[$idx]}	${keys_log}"
+done
+for ((i = 0; i < VEC_EXTRA_COUNT; i++)); do
+  log_row "${SESSION_ID}	${VEC_EXTRA_RELPATHS[$i]}	(ベクトル類似)"
 done
 
 printf '%s\n' "$OUT_JSON"

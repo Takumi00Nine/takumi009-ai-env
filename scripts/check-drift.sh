@@ -395,6 +395,14 @@ echo "======================================================================"
 # vault_inventory.py と同じ既定値・同じ環境変数名）。
 : "${FRAGMENTS_LOG_DIR:=$HOME/.claude/logs/fragments-log}"
 : "${VAULT_INVENTORY_LOG_DIR:=$HOME/.claude/logs/vault-inventory}"
+# knowledge-merge-candidates（外部脳Knowledge自律整理・柱②・週次・2026-07-12追加）の
+# レポート出力先。claude/hooks/bootstrap-vault.sh・
+# scripts/vault-agents/knowledge_merge_candidates.py と同じ既定値・同じ環境変数名。
+: "${KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR:=$HOME/.claude/logs/knowledge-merge-candidates}"
+: "${KNOWLEDGE_MERGE_STALE_DAYS:=10}"    # 週次(目安7日) + 猶予（fragments-logと同型）
+# 未解決ALERTレポート出力先（FR12b／要件v2未決事項j）。knowledge_merge.py等の
+# マージ実行側が生成する想定（本ツールは読み取りのみ）。
+: "${VAULT_MERGE_ALERTS_DIR:=$HOME/.claude/logs/vault-merge-alerts}"
 # 未処理レポートの猶予日数（2026-07-11 決定・claude/hooks/bootstrap-vault.sh の
 # 未処理レポート検知と同じ判定基準＝frontmatter `processed: YYYY-MM-DD` の有無）。
 # bootstrap-vault.sh は毎セッション気づけるための一次検知、こちらは「気づいたのに
@@ -430,15 +438,18 @@ vault_agent_installed() {
 vault_agents_untouched=1
 [ -d "$FRAGMENTS_LOG_DIR" ] && vault_agents_untouched=0
 [ -d "$VAULT_INVENTORY_LOG_DIR" ] && vault_agents_untouched=0
+[ -d "$KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR" ] && vault_agents_untouched=0
+[ -d "$VAULT_MERGE_ALERTS_DIR" ] && vault_agents_untouched=0
 [ -f "$VAULT_READS_LOG" ] && vault_agents_untouched=0
 [ -f "$VAULT_RECALL_LOG" ] && vault_agents_untouched=0
 vault_agent_installed "vault-inventory" && vault_agents_untouched=0
 vault_agent_installed "fragments-log" && vault_agents_untouched=0
+vault_agent_installed "knowledge-merge-detect" && vault_agents_untouched=0
 
 if [ ! -d "$VAULT" ]; then
   log "  -> Vaultが見つかりません（${VAULT}）。このマシンに私的Vaultが無い（サブ機）想定ならチェック対象外"
 elif [ "$vault_agents_untouched" = "1" ]; then
-  log "  -> vault-agentsの出力（${FRAGMENTS_LOG_DIR}・${VAULT_INVENTORY_LOG_DIR}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）が1件も見つかりません。vault-agentsが一度も導入されていない想定ならチェック対象外"
+  log "  -> vault-agentsの出力（${FRAGMENTS_LOG_DIR}・${VAULT_INVENTORY_LOG_DIR}・${KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR}・${VAULT_MERGE_ALERTS_DIR}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）が1件も見つかりません。vault-agentsが一度も導入されていない想定ならチェック対象外"
 else
   # epoch(秒)から現在までの経過日数を返す。未来のepoch（時計ズレ・ファイル破損）
   # では負値をそのまま返す＝呼び出し側で「未来日=異常」と判定できるようにする
@@ -577,6 +588,22 @@ else
     awk 'NR==1 { if ($0 != "---") exit; next } /^---[[:space:]]*$/ { exit } { print }' "$1" 2>/dev/null
   }
 
+  # ディレクトリ内の*.mdファイルのうち、frontmatterに`resolved: YYYY-MM-DD`行が
+  # 無いもの（＝未解決ALERT）の件数を返す（claude/hooks/bootstrap-vault.shの
+  # count_unresolved_alerts()と同じ判定基準。FR12b／要件v2未決事項j「resolved確認
+  # までの全マージ停止ラッチ」の週次drift通知側での可視化）。ALERTファイル名は
+  # 日付先頭固定ではない想定（候補IDベース等）のため*.md全件を対象にする。
+  count_unresolved_alerts() {
+    local dir="$1" count=0 f
+    for f in "$dir"/*.md; do
+      [ -e "$f" ] || continue
+      if ! report_frontmatter "$f" | grep -qE '^resolved:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
+        count=$((count + 1))
+      fi
+    done
+    echo "$count"
+  }
+
   #   $1=ディレクトリ $2=ラベル(drift種別プレフィクス) $3=しきい値(日・freshnessと同じ値を渡す) $4=表示名
   check_report_processed() {
     local dir="$1" label="$2" threshold="$3" name="$4" latest age
@@ -590,7 +617,8 @@ else
       return
     fi
     if [ "$age" -gt "$UNPROCESSED_REPORT_GRACE_DAYS" ]; then
-      item_drift "[${label}-UNPROCESSED] 最新の${name}（$(basename "$latest" .md)）が生成から${age}日経過してもリーダーに処理された形跡（frontmatterの processed: 行）がありません（目安 ${UNPROCESSED_REPORT_GRACE_DAYS} 日）。次回セッションで確認・処理してください。"
+      # 表示は日付のみではなくフルパス（本人がそのまま開けるように・2026-07-12追加）。
+      item_drift "[${label}-UNPROCESSED] 最新の${name}（${latest}）が生成から${age}日経過してもリーダーに処理された形跡（frontmatterの processed: 行）がありません（目安 ${UNPROCESSED_REPORT_GRACE_DAYS} 日）。次回セッションで確認・処理してください。"
     else
       log "  -> ${name}: 未処理（生成から${age}日・目安${UNPROCESSED_REPORT_GRACE_DAYS}日以内は許容）"
     fi
@@ -611,6 +639,28 @@ else
       "$FRAGMENTS_LOG_STALE_DAYS" "fragments-logレポート"
   else
     log "  -> fragments-logレポート: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.fragments-log.plist が無い。scripts/install-vault-agents.sh 未実行）のためチェック対象外"
+  fi
+  if vault_agent_installed "knowledge-merge-detect"; then
+    check_report_freshness "$KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR" "KNOWLEDGE-MERGE-CANDIDATES" \
+      "$KNOWLEDGE_MERGE_STALE_DAYS" "Knowledge統合候補レポート" "knowledge-merge-detect"
+    check_report_processed "$KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR" "KNOWLEDGE-MERGE-CANDIDATES" \
+      "$KNOWLEDGE_MERGE_STALE_DAYS" "Knowledge統合候補レポート"
+  else
+    log "  -> Knowledge統合候補レポート: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.knowledge-merge-detect.plist が無い。scripts/install-vault-agents.sh 未実行）のためチェック対象外"
+  fi
+  # 未解決ALERT（FR12b・要件v2未決事項j）。棚卸し/fragments-log/knowledge-merge-
+  # candidatesのような「定期生成物の新鮮度」チェックとは性質が異なる（ALERTは
+  # イベント駆動＝正常時は1件も生成されない）ため、plist導入有無に関わらず
+  # ディレクトリが存在すれば常にチェックする（bootstrap-vault.shの④と同じ考え方）。
+  if [ -d "$VAULT_MERGE_ALERTS_DIR" ]; then
+    unresolved_alert_count="$(count_unresolved_alerts "$VAULT_MERGE_ALERTS_DIR")"
+    if [ "$unresolved_alert_count" -gt 0 ]; then
+      item_drift "[VAULT-MERGE-ALERT-UNRESOLVED] ${VAULT_MERGE_ALERTS_DIR} に未解決ALERT（frontmatterのresolved:行が無いファイル）が${unresolved_alert_count}件あります＝Knowledgeマージ全体が停止中の疑い（FR10ラッチ）。確認: ls ${VAULT_MERGE_ALERTS_DIR}"
+    else
+      log "  -> ✅ 未解決ALERT: 0件"
+    fi
+  else
+    log "  -> 未解決ALERT: ${VAULT_MERGE_ALERTS_DIR} が無い（ALERT未発生の想定）ためチェック対象外"
   fi
   check_log_freshness "$VAULT_READS_LOG" "VAULT-READS-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
     "vault-reads.tsv" "claude/hooks/vault-read-log.sh"

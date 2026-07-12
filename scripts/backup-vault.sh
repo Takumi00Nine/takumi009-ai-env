@@ -130,4 +130,21 @@ else
   warn "remote 'origin' が未設定のため push をスキップしました（commit までは完了）。remote設定は本人が行う運用です。"
 fi
 
+# --- 6. 埋め込みインデックスのbest-effort更新（外部脳ハイブリッド検索・柱①）---
+# 毎時のvault-backup相乗り（設計書§1柱①・§2.2・§3(b)採用案）。Vaultのcommit/pushとは
+# 独立した処理のため、失敗してもこのスクリプト自体はFAILにしない（best-effort＝
+# インデックス更新はバックアップの必須要件ではない。update_embedding_index.py自身が
+# Ollama不通等をfail-openでexit 0にする設計だが、万一非0で終わっても無視する）。
+UPDATE_EMBEDDING_INDEX="${UPDATE_EMBEDDING_INDEX_SCRIPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vault-agents/update_embedding_index.py}"
+if [[ -f "$UPDATE_EMBEDDING_INDEX" ]]; then
+  PYTHON_BIN_FOR_INDEX="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+  if "$PYTHON_BIN_FOR_INDEX" "$UPDATE_EMBEDDING_INDEX" --vault "$VAULT"; then
+    log "埋め込みインデックス更新を実行しました"
+  else
+    warn "埋め込みインデックス更新が非0終了しました（best-effort・バックアップ自体は正常完了扱い）"
+  fi
+else
+  warn "update_embedding_index.pyが見つからないためインデックス更新をskipしました: $UPDATE_EMBEDDING_INDEX"
+fi
+
 log "done."

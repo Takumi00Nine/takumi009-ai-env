@@ -38,9 +38,9 @@ assert_true() {
   fi
 }
 
-echo "=== 1. 収録した2plistは全てRunAtLoad=falseである（静的チェック） ==="
+echo "=== 1. 収録した3plistは全てRunAtLoad=falseである（静的チェック） ==="
 {
-  for name in vault-inventory fragments-log; do
+  for name in vault-inventory fragments-log knowledge-merge-detect; do
     plist="$REPO_ROOT/launchagents/com.takumi009.$name.plist"
     # RunAtLoadキーの直後の値が<false/>であることを確認する
     val=$(awk '/<key>RunAtLoad<\/key>/{getline; print; exit}' "$plist" | tr -d '[:space:]')
@@ -50,7 +50,7 @@ echo "=== 1. 収録した2plistは全てRunAtLoad=falseである（静的チェ�
 
 echo "=== 2. plutil -lint が全plistでOKになる（構文チェック） ==="
 {
-  for name in vault-inventory fragments-log; do
+  for name in vault-inventory fragments-log knowledge-merge-detect; do
     plist="$REPO_ROOT/launchagents/com.takumi009.$name.plist"
     if plutil -lint "$plist" >/dev/null 2>&1; then
       pass "$name: plutil -lint OK"
@@ -65,8 +65,8 @@ echo "=== 3. --dry-run: 実際の変更を一切しない・kickstartに触れ�
   FAKE_HOME="$(mktemp -d)"
   out=$(HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run)
 
-  assert_true "would generateが2件出る" \
-    "$([[ "$(echo "$out" | grep -c 'would generate')" == "2" ]] && echo 1 || echo 0)"
+  assert_true "would generateが3件出る" \
+    "$([[ "$(echo "$out" | grep -c 'would generate')" == "3" ]] && echo 1 || echo 0)"
   # ログ文中に「kickstartは行わない」旨の説明があるのは正しい（そのものは弾かない）。
   # 実際に kickstart を"実行する計画"（would run: launchctl kickstart）が無いことを確認する。
   assert_true "「would run: launchctl kickstart」という実行計画は出ない（即時実行しない設計）" \
@@ -80,7 +80,7 @@ echo "=== 3. --dry-run: 実際の変更を一切しない・kickstartに触れ�
 echo "=== 4. __AIENV_HOME__ プレースホルダが実ホームパスへ正しく置換される（生成シミュレーション） ==="
 {
   FAKE_HOME="/tmp/fake-home-for-vault-agents-test"
-  for name in vault-inventory fragments-log; do
+  for name in vault-inventory fragments-log knowledge-merge-detect; do
     src="$REPO_ROOT/launchagents/com.takumi009.$name.plist"
     sim=$(sed "s#__AIENV_HOME__#$FAKE_HOME#g" "$src")
     assert_true "$name: 置換後に__AIENV_HOME__が残っていない" \

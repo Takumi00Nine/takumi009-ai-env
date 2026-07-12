@@ -49,13 +49,20 @@ d_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%Y-%m-%dT12:
 # 必読5ファイル＋4フォルダのREADME.mdを作る（無いとスクリプトがFileNotFoundErrorで落ちる）
 make_base_vault() {
   local vault="$1"
+  # Personal/はvault_inventory.pyのBOOTSTRAP_FILES（§5注入サイズ監視）に元々
+  # 含まれていた（bootstrap-vault.shの必読6ファイルと同期）が、このfixtureヘルパー
+  # には反映されておらず§5がFileNotFoundErrorで落ちる既存の隙間があった。
+  # 2026-07-11決定（[[Decisions/2026-07-11-personal-recall-scope]]）でPersonal/が
+  # 想起対象フォルダにも加わったタイミングで合わせて解消する（私の担当外の既存問題
+  # だが、Personal関連テストを追加するために本ヘルパーの修正が前提となるため対応）。
   mkdir -p "$vault/Knowledge" "$vault/Preferences" "$vault/Decisions" "$vault/Projects" \
-           "$vault/Fragments"
+           "$vault/Personal" "$vault/Fragments"
   for f in "Knowledge/mistakes.md" "Preferences/absolute-rules.md" "Preferences/profile.md" \
-           "Preferences/coding-delegation.md" "Preferences/vault-operation.md"; do
+           "Preferences/coding-delegation.md" "Preferences/vault-operation.md" \
+           "Personal/profile-personal.md"; do
     printf -- '---\ndate: 2026-01-01\n---\n\ndummy\n' > "$vault/$f"
   done
-  for d in Knowledge Preferences Decisions Projects; do
+  for d in Knowledge Preferences Decisions Projects Personal; do
     printf -- '---\ndate: 2026-01-01\ntags: [meta, index]\n---\n\n# %s\n' "$d" > "$vault/$d/README.md"
   done
 }
@@ -94,6 +101,24 @@ echo "=== 1. aliases 欠落検出（§9）: README除外・欠落/フロー形�
   assert_contains "aliasesが無いノートが§9に載る" "$out" "Knowledge/no-alias-note.md"
   assert_not_contains "aliasesがあるノートは§9に載らない" "$out" "Knowledge/good-alias-note.md\`"
   assert_not_contains "README.mdは§9の対象外（フォルダ全体では0件想定だが個別にも見る）" "$out" "Knowledge/README.md"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 1b. aliases 欠落検出（§9）: Personal/フォルダも対象になる（2026-07-11決定・4→5フォルダ） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+
+  write_note "$V" "Personal/devices.md" "date: 2026-01-01"
+  write_note "$V" "Personal/good-alias-note.md" \
+    $'date: 2026-01-01\naliases:\n  - specific-personal-term-abc'
+
+  out="$(run_inventory "$VAULT_HOME")"
+  assert_contains "Personal/内のaliases欠落ノートが§9に載る" "$out" "Personal/devices.md"
+  assert_not_contains "Personal/内のaliasesありノートは§9に載らない" "$out" "Personal/good-alias-note.md\`"
+  assert_not_contains "Personal/README.mdは§9の対象外" "$out" "Personal/README.md"
 
   rm -rf "$VAULT_HOME"
 }
@@ -392,7 +417,13 @@ echo "=== 12. 既存§1-8のリグレッション: 空Vaultでも例外なく完
   make_base_vault "$V"
 
   out="$(run_inventory "$VAULT_HOME")"
-  assert_contains "既存の必読5ファイルサイズ監視セクションは健在" "$out" "## 5. 必読5ファイルの注入サイズ"
+  # 見出しはBOOTSTRAP_FILES件数から動的生成される（vault_inventory.py:575）。
+  # BOOTSTRAP_FILESは既にPersonal/profile-personal.mdを含む6件（bootstrap-vault.shの
+  # 必読6ファイルと同期・私の担当外の既存事実）だったため、本来「必読6ファイル」が
+  # 正しい期待値だった（従来のfixtureがPersonal/profile-personal.mdを用意しておらず
+  # このテスト自体がFileNotFoundErrorで未達成だったため、この食い違いが露見していな
+  # かった＝make_base_vault修正の副次効果として発覚・修正）。
+  assert_contains "既存の必読6ファイルサイズ監視セクションは健在" "$out" "## 5. 必読6ファイルの注入サイズ"
   assert_contains "既存のFragmentsセクションは健在" "$out" "## 8. Fragments（直近14日）"
   assert_contains "新設セクション9〜12がすべて出る" "$out" "## 9. aliases が無いノート"
   assert_contains "新設セクション10が出る" "$out" "## 10. 汎用すぎる／短すぎる alias"

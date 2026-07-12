@@ -59,7 +59,14 @@ count_commits() {
 # global git identity が無い環境で失敗しないようにする（Codexレビュー指摘・Major）。
 run_backup() {
   local vault="$1" lock="$2" stale="${3:-3600}"
+  # UPDATE_EMBEDDING_INDEX_SCRIPT=/dev/null にして埋め込みインデックス更新の
+  # best-effort呼び出し（8.1ラウンド追加）を確実にno-op化する。backup-vault.shの
+  # テストはgit commit/pushロジックの検証が目的であり、実Ollama/実ネットワークへの
+  # 依存や実リポジトリの.cache/vault-embeddings/への副作用を持ち込まないため
+  # （/dev/nullは `[[ -f ]]` が偽になるのでWARN1行を出してskipされる＝別テストで
+  # 明示的に検証する）。
   STALE_LOCK_SECONDS="$stale" VAULT="$vault" LOCK_FILE="$lock" \
+    UPDATE_EMBEDDING_INDEX_SCRIPT="/dev/null" \
     GIT_AUTHOR_NAME="backup-vault-test" GIT_AUTHOR_EMAIL="test@example.invalid" \
     GIT_COMMITTER_NAME="backup-vault-test" GIT_COMMITTER_EMAIL="test@example.invalid" \
     "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log"
@@ -244,11 +251,13 @@ echo "=== 9. 排他制御: ほぼ同時に2プロセス起動しても片方だ�
   LOCK="$WORK/lock"
 
   STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
+    UPDATE_EMBEDDING_INDEX_SCRIPT="/dev/null" \
     GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
     GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
     "$SCRIPT" >"$WORK/stdout1.log" 2>"$WORK/stderr1.log" &
   pid1=$!
   STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
+    UPDATE_EMBEDDING_INDEX_SCRIPT="/dev/null" \
     GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
     GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
     "$SCRIPT" >"$WORK/stdout2.log" 2>"$WORK/stderr2.log" &
@@ -266,6 +275,79 @@ echo "=== 9. 排他制御: ほぼ同時に2プロセス起動しても片方だ�
   grep -q "既に実行中です" "$WORK/stdout1.log" 2>/dev/null && skip_count=$((skip_count + 1))
   grep -q "既に実行中です" "$WORK/stdout2.log" 2>/dev/null && skip_count=$((skip_count + 1))
   assert_eq "どちらか一方だけがskipメッセージを出す" "1" "$skip_count"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 10. 埋め込みインデックス更新（8.1ラウンド追加）: best-effort呼び出し・成功時はログに残る ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  STUB="$WORK/stub-update.py"
+  cat > "$STUB" <<'PYEOF'
+import sys
+print("stub: ok")
+sys.exit(0)
+PYEOF
+
+  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
+    UPDATE_EMBEDDING_INDEX_SCRIPT="$STUB" \
+    GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
+    GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
+    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log"
+  rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_stdout_has "成功ログが出る" "$WORK" "埋め込みインデックス更新を実行しました"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 11. 埋め込みインデックス更新が非0終了してもbackup-vault.sh自体はFAILにしない（best-effort） ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  STUB="$WORK/stub-update-fail.py"
+  cat > "$STUB" <<'PYEOF'
+import sys
+sys.exit(1)
+PYEOF
+
+  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
+    UPDATE_EMBEDDING_INDEX_SCRIPT="$STUB" \
+    GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
+    GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
+    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log"
+  rc=$?
+  assert_eq "非0終了でもbackup-vault.sh自体はexit 0" "0" "$rc"
+  assert_stderr_has "best-effort失敗のWARNが出る" "$WORK" "埋め込みインデックス更新が非0終了しました"
+  commits=$(count_commits "$VAULT_DIR")
+  assert_eq "commit自体は正常に完了している" "1" "$commits"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 12. update_embedding_index.pyが見つからない場合もWARNのみでexit 0 ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+
+  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
+    UPDATE_EMBEDDING_INDEX_SCRIPT="$WORK/does-not-exist.py" \
+    GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
+    GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
+    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log"
+  rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_stderr_has "見つからない旨のWARNが出る" "$WORK" "見つからないためインデックス更新をskipしました"
 
   rm -rf "$WORK"
 }

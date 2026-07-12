@@ -34,6 +34,16 @@ TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 # scripts/vault-agents/fragments_log.py・vault_inventory.py のOUT_DIRと同じ既定値）。
 : "${FRAGMENTS_LOG_DIR:=$HOME/.claude/logs/fragments-log}"
 : "${VAULT_INVENTORY_LOG_DIR:=$HOME/.claude/logs/vault-inventory}"
+# knowledge-merge-candidates（外部脳Knowledge自律整理・柱②・2026-07-12追加）の
+# レポート出力先。scripts/vault-agents/knowledge_merge_candidates.py のDEFAULT_OUT_DIRと
+# 同じ既定値（未処理レポート検知の3つ目・FR9a）。
+: "${KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR:=$HOME/.claude/logs/knowledge-merge-candidates}"
+# 未解決ALERTレポート出力先（FR12b・要件v2未決事項j「resolved確認までの全マージ
+# 停止ラッチ」）。frontmatterに`resolved: YYYY-MM-DD`が無いファイルが1件でもあれば、
+# 下のcompute_health_lines()内で専用のヘルス行を出す（マージ役=リーダー自身の書込
+# スクリプト(knowledge_merge.py等)が生成する想定・本フックはここでは何も書き込まない
+# ＝読み取りのみ）。
+: "${VAULT_MERGE_ALERTS_DIR:=$HOME/.claude/logs/vault-merge-alerts}"
 
 # ファイル先頭のfrontmatter（先頭行が `---` の場合のみ、次の `---` 行の直前まで）を
 # 標準出力へ書く。先頭行が `---` でない・読み取れない等はfrontmatmter無し扱いで
@@ -68,8 +78,26 @@ latest_unprocessed_report_date() {
   basename "$latest" .md
 }
 
+# ディレクトリ内の*.mdファイルのうち、frontmatterに`resolved: YYYY-MM-DD`行が
+# 無いもの（＝未解決ALERT）の件数を返す（FR12b・未決事項j「resolved確認までの
+# 全マージ停止ラッチ」の可視化用）。ALERTファイル名は棚卸し/fragments-log/
+# knowledge-merge-candidatesのような日付先頭固定ではない想定（候補IDベース等）
+# のため、20*.md ではなく *.md 全件を対象にする。ディレクトリが無い/空なら0を返す。
+count_unresolved_alerts() {
+  local dir="$1" count=0 f
+  shopt -s nullglob
+  local files=("$dir"/*.md)
+  shopt -u nullglob
+  for f in "${files[@]}"; do
+    if ! report_frontmatter "$f" | grep -qE '^resolved:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
+      count=$((count + 1))
+    fi
+  done
+  echo "$count"
+}
+
 compute_health_lines() {
-  local inv_dir lines="" latest rdate count now_epoch stale_names=""
+  local inv_dir lines="" latest count now_epoch stale_names=""
 
   # ① 最新棚卸しレポートの日付・検出件数（frontmatter/タイトルには件数が無いため、
   # 本文冒頭の「要確認 N 件」を1回のgrepで拾う。取れなければ日付のみ表示する）。
@@ -83,41 +111,55 @@ compute_health_lines() {
     shopt -u nullglob
     if [ "${#files[@]}" -gt 0 ]; then
       latest="${files[$((${#files[@]} - 1))]}"  # ファイル名がYYYY-MM-DDなのでglob順=時系列順（bash 3.2互換のため負インデックス不使用）
-      rdate="$(basename "$latest" .md)"
       count="$(grep -m1 -oE '要確認[^0-9]*[0-9]+' "$latest" 2>/dev/null | grep -oE '[0-9]+$')"
+      # 表示は日付のみではなくフルパス（本人がそのままファイルを開けるように・
+      # Codexレビュー指摘の運用改善。2026-07-12追加）。
       if [ -n "$count" ]; then
-        lines="${lines}- 棚卸し最新: ${rdate}（要確認 ${count} 件）
+        lines="${lines}- 棚卸し最新: ${latest}（要確認 ${count} 件）
 "
       else
-        lines="${lines}- 棚卸し最新: ${rdate}
+        lines="${lines}- 棚卸し最新: ${latest}
 "
       fi
     fi
   fi
 
-  # ② 未処理レポート検知（fragments-log / vault-inventory）。
+  # ② 未処理レポート検知（fragments-log / vault-inventory / knowledge-merge-candidates）。
   # 2026-07-11 決定（Decisions/2026-07-11-vault-maintenance-hands-off.md）で、
   # 両レポートの対処（昇格・棚卸し要確認項目の解消）は「本人が見て指示」から
   # 「リーダーがレポート生成後の最初のセッションで自律処理」に変わった。
   # テキスト規律にせず機械検知するため、各レポートフォルダの最新ファイルに
   # 処理完了マーカー（frontmatter行 `processed: YYYY-MM-DD`。リーダーが処理完了時に
-  # 追記する。fragments_log.py/vault_inventory.py はこのキーを出力しないため
-  # 生成物とは衝突しない）が無ければ「未処理」として日付を出す。
+  # 追記する。fragments_log.py/vault_inventory.py/knowledge_merge_candidates.py は
+  # このキーを出力しないため生成物とは衝突しない）が無ければ「未処理」として日付を出す。
   # フォルダが1つも無ければ（vault-agents未導入・サブ機）行自体を出さない。
-  # 出力先は同じく$HOME/.claude/logs/配下（Vault配下からの移設）。
+  # 出力先は同じく$HOME/.claude/logs/配下（Vault配下からの移設）。knowledge-merge-
+  # candidatesは3つ目として2026-07-12追加（FR9a。候補ごとに安定ID・状態を持つため
+  # 「全候補終端」までprocessedが付かない＝他の2本より未処理期間が長くなり得る
+  # 想定は既知＝FR9b仕様どおり）。
   local frag_dir="$FRAGMENTS_LOG_DIR"
   local inv_dir_up="$VAULT_INVENTORY_LOG_DIR"
+  local km_dir="$KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR"
   local any_report_dir=0 unprocessed="" d
+  # 表示は日付のみではなくフルパス（本人がそのままファイルを開けるように・
+  # Codexレビュー指摘の運用改善。2026-07-12追加）。latest_unprocessed_report_dateは
+  # 引き続き日付(basename)のみを返す＝呼び出し側でdir/dateからフルパスを組み立てる。
   if [ -d "$frag_dir" ]; then
     any_report_dir=1
     if d="$(latest_unprocessed_report_date "$frag_dir" 2>/dev/null)"; then
-      unprocessed="${unprocessed}fragments-log ${d}"
+      unprocessed="${unprocessed}fragments-log ${frag_dir}/${d}.md"
     fi
   fi
   if [ -d "$inv_dir_up" ]; then
     any_report_dir=1
     if d="$(latest_unprocessed_report_date "$inv_dir_up" 2>/dev/null)"; then
-      unprocessed="${unprocessed}${unprocessed:+ / }vault-inventory ${d}"
+      unprocessed="${unprocessed}${unprocessed:+ / }vault-inventory ${inv_dir_up}/${d}.md"
+    fi
+  fi
+  if [ -d "$km_dir" ]; then
+    any_report_dir=1
+    if d="$(latest_unprocessed_report_date "$km_dir" 2>/dev/null)"; then
+      unprocessed="${unprocessed}${unprocessed:+ / }knowledge-merge-candidates ${km_dir}/${d}.md"
     fi
   fi
   if [ "$any_report_dir" = "1" ]; then
@@ -126,6 +168,21 @@ compute_health_lines() {
 "
     else
       lines="${lines}- 未処理レポートなし
+"
+    fi
+  fi
+
+  # ④ 未解決ALERT（2026-07-12追加・FR12b／要件v2未決事項j対応）。
+  # ~/.claude/logs/vault-merge-alerts/ 配下にfrontmatter `resolved: YYYY-MM-DD`
+  # の無いファイルが1件でもあれば、「resolved確認までの全マージ停止ラッチ」が
+  # かかっていることを本人が能動的に見に行かなくても気づけるよう、専用の
+  # ヘルス行を出す。fail-open: ディレクトリが無い（ALERT未発生=健全）なら
+  # 行自体を出さない。
+  if [ -d "$VAULT_MERGE_ALERTS_DIR" ]; then
+    local unresolved_count
+    unresolved_count="$(count_unresolved_alerts "$VAULT_MERGE_ALERTS_DIR" 2>/dev/null)"
+    if [ -n "$unresolved_count" ] && [ "$unresolved_count" -gt 0 ] 2>/dev/null; then
+      lines="${lines}- ⚠️ マージALERT未解決 ${unresolved_count}件＝マージ停止中（詳細: ${VAULT_MERGE_ALERTS_DIR}）
 "
     fi
   fi
@@ -157,6 +214,71 @@ compute_health_lines() {
   fi
 
   printf '%s' "$lines"
+}
+
+# --- Ollama予熱（外部脳ハイブリッド検索・柱①・FR1・8.1ラウンド追加） ---
+# セッション開始に連動してOllamaを起動＋対象モデルを予熱する。フル版分岐（本人の
+# メインセッション）のみで呼ぶ。ワーカー/サブエージェントの軽量版分岐には追加しない
+# （設計書§1「ワーカー軽量版には追加しない＝多重予熱防止」＝サブエージェントを何個も
+# 起動するたびに予熱が走るのを防ぐ）。
+#
+# 起動方式（実機確認・2026-07-11リーダー実施＋本ワーカー確認）: brew services /
+# LaunchAgent化はしない（本人方針＝ログイン項目に入れない）。`ollama serve` を
+# 直接バックグラウンド起動する。多重起動対策は「起動前に疎通確認」＋「ollama serve
+# 自体、既に誰かがポートを掴んでいれば即エラー終了する」の二重（実機確認済み：
+# 2重起動してもクラッシュしたり既存プロセスを壊したりはしない＝安全側）。
+#
+# fire-and-forget: 呼び出し全体をバックグラウンド化(&)＋disownし、本フックの応答
+# （SessionStart timeout=15秒）を一切ブロックしない。失敗しても本フック本体には
+# 何も影響しない・ログも増やさない（Ollama起動状況の可観測性は柱①検索側の
+# fail-openログ(vault-recall.tsv)に委ねる＝「意味のあるエラーだけ拾う」既存方針）。
+preheat_ollama() {
+  local base_url="${VAULT_EMBED_BASE_URL:-http://127.0.0.1:11434}"
+  local model="${VAULT_EMBED_MODEL:-qwen3-embedding:0.6b}"
+  # scripts/vault-agents/embedding_index.py の EMBED_NUM_CTX/EMBED_NUM_BATCH と
+  # 同じ既定値・同じ環境変数名（VAULT_EMBED_NUM_CTX/VAULT_EMBED_NUM_BATCH）を使う
+  # ことで、bash側とpython側で値がずれないようにする（値そのものはbash/python間で
+  # 共有できないため、環境変数を単一の設定点にする運用でsyncを保つ）。
+  local num_ctx="${VAULT_EMBED_NUM_CTX:-4096}"
+  local num_batch="${VAULT_EMBED_NUM_BATCH:-4096}"
+  command -v curl >/dev/null 2>&1 || return 0
+
+  if ! curl -s -m 1 "${base_url}/api/tags" >/dev/null 2>&1; then
+    local ollama_bin
+    ollama_bin="$(command -v ollama 2>/dev/null || true)"
+    [ -z "$ollama_bin" ] && [ -x /opt/homebrew/bin/ollama ] && ollama_bin="/opt/homebrew/bin/ollama"
+    [ -z "$ollama_bin" ] && [ -x /usr/local/bin/ollama ] && ollama_bin="/usr/local/bin/ollama"
+    [ -z "$ollama_bin" ] && return 0
+
+    # OLLAMA_NUM_PARALLEL=1: 埋め込み用途は逐次処理（想起フックは1クエリずつ・
+    # インデクサも1ノートずつ）で並列スロットが不要なため、既定の並列数のまま
+    # 起動しない（実機測定・2026-07-11リーダー実測: options.num_ctx=8192指定時、
+    # 既定の並列スロット数(4)分のコンテキストが確保されモデルロードが6.7GBまで
+    # 膨張することを確認。24GB機では圧迫が大きい。1並列に絞ることでコンテキスト
+    # メモリを概ね1/4に削減できる見込み。※その後の追加実測でnum_ctx既定自体を
+    # 8192→4096へ引き下げ済み(6.7GB→3.6GB)・OLLAMA_NUM_PARALLEL=1は引き続き有効）。
+    # このOllamaサーバはbootstrap-vault.sh自身が起動を担う構成（brew services等の
+    # 外部管理下ではない）なので、ここで環境変数を付与してもリポジトリ外の設定に
+    # 影響しない。
+    OLLAMA_NUM_PARALLEL=1 nohup "$ollama_bin" serve >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+
+    local i=0
+    while [ "$i" -lt 10 ]; do
+      curl -s -m 1 "${base_url}/api/tags" >/dev/null 2>&1 && break
+      sleep 0.5
+      i=$((i + 1))
+    done
+  fi
+
+  # 空文字の埋め込みリクエストでモデルをメモリへロードさせる（予熱）。応答は捨てる。
+  # 本番の検索/インデクサ呼び出しと同じoptions(num_ctx/num_batch)で叩く（Codex
+  # レビュー後リーダー実機指摘: optionsが違うとOllama側でモデル再ロードが走り、
+  # 予熱の意味が無くなって最初の本番クエリが再ロード分の遅延を被り500ms予算を
+  # 圧迫する）。keep_aliveは既定のまま（対話中の再ロード防止を優先）。
+  curl -s -m 30 "${base_url}/api/embed" \
+    -d "{\"model\":\"${model}\",\"input\":\"\",\"options\":{\"num_ctx\":${num_ctx},\"num_batch\":${num_batch}}}" \
+    >/dev/null 2>&1
 }
 
 INPUT=$(cat 2>/dev/null || true)
@@ -225,6 +347,13 @@ else
 
   # 外部脳ヘルス行（fail-open: 失敗してもブートストラップ本文は必ず出す）。
   HEALTH_LINES="$(compute_health_lines 2>/dev/null)" || HEALTH_LINES=""
+
+  # Ollama予熱をfire-and-forgetで起動（フル版のみ）。BOOTSTRAP_DISABLE_PREHEAT=1で
+  # 無効化できる（ユニットテスト用・実Ollama/実ネットワークへ依存させないため）。
+  if [ "${BOOTSTRAP_DISABLE_PREHEAT:-0}" != "1" ]; then
+    ( preheat_ollama ) >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
 
   read -r -d '' DIRECTIVE <<EOF
 【セッション開始ブートストラップ｜ハーネス強制注入】

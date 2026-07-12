@@ -106,6 +106,8 @@ def main():
              "Blogs へ送るもの、を判断して自律的に処理する（本人の指示は不要）。Fragments 側に"
              " `status: promoted`＋相互リンクを付け、本ログのfrontmatterに `processed: YYYY-MM-DD`"
              " を追記する。**多くのエントリは昇格不要（履歴のまま）で正常**。")
+    L.append("")
+    L.append("運用ノート: [[Preferences/fragments-workflow]]")
     if not days:
         L.append("")
         L.append("（対象期間に新しいエントリはありません）")

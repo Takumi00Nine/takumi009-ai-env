@@ -59,11 +59,18 @@ write_note() {
 }
 
 # vault-recall.sh を実行し、標準出力(JSON文字列)を返す。
+# VAULT_RECALL_DISABLE_VECTOR=1（8.1ラウンド追加のキルスイッチ）を常に付ける:
+# 本ファイルはキーワード照合ロジック専用のテストであり、ベクトル想起の挙動は
+# tests/test-vault-recall-vector.sh 側で個別に検証する。無効化しないと、リポジトリ内
+# 既定の埋め込みインデックス置き場(.cache/vault-embeddings/)にたまたま実Vaultの
+# インデックスが存在する状態でテストを走らせた場合に、キーワード除外対象のはずの
+# ノート（absolute-rules.md等）がベクトル候補として紛れ込み、テストが環境依存で
+# 不安定になる（実際に発生した回帰の再発防止＝Codexレビュー相当の自己発見）。
 run_recall() {
   local vault="$1" log="$2" prompt="$3" session="${4:-sess-1}"
   local input
   input="$(jq -n --arg p "$prompt" --arg s "$session" '{session_id: $s, prompt: $p}')"
-  printf '%s' "$input" | VAULT_RECALL_VAULT="$vault" VAULT_RECALL_LOG="$log" "$SCRIPT"
+  printf '%s' "$input" | VAULT_RECALL_VAULT="$vault" VAULT_RECALL_LOG="$log" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT"
 }
 
 echo "=== 1. 正常ヒット: aliases(ブロックリスト)とファイル名由来キーの両方が拾われる ==="
@@ -149,6 +156,26 @@ echo "=== 5. 除外ファイル: 起動必読5件・README.mdはヒットして�
   rm -rf "$VAULT_DIR" "$(dirname "$LOG")"
 }
 
+echo "=== 5b. Personal/フォルダも想起対象になる（2026-07-11決定・4→5フォルダ）・profile-personal.mdは除外される ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  LOG="$(mktemp -d)/vault-recall.tsv"
+  write_note "$VAULT_DIR/Personal/devices.md" \
+    $'date: 2026-07-11\naliases:\n  - "モニターの型番台帳"'
+  write_note "$VAULT_DIR/Personal/profile-personal.md" \
+    $'date: 2026-07-11\naliases:\n  - "個人プロファイル除外対象"'
+
+  out="$(run_recall "$VAULT_DIR" "$LOG" "モニターの型番台帳を教えてください")"
+  ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
+  assert_contains "Personal/devices.mdが想起対象として提示される" "$ctx" "Personal/devices.md"
+
+  out2="$(run_recall "$VAULT_DIR" "$LOG" "個人プロファイル除外対象について聞きたいです")"
+  ctx2="$(printf '%s' "$out2" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
+  assert_not_contains "Personal/profile-personal.mdは起動必読のため除外される" "$ctx2" "profile-personal.md"
+
+  rm -rf "$VAULT_DIR" "$(dirname "$LOG")"
+}
+
 echo "=== 6. プロンプトが10文字未満なら何も出力せずexit 0（ログも残さない） ==="
 {
   VAULT_DIR="$(mktemp -d)"
@@ -183,7 +210,7 @@ echo "=== 8. fail-open: 壊れたJSON入力でもexit 0・ログにERROR行（3�
   VAULT_DIR="$(mktemp -d)"
   LOG="$(mktemp -d)/vault-recall.tsv"
 
-  out="$(printf 'not valid json at all' | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" "$SCRIPT")"
+  out="$(printf 'not valid json at all' | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT")"
   rc=$?
   assert_eq "exit code 0（プロンプト処理を妨げない）" "0" "$rc"
   assert_eq "標準出力は空" "" "$out"
@@ -206,6 +233,36 @@ echo "=== 9. fail-open: Vaultディレクトリが存在しなくてもexit 0・
   assert_contains "ERROR行にVault不在が記録される" "$(cat "$LOG")" "Vaultディレクトリが見つかりません"
 
   rm -rf "$(dirname "$LOG")"
+}
+
+echo "=== 9b. session_idがJSONに無くても候補は無言で消えず通常どおり提示される（8.1ラウンド・リーダー実機発見の回帰修正） ==="
+{
+  # バグの機序: @tsvの1列目(session_id)が空文字だと出力が先頭タブ始まりになり、
+  # bashのreadがIFSに含まれる空白類文字(タブ)の連続を「先頭の空白」として読み飛ばす
+  # 仕様により、本来2列目に入るはずのプロンプト全体が誤って1列目へ詰まってしまい
+  # PROMPTが空文字になっていた（＝候補があっても無言で無出力になる「無言のfail-open」
+  # 違反）。実機のClaude Codeは常にsession_idを送るため実害は無かったが、手動テストを
+  # 混乱させるため修正した。session_id側に固定プレフィックスを付けてから読み、直後に
+  # 取り除く方式で、1列目が常に非空になり先頭空白読み飛ばしを回避する。
+  VAULT_DIR="$(mktemp -d)"
+  LOG="$(mktemp -d)/vault-recall.tsv"
+  write_note "$VAULT_DIR/Knowledge/sessionless-note.md" \
+    $'date: 2026-07-10\naliases:\n  - "excludedsessiontestkeyword"'
+
+  out="$(printf '{"prompt":"excludedsessiontestkeywordについて教えて"}' \
+    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT")"
+  rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
+  assert_contains "session_id欠落でも候補が無言で消えず提示される" "$ctx" "sessionless-note.md"
+
+  logtext="$(cat "$LOG" 2>/dev/null || true)"
+  # ログ行は "timestamp\tsession_id\trelpath\t..." の形式（log_row()参照）。
+  # session_idはtimestampに続く2列目で、欠落時は空文字のまま記録される
+  # （Codexレビュー指摘・コメント表現の訂正: 1列目ではなく2列目）。
+  assert_contains "提示ログの2列目(session_id)は空文字のまま記録される" "$logtext" $'\t\tKnowledge/sessionless-note.md'
+
+  rm -rf "$VAULT_DIR" "$(dirname "$LOG")"
 }
 
 echo "=== 10. 最大5件・一致キー数の多い順 ==="
@@ -279,7 +336,7 @@ echo "=== 13. jqが無い環境でもexit 0・ERROR行を残す（Codexレビュ
   done
 
   out=$(printf '{"session_id":"s1","prompt":"これは十分に長いプロンプトです確認"}' \
-    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" PATH="$BINDIR" "$SCRIPT" 2>&1)
+    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" PATH="$BINDIR" "$SCRIPT" 2>&1)
   rc=$?
   assert_eq "exit code 0（jq不在でも落ちない）" "0" "$rc"
   assert_eq "標準出力は空" "" "$out"
@@ -426,7 +483,7 @@ echo "=== 20. fail-open: カタカナ境界分割用のgrepが無くてもexit 0
   done
 
   out=$(printf '{"session_id":"s1","prompt":"変更したときのチェックってどうやるんだっけ"}' \
-    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" PATH="$BINDIR" "$SCRIPT" 2>&1)
+    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" PATH="$BINDIR" "$SCRIPT" 2>&1)
   rc=$?
   assert_eq "grep不在でもexit code 0" "0" "$rc"
 

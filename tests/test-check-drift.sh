@@ -1126,6 +1126,220 @@ echo "=== 30. ⑥LaunchAgent plistは導入済みだが出力(レポート/ロ�
   rm -rf "$REPO" "$HOME_DIR"
 }
 
+echo "=== 31. ⑥knowledge-merge-candidatesが健全（レポートが新しい・processed済み）ならdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/knowledge-merge-candidates" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.knowledge-merge-detect.plist"
+  cat > "$HOME_DIR/.claude/logs/knowledge-merge-candidates/$(d_date 0).md" <<'EOF'
+---
+date: 2026-07-12
+processed: 2026-07-12
+---
+# 候補レポート
+EOF
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "Knowledge統合候補レポート健全メッセージ" "$out" "✅ Knowledge統合候補レポート:"
+  assert_contains "処理済みメッセージ" "$out" "✅ Knowledge統合候補レポート: 処理済みマーカーあり"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 32. ⑥knowledge-merge-candidatesレポートが期限超過(STALE)だと検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/knowledge-merge-candidates" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.knowledge-merge-detect.plist"
+  # 目安10日を超える15日前が最新レポート
+  echo "# report" > "$HOME_DIR/.claude/logs/knowledge-merge-candidates/$(d_date -15).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "KNOWLEDGE-MERGE-CANDIDATES-STALEが検知される" "$out" "[KNOWLEDGE-MERGE-CANDIDATES-STALE]"
+  assert_contains "確認コマンドが含まれる" "$out" "launchctl list | grep knowledge-merge-detect"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 33. ⑥knowledge-merge-candidatesレポートが一度も生成されていない(DEAD)と検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/knowledge-merge-candidates" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.knowledge-merge-detect.plist"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "KNOWLEDGE-MERGE-CANDIDATES-DEADが検知される" "$out" "[KNOWLEDGE-MERGE-CANDIDATES-DEAD]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 34. ⑥knowledge-merge-candidates未処理レポート: 猶予日数超過でUNPROCESSEDを検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/knowledge-merge-candidates" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.knowledge-merge-detect.plist"
+  # 猶予(既定3日)を超える5日前・processedマーカー無し
+  echo "# report" > "$HOME_DIR/.claude/logs/knowledge-merge-candidates/$(d_date -5).md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "KNOWLEDGE-MERGE-CANDIDATES-UNPROCESSEDが検知される" "$out" "[KNOWLEDGE-MERGE-CANDIDATES-UNPROCESSED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 35. ⑥knowledge-merge-detectの任意LaunchAgentが未導入ならDEAD誤報しない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+  # $HOME_DIR/Library/LaunchAgents/com.takumi009.knowledge-merge-detect.plist は作らない
+  # （任意機能未導入を模擬）。$HOME_DIR/.claude/logs/knowledge-merge-candidates も作らない。
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "任意機能未導入なのにDEAD誤報されない" "$out" "[KNOWLEDGE-MERGE-CANDIDATES-DEAD]"
+  assert_contains "任意機能未導入の対象外メッセージが出る" "$out" "Knowledge統合候補レポート: 任意機能未導入"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 36. ⑥未解決ALERT（FR12b）: resolvedの無いALERTファイルがあると検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs/vault-merge-alerts"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+  cat > "$HOME_DIR/.claude/logs/vault-merge-alerts/cand-abc.md" <<'EOF'
+---
+date: 2026-07-06
+processed: 2026-07-06
+---
+# ALERT
+EOF
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-MERGE-ALERT-UNRESOLVEDが検知される" "$out" "[VAULT-MERGE-ALERT-UNRESOLVED]"
+  assert_contains "件数1件が明記される" "$out" "未解決ALERT"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 37. ⑥未解決ALERT: 全件resolved済みならdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs/vault-merge-alerts"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+  cat > "$HOME_DIR/.claude/logs/vault-merge-alerts/cand-abc.md" <<'EOF'
+---
+date: 2026-07-06
+processed: 2026-07-06
+resolved: 2026-07-07
+---
+# ALERT
+EOF
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "VAULT-MERGE-ALERT-UNRESOLVEDは出ない" "$out" "[VAULT-MERGE-ALERT-UNRESOLVED]"
+  assert_contains "健全メッセージが出る" "$out" "✅ 未解決ALERT: 0件"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 38. ⑥未解決ALERT: ディレクトリ自体が無ければ対象外（ALERT未発生想定・fail-open） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+  # $HOME_DIR/.claude/logs/vault-merge-alerts は作らない
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "対象外メッセージが出る" "$out" "未解決ALERT: "
+  assert_contains "対象外メッセージが出る(続き)" "$out" "が無い（ALERT未発生の想定）ためチェック対象外"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 39. ⑥knowledge-merge-detect: plistは導入済みだが出力がまだ1件も無い → DEADとして検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs" "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.knowledge-merge-detect.plist"
+  # $HOME_DIR/.claude/logs/knowledge-merge-candidates ディレクトリ自体を作らない
+  # （plist導入済みだが初回実行前 or ジョブが一度も成功していない状態を模擬）
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "plist導入済みなのに出力が無いとDEADとして検知される" "$out" "[KNOWLEDGE-MERGE-CANDIDATES-DEAD]"
+  assert_not_contains "「一度も導入されていない」という対象外メッセージにはならない（plistがあるため）" \
+    "$out" "vault-agentsが一度も導入されていない想定ならチェック対象外"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

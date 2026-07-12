@@ -20,3 +20,7 @@ scripts/ngwords.txt
 # EXIT trapで都度削除されるが、異常終了時の残骸が誤って追跡されないよう明示除外）
 .export-tmp.*
 __pycache__/
+# 外部脳ハイブリッド検索・柱①: 埋め込みインデックス（scripts/vault-agents/embedding_index.py
+# ＋update_embedding_index.py が生成。Ollamaモデル・Vault内容から機械的に再構築できるため
+# git管理しない＝docs/design-vault-hybrid-search.md §3(a)「リポジトリ内git非管理キャッシュ」）。
+.cache/vault-embeddings/

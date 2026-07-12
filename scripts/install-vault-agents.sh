@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Vault育成系 LaunchAgent 2種（vault-inventory・fragments-log）を
-# $HOME/Library/LaunchAgents へ配置し、launchctl へ (re)load する（メイン専用機能）。
+# Vault育成系 LaunchAgent 3種（vault-inventory・fragments-log・
+# knowledge-merge-detect）を $HOME/Library/LaunchAgents へ配置し、launchctl へ
+# (re)load する（メイン専用機能）。knowledge-merge-detectは外部脳Knowledge自律整理・
+# 柱②の週次検出ジョブ（scripts/vault-agents/knowledge_merge_candidates.py・
+# 2026-07-12追加。LLM不使用・決定的処理のみ・書込はレポート/state.jsonのみで
+# Vault本体には書き込まない）。
 # install-backup.sh と同方式＝実ファイルコピー＋__AIENV_HOME__プレースホルダ置換。
 #
 # 対象スクリプト本体（scripts/vault-agents/*.py）は symlink 化せず、plist の
@@ -9,7 +13,7 @@
 #
 # install-backup.sh と同じ理由で、bootstrap+enableのみを行い**即時kickstartはしない**
 # （初回実行はStartCalendarIntervalの次回発火を待つか、準備が整ってから手動で
-# `launchctl kickstart -k` する）。同じ理由で、収録した2plistは実際にデプロイ済みの
+# `launchctl kickstart -k` する）。同じ理由で、収録した3plistは実際にデプロイ済みの
 # ものから RunAtLoad を true→false に変更している（Codexレビュー指摘・Major：
 # RunAtLoad=trueのままだと bootstrap 時点で即時実行され、「配置のみ・即時実行しない」
 # という本スクリプトの設計と矛盾するため）。
@@ -27,6 +31,7 @@ DOMAIN="gui/$(id -u)"
 PLISTS=(
   com.takumi009.vault-inventory.plist
   com.takumi009.fragments-log.plist
+  com.takumi009.knowledge-merge-detect.plist
 )
 # 改名済みで撤去されたLaunchAgentラベル（2026-07-11: fragments-review →
 # fragments-log。「review」だと人間レビュー待ちに誤解されるため改名）。

@@ -9,7 +9,8 @@
   5. 必読5ファイルの注入サイズ監視
   6. status 付きノートの一覧と停滞検知
   8. Fragments の直近統計（capture が続いているか・昇格レビューの目安）
-  9. Knowledge/Preferences/Decisions/Projects の aliases 欠落（README除く）
+  9. Knowledge/Preferences/Decisions/Projects/Personal の aliases 欠落（README除く。
+     2026-07-11決定でPersonal追加＝[[Decisions/2026-07-11-personal-recall-scope]]）
   10. 汎用すぎる／短すぎる alias（想起フックの誤ヒット源を機械検出）
   11. review_by の期限超過・14日以内到来（任意フィールド）
   12. vault-reads.tsv による未読ノート検出（90日以上未読・「読んだ」判定はReadのみで行う）＋
@@ -88,8 +89,15 @@ LINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 CODE_RE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # コードフェンス・インラインコード
 STALE_PROJECT_DAYS = 30
 
-# aliases 欠落・review_by・未読 検出の対象フォルダ（README.mdはindexなので除外）
-ALIAS_CHECK_DIRS = ("Knowledge/", "Preferences/", "Decisions/", "Projects/")
+# aliases 欠落・汎用/短すぎるalias・未読 検出の対象フォルダ（README.mdはindexなので
+# 除外）。2026-07-11決定（[[Decisions/2026-07-11-personal-recall-scope]]）でPersonal/
+# を想起対象＋aliases必須ルールの対象へ追加（4→5フォルダ）。この定数は§9(aliases
+# 欠落)・§10(汎用/短すぎるalias)・§12(未読検出)で共有しているため、Personal追加の
+# 効果はこの3項目に及ぶ（§11のreview_by検査は本定数を使わず全ノート無条件が対象
+# のため、Personalは以前から対象＝波及なし。リーダー指示は§9限定の言及だったが、
+# 対象フォルダ定数が元々§9/§10/§12で共有設計のため分離せずそのまま適用した
+# ＝Codexレビュー指摘で§11は対象外と判明・コメント訂正）。
+ALIAS_CHECK_DIRS = ("Knowledge/", "Preferences/", "Decisions/", "Projects/", "Personal/")
 DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 REVIEW_SOON_DAYS = 14      # review_by がこの日数以内に来るものを「まもなく」として警告
 UNREAD_THRESHOLD_DAYS = 90  # この日数以上 Read/想起ヒットが無ければ「未読」
@@ -407,7 +415,7 @@ def main():
             if active and age is not None and age > STALE_PROJECT_DAYS:
                 stalled.append((rel, fm["status"], ref, age))
 
-        # 9./10. aliases 欠落・汎用/短すぎるalias（Knowledge/Preferences/Decisions/Projects・README除く）
+        # 9./10. aliases 欠落・汎用/短すぎるalias（Knowledge/Preferences/Decisions/Projects/Personal・README除く）
         if rel.startswith(ALIAS_CHECK_DIRS) and not rel.endswith("README.md"):
             aliases = normalize_aliases(fm.get("aliases"))
             if not aliases:
@@ -546,7 +554,7 @@ def main():
     L.append(f"自動生成（`work/takumi009-ai-env/scripts/vault-agents/`）。ノート {len(notes)} 件を検査し、"
              f"**要確認 {n_issues} 件**。生成後の最初のセッションで、リーダー（Claude）が下記項目を確認し"
              "自律的に対処する（本人の指示は不要）。対処完了時は本レポートのfrontmatterに"
-             " `processed: YYYY-MM-DD` を追記する。")
+             " `processed: YYYY-MM-DD` を追記する。運用ノート: [[Knowledge/external-brain-guide#定期チェック（陳腐化・肥大化の検出）]]")
 
     def section(title, rows, fmt, empty="✅ 問題なし"):
         L.append("")
@@ -591,7 +599,7 @@ def main():
     L.append(f"- `status: promoted` マーク累計 {promoted_total} 件（週次昇格レビューの参考値）")
 
     L.append("")
-    L.append(f"## 9. aliases が無いノート（Knowledge/Preferences/Decisions/Projects・README除く・{len(missing_aliases)}件）")
+    L.append(f"## 9. aliases が無いノート（Knowledge/Preferences/Decisions/Projects/Personal・README除く・{len(missing_aliases)}件）")
     L.append("aliases は想起フック（プロンプトから関連ノートを引く仕組み）の検索キー。"
              "無いノートは想起されない＝frontmatterに `aliases:` を追記する。")
     if not missing_aliases:
