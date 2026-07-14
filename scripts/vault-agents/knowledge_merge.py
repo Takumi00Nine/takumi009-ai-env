@@ -18,14 +18,32 @@
                     流入wikilink張替（worktreeへ適用・この段階では一切commitしない）
   evidence          未コミット差分から証拠パックJSON（rubric明記）を生成
   gate              FR12a構造チェック＋ベンチTSV旧→新パスremap採点＋recall回帰ベンチ
+  skip              候補を「マージ不適」としてstate.jsonへ直接status=skippedを記録
+                    （FR9bが定義する候補状態語彙pending/merged/skipped/blocked/retry
+                    のうち、従来skippedを設定するコードパスが本CLIに存在せず、
+                    マージ不適と判断した候補が永久にpendingへ留まり続けていた間隙を
+                    埋める・2026-07-14追加）。Vault本体・git履歴には一切書込まない
+                    （理由はcmd_skipのdocstring参照）
+  unskip            skippedを手動再評価のためpendingへ戻す（本人裁定・2026-07-14
+                    追加。「skip判断を誤った/状況が変わった」場合の唯一の復帰経路。
+                    ガード・監査記録の詳細はcmd_unskipのdocstring参照。副作用として
+                    次回週次検出が同じ候補ペアをpendingとして再提示しうる＝意図どおり）
   commit            Codex verdict＋gate結果が全PASSの場合のみworktreeへ1コミット→
                     mainへ`git merge --ff-only`→成功時は保持中の同一ロックのまま
                     reconcile本体を自動実行（state.jsonがstaleなまま次セッションへ
                     渡る事故の再発防止・2026-07-12追加）。reconcileのみ失敗しても
-                    commit自体の成功は取り消さない（手動`reconcile`実行を促す警告のみ）
+                    commit自体の成功は取り消さない（手動`reconcile`実行を促す警告のみ）。
+                    実行前にstate.jsonの候補statusを読み、既にmerged/skipped
+                    （終端状態）ならFAILし再commitさせない（2026-07-14追加）。
+                    Codexのverdictを取得できない場合（不通・認証切れ・MCP未起動・
+                    timeout・利用上限）はFR11aに従いfail-closed＝当該候補のみを
+                    codex_unavailable ALERT生成→即reconcileでblocked化する
+                    （他候補は妨げない。詳細はcmd_commitの当該except節参照）
   reconcile         git log の candidate_id trailer を正としてstate.jsonを再構成
                     （commit成功時は自動実行されるため、通常は手動実行不要。
-                    自動実行が失敗した場合の手動リカバリ用に残す）
+                    自動実行が失敗した場合の手動リカバリ用に残す）。ALERTが
+                    resolvedになった候補はblocked/retryからpendingへ復帰させる
+                    （2026-07-14追加・詳細は_reconcile_lockedのコメント参照）
   alert             ALERTレポート（`~/.claude/logs/vault-merge-alerts/`）の生成
   revert            コミット後に発覚した欠陥の救済revert（週次自動フロー対象外・
                     起動はリーダーの人間判断のみ。設計書§2.4）
@@ -35,12 +53,38 @@ worktree内には `.vault-merge-meta.json`（非追跡・git addしない）を�
 worktree-setup/draft/evidence/gate/commit の各段階がそこへ進行状況を書き足す
 形でパイプラインを繋ぐ（引数の受け渡し漏れ・後段での再入力ミスを防ぐため）。
 
-state.json（候補検出側=knowledge_merge_candidates.pyが書く）はpreflightと
-reconcile（本体=_reconcile_locked、commit成功時にも自動で呼ばれる）でのみ読み
-書きする。preflightはstate.jsonの内容を**信用せず**、記載された2パスを毎回実
-ファイルシステムに対して独立検証する（設計書§2.3手順3）。commit/revertは
-state.jsonへ直接書込まない（git log trailerをsource of truthにreconcileで
-再構成する運用のため、書込主体を一本化し競合を避ける）。
+state.json（候補検出側=knowledge_merge_candidates.pyが書く）は、**読込**は
+preflight/commit/reconcile/skip/unskipの5つが行うが、**書込**（save_state_atomic
+の呼出し）はreconcile（本体=_reconcile_locked、commit成功時・commit失敗時の
+FR11a codex_unavailable ALERT生成直後にも自動で呼ばれる）・skip・unskipの3つ
+でのみ行う（Codexレビュー指摘・Minor・2026-07-14: 読込主体の一覧に書込主体を
+混在させた表現になっており、preflightがあたかも書込むかのように読める不正確な
+記述だった。preflightは常に**読込専用**＝候補パスの独立検証結果を返すのみで
+save_state_atomic()を一切呼ばない）。preflightはstate.jsonの内容を**信用せず**、
+記載された2パスを毎回実ファイルシステムに対して独立検証する（設計書§2.3手順3）。
+preflight/commitはさらに、既にmerged/skipped（終端状態）の候補への再処理を
+拒否するため候補statusを読む（2026-07-14追加・TERMINAL_STATUSES参照）。
+commit/revertはstate.jsonへ直接書込まない（git log trailerをsource of truthに
+reconcileで再構成する運用のため、書込主体を一本化し競合を避ける。commitが
+行うのは終端状態チェックのための**読込**と、FR11a該当時の_reconcile_locked
+呼び出しのみ）。skip/unskipのみ例外的にstate.jsonへ直接書込む（Vault本体の
+内容変更を伴わずgit trailerを作れないため。詳細はcmd_skip/cmd_unskipの
+docstring参照）。
+
+未解決ALERTのTOCTOU再確認（設計上の一般方針・外部脳総点検5巡目Codexレビュー
+指摘対応・2026-07-14）: check_alert_latch()はロック取得直後に一度呼ぶだけでは
+不十分で、そこから実際の書込（git commit/state.json保存）までの間に他プロセスが
+新規ALERTを書込む窓が残る。write_alert()自体はvault-merge.lockを取得せず書く
+設計（lock_conflict種別は「ロック取得に失敗した」事実を書くものであり、ロック
+必須化すると自己矛盾で書けなくなる＝write_alert()のdocstring参照）ため、
+「ALERT書込側の全ロック化」では解決できない。本ファイルは一貫して「判定側の
+再検証を書込に可能な限り近づける」方針を取る（cmd_revertの`_check_clean`/
+`_resolve_revert_target`の二重確認、cmd_commitの書込直前latch再確認、cmd_skip/
+cmd_unskipのALERT走査が状態保存の直前に位置する構成、いずれも同型）。この方針
+でも、判定〜実際のgit/state書込の間に残るごく短い窓（数回のsubprocess呼出し
+分）は理論上ゼロにできない**既知の残余**として受容する（本ツールの脅威モデル＝
+完全ローカル・単一操作者・悪意ある同時実行プロセスを想定しないに対しては実用上
+十分な軽減と判断）。
 """
 import argparse
 import datetime
@@ -88,8 +132,15 @@ REQUIRED_VERDICT_KEYS = ("candidate_id", "content_fingerprint", "verdict", "reas
 
 CANDIDATE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")  # 80: detect側の "cand-"+sha256全64桁(=69字) を許容（2026-07-12 結合バグ修正）
 # ALERT種別（設計書§2.3手順3の「ロック不在確認/基準HEAD再設定確認/worktree clean確認」の
-# 3種＋gate側のベンチTSV改ざん検知1種）。alert_machine_resolved()の分岐と1:1対応する。
-ALERT_TYPES = ("lock_conflict", "head_moved", "worktree_dirty", "bench_tsv_tampered")
+# 3種＋gate側のベンチTSV改ざん検知1種＋FR11a「Codex不通」1種）。lock_conflict/
+# head_moved/worktree_dirty/bench_tsv_tamperedの4種はalert_machine_resolved()の
+# 分岐と1:1対応し、check_alert_latch()の全マージ停止ラッチに参加する（設計書
+# FR12b「resolved確認までの全マージ停止ラッチ」）。codex_unavailableのみ例外＝
+# FR11a「他候補は妨げない」という要件がFR12bの「全マージ停止」と正面から矛盾する
+# ため、check_alert_latch()側で明示的にラッチ対象から除外する（=候補単位の情報
+# としてのみstate.jsonのstatus="blocked"に反映され、alert_machine_resolved()は
+# 呼ばれない。詳細はcheck_alert_latch()の当該分岐のコメント参照・2026-07-14追加）。
+ALERT_TYPES = ("lock_conflict", "head_moved", "worktree_dirty", "bench_tsv_tampered", "codex_unavailable")
 
 
 # ============================================================
@@ -220,19 +271,67 @@ def assert_safe_to_write(root, path):
 
 
 # ============================================================
-# state.json（読み書きはpreflight/reconcileのみ。書込はatomic replace）
+# state.json（読込はpreflight/commit/reconcile/skip/unskip・書込はreconcile/skip/
+# unskipのみ。書込はatomic replace）
 # ============================================================
+
+# knowledge_merge_candidates.STATE_SCHEMA_VERSIONと必ず同じ値を保つ定数（本ファイル
+# 冒頭のacquire_lock()と同じ理由＝他ワーカー担当ファイルへの依存を避けるため
+# importせず値を複製している。値を変更する際は両ファイルを同時に見直すこと）。
+STATE_SCHEMA_VERSION = 1
+
+# knowledge_merge_candidates.TERMINAL_STATUSESと同じ値を保つ定数（同上の理由で
+# 複製）。preflight/commitが終端状態（既にmerged/skippedが確定した候補）への
+# 再処理を拒否する際に使う（2026-07-14追加・外部脳総点検で判明: 従来preflight/
+# commitのどちらも候補のstatusを一切照合しておらず、既にmerged/skippedになった
+# candidate_idへ--candidate-idを明示指定すればpreflight/worktree-setup/draft/
+# gate/commitの一連が何の拒否もなく再度走ってしまい、二重マージや無意味な
+# revert対象増殖を招きうる間隙があった）。
+# 「終端」とは「本CLIの通常経路（preflight/worktree-setup/.../commit）からは
+# 抜け出せない」という意味であり、絶対に不変という意味ではない。skippedのみ、
+# 人間判断による明示的なunskipコマンド（cmd_unskip・本人裁定2026-07-14追加）で
+# pendingへ手動で戻せる（mergedにはこれに相当する経路は無い＝取消すにはrevertで
+# 「revertした事実を追加記録する」のみで、merged自体は消えない）。
+TERMINAL_STATUSES = ("merged", "skipped")
+
+# FR9bが定義する候補状態語彙の全体（pending/merged/skipped/blocked/retryの5つ）。
+# cmd_commitが既存レコードのstatusを検証する際、未知の値（想定外の破損・改ざん・
+# 手動編集ミスの兆候）をfail-closedで拒否するために使う（Codexレビュー指摘・
+# Major対応・2026-07-14追加。cmd_skipは元々未知status値を拒否していたが
+# （cmd_skipのdocstring参照）、cmd_commitのTERMINAL_STATUSESチェックは既知の
+# 終端状態のみを弾き、未知の値はチェックをすり抜けてcommitへ進んでしまって
+# いた）。candidate_id自体がstate.jsonに未登録（commit_cand is None）の場合は
+# この定数では検証しない（statusという概念自体が無いため）が、既定では別途
+# fail-closedで拒否する（cmd_commit内の`args.allow_unregistered_candidate`
+# チェック参照。state.json消失/state-file誤指定と、preflightの--note-a/
+# --note-bによる意図的な「stateに未登録の候補を手動で試す」運用を区別できない
+# ため、後者は`--allow-unregistered-candidate`の明示指定でのみ許可する＝
+# リーダー判断・2026-07-14追加。Codexレビュー指摘・Major対応）。
+KNOWN_CANDIDATE_STATUSES = ("pending", "merged", "skipped", "blocked", "retry")
+
 
 def load_state(state_file):
     state_file = pathlib.Path(state_file)
     if not state_file.exists():
-        return {"candidates": {}}
+        return {"schema_version": STATE_SCHEMA_VERSION, "candidates": {}}
     try:
         data = json.loads(state_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         raise ValueError(f"state.jsonの読込/解析に失敗しました（{state_file}）: {e}")
     if not isinstance(data, dict) or not isinstance(data.get("candidates"), dict):
         raise ValueError(f"state.jsonの形式が想定外です（'candidates'オブジェクトが必要）: {state_file}")
+    # schema_versionの検証をknowledge_merge_candidates.load_state()と対称にする
+    # （外部脳総点検で判明した非対称・2026-07-14修正: 従来この関数はschema_version
+    # 自体を一切検証せず、無い/不一致でも素通りしていた。knowledge_merge_candidates.py
+    # は同じstate.jsonに対し「必須＋一致検証」というfail-closed方式を取っており、
+    # 同一ファイルを共有する2スクリプト間で検証強度が非対称だと、一方が緩い
+    # チェックで書込んだ内容を他方がfail-closedで拒否する/しないが噛み合わない
+    # 事故につながる。fail-closed側＝candidates.py方式に統一する）。
+    if "schema_version" not in data:
+        raise ValueError(f"state.jsonに'schema_version'がありません（破損/改ざんの可能性）: {state_file}")
+    if data["schema_version"] != STATE_SCHEMA_VERSION:
+        raise ValueError(
+            f"state.jsonのschema_versionが不一致です（{data['schema_version']!r} != {STATE_SCHEMA_VERSION}）: {state_file}")
     return data
 
 
@@ -367,6 +466,15 @@ def write_alert(alerts_dir, candidate_id, alert_type, command, message, base_hea
     FR12b「resolved確認までの全マージ停止ラッチ」の再発火に対応）。
     next_retryは attempt_count 日後（最大7日）の単純バックオフ（決定的・要承認の
     運用パラメータでは無いため固定値。実運用で不足すれば設定値化を検討）。
+
+    本関数は意図的にvault-merge.lockを取得しない（設計上の制約・モジュール
+    docstringの「未解決ALERTのTOCTOU再確認」節参照）: lock_conflict種別のALERT
+    はまさに「ロック取得に失敗した」事実を書くためのものであり、write_alert()
+    自体がロック必須だと、ロックが取れない状況でこそ書きたいALERTが書けない
+    という自己矛盾に陥る。この結果、他の書込コマンド（commit/skip/unskip等）が
+    ロックを保持している最中でも、別プロセスが（gate等から）ALERTを書込む余地は
+    構造的に残る。各コマンド側はこれを「判定側の再検証を書込に可能な限り近づける」
+    ことで軽減する（cmd_commitの書込直前latch再確認等）。
     """
     if alert_type not in ALERT_TYPES:
         raise ValueError(f"未知のalert_typeです: {alert_type!r}")
@@ -470,6 +578,38 @@ def alert_machine_resolved(fm, vault_root, lock_path, worktrees_dir, lock_alread
     return False, f"未知のalert_type（fail-closed）: {alert_type!r}"
 
 
+def alert_is_resolved(fm, vault_root, lock_path, worktrees_dir, lock_already_held=False):
+    """1件のALERTが「厳格に」解消済みかを判定する（resolved欄の日付形式＋
+    alert_machine_resolved()のAND。codex_unavailableのみresolved欄の日付形式
+    のみで判定＝下記参照）。_reconcile_locked（blocked/retryを「進める」/
+    「戻す」の両方向）とcmd_skip・cmd_unskip（いずれも当該候補の未解決ALERTが
+    あればFAIL）が共有する単一のsource of truth（Codexレビュー指摘・Major・
+    2巡目再指摘対応で_reconcile_locked内のローカル関数として導入し、リーダー
+    判断によりcmd_skipからも使うため2026-07-14にモジュールレベルへ引き上げ。
+    同日追加のcmd_unskipもcmd_skipと対称のガードとして同じ判定を再利用する）。
+    """
+    resolved_field = fm.get("resolved")
+    resolved_field_ok = bool(resolved_field) and bool(
+        re.match(r"^\d{4}-\d{2}-\d{2}$", str(resolved_field)))
+    if not resolved_field_ok:
+        return False
+    if fm.get("alert_type") == "codex_unavailable":
+        # codex_unavailableはalert_machine_resolved()に分岐が無い（check_alert_
+        # latch()と同じ理由＝候補単位のみ・「機械的な解消判定」という概念自体が
+        # 無い＝Codexの到達性を外部から検証する手段が無い）。よってこの種別
+        # だけはresolved欄の日付形式のみで判定する（機械判定ANDは要求しない。
+        # 無いと「機械判定できないので常に未解決扱い」というalert_machine_
+        # resolvedの既定fail-closed分岐に落ち、逆に「常に未解決なのでblocked
+        # から一生戻れない」という別の詰みを生む）。実際の再試行可否はcmd_commit
+        # が都度verdictを検証して決めるため（TERMINAL_STATUSESのみでblocked
+        # 自体はゲートしない設計・cmd_commit参照）、resolved欄の真偽が甘くても
+        # 実害はskip可否（Vault非破壊のbookkeeping操作）に留まる。
+        return True
+    machine_ok, _ = alert_machine_resolved(fm, vault_root, lock_path, worktrees_dir,
+                                            lock_already_held=lock_already_held)
+    return machine_ok
+
+
 def check_alert_latch(vault_root, alerts_dir, lock_path, worktrees_dir, lock_already_held=False):
     """未解決ALERTの二重チェック（`resolved:`欄＋機械的解消判定のAND）。1件でも
     未解決ならlatch_active=True（マージ処理全体を停止＝FR10/FR12bのラッチ）。
@@ -484,6 +624,13 @@ def check_alert_latch(vault_root, alerts_dir, lock_path, worktrees_dir, lock_alr
             fm, _, _ = parse_alert(path)
         except OSError as e:
             unresolved.append({"path": str(path), "reasons": [f"読込失敗（fail-closed）: {e}"]})
+            continue
+        if fm.get("alert_type") == "codex_unavailable":
+            # FR11a「他候補は妨げない」＝candidate単位のみを塞ぐALERTであり、
+            # FR12bの全マージ停止ラッチには参加させない（ALERT_TYPESの定義部
+            # コメント参照）。resolved欄の有無に関わらずここでは常にスキップする
+            # （＝latch_active/unresolvedの計算対象外）。個別候補のblocked状態は
+            # state.json側（_reconcile_locked）が別途resolved欄のみを見て管理する。
             continue
         resolved_field = fm.get("resolved")
         resolved_field_ok = bool(resolved_field) and bool(re.match(r"^\d{4}-\d{2}-\d{2}$", str(resolved_field)))
@@ -819,6 +966,21 @@ def cmd_preflight(args):
         if latch_active2:
             return report({"ok": False, "reason": "unresolved_alerts_recheck", "unresolved": unresolved2}, False)
 
+        # ロック取得後にstate.jsonを再読込する（TOCTOU対策・Codexレビュー指摘・
+        # Minor: ロック取得前に読んだstateのまま判定すると、ロック待機中に候補が
+        # 終端状態(merged/skipped)へ更新されていても古いpending/retry情報で
+        # cleared=trueを返しうる。preflight自体はVaultへ書込まずcleared=trueは
+        # あくまで後続作業の入口を開く合図に過ぎないため実害は限定的だが、実際に
+        # Vaultを書込むcmd_commitは別途ロック内でstate.jsonを再読込している＝
+        # ここでも同じ防御を揃える）。バッチ選定対象の候補一覧(ids)自体はロック
+        # 取得前の値のまま据え置く（再選定すると「ロック待機中に新規検出された
+        # 候補」まで巻き込み挙動が変わるため）。候補ごとの状態/パス判定のみを
+        # 最新のstateで行う。
+        try:
+            state = load_state(args.state_file)
+        except ValueError as e:
+            return report({"ok": False, "reason": "state_load_error", "error": str(e)}, False)
+
         results = []
         for cid in ids:
             try:
@@ -827,6 +989,16 @@ def cmd_preflight(args):
                 results.append({"candidate_id": cid, "cleared": False, "reason": str(e)})
                 continue
             cand = state["candidates"].get(cid)
+            if cand is not None and cand.get("status") in TERMINAL_STATUSES:
+                # 終端状態（merged/skipped）からの再処理は拒否する（fail-closed・
+                # 2026-07-14追加）。バッチ選定（--candidate-id省略時）は既にstatus
+                # in (pending, retry)で絞り込み済みのためここへは到達しないが、
+                # --candidate-idで既にmerged/skipped確定済みの候補を明示指定
+                # された場合はここで初めて弾かれる（二重マージ等を防ぐ最終防波堤）。
+                results.append({"candidate_id": cid, "cleared": False,
+                                 "reason": f"終端状態（{cand.get('status')}）の候補は再処理できません（fail-closed）",
+                                 "note_a": cand.get("note_a"), "note_b": cand.get("note_b")})
+                continue
             if cand is not None:
                 note_a, note_b = cand.get("note_a"), cand.get("note_b")
             elif args.candidate_id == cid and args.note_a and args.note_b:
@@ -1303,6 +1475,304 @@ def _write_gate_result(worktrees_dir, cid, result):
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def cmd_skip(args):
+    """候補を「マージ不適」として明示的に終端状態skippedへ遷移させる（FR9bが
+    定義する候補状態語彙pending/merged/skipped/blocked/retryのうち、従来
+    skippedを設定するコードパスが本CLIに一つも存在せず、リーダーが「マージ不適」
+    と判断した候補が永久にpendingへ留まり週次レポートに再検出され続けていた
+    間隙を埋める・2026-07-14追加）。
+
+    commit/revertと異なりstate.jsonへ**直接**書込む（git log trailerをsource of
+    truthにreconcileで再構成する運用の対象外）。理由:
+    - skip判断はVault本体への内容変更を一切伴わない（統合ノートも作らず原ノートも
+      変更しない）。そもそも対応するコミットが存在しないため、reconcileが読み
+      取れるsource of truth（git log trailer）を作りようがない。
+    - これはblocked/retry（ALERTファイルというgit外の情報源から_reconcile_locked
+      がstate.jsonへ直接書込む既存の前例）と同じ構造であり、「Vaultへの実書込みを
+      伴わない状態遷移はstate.json直書き」という既に確立した設計方針の範囲内。
+    - 万一state.jsonが失われても、週次検出側(knowledge_merge_candidates.py)は
+      次回実行時に同じrelpathペアを再検出しpendingとして再提案する（fail-safe
+      方向＝安全側の既定に落ちる。tombstone設計＝TERMINAL_STATUSESのdocstring参照）。
+
+    ロックはreconcileと同型（vault-merge.lockを共有・acquire_lock_with_retry）を
+    用いる。state.jsonはknowledge_merge_candidates.py（週次検出側・別ワーカー
+    担当）とも共有されるため、読込→更新→書込を丸ごとロック内に収めlost update
+    を防ぐ（cmd_reconcileのコメントと同じ理由）。
+
+    ガード（fail-closed＝迷ったら書込まない）:
+      - candidate_idがstate.jsonに存在しない → FAIL
+      - **git log（candidate_id trailer）に、この候補の非revertマージコミットが
+        既に存在し、かつそれが現在のVault HEADから到達可能（=実際に反映済み）
+        → FAIL**（state.jsonのstatusフィールドだけを信用しない。commit成功
+        直後のreconcile自動実行が失敗した場合、state.jsonはstale=pendingの
+        まま残りうる＝cmd_commit末尾のWARNコメント参照。state.jsonの
+        status=="merged"という自己申告だけに頼ると、このstale窓でskipが
+        「既に実際にはマージ済みの候補」を誤ってskipped扱いにしてしまう。
+        git logをsource of truthとして直接参照するのはcmd_revertと同じ考え方
+        ＝list_merge_commits参照。HEAD到達可能性まで見るのは、ff-only失敗で
+        候補ブランチにだけ残った未反映コミットを「マージ済み」と誤判定しない
+        ため＝_commit_reachable_from_head参照）
+      - status=="blocked" → FAIL（先に対応するALERTのresolved欄を埋めreconcileを
+        実行すること。ALERT未解決のままskipで揉み消せてしまうのを防ぐ）
+      - status in ("pending", "retry") → skippedへ遷移してOK
+      - status=="skipped"（既にskip済み） → 冪等に成功。reasonは上書きせず
+        既存値を維持する（後から異なるreasonで誤って上書きする事故を防ぐ）
+      - 上記以外の未知のstatus値 → FAIL（fail-closed）
+      - **当該candidate_idに未解決ALERTが1件でもあれば → FAIL**（リーダー判断・
+        2026-07-14追加。上のstatus=="blocked"チェックは、reconcileが未実行で
+        statusがまだ"pending"/"retry"のままの間（=== 19b. ===参照）はすり抜けて
+        しまうため、二重防御として本CLI自身でもALERTディレクトリを直接走査する。
+        「未解決」の判定はalert_is_resolved()（resolved欄の日付形式＋
+        alert_machine_resolved()のAND。codex_unavailableのみ日付形式のみ）を
+        _reconcile_lockedと共有する。ALERTファイルが1件でも読込失敗する場合も
+        fail-closedでFAILする＝全件が確実に解消済みと確認できない限りskipしない）
+
+    TOCTOU残余（モジュールdocstring「未解決ALERTのTOCTOU再確認」参照）: 上記の
+    ALERT走査は意図的にstate.json保存（save_state_atomic）の直前に置き、その間には
+    `cand["status"] = "skipped"`等の代入3行しか挟まない＝実用上ほぼゼロ化している。
+    ただしwrite_alert()自体はロックを取らない設計のため、この走査完了〜保存の間に
+    他プロセスが新規ALERTを書込む窓は理論上ゼロにはならない（既知の残余として受容）。
+    """
+    cid = sanitize_candidate_id(args.candidate_id)
+    reason = (args.reason or "").strip()
+    if not reason:
+        print("FAIL: --reason は空にできません", file=sys.stderr)
+        return 1
+
+    held = acquire_lock_with_retry(args.lock_file, attempts=3)
+    if not held:
+        print("FAIL: state.jsonの排他ロックを取得できませんでした（knowledge_merge_candidates.py実行中の可能性・"
+              "しばらく待って再実行してください）", file=sys.stderr)
+        return 1
+    try:
+        try:
+            state = load_state(args.state_file)
+        except ValueError as e:
+            print(f"FAIL: {e}", file=sys.stderr)
+            return 1
+
+        cand = state["candidates"].get(cid)
+        if cand is None:
+            print(f"FAIL: candidate_id={cid} がstate.jsonに見つかりません", file=sys.stderr)
+            return 1
+
+        # state.jsonのstatusフィールドだけでなく、git log自体をsource of truthと
+        # して直接確認する（Codexレビュー指摘・Major対応: commit成功直後の自動
+        # reconcileが失敗するとstate.jsonがstale=pendingのまま残りうる窓があり、
+        # status=="merged"チェックだけでは実際には既にマージ済みの候補を誤って
+        # skippedにしてしまう。list_merge_commits()を直接参照するのはcmd_revert
+        # と同じ考え方）。
+        vault_root = pathlib.Path(args.vault).resolve()
+        try:
+            merge_commits = [c for c in list_merge_commits(vault_root)
+                             if c.get("candidate_id") == cid and c.get("action") != "revert"]
+            # list_merge_commits()は`git log --all`のためVault本体の現在HEADへ未到達の
+            # コミット（例: worktree上でcommitした直後にff-onlyマージが失敗し、候補
+            # ブランチ`vault-merge/<cid>`上にだけtrailer付きコミットが残っているケース＝
+            # head_moved ALERT参照）も拾ってしまう（Codexレビュー指摘・Major・2巡目
+            # 再指摘）。skipにとって意味のある「既にマージ済み」は現在のVault HEADへ
+            # 実際に反映されているコミットのみなので、ここでHEADからの到達可能性
+            # （`git merge-base --is-ancestor`）で絞り込む。判定コマンド自体の失敗も
+            # fail-closedでFAILさせる（_commit_reachable_from_head参照）。
+            merge_commits = [c for c in merge_commits if _commit_reachable_from_head(vault_root, c["hash"])]
+        except RuntimeError as e:
+            print(f"FAIL: git履歴の確認に失敗しました（fail-closed・{e}）", file=sys.stderr)
+            return 1
+        if merge_commits:
+            print(f"FAIL: candidate_id={cid} は既にgit履歴にマージコミットが存在します"
+                  f"（hash={merge_commits[0]['hash']}）。skip不可（取消すにはrevertを使う）。"
+                  "state.jsonのstatusがstaleな可能性があるため、先に `reconcile` を実行してください。",
+                  file=sys.stderr)
+            return 1
+
+        status = cand.get("status")
+        if status == "merged":
+            print(f"FAIL: candidate_id={cid} は既にmergedです（skip不可。取消すにはrevertを使ってください）",
+                  file=sys.stderr)
+            return 1
+        if status == "blocked":
+            print(f"FAIL: candidate_id={cid} はblocked状態です（先に対応するALERTのresolved欄を埋め"
+                  "reconcileを実行してください。ALERT未解決のままskipはできません）", file=sys.stderr)
+            return 1
+        if status == "skipped":
+            print(json.dumps({"ok": True, "candidate_id": cid, "status": "skipped", "idempotent": True,
+                               "skip_reason": cand.get("skip_reason"), "skipped_at": cand.get("skipped_at")},
+                              ensure_ascii=False))
+            print("skip: 既にskipped済みです（reasonは上書きせず既存値を維持しました）")
+            return 0
+        if status not in ("pending", "retry"):
+            print(f"FAIL: candidate_id={cid} のstatusが未知の値です（fail-closed）: {status!r}", file=sys.stderr)
+            return 1
+
+        # 当該candidate_idの未解決ALERTを直接確認する（リーダー判断・2026-07-14
+        # 追加・cmd_skipのdocstring参照）。status=="blocked"チェック（上）は
+        # reconcile実行後にしか効かないため、reconcile未実行でstatusがまだ
+        # "pending"/"retry"の間はここが唯一の防波堤になる（二重防御）。
+        alerts_dir = pathlib.Path(args.alerts_dir)
+        if alerts_dir.exists() and not alerts_dir.is_dir():
+            # --alerts-dirが誤って通常ファイル等を指している場合はfail-closedで
+            # 拒否する（Codexレビュー指摘・Minor: 存在しない場合は「ALERTがまだ
+            # 一度も生成されていない」という正常な初回状態として扱う既存の慣習
+            # （check_alert_latch/_reconcile_lockedと同じ）を維持するが、パスが
+            # 存在するのにディレクトリでない場合は設定ミス/改ざんの疑いが強く、
+            # 「ALERTなし」と誤認してskipを通してしまうのを防ぐ）。
+            print(f"FAIL: --alerts-dirがディレクトリではありません（fail-closed）: {alerts_dir}", file=sys.stderr)
+            return 1
+        unresolved_alerts = []
+        if alerts_dir.is_dir():
+            for path in sorted(alerts_dir.glob("*.md")):
+                try:
+                    fm, _, _ = parse_alert(path)
+                except OSError as e:
+                    print(f"FAIL: ALERTファイルの読込に失敗しました（fail-closed・{path}: {e}）", file=sys.stderr)
+                    return 1
+                if fm.get("candidate_id") != cid:
+                    continue
+                if not alert_is_resolved(fm, vault_root, args.lock_file, args.worktrees_dir, lock_already_held=True):
+                    unresolved_alerts.append(str(path))
+        if unresolved_alerts:
+            print(f"FAIL: candidate_id={cid} に未解決ALERTがあります（{unresolved_alerts}）。"
+                  "先に対応するALERTのresolved欄を埋めreconcileを実行してください。"
+                  "ALERT未解決のままskipはできません。", file=sys.stderr)
+            return 1
+
+        today = datetime.date.today().isoformat()
+        cand["status"] = "skipped"
+        cand["skip_reason"] = reason
+        cand["skipped_at"] = today
+        save_state_atomic(args.state_file, state)
+
+        print(json.dumps({"ok": True, "candidate_id": cid, "status": "skipped",
+                          "skip_reason": reason, "skipped_at": today}, ensure_ascii=False))
+        return 0
+    finally:
+        release_lock(held)
+
+
+def cmd_unskip(args):
+    """cmd_skipでskippedへ遷移させた候補を、手動再評価のためpendingへ戻す
+    （本人裁定・2026-07-14追加＝「マージ不適」と判断した候補を後から見直したい、
+    という人間判断のための唯一の復帰経路。knowledge_merge_candidates.py（週次
+    検出側）はskipped/mergedをTERMINAL_STATUSESとして扱い自動では触らないため、
+    このコマンドを使わない限りskippedは事実上永久に固定される）。
+
+    cmd_skipと対称のガード（fail-closed＝迷ったら書込まない）:
+      - status!="skipped" → FAIL（pending/retryはそもそもunskip不要、blockedは
+        先にALERT解消→reconcileが筋、mergedは絶対に戻せない終端。状態ごとに
+        個別の許可条件を作るより「skipped以外は一律FAIL」というホワイトリスト
+        方式の方が単純で間違いにくい）。
+      - git log（candidate_id trailer）に現在のVault HEADから到達可能な非revert
+        マージコミットが既に存在する → FAIL（cmd_skipと全く同じ理由・同じ
+        _commit_reachable_from_head参照。skip自体はVault非破壊のbookkeeping
+        操作のため通常この矛盾は起きないはずだが、state.jsonの手動編集ミスや
+        破損に備え、git logをsource of truthとして直接照合するfail-closedを
+        skipと対称に維持する）。
+      - 当該candidate_idに未解決ALERTが1件でもあれば → FAIL（cmd_skipと同じ
+        alert_is_resolved()を共有。ALERT未解決のまま状態をいじれてしまうのを
+        防ぐという二重防御の考え方もcmd_skipと同型）。
+
+    監査性: skip_reason/skipped_atは一切上書きしない（「いつ・なぜskipと判断
+    されたか」という履歴事実そのものは消さない）。unskip_reason/unskipped_atを
+    追加記録するのみ（同一候補が将来また複数回skip↔unskipを往復しても、直近の
+    skip理由と直近のunskip理由が両方読める状態を保つ＝上書きし続けると往復履歴が
+    失われるため、この2フィールドは「直近1回分」の記録として割り切る）。
+
+    副作用（意図どおり・cmd_skipのdocstring「tombstone設計」参照）: statusを
+    pendingへ戻すことで、次回のknowledge_merge_candidates.py（週次検出）実行時に
+    同じ候補ペアが改めてpending候補として週次レポートに現れうる。これは
+    「もう一度検討したい」という本コマンドの目的そのものであり、tombstone
+    （skipped）を明示的に破る唯一の経路として設計している。
+    """
+    cid = sanitize_candidate_id(args.candidate_id)
+    reason = (args.reason or "").strip()
+    if not reason:
+        print("FAIL: --reason は空にできません", file=sys.stderr)
+        return 1
+
+    held = acquire_lock_with_retry(args.lock_file, attempts=3)
+    if not held:
+        print("FAIL: state.jsonの排他ロックを取得できませんでした（knowledge_merge_candidates.py実行中の可能性・"
+              "しばらく待って再実行してください）", file=sys.stderr)
+        return 1
+    try:
+        try:
+            state = load_state(args.state_file)
+        except ValueError as e:
+            print(f"FAIL: {e}", file=sys.stderr)
+            return 1
+
+        cand = state["candidates"].get(cid)
+        if cand is None:
+            print(f"FAIL: candidate_id={cid} がstate.jsonに見つかりません", file=sys.stderr)
+            return 1
+
+        status = cand.get("status")
+        if status != "skipped":
+            print(f"FAIL: candidate_id={cid} はskipped状態ではありません（現在: {status!r}）。"
+                  "unskipはskipped→pendingの手動再評価専用です（skipped以外は一律拒否・fail-closed）。",
+                  file=sys.stderr)
+            return 1
+
+        # state.jsonのstatusフィールドだけでなく、git log自体をsource of truthと
+        # して直接確認する（cmd_skipと同じ理由・_commit_reachable_from_head参照）。
+        vault_root = pathlib.Path(args.vault).resolve()
+        try:
+            merge_commits = [c for c in list_merge_commits(vault_root)
+                             if c.get("candidate_id") == cid and c.get("action") != "revert"]
+            merge_commits = [c for c in merge_commits if _commit_reachable_from_head(vault_root, c["hash"])]
+        except RuntimeError as e:
+            print(f"FAIL: git履歴の確認に失敗しました（fail-closed・{e}）", file=sys.stderr)
+            return 1
+        if merge_commits:
+            print(f"FAIL: candidate_id={cid} は既にgit履歴にマージコミットが存在します"
+                  f"（hash={merge_commits[0]['hash']}）。unskip不可（state.jsonとgit履歴の矛盾の疑い・"
+                  "先に`reconcile`を実行し状態を確認してください）。", file=sys.stderr)
+            return 1
+
+        # 当該candidate_idの未解決ALERTを直接確認する（cmd_skipと同じ・二重防御。
+        # 通常skipped候補にALERTは残らないはずだが、blockedからの手動編集ミス等に
+        # 備えfail-closedにする）。
+        alerts_dir = pathlib.Path(args.alerts_dir)
+        if alerts_dir.exists() and not alerts_dir.is_dir():
+            print(f"FAIL: --alerts-dirがディレクトリではありません（fail-closed）: {alerts_dir}", file=sys.stderr)
+            return 1
+        unresolved_alerts = []
+        if alerts_dir.is_dir():
+            for path in sorted(alerts_dir.glob("*.md")):
+                try:
+                    fm, _, _ = parse_alert(path)
+                except OSError as e:
+                    print(f"FAIL: ALERTファイルの読込に失敗しました（fail-closed・{path}: {e}）", file=sys.stderr)
+                    return 1
+                if fm.get("candidate_id") != cid:
+                    continue
+                if not alert_is_resolved(fm, vault_root, args.lock_file, args.worktrees_dir, lock_already_held=True):
+                    unresolved_alerts.append(str(path))
+        if unresolved_alerts:
+            print(f"FAIL: candidate_id={cid} に未解決ALERTがあります（{unresolved_alerts}）。"
+                  "先に対応するALERTのresolved欄を埋めreconcileを実行してください。"
+                  "ALERT未解決のままunskipはできません。", file=sys.stderr)
+            return 1
+
+        # TOCTOU残余（モジュールdocstring/cmd_skipのdocstring参照）: 上記ALERT走査
+        # から保存までは代入3行のみ＝実用上ほぼゼロ化しているが、write_alert()が
+        # ロックを取らない設計のため理論上の窓は残る（既知の残余として受容）。
+        today = datetime.date.today().isoformat()
+        cand["status"] = "pending"
+        cand["unskip_reason"] = reason
+        cand["unskipped_at"] = today
+        save_state_atomic(args.state_file, state)
+
+        print(json.dumps({
+            "ok": True, "candidate_id": cid, "status": "pending",
+            "unskip_reason": reason, "unskipped_at": today,
+            "skip_reason": cand.get("skip_reason"), "skipped_at": cand.get("skipped_at"),
+        }, ensure_ascii=False))
+        return 0
+    finally:
+        release_lock(held)
+
+
 def cmd_commit(args):
     vault_root = pathlib.Path(args.vault).resolve()
     cid = sanitize_candidate_id(args.candidate_id)
@@ -1332,6 +1802,71 @@ def cmd_commit(args):
             print(f"BLOCKED: 未解決ALERTがあるためコミットしません（ラッチ）: {unresolved}", file=sys.stderr)
             return 8
 
+        # 候補の終端状態チェック（fail-closed・2026-07-14追加）。commitはstate.json
+        # へ直接書込まない方針は据え置くが（cmd_commitの他コメント参照）、既に
+        # merged/skippedが確定した候補への再commitだけは事前に読込のみで拒否する
+        # （preflightのTERMINAL_STATUSESチェックと対の防波堤。preflightをすり抜けて
+        # 直接commitを叩かれた場合でも二重マージを防ぐ）。ロック保持後にstate.jsonを
+        # 読むためTOCTOUの窓は最小。blocked/retryはここでは弾かない（retryは
+        # 再挑戦できることが設計上の意図であり、head_moved等のALERT解消後の
+        # 再commitフローを壊さないため＝既存テスト=== 9. ===で確認）。
+        try:
+            commit_state = load_state(args.state_file)
+        except ValueError as e:
+            print(f"FAIL: state.jsonの読込に失敗しました（{e}）", file=sys.stderr)
+            return 1
+        commit_cand = commit_state["candidates"].get(cid)
+        if commit_cand is None and not args.allow_unregistered_candidate:
+            # candidate_idがstate.jsonに未登録の場合は既定でfail-closed拒否する
+            # （リーダー判断・2026-07-14追加。Codexレビュー指摘・Major: state.json
+            # 消失・誤ったstate-file指定・候補レコード欠落と、意図的な「stateに
+            # 未登録の候補を手動で試す」運用（preflightの--note-a/--note-bによる
+            # 手動オーバーライド）とを区別できないままcommitを通してしまっていた）。
+            # 手動運用（preflightで--note-a/--note-bを使い、stateに未登録のまま
+            # worktree-setup/draft/evidence/gate/commitと進める意図的なフロー）
+            # だけは`--allow-bench-skip`と同じ二重明示エスケープハッチの流儀で
+            # `--allow-unregistered-candidate`を要求する（既定は安全側＝拒否）。
+            print(f"FAIL: candidate_id={cid} がstate.jsonに見つかりません（fail-closed・既定拒否）。"
+                  "state.json消失/state-file誤指定/候補レコード欠落の可能性があります。"
+                  "stateに未登録のまま意図的に手動commitする場合のみ"
+                  "--allow-unregistered-candidate を明示してください。", file=sys.stderr)
+            return 1
+        if commit_cand is not None and commit_cand.get("status") in TERMINAL_STATUSES:
+            print(f"FAIL: candidate_id={cid} は既に終端状態（{commit_cand.get('status')}）です。"
+                  "再commitはできません（取消すにはrevertを使ってください）。", file=sys.stderr)
+            return 1
+        if commit_cand is not None and commit_cand.get("status") not in KNOWN_CANDIDATE_STATUSES:
+            # 未知のstatus値はfail-closedで拒否する（Codexレビュー指摘・Major対応・
+            # cmd_skipと同じ考え方＝KNOWN_CANDIDATE_STATUSES参照）。
+            print(f"FAIL: candidate_id={cid} のstatusが未知の値です（fail-closed）: "
+                  f"{commit_cand.get('status')!r}", file=sys.stderr)
+            return 1
+
+        # state.jsonのstatusフィールドだけでなく、git log自体もsource of truthとして
+        # 直接確認する（Codexレビュー指摘・Major対応・cmd_skipと同じ考え方＝
+        # list_merge_commits参照）。上のTERMINAL_STATUSESチェックだけでは、commit
+        # 成功直後の自動reconcileが何らかの理由で失敗しstate.jsonがstale=pendingの
+        # まま残った窓（cmd_commit末尾のWARNコメント参照）で、実際には既にmainへ
+        # 反映済みの候補に対してworktree-setup --force-recreate→draft→gate→commitを
+        # やり直すと、同じcandidate_idの2件目のマージコミットを作れてしまう
+        # （TERMINAL_STATUSESチェックはstate.jsonの自己申告に依存するため、この
+        # staleウィンドウでは無力）。HEAD到達可能性まで見るのは、ff-only失敗で
+        # 候補ブランチにだけ残った未反映コミットを誤って「既にマージ済み」と
+        # 判定しないため（_commit_reachable_from_head参照）。
+        try:
+            existing_merges = [c for c in list_merge_commits(vault_root)
+                                if c.get("candidate_id") == cid and c.get("action") != "revert"]
+            existing_merges = [c for c in existing_merges if _commit_reachable_from_head(vault_root, c["hash"])]
+        except RuntimeError as e:
+            print(f"FAIL: git履歴の確認に失敗しました（fail-closed・{e}）", file=sys.stderr)
+            return 1
+        if existing_merges:
+            print(f"FAIL: candidate_id={cid} は既にgit履歴にマージコミットが存在します"
+                  f"（hash={existing_merges[0]['hash']}）。再commit不可（取消すにはrevertを使ってください）。"
+                  "state.jsonのstatusがstaleな可能性があるため、先に`reconcile`を実行してください。",
+                  file=sys.stderr)
+            return 1
+
         # verdict/gate結果の読込・fingerprint検証は、ロック取得後・git add直前という
         # 可能な限り狭い窓に置く（Codexレビュー指摘・Critical・2巡目再指摘: ロック
         # 取得前にfingerprintを計算すると、ロック待機中の変更を見逃すTOCTOU窓が残る）。
@@ -1345,7 +1880,31 @@ def cmd_commit(args):
             verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
             validate_verdict(verdict, expected_candidate_id=cid, expected_content_fingerprint=expected_fp)
         except (OSError, json.JSONDecodeError, ValueError) as e:
-            print(f"BLOCKED: verdictが不正・読込不能・現在の内容と不一致のため書込しません（{e}）", file=sys.stderr)
+            # FR11a（Codex障害時・fail-closed）: verdictファイルが存在しない/読めない/
+            # JSONとして壊れている/構造的に不正（必須キー欠落・候補ID不一致・
+            # fingerprint不一致・rubric不正等、validate_verdict()参照）のいずれも、
+            # 本CLI視点では「Codexから使用可能なverdictを得られなかった」点で区別
+            # できない（不通・認証切れ・MCP未起動・timeout・利用上限のいずれも、
+            # 呼び出し元＝リーダーが書くverdictファイルが正しく生成されないという
+            # 同じ観測結果になる）。fail-closedに倒し、当該candidate_idのみを
+            # blocked化する（他候補は妨げない＝FR11a本文どおり。ALERT_TYPES/
+            # check_alert_latch()のcodex_unavailable分岐参照：このALERTは意図的に
+            # FR12bの全マージ停止ラッチ対象外にしてあるため、他候補のpreflight/
+            # commitを止めない）。ALERT生成後、保持中の同一ロックのままreconcile
+            # 本体を呼び、この候補のstatusを即座にblockedへ反映する（commit成功時に
+            # reconcileを自動実行する既存パターンと同型・cmd_commit末尾参照）。
+            write_alert(args.alerts_dir, cid, "codex_unavailable", "commit",
+                        f"Codexのverdictを取得できませんでした（不通/timeout/認証切れ/利用上限、"
+                        f"またはverdict自体が不正・別候補や古い証拠パックへの回答の使い回しの疑い。"
+                        f"fail-closed・FR11a）: {e}")
+            alert_reconcile_rc, _ = _reconcile_locked(args)
+            if alert_reconcile_rc != 0:
+                print(f"WARN: ALERT生成後のreconcileに失敗しました（rc={alert_reconcile_rc}）。"
+                      "state.jsonのstatusがstaleな可能性があります。手動で`reconcile`を実行してください。",
+                      file=sys.stderr)
+            print(f"BLOCKED: verdictが不正・読込不能・現在の内容と不一致のため書込しません"
+                  f"（Codex不通等の可能性・当該候補のみblocked化・ALERT生成・FR11a。他候補は妨げません）: {e}",
+                  file=sys.stderr)
             return 4
         if verdict["verdict"] != "approve":
             print(f"SKIP: Codex verdict={verdict['verdict']}（reason={verdict['reason_code']}）のためコミットしません",
@@ -1381,6 +1940,31 @@ def cmd_commit(args):
                         f"draft後に想定外の変更が検出されました: {unexpected}", target_path=wt)
             print(f"BLOCKED: worktreeに想定外の変更があります（ALERT生成）: {unexpected}", file=sys.stderr)
             return 6
+
+        # 書込直前の最終ラッチ再確認（TOCTOU対策・外部脳総点検5巡目Codexレビュー
+        # 指摘・Major、6巡目再指摘で配置をさらに書込直前へ移動: 冒頭の
+        # check_alert_latch()呼出し（ロック取得直後）から、ここに至るまでに
+        # state.json読込・fingerprint再計算・verdict/gate読込・検証・git status
+        # 確認という無視できない処理を挟んでおり、この間に他プロセスが新規ALERT
+        # を書込んでも（write_alert()自体はロックを取らない設計＝write_alertの
+        # docstring参照）冒頭の一度きりのチェックでは検知できないまま実際の
+        # git書込（add/commit/merge）へ進んでしまう窓があった。cmd_revertが既に
+        # 採っている「実際の書込直前でもう一度latchを確認する」パターンに揃え、
+        # かつ本チェック自体もgit statusの直後・`git add`の直前という実際の書込に
+        # 最も近い位置へ置く（初版ではgit status確認より前に置いており、6巡目
+        # レビューでその間の窓もまだ縮められると指摘された）。
+        # なお本チェックとその直後のgit操作（`git add`/`git commit`/`git merge`の
+        # 数回のsubprocess呼出し）の間にも理論上の窓は残る（モジュールdocstring
+        # 「未解決ALERTのTOCTOU再確認」の既知の残余を参照。これを完全にゼロ化
+        # するには書込側=write_alert()の全ロック化が必要だが、lock_conflict種別の
+        # ALERTは「ロック取得に失敗した」事実を書くものであり、ロック必須化すると
+        # 書けなくなる本末転倒のため採用しない）。
+        latch_active_pre_write, unresolved_pre_write = check_alert_latch(
+            vault_root, args.alerts_dir, args.lock_file, args.worktrees_dir, lock_already_held=True)
+        if latch_active_pre_write:
+            print(f"BLOCKED: 未解決ALERTがあるためコミットしません（書込直前の再確認ラッチ）: "
+                  f"{unresolved_pre_write}", file=sys.stderr)
+            return 8
 
         add_paths = sorted(expected_dirty)
         run_git(["add", "--"] + add_paths, wt)
@@ -1463,6 +2047,25 @@ def list_merge_commits(vault_root):
     return commits
 
 
+def _commit_reachable_from_head(cwd, commit_hash):
+    """commit_hashが現在のHEADから到達可能な祖先か（=Vault本体に実際に反映
+    済みか）を`git merge-base --is-ancestor`で判定する。list_merge_commits()の
+    `git log --all`は、ff-only失敗で候補ブランチ上にだけ残った未反映コミット
+    （head_moved ALERT参照）も含んでしまうため、cmd_skipがそれを「既にマージ
+    済み」と誤判定しないための絞り込みに使う（Codexレビュー指摘・Major）。
+    判定コマンド自体が失敗（returncodeが0/1以外）した場合はfail-closedで
+    RuntimeErrorを送出する（呼び出し側=cmd_skipはFAILとして書込しないこと）。
+    """
+    proc = subprocess.run(["git", "-C", str(cwd), "merge-base", "--is-ancestor", commit_hash, "HEAD"],
+                           capture_output=True, text=True, timeout=15)
+    if proc.returncode == 0:
+        return True
+    if proc.returncode == 1:
+        return False
+    raise RuntimeError(
+        f"git merge-base --is-ancestor の判定に失敗しました（commit={commit_hash}）: {proc.stderr.strip()}")
+
+
 def _reconcile_locked(args):
     """cmd_reconcileの本体（呼び出し元がvault-merge.lockを既に保持している前提・
     ロックの取得/解放は一切行わない）。cmd_reconcile（自身でロック取得後に呼ぶ）と
@@ -1500,11 +2103,21 @@ def _reconcile_locked(args):
         # あっても最初に見つかったもの（＝最新）を採用する（setdefaultで2件目以降を
         # 無視）。merge/revertは別々に集計し、統合ノートの有無に関わらず両方の事実を
         # 反映する（処理順序に依存する上書き事故を避ける）。
+        # list_merge_commits()は`git log --all`のためVault本体の現在HEADへ未到達の
+        # コミット（worktree上でcommitした直後にff-onlyマージが失敗し、候補ブランチ
+        # `vault-merge/<cid>`上にだけtrailer付きコミットが残っているケース＝
+        # head_moved ALERT参照）も拾ってしまう。cmd_skipは`_commit_reachable_from_head`
+        # で既にこれを絞り込んでいた（2026-07-12）が、reconcile本体では未適用のまま
+        # 残っており、ff-only失敗直後に（誤って）reconcileを実行すると、実際には
+        # mainへ反映されていない候補を"merged"と誤登録し得る間隙があった（外部脳
+        # 総点検・2026-07-14修正。同じ絞り込みをcmd_revertにも適用＝下記参照）。
         commits = list_merge_commits(vault_root)
         merge_by_cid, revert_by_cid = {}, {}
         for c in commits:
             cid = c.get("candidate_id")
             if not cid:
+                continue
+            if not _commit_reachable_from_head(vault_root, c["hash"]):
                 continue
             target = revert_by_cid if c.get("action") == "revert" else merge_by_cid
             target.setdefault(cid, c["hash"])
@@ -1520,24 +2133,83 @@ def _reconcile_locked(args):
             cand["reverted_commit"] = hash_
             touched += 1
 
+        # ALERTからのstatus同期（「未解決なら進める」「解消したら戻す」の両方向を
+        # 同一の厳格な解消判定=alert_is_resolved()で行う＝Codexレビュー指摘・
+        # Major・2巡目再指摘対応: 当初は「進める」方向がresolved欄の有無のみ
+        # （真偽のみ）、「戻す」方向が「resolved欄の日付形式＋alert_machine_
+        # resolved()」という非対称な強度になっており、statusがまだ"pending"の
+        # 候補に対しては「進める」側の弱い判定しか働かないため、resolved欄が
+        # 形式不正/機械判定NGでも見かけ上blocked化されずpendingのまま残り、
+        # cmd_skip()で終端化できてしまう（=== 19. ===の揉み消し経路と同型の
+        # 間隙が"pending"側にも残っていた）。alert_is_resolved()はcmd_skip()も
+        # 使う共有ヘルパーのためモジュールレベルへ定義（同関数のdocstring参照）。
+        def _alert_is_resolved(fm):
+            return alert_is_resolved(fm, vault_root, args.lock_file, args.worktrees_dir, lock_already_held=True)
+
         alerts_dir = pathlib.Path(args.alerts_dir)
         if alerts_dir.is_dir():
+            # ALERTファイルが1件でも読込失敗する場合は、その回のreconcileでは
+            # ALERT起因のstatus同期処理自体を全面的に見送る（fail-closed・
+            # Codexレビュー指摘・Major: 読込失敗したALERTのcandidate_idが分からない
+            # 以上、それを除外して「他は全部resolvedだった」と判断すると、本当は
+            # 未解決だった候補まで誤って動かしかねない。現状維持の方が安全）。
+            alerts_readable = True
+            alert_records = []  # [(path, fm), ...] sorted順（=最新のALERTが最後）
             for path in sorted(alerts_dir.glob("*.md")):
                 try:
                     fm, _, _ = parse_alert(path)
                 except OSError:
+                    alerts_readable = False
                     continue
-                cid = fm.get("candidate_id")
-                if not cid or cid not in state["candidates"]:
-                    continue
-                if state["candidates"][cid].get("status") == "merged" or state["candidates"][cid].get("reverted_commit"):
-                    continue
-                if fm.get("resolved"):
-                    continue
-                alert_type = fm.get("alert_type")
-                state["candidates"][cid]["status"] = "retry" if alert_type == "lock_conflict" else "blocked"
-                state["candidates"][cid]["last_alert"] = str(path)
-                touched += 1
+                alert_records.append((path, fm))
+
+            if alerts_readable:
+                # candidate_idごとに「未解決ALERTの種別すべて」と「（あれば）
+                # sorted順で最後に見つかった未解決ALERTのパス」を1回の走査で
+                # 集計する（Codexレビュー指摘・Major・3巡目再指摘: 当初は「最後に
+                # 見つかった未解決ALERT1件」の種別だけでstatusを決めていたため、
+                # 同一候補にlock_conflict以外の未解決ALERT（例: 古いworktree_dirty）
+                # と新しいlock_conflictが同時に存在する場合、ファイル名の日付順で
+                # lock_conflictが最後に処理されるとstatus="retry"になってしまい、
+                # cmd_skipはretryを拒否しないため「worktree_dirty側は実際には
+                # 未解決のままskipできる」というfail-closedに反する経路が残って
+                # いた。「lock_conflict以外の未解決が1件でもあればblocked、全件
+                # lock_conflictの場合のみretry」という安全側の集約に変更する）。
+                unresolved_cids = set()
+                unresolved_types = {}  # cid -> {alert_type, ...}（未解決分のみ）
+                last_unresolved_path = {}  # cid -> path（last_alert記録用・最新のもの）
+                for path, fm in alert_records:
+                    cid = fm.get("candidate_id")
+                    if not cid:
+                        continue
+                    if not _alert_is_resolved(fm):
+                        unresolved_cids.add(cid)
+                        unresolved_types.setdefault(cid, set()).add(fm.get("alert_type"))
+                        last_unresolved_path[cid] = path
+
+                # 進める: 未解決ALERTがある候補はblocked/retryへ（merged/skipped/
+                # revertedは対象外＝skip後にreconcileしてもskippedが消えない
+                # ガードを維持・2026-07-14 skipコマンド追加時の対応）。
+                for cid, types in unresolved_types.items():
+                    if cid not in state["candidates"]:
+                        continue
+                    cand = state["candidates"][cid]
+                    if cand.get("status") in ("merged", "skipped") or cand.get("reverted_commit"):
+                        continue
+                    non_lock_types = types - {"lock_conflict"}
+                    cand["status"] = "retry" if not non_lock_types else "blocked"
+                    cand["last_alert"] = str(last_unresolved_path[cid])
+                    touched += 1
+
+                # 戻す: 未解決ALERTが無くなった候補はblocked/retryからpendingへ
+                # （外部脳総点検・2026-07-14追加。ALERTがresolvedになった候補が
+                # 永久にblocked/retryへ留まり続け、cmd_skipのFAILメッセージ
+                # 「先に対応するALERTのresolved欄を埋めreconcileを実行して
+                # ください」が効果の無い指示になっていた間隙を埋める）。
+                for cid, cand in state["candidates"].items():
+                    if cand.get("status") in ("blocked", "retry") and cid not in unresolved_cids:
+                        cand["status"] = "pending"
+                        touched += 1
 
         save_state_atomic(args.state_file, state)
     except Exception as e:
@@ -1594,32 +2266,52 @@ def cmd_revert(args):
             return False, 6
         return True, 0
 
+    def _resolve_revert_target():
+        """現在のVault HEADから見て、candidate_idの非revertマージコミットを1件だけ
+        特定する。0件/複数件/git log失敗はいずれも(None, メッセージ, 終了コード)を
+        返す（呼び出し側はFAILとして処理を打ち切ること）。ロック取得前後の両方で
+        呼び出し、ロック取得後の再呼び出しを実際のrevertに使う「正」とする
+        （Codexレビュー指摘・Major・2026-07-14: ロック取得前の一度きりの判定では、
+        判定からロック取得までの間にHEADが動いた場合、`_check_clean`と異なりここ
+        だけ再確認していなかったためTOCTOU窓が残っていた。`git revert`はtargetの
+        祖先関係を見ずに指定コミットの逆パッチを機械的に適用するため、判定後に
+        到達不能になったコミットをそのままrevertすると意図しない差分を適用し
+        かねない）。
+        """
+        try:
+            commits = [c for c in list_merge_commits(vault_root)
+                       if c.get("candidate_id") == cid and c.get("action") != "revert"]
+            # list_merge_commits()は`git log --all`のため、ff-only失敗で候補ブランチ
+            # `vault-merge/<cid>`上にだけ残った未反映コミット（head_moved ALERT参照）も
+            # 拾ってしまう。現在のVault HEADから到達不能＝実際にはmainへ反映されて
+            # いないコミットを`git revert`しても意味が無い（何も打ち消さない・むしろ
+            # 意図しない差分を適用しかねない）ため、cmd_skip・_reconcile_lockedと同じ
+            # `_commit_reachable_from_head`で絞り込む（外部脳総点検・2026-07-14修正）。
+            commits = [c for c in commits if _commit_reachable_from_head(vault_root, c["hash"])]
+        except RuntimeError as e:
+            return None, f"revert対象コミットの検索に失敗しました: {e}", 1
+        if not commits:
+            return None, f"candidate_id={cid} のマージコミットが見つかりません", 1
+        if len(commits) > 1:
+            # git log は新しい順に並ぶが、candidate_idが複数コミットにまたがるのは
+            # 通常あり得ない異常（候補IDの再利用等の疑い）。どれを戻すべきか自動選択
+            # せずblockする（Codexレビュー指摘・Major: 従来はcommits[-1]で「最も古い」
+            # コミットを暗黙に選んでおり、意図と逆の結果になり得た）。
+            return None, (f"candidate_id={cid} に一致するマージコミットが複数見つかりました"
+                           f"（候補ID再利用の疑い・自動選択しません）: {[c['hash'] for c in commits]}"), 1
+        return commits[0]["hash"], None, 0
+
     ok, rc = _check_clean("revert")
     if not ok:
         return rc
 
-    # list_merge_commits()はgit log自体が失敗するとRuntimeErrorを送出する
-    # （Codexレビュー指摘・2巡目: main()のグローバルRuntimeErrorハンドラでも
-    # 最終的にFAIL表示・終了コード1にはなるが、worktree-setup同様ここでも
-    # 分かりやすいメッセージに変換しておく）。
-    try:
-        commits = [c for c in list_merge_commits(vault_root)
-                   if c.get("candidate_id") == cid and c.get("action") != "revert"]
-    except RuntimeError as e:
-        print(f"FAIL: revert対象コミットの検索に失敗しました: {e}", file=sys.stderr)
-        return 1
-    if not commits:
-        print(f"FAIL: candidate_id={cid} のマージコミットが見つかりません", file=sys.stderr)
-        return 1
-    if len(commits) > 1:
-        # git log は新しい順に並ぶが、candidate_idが複数コミットにまたがるのは
-        # 通常あり得ない異常（候補IDの再利用等の疑い）。どれを戻すべきか自動選択
-        # せずblockする（Codexレビュー指摘・Major: 従来はcommits[-1]で「最も古い」
-        # コミットを暗黙に選んでおり、意図と逆の結果になり得た）。
-        print(f"FAIL: candidate_id={cid} に一致するマージコミットが複数見つかりました"
-              f"（候補ID再利用の疑い・自動選択しません）: {[c['hash'] for c in commits]}", file=sys.stderr)
-        return 1
-    target = commits[0]["hash"]
+    # ロック取得前の早期棄却（revert対象が無い/曖昧ならロックを取らずに済ませる）。
+    # main()のグローバルRuntimeErrorハンドラでも最終的にFAIL表示・終了コード1には
+    # なるが、worktree-setup同様ここでも分かりやすいメッセージに変換しておく。
+    target, err, rc = _resolve_revert_target()
+    if target is None:
+        print(f"FAIL: {err}", file=sys.stderr)
+        return rc
 
     held = acquire_lock_with_retry(args.lock_file, attempts=args.lock_retries)
     if not held:
@@ -1637,6 +2329,15 @@ def cmd_revert(args):
         if latch_active:
             print(f"BLOCKED: 未解決ALERTがあるためrevertしません（ラッチ）: {unresolved}", file=sys.stderr)
             return 8
+
+        # revert対象コミットもロック取得後に再確定する（TOCTOU対策・Codexレビュー
+        # 指摘・Major: `_check_clean`と同様、ロック取得前の判定だけでは判定から
+        # ロック取得までの間にHEADが動いた場合を捉えられない。ここで確定した値を
+        # 実際の`git revert`に使う＝ロック取得前のtargetは早期棄却の判定にのみ使う）。
+        target, err, rc = _resolve_revert_target()
+        if target is None:
+            print(f"FAIL: {err}（ロック取得後の再確認で判明）", file=sys.stderr)
+            return rc
 
         current_head = git_head(vault_root)
         proc = run_git(["revert", "--no-commit", target], vault_root, check=False)
@@ -1721,6 +2422,24 @@ def build_parser():
     p.add_argument("--hook", default=str(DEFAULT_HOOK))
     p.set_defaults(func=cmd_gate)
 
+    p = sp.add_parser("skip", help="候補を「マージ不適」としてstate.jsonへ直接status=skippedを記録"
+                                    "（FR9b終端状態語彙の間隙埋め・2026-07-14追加）")
+    # alerts/worktrees=True: 当該candidate_idに未解決ALERTが無いか直接確認するため
+    # （リーダー判断・2026-07-14追加＝status=="blocked"チェックだけでは、reconcile
+    # 未実行でstatusがまだ"pending"のままの間隙をすり抜けられたため）。
+    common(p, state=True, alerts=True, worktrees=True, lock=True)
+    p.add_argument("--candidate-id", required=True)
+    p.add_argument("--reason", required=True, help="マージ不適と判断した理由（skip_reasonとして記録）")
+    p.set_defaults(func=cmd_skip)
+
+    p = sp.add_parser("unskip", help="skippedを手動再評価のためpendingへ戻す（本人裁定・2026-07-14追加）")
+    # alerts/worktrees=True: cmd_skipと同じ二重防御（当該candidate_idの未解決ALERT
+    # を直接確認）のため。
+    common(p, state=True, alerts=True, worktrees=True, lock=True)
+    p.add_argument("--candidate-id", required=True)
+    p.add_argument("--reason", required=True, help="再評価したい理由（unskip_reasonとして記録・skip_reasonは上書きしない）")
+    p.set_defaults(func=cmd_unskip)
+
     p = sp.add_parser("commit", help="全PASS確認後にworktreeへ1コミット→mainへff-onlyマージ→reconcile自動実行")
     common(p, state=True, worktrees=True, alerts=True, lock=True)
     p.add_argument("--candidate-id", required=True)
@@ -1731,10 +2450,18 @@ def build_parser():
     p.add_argument("--allow-bench-skip", action="store_true",
                    help="gate結果のbenchがskippedでもcommitを許可する（既定は拒否＝"
                         "回帰ベンチ未実施での正式マージを防ぐ。手順書外の手動判断が必要な場合のみ使用）")
+    p.add_argument("--allow-unregistered-candidate", action="store_true",
+                   help="candidate_idがstate.jsonに未登録でもcommitを許可する（既定は拒否＝"
+                        "state.json消失/state-file誤指定と意図的な手動候補を区別できないため。"
+                        "preflightの--note-a/--note-bによる手動オーバーライドを実際にcommitまで"
+                        "進める場合のみ明示的に使用・リーダー判断2026-07-14追加）")
     p.set_defaults(func=cmd_commit)
 
     p = sp.add_parser("reconcile", help="git logのcandidate_id trailerを正としてstate.jsonを再構成")
-    common(p, state=True, alerts=True, lock=True)
+    # worktrees=True: blocked/retryからの復帰判定でalert_machine_resolved()を呼ぶため
+    # （worktree_dirty種別のtarget_path未記録時のフォールバック先として必要・
+    # Codexレビュー指摘・Major対応で追加・2026-07-14）。
+    common(p, state=True, alerts=True, worktrees=True, lock=True)
     p.set_defaults(func=cmd_reconcile)
 
     p = sp.add_parser("alert", help="ALERTレポートを手動生成（通常はcommit/revertが自動生成）")

@@ -1,6 +1,6 @@
 ---
 date: 2026-06-23
-updated: 2026-07-11
+updated: 2026-07-12
 tags: [preference, fragments, blog, workflow, capture]
 project: external-brain
 related:

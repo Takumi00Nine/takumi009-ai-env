@@ -78,7 +78,14 @@ cleanup() {
   [[ -z "$STAGING_DIR" ]] || rm -rf "$STAGING_DIR"
 }
 trap cleanup EXIT
-register_tmp() { local f; f="$(mktemp)"; TMP_FILES+=("$f"); printf '%s' "$f"; }
+# 呼び出し規約: `register_tmp; VAR="$REGISTER_TMP_RESULT"`（VAR="$(register_tmp)"
+# は使わない）。コマンド置換はサブシェルで実行されるため、関数内で
+# TMP_FILES+=() しても親シェルの配列へ伝播せず、cleanup() が常に空配列を見て
+# mktemp の一時ファイルが削除されないまま残留するバグがあった（Codexレビュー指摘・
+# Major）。「-t export-public-vault」でファイル名に識別用プレフィックスを付け、
+# 万一の残留もユニットテストや目視で追跡しやすくする（配置先自体は既定の
+# システム一時領域のまま変えない）。
+register_tmp() { REGISTER_TMP_RESULT="$(mktemp -t export-public-vault)"; TMP_FILES+=("$REGISTER_TMP_RESULT"); }
 
 # --- 前提コマンドの確認 ---
 for cmd in rsync rg gitleaks git; do
@@ -170,8 +177,8 @@ fi
 #      denylist は「FAIL_LINK_FOLDERS（=Personal）配下の全 .md の basename」を毎回自動生成する
 #      （手書き例示だと網羅できないため。設計§1-3 Codexレビュー指摘）
 log "check: Personal note basename wiki link (denylist auto-generated, fail-fast)"
-BASENAME_DENYLIST="$(register_tmp)"
-BASENAME_PATTERN_FILE="$(register_tmp)"
+register_tmp; BASENAME_DENYLIST="$REGISTER_TMP_RESULT"
+register_tmp; BASENAME_PATTERN_FILE="$REGISTER_TMP_RESULT"
 
 : > "$BASENAME_DENYLIST"
 for dir in "${FAIL_LINK_FOLDERS[@]}"; do
@@ -200,7 +207,7 @@ fi
 #      追加された場合の誤爆・regexミスを避ける（Codexレビュー指摘・Minor）。
 #      空行が1行でも混じると「全行マッチ」の事故になるため、空行を除いた一時ファイルを使う。
 log "check: NG words ($NGWORDS_FILE)"
-NGWORDS_CLEAN="$(register_tmp)"
+register_tmp; NGWORDS_CLEAN="$REGISTER_TMP_RESULT"
 if ! grep -v '^[[:space:]]*$' "$NGWORDS_FILE" > "$NGWORDS_CLEAN"; then
   # grep -v は「空行以外が1行も無い（=全部空行 or 0バイト）」場合も非ゼロで終了するため、
   # 「読み取れない」と「有効な行が無い」を区別する（Codexレビュー指摘・Nit）
@@ -231,7 +238,7 @@ fi
 #      ただし public 側では参照先が存在しないためリンク切れになるので、
 #      一覧をレポート表示するだけに留める（fail-fastしない・exit 0のまま）。
 log "check: private folder link report (non-fail; Knowledge/Decisions/Projects/Fragments/Explorations)"
-REPORT_LINES_FILE="$(register_tmp)"
+register_tmp; REPORT_LINES_FILE="$REGISTER_TMP_RESULT"
 : > "$REPORT_LINES_FILE"
 
 # report-only なので rg のマッチ有無（exit 0/1）では絶対に fail させないが、
@@ -243,8 +250,8 @@ rc=0
 rg -n -i -P "$(folder_link_regex "$report_folder_alt")" "$STAGING_DIR" >> "$REPORT_LINES_FILE" || rc=$?
 [[ $rc -gt 1 ]] && log "WARN: report-only rg 実行エラー (folder-qualified, exit $rc)。レポートが不完全な可能性があります"
 
-REPORT_BASENAME_DENYLIST="$(register_tmp)"
-REPORT_BASENAME_PATTERN_FILE="$(register_tmp)"
+register_tmp; REPORT_BASENAME_DENYLIST="$REGISTER_TMP_RESULT"
+register_tmp; REPORT_BASENAME_PATTERN_FILE="$REGISTER_TMP_RESULT"
 : > "$REPORT_BASENAME_DENYLIST"
 for dir in "${REPORT_LINK_FOLDERS[@]}"; do
   if [[ -d "$VAULT/$dir" ]]; then

@@ -347,6 +347,35 @@ try:
 finally:
     shutil.rmtree(d, ignore_errors=True)
 
+print("=== 7b. load_index: notes内に重複relpathがあるとIndexError_（fail-closed・Codexレビュー指摘対応） ===")
+idx_dir = pathlib.Path(tempfile.mkdtemp())
+try:
+    gen_id = ei.new_generation_id()
+    ei.write_generation(idx_dir, gen_id, "m", "dg", 1,
+                         [("Knowledge/a.md", "h1", [0.5]), ("Knowledge/b.md", "h2", [0.6])])
+    ei.publish_current(idx_dir, gen_id)
+    meta_path = idx_dir / gen_id / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    # count・vectors.binのバイト長は変えず、notes[1]のrelpathをnotes[0]と重複させる
+    # （破損/改ざんされたmeta.jsonの再現。件数不整合チェックやバイト長チェックとは
+    # 独立に、重複relpath自体の検証が効くことを確認する）。
+    meta["notes"][1]["relpath"] = meta["notes"][0]["relpath"]
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    assert_raises("notes内の重複relpathはIndexError_", ei.IndexError_, lambda: ei.load_index(idx_dir, retries=0))
+finally:
+    shutil.rmtree(idx_dir, ignore_errors=True)
+
+idx_dir = pathlib.Path(tempfile.mkdtemp())
+try:
+    gen_id = ei.new_generation_id()
+    ei.write_generation(idx_dir, gen_id, "m", "dg", 1,
+                         [("Knowledge/a.md", "h1", [0.5]), ("Knowledge/b.md", "h2", [0.6])])
+    ei.publish_current(idx_dir, gen_id)
+    loaded = ei.load_index(idx_dir)
+    assert_eq("重複の無い正常なnotesは従来どおり読み込める", 2, len(loaded.notes))
+finally:
+    shutil.rmtree(idx_dir, ignore_errors=True)
+
 print("=== 8. prune_old_generations: 直近3世代を残し古いものを削除・stale tmp掃除 ===")
 d = pathlib.Path(tempfile.mkdtemp())
 try:

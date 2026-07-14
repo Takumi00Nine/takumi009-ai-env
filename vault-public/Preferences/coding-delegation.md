@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-07-11
+updated: 2026-07-13
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 aliases:
@@ -22,5 +22,4 @@ aliases:
 - 見せる成果物は cmux ペインに表示してから依頼（`~/work/dotfiles/cmux/show-review.sh <path-or-url>`）。例外＝Vault 内の全ノート（本人が Obsidian で見る→テキスト報告のみ）。
 - リーダーの直接編集は PreToolUse フック（delegation-gate v2）が制限：許可パス＝Vault・`~/.claude`・tmp のみ。それ以外は委任するか、理由をユーザーへ明示してマーカー touch（[[Decisions/2026-07-05-delegation-gate-v2]]）。
 - ワーカー/チームメイトの起動時は軽量版ブートストラップ（absolute-rules のみ必読・Vault 書込禁止＝申告制・obsidian-mcp 不使用）。フル版はリーダーのみ。Vault 書込はリーダーのみ。
-- 合議＝後戻りコスト高の設計・技術選定のみ：リーダーが論点定義→ワーカー＋Codex が案+根拠+リスク→リーダー統合・決定。
-- 例外なし（全プロジェクト共通で通常のワーカー委任体制。委任除外は設けない）。
+- 合議＝後戻りコスト高の設計・技術選定のみ：リーダーが論点定義→ワーカー＋Codex が案+根拠+リスク→リーダー統合・決定。例外なし（全プロジェクト共通で通常のワーカー委任体制。委任除外は設けない）。

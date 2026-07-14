@@ -319,6 +319,107 @@ echo "=== 18. バックスラッシュ・タブを含むaliasも壊れずJSONへ
   rm -rf "$VAULT_DIR"
 }
 
+echo "=== 19. フォルダ列挙失敗（権限不足）はunreadable_countに計上され「静かな全滅」にならない（Codexレビュー指摘・Major対応） ==="
+{
+  if [[ "$(id -u)" -eq 0 ]]; then
+    echo "  skip - root実行のためchmodによる権限エラーを再現できません"
+  else
+    VAULT_DIR="$(mktemp -d)"
+    write_note "$VAULT_DIR/Preferences/readable-note.md" $'date: 2026-07-10\naliases:\n  - "readablemarkerkeyword"'
+    mkdir -p "$VAULT_DIR/Knowledge"
+    write_note "$VAULT_DIR/Knowledge/hidden-by-perm.md" $'date: 2026-07-10\naliases:\n  - "readablemarkerkeyword"'
+    chmod 000 "$VAULT_DIR/Knowledge"
+
+    out="$(run_helper "$VAULT_DIR" "readablemarkerkeywordについて確認したい、十分な長さです")"
+    rc=$?
+    chmod 755 "$VAULT_DIR/Knowledge"
+
+    assert_eq "exit code 0（列挙失敗はfail-openのまま継続）" "0" "$rc"
+    relpaths="$(printf '%s' "$out" | relpaths_of)"
+    assert_contains "列挙できるPreferencesフォルダのヒットは維持される" "$relpaths" "readable-note.md"
+    unreadable="$(printf '%s' "$out" | python3 -c "import json,sys; print(json.load(sys.stdin)['unreadable_count'])")"
+    assert_eq "権限不足で列挙できなかったKnowledgeフォルダの分がunreadable_countへ計上される" "1" "$unreadable"
+
+    rm -rf "$VAULT_DIR"
+  fi
+}
+
+echo "=== 20. SCAN_DIRSのフォルダが単に存在しない場合は正常系のまま（unreadable_countに計上されない・19との対比） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Preferences/only-note.md" $'date: 2026-07-10\naliases:\n  - "onlynotekeyword"'
+  # Knowledge/Decisions/Projects/Personalディレクトリは意図的に作らない。
+
+  out="$(run_helper "$VAULT_DIR" "onlynotekeywordについて確認したい、十分な長さです")"
+  rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  unreadable="$(printf '%s' "$out" | python3 -c "import json,sys; print(json.load(sys.stdin)['unreadable_count'])")"
+  assert_eq "存在しないフォルダはunreadable_countに計上されない（正常系）" "0" "$unreadable"
+
+  rm -rf "$VAULT_DIR"
+}
+
+echo "=== 21. _list_md_names()単体: os.scandir()の例外種別ごとの分岐をroot実行環境に依存せず決定的に検証する（Codex一次レビュー指摘・Minor対応: chmodベースのテスト19はroot実行時にskipされ主要バグが未検証になるため、モックで補完する） ==="
+{
+  out="$(python3 - "$SCRIPT" <<'PYEOF'
+import sys, importlib.util, unittest.mock
+
+script_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("keyword_recall_helper", script_path)
+krh = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(krh)
+
+PASS = 0
+FAIL = 0
+
+
+def ok(desc):
+    global PASS
+    PASS += 1
+    print(f"  ok - {desc}")
+
+
+def ng(desc, detail=""):
+    global FAIL
+    FAIL += 1
+    print(f"  NG - {desc} ({detail})" if detail else f"  NG - {desc}")
+
+
+collate_key = lambda s: s  # noqa: E731 - ロケール依存を排除した単純な比較キー
+
+# 1. FileNotFoundError（フォルダが存在しない）は正常系: ([], False)
+with unittest.mock.patch("os.scandir", side_effect=FileNotFoundError):
+    names, failed = krh._list_md_names("dummy", collate_key)
+    if names == [] and failed is False:
+        ok("FileNotFoundErrorは正常系(([], False))として扱われる")
+    else:
+        ng("FileNotFoundErrorの扱い", f"names={names!r} failed={failed!r}")
+
+# 2. PermissionError（権限不足で列挙できない）は異常系: ([], True)
+with unittest.mock.patch("os.scandir", side_effect=PermissionError):
+    names, failed = krh._list_md_names("dummy", collate_key)
+    if names == [] and failed is True:
+        ok("PermissionErrorは異常系(([], True))として扱われる（実OSの権限設定に依存しない決定的な検証）")
+    else:
+        ng("PermissionErrorの扱い", f"names={names!r} failed={failed!r}")
+
+# 3. その他のOSError（I/Oエラー等）も異常系: ([], True)
+with unittest.mock.patch("os.scandir", side_effect=OSError("simulated I/O error")):
+    names, failed = krh._list_md_names("dummy", collate_key)
+    if names == [] and failed is True:
+        ok("その他のOSErrorも異常系(([], True))として扱われる")
+    else:
+        ng("その他のOSErrorの扱い", f"names={names!r} failed={failed!r}")
+
+print(f"=== summary: {PASS} passed, {FAIL} failed ===")
+sys.exit(0 if FAIL == 0 else 1)
+PYEOF
+)"
+  rc=$?
+  printf '%s\n' "$out"
+  assert_eq "exit code 0（3ケース全てPASS）" "0" "$rc"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

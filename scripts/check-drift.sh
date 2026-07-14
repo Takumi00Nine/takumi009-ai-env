@@ -7,16 +7,26 @@
 #   ② ~/.codex/config.toml（生成物）が repo の codex/config.toml テンプレと
 #      「プレースホルダ展開を考慮すれば」一致しているか（実ファイルを
 #      __AIENV_HOME__ へ逆置換してからテンプレと diff する）
-#   ③ repo（このリポジトリ）に未commitの変更が無いか
+#   ③ repo（このリポジトリ）に未commitの変更が無いか（`git status --porcelain`が
+#      実行自体に失敗した場合は「差分なし」に混同せず監視不能として計上する。
+#      2026-07-14 リーダー指摘対応＝旧実装は `|| true` でコマンド失敗と出力ゼロ件を
+#      区別できておらず、git破損時に偽の健全表示になり得た）
 #   ④ vault-public/Preferences と実 Vault の Preferences に差分が無いか
-#      （export-public-vault.sh のエクスポート漏れ検知）
+#      （export-public-vault.sh のエクスポート漏れ検知。`diff -rq`のexit codeで
+#      「差分なし／差分あり／実行エラー」を区別する。同じくリーダー指摘対応）
 #   ⑤ private であるべき remote（Vaultバックアップ・私的パッチrepo）が
 #      実際に GitHub 上で private のままか（`gh repo view --json visibility`）。
 #      ai-env 本体（このリポジトリ自身）は「公開予定」のため対象外。
-#      remote未設定はチェック対象外（情報表示のみ）。gh 不在・未認証・API失敗は
-#      drift にはせず WARN 表示のみに留める（2026-07-08 adoption-critic指摘対応。
-#      「必須指摘」＝private repoの意図しない公開化を検知する恒久対策）。
-#   ⑥ vault-agents（棚卸し・fragments-log・想起/読取ログフック）の死活。
+#      remote未設定はチェック対象外（情報表示のみ）。gh コマンド自体が無い環境
+#      （未インストール）は drift にはせず WARN 表示のみに留める（2026-07-08
+#      adoption-critic指摘対応。「必須指摘」＝private repoの意図しない公開化を
+#      検知する恒久対策）。一方、gh はあるのに未認証・権限不足・API失敗で
+#      可視性そのものが取得できない場合（GH-CHECK-FAILED）は drift として計上する
+#      （2026-07-13 外部脳round4白紙レビュー欠陥③対応。従来はWARN表示のみで
+#      drift件数に乗らず、私的リポジトリの意図しない公開化を検知するはずの
+#      安全網自体が静かに無効化していても週次通知に出ない穴があった＝
+#      「監視不能も異常」として明示的に検知対象にする）。
+#   ⑥ vault-agents（棚卸し・fragments-log・weekly-review・想起/読取ログフック）の死活。
 #      「最新の棚卸しレポートが古すぎる」「fragments-logが古すぎる」
 #      「vault-reads.tsv/vault-recall.tsvの最終記録が古すぎる」のいずれかを検知する
 #      （2026-07-10 敵対的レビュー M-1/M-2 対応。3年ノーメンテ運用では「本人が定期的に
@@ -24,7 +34,12 @@
 #      無言で死ぬ穴を塞ぐ）。加えて「レポートは生成されているがリーダーに処理された
 #      形跡（frontmatterの processed: 行）が無いまま何日も放置されている」も検知する
 #      （2026-07-11 決定・claude/hooks/bootstrap-vault.sh の未処理レポート検知の
-#      二次安全網。判定基準は同じ）。棚卸し・fragments-logの出力先は同決定で
+#      二次安全網。判定基準は同じ。2026-07-14修正: 従来は「最新1件」しか見ておらず、
+#      drift-check LaunchAgent（毎週月曜9:30）がレポート生成（fragments-log 月3:30・
+#      knowledge-merge-detect 月4:15）と同日実行のため、latestは常にage=0＝グレース
+#      （既定3日）を構造的に超えられず、過去の未処理レポートが永久に検知されない
+#      穴があった＝対象ディレクトリの未処理（processedマーカー無し）レポート全件を
+#      判定対象に変更）。棚卸し・fragments-logの出力先は同決定で
 #      Vault配下(Explorations/...)から $HOME/.claude/logs/ 配下へ移設済み
 #      （「読まれない人間向け資料をVaultに置かない」）。$VAULT が無い
 #      （サブ機・私的Vault未clone）場合は対象外。棚卸し・fragments-logは
@@ -33,11 +48,48 @@
 #      （install-main.shで標準導入・任意ではない）とは別に、LaunchAgent plistの
 #      実在で個別に導入判定してからチェックする（Codexレビュー指摘・Major:
 #      reads/recallログだけが存在する普通のmain構成で、未導入の任意機能まで
-#      毎回DEAD誤報していた）。
+#      毎回DEAD誤報していた）。weekly-review（「今週の歩み」週次振り返りcanvas。
+#      takumi009-ai-env-private/tools/weekly-review/weekly_review.py・
+#      LaunchAgent com.takumi009.weekly-review が毎週月曜04:00に無人実行）も同型の
+#      新鮮度チェック対象に追加（2026-07-14。従来は本ツールに一切の言及が無く
+#      監視対象外だった＝外部脳監視・バックアップ機構総点検で確定）。canvas出力
+#      ファイル名は「対象週の月曜日」であり生成日ではないため、ファイル名基準では
+#      なく最新ファイルのmtime基準で新鮮度を判定する（processedマーカーによる
+#      未処理チェックの対象外＝canvasは本人向けの最終成果物そのものであり、他3種の
+#      ような「処理待ちレポート」ではないため）。
 #      ログの時刻(TSV1列目)はvault-recall.sh/vault-read-log.shがUTCで書くため、
 #      経過日数の算出は `TZ=UTC` を明示してパースする（2026-07-10 敵対的レビュー
 #      2回目 N-5 対応。以前はローカルTZとして解釈しており、JST環境では±9hずれ、
 #      日境界付近では経過日数が1日多くカウントされ得た＝日単位閾値の誤判定要因）。
+#   ⑦ vault-backup（scripts/backup-vault.sh）の push 死活。push失敗はWARNとして
+#      /tmp/vault-backup.log（launchagents/com.takumi009.vault-backup.plistが
+#      指定する一時領域・再起動で揮発）へ出るのみで、origin(GitHub)との乖離が
+#      長期化しても気付く手段が無かった（2026-07-13 外部脳round4白紙レビュー
+#      新発見の監視穴①対応）。ネットワークアクセスはしない（git fetch はしない。
+#      本ツール冒頭の「読み取りのみ」方針どおり）ため、ローカルの
+#      origin/main 参照（直近の成功pushでのみ更新される＝git push は成功時に
+#      ローカルの追跡ブランチも更新する）だけを判定材料にする。
+#      `git rev-list origin/main..main` で「originに無くlocalにあるcommit」
+#      （＝push未反映）だけを厳密に求め（ローカルがorigin/mainより単に古い
+#      だけのケースを誤検知しないため）、そのうち最も古いcommitの時刻からの
+#      経過時間が24時間超ならdrift計上する（origin/mainのtip時刻を基準にすると、
+#      長期間無編集の後にたまたま1回pushが失敗しただけでも「何日も前から
+#      詰まっている」ように誤検知するため、実際に待たされている最古の未反映
+#      commitを基準にする）。origin/main参照が存在しない（一度も成功push
+#      していない）場合はlocalの全commitを「未反映」とみなし同じ判定に合流させる
+#      （初回セットアップ直後は最古commitも新しいため自然に猶予期間になる）。
+#      ローカルmainとorigin/mainが一致していれば「pushすべき差分がそもそも
+#      無い」健全な状態としてチェック対象外にする＝Vault未編集の日が続くだけで
+#      誤報しないための設計。fetchしない制約による既知の限界＝他マシン/手動
+#      操作で実際のorigin/mainがもっと進んでいるのにこのマシンのローカル参照
+#      だけが古いケースとは区別できない。
+#   ⑦-2 backup-vault.shのロック回収ミューテックス（$LOCK_FILE.reclaim）が
+#      長時間残っていないか（2026-07-14追加・Codex二次レビュー指摘・Major対応）。
+#      ⑦は「ローカルcommit済みだがpush未反映」を検知するが、回収ミューテックスが
+#      固着（前回実行のクラッシュ痕跡）するとバックアップがcommit前にfail-closedで
+#      止まり続け、⑦のrev-list判定には何も現れないまま無期限に沈黙しうる別種の
+#      穴になるため、ミューテックスディレクトリの新鮮度を直接読む（削除はしない＝
+#      読み取りのみ。解除はbackup-vault.sh自身の起動時ロジックに委ねる）。
 #
 # **fail-fast はしない**（1件でも検知したらexitさせる export-public-vault.sh とは
 # 役割が違う。本ツール自体は常にexit 0の「一覧表示するだけ」の手動確認用レポート
@@ -209,12 +261,21 @@ echo "③ repo（このリポジトリ）に未commitの変更が無いか"
 echo "======================================================================"
 
 if [ -d "$DIR/.git" ]; then
-  git_status="$(git -C "$DIR" status --porcelain 2>/dev/null || true)"
-  if [ -z "$git_status" ]; then
-    log "  -> ✅ 未commitの変更はありません"
+  # `|| true` でコマンド失敗を握りつぶすと、git自体が壊れて実行できない場合も
+  # 「出力が空＝差分なし＝健全」に混同してしまう（2026-07-14 リーダー指摘。
+  # ⑤のGH-CHECK-FAILED・⑦のVAULT-PUSH-CHECK-FAILEDと同じ「監視不能も異常」の
+  # 原則に反していた）。exit codeでコマンド失敗と「差分ゼロ件で正常終了」を
+  # 区別する。
+  if git_status="$(git -C "$DIR" status --porcelain 2>&1)"; then
+    if [ -z "$git_status" ]; then
+      log "  -> ✅ 未commitの変更はありません"
+    else
+      n=$(printf '%s\n' "$git_status" | grep -c . || true)
+      item_drift "[UNCOMMITTED] 未commitの変更が ${n} 件あります"
+      printf '%s\n' "$git_status" | sed 's/^/    /'
+    fi
   else
-    n=$(printf '%s\n' "$git_status" | grep -c . || true)
-    item_drift "[UNCOMMITTED] 未commitの変更が ${n} 件あります"
+    item_drift "[GIT-STATUS-CHECK-FAILED] git -C ${DIR} status --porcelain の実行に失敗しました（リポジトリ破損等の可能性）＝未commitの変更の有無を判定できません。確認: git -C ${DIR} status"
     printf '%s\n' "$git_status" | sed 's/^/    /'
   fi
 else
@@ -233,12 +294,20 @@ if [ ! -d "$VP_PREFS" ]; then
 elif [ ! -d "$VAULT_PREFS" ]; then
   log "  -> 実Vaultの Preferences が見つかりません（${VAULT_PREFS}）。このマシンに私的パッチが無い（サブ機）想定ならチェック対象外"
 else
-  diff_out="$(diff -rq "$VAULT_PREFS" "$VP_PREFS" 2>/dev/null || true)"
-  if [ -z "$diff_out" ]; then
+  # `diff -rq` の exit code: 0=差分なし／1=差分あり／2=読み取り不能等のエラー。
+  # 旧実装は `|| true` で握りつぶしていたため、2（エラー）も1（差分あり）も
+  # 出力が空なら「差分なし＝健全」に混同し得た（2026-07-14 リーダー指摘。
+  # 「監視不能も異常」の原則に反していた）。exit codeで3者を区別する。
+  diff_out="$(diff -rq "$VAULT_PREFS" "$VP_PREFS" 2>&1)"
+  diff_rc=$?
+  if [ "$diff_rc" -eq 0 ]; then
     log "  -> ✅ 差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
-  else
+  elif [ "$diff_rc" -eq 1 ]; then
     n=$(printf '%s\n' "$diff_out" | grep -c . || true)
     item_drift "[DIFF] 実Vault と vault-public/Preferences に差分が ${n} 件あります（export-public-vault.sh の再実行が必要な可能性）"
+    printf '%s\n' "$diff_out" | sed 's/^/    /'
+  else
+    item_drift "[DIFF-CHECK-FAILED] diff -rq ${VAULT_PREFS} ${VP_PREFS} の実行に失敗しました（exit ${diff_rc}。ファイル読み取り不能等の可能性）＝差分の有無を判定できません。確認: diff -rq ${VAULT_PREFS} ${VP_PREFS}"
     printf '%s\n' "$diff_out" | sed 's/^/    /'
   fi
 fi
@@ -358,7 +427,11 @@ for pair in "${VISIBILITY_TARGETS[@]}"; do
 
   vvisibility="$(gh repo view "${vowner_repo}" --json visibility -q .visibility 2>/dev/null || true)"
   if [ -z "${vvisibility}" ]; then
-    echo "  [GH-CHECK-FAILED] ${vlabel} (${vowner_repo}) の可視性を取得できませんでした（gh 未認証・権限不足・ネットワーク不通の可能性。'gh auth status' を確認してください）"
+    # gh は存在するのに可視性を取得できない＝監視そのものが機能していない状態。
+    # 従来はWARN表示のみでdrift件数に乗らず、private誤公開検知の安全網が無効化
+    # していても週次通知で気付けない穴があった（2026-07-13 外部脳round4対応・
+    # 「監視不能も異常」）。
+    item_drift "[GH-CHECK-FAILED] ${vlabel} (${vowner_repo}) の可視性を取得できませんでした（gh 未認証・権限不足・ネットワーク不通の可能性。'gh auth status' を確認してください）"
     continue
   fi
 
@@ -371,7 +444,7 @@ done
 
 echo
 echo "======================================================================"
-echo "⑥ vault-agents 死活チェック（棚卸し・fragments-log・reads/recallログ）"
+echo "⑥ vault-agents 死活チェック（棚卸し・fragments-log・weekly-review・reads/recallログ）"
 echo "======================================================================"
 
 # vault_inventory.py（隔週）・fragments_log.py（週次）のLaunchAgentと、
@@ -403,6 +476,13 @@ echo "======================================================================"
 # 未解決ALERTレポート出力先（FR12b／要件v2未決事項j）。knowledge_merge.py等の
 # マージ実行側が生成する想定（本ツールは読み取りのみ）。
 : "${VAULT_MERGE_ALERTS_DIR:=$HOME/.claude/logs/vault-merge-alerts}"
+# weekly-review（「今週の歩み」週次振り返りcanvas・takumi009-ai-env-private/
+# tools/weekly-review/weekly_review.py。LaunchAgent com.takumi009.weekly-review が
+# 毎週月曜04:00に無人実行。2026-07-14追加＝外部脳監視・バックアップ機構総点検で
+# 「本ツールにweekly-reviewへの言及が無く監視対象外だった」欠陥への対応）の
+# 出力先。private repo側のスクリプトと同じ既定値。
+: "${WEEKLY_REVIEW_DIR:=$VAULT/Explorations/weekly-review}"
+: "${WEEKLY_REVIEW_STALE_DAYS:=10}"      # 週次(目安7日) + 猶予（fragments-logと同型）
 # 未処理レポートの猶予日数（2026-07-11 決定・claude/hooks/bootstrap-vault.sh の
 # 未処理レポート検知と同じ判定基準＝frontmatter `processed: YYYY-MM-DD` の有無）。
 # bootstrap-vault.sh は毎セッション気づけるための一次検知、こちらは「気づいたのに
@@ -440,16 +520,25 @@ vault_agents_untouched=1
 [ -d "$VAULT_INVENTORY_LOG_DIR" ] && vault_agents_untouched=0
 [ -d "$KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR" ] && vault_agents_untouched=0
 [ -d "$VAULT_MERGE_ALERTS_DIR" ] && vault_agents_untouched=0
+# WEEKLY_REVIEW_DIR は $VAULT 配下（Vault自体は複数マシン間でgit同期される）を
+# 意図的に signal から除外している（Codexレビュー指摘・Major対応: 他の出力先
+# （$HOME/.claude/logs/... 配下）はローカル専用でマシン間同期されないが、
+# canvas出力だけはVault経由で同期されるため、reads/recallフックもweekly-review
+# LaunchAgentも一切導入していないサブ機が、単に「他マシンが生成したcanvasを
+# Vault同期で受け取っているだけ」でuntouched=0と誤判定され、reads/recallの
+# DEADが誤報される穴があった。ローカル導入の判定はweekly-review plist（下記）
+# だけで行う）。
 [ -f "$VAULT_READS_LOG" ] && vault_agents_untouched=0
 [ -f "$VAULT_RECALL_LOG" ] && vault_agents_untouched=0
 vault_agent_installed "vault-inventory" && vault_agents_untouched=0
 vault_agent_installed "fragments-log" && vault_agents_untouched=0
 vault_agent_installed "knowledge-merge-detect" && vault_agents_untouched=0
+vault_agent_installed "weekly-review" && vault_agents_untouched=0
 
 if [ ! -d "$VAULT" ]; then
   log "  -> Vaultが見つかりません（${VAULT}）。このマシンに私的Vaultが無い（サブ機）想定ならチェック対象外"
 elif [ "$vault_agents_untouched" = "1" ]; then
-  log "  -> vault-agentsの出力（${FRAGMENTS_LOG_DIR}・${VAULT_INVENTORY_LOG_DIR}・${KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR}・${VAULT_MERGE_ALERTS_DIR}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）が1件も見つかりません。vault-agentsが一度も導入されていない想定ならチェック対象外"
+  log "  -> vault-agentsの出力（${FRAGMENTS_LOG_DIR}・${VAULT_INVENTORY_LOG_DIR}・${KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR}・${VAULT_MERGE_ALERTS_DIR}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）・weekly-review plist（${LAUNCH_AGENTS_DIR}/com.takumi009.weekly-review.plist）が1件も見つかりません。vault-agentsが一度も導入されていない想定ならチェック対象外"
 else
   # epoch(秒)から現在までの経過日数を返す。未来のepoch（時計ズレ・ファイル破損）
   # では負値をそのまま返す＝呼び出し側で「未来日=異常」と判定できるようにする
@@ -460,9 +549,23 @@ else
   # `$(コマンド置換) - "$1"` のように command substitution と quoted変数展開が
   # 混在すると誤ってパースする既知の癖があるため（実測確認済み）、$1 はクォート
   # せずに渡す（値は常に数字のみなのでword-splitting等のリスクは無い）。
+  #
+  # 秒差が負（epochが未来）の場合は、単純な `秒差 / 86400` ではなく絶対値を
+  # 切り上げてから符号反転する（Codex二次レビュー指摘・Minor対応: bashの整数
+  # 除算は0方向へ丸めるため、24時間未満の未来スキュー（例: -3600秒）が
+  # `-3600/86400=0` に丸まってしまい、「未来なのに経過日数0＝健全」に誤判定
+  # されてしまっていた。1秒でも未来なら必ず負の日数〈最小-1〉を返すことで、
+  # 呼び出し側の `age < 0` によるFUTURE-DATE判定を確実に発火させる。
+  # weekly-reviewの新規mtime基準FUTURE-DATE判定にも直接影響するため合わせて修正）。
   age_days_from_epoch() {
-    local epoch=$1
-    echo $(( ( $(date -u +%s) - epoch ) / 86400 ))
+    local epoch=$1 diff future_days
+    diff=$(( $(date -u +%s) - epoch ))
+    if [ "$diff" -lt 0 ]; then
+      future_days=$(( (-diff + 86399) / 86400 ))
+      echo $(( -future_days ))
+    else
+      echo $(( diff / 86400 ))
+    fi
   }
 
   # ディレクトリ内の最新 YYYY-MM-DD.md の日付から today までの経過日数を返す
@@ -530,6 +633,117 @@ else
       item_drift "[${label}-STALE] 最新の${name}が ${age} 日前（目安 ${threshold} 日）＝com.takumi009.${agent} LaunchAgent停止の疑い。確認: launchctl list | grep ${agent}"
     else
       log "  -> ✅ ${name}: ${age}日前（目安${threshold}日以内）"
+    fi
+  }
+
+  # $VAULT/Fragments 配下（weekly_review.pyのcollect()と同じ
+  # `(VAULT/"Fragments").rglob("20*.md")`探索）に、$1(epoch秒)以降の日付の
+  # Fragmentsファイルが1件でもあるかを調べる（2026-07-14 リーダー指摘対応・
+  # 設計情報反映: weekly_review.pyは対象週にFragments記録が1件も無ければ
+  # 「skip: ... に Fragments 記録なし」として意図的にcanvasを生成しない仕様。
+  # 単純なmtime新鮮度チェックだけだと、この正常なskip（材料が無いだけ）と
+  # 実際の生成失敗〈LaunchAgent停止等〉を区別できず、①素材が無いだけの静かな週を
+  # STALE誤報する ②逆に本当に壊れているのに「そのうち動くはず」と静観してしまう、
+  # という二重の死角があった。Fragmentsの実在で「生成すべき材料があったのに
+  # 生成されなかったか」を判別する）。
+  # 戻り値: 0=記録あり（本物の異常の疑い）／1=記録なし（正常なskipの可能性）／
+  # 2=探索自体に失敗し判定不能（Codex三次レビュー指摘・Major対応: `find`が
+  # 権限不備等で失敗しても従来は出力ゼロ件＝「記録なし」と誤って同一視しており、
+  # 「監視不能も異常」の原則に反していた。呼び出し側で3値を区別する）。
+  weekly_review_fragments_exist_since() {
+    local since_epoch="$1" fdir="$VAULT/Fragments"
+    local since_date_str since_midnight_epoch find_out rc f base d_epoch found=1
+    [ -d "$fdir" ] || return 1
+    # 比較粒度をどちらも「日付」に揃える（Codex三次レビュー指摘・Major対応:
+    # Fragmentsのファイル名日付はローカル日付の0時としてepoch化される一方、
+    # 比較対象のsince_epoch（canvasの実mtime）は時刻成分を含むため、そのまま
+    # 比較すると「canvas生成と同じ日に書かれたFragment」が誤ってcanvasより古い
+    # 扱いになり、以後Fragmentが増えなければSTALEを永久に抑止しうる欠陥があった。
+    # since_epochをローカル日付の0時へ正規化し、`>=`で比較する）。
+    since_date_str="$(date -j -f "%s" "$since_epoch" +%Y-%m-%d 2>/dev/null)" || return 1
+    since_midnight_epoch="$(date -j -f "%Y-%m-%d" "$since_date_str" +%s 2>/dev/null)" || return 1
+    find_out="$(find "$fdir" -name '20*.md' -type f 2>&1)"
+    rc=$?
+    [ "$rc" -eq 0 ] || return 2
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      base="$(basename "$f" .md)"
+      d_epoch="$(date -j -f "%Y-%m-%d" "$base" +%s 2>/dev/null)" || continue
+      if [ "$d_epoch" -ge "$since_midnight_epoch" ]; then
+        found=0
+        break
+      fi
+    done <<EOF
+$find_out
+EOF
+    return "$found"
+  }
+
+  # weekly-review（週次振り返りcanvas）1件分の新鮮度判定。$1=ディレクトリ $2=しきい値(日)
+  #
+  # 棚卸し・fragments-log等（latest_report_age_days＝ファイル名の日付＝生成日）とは
+  # 判定方式を変えている。weekly_review.pyの出力ファイル名は「生成日」ではなく
+  # 「対象週（直前の完全な週）の月曜日」＝生成日の7日前固定になるため、ファイル名
+  # ベースで判定すると生成直後でも常にage=7からスタートしてしまい、latest_report_
+  # age_days/check_report_freshnessと同じしきい値運用ができない（オフセットの
+  # 分だけしきい値を余分に緩める必要が生じ、STALE等の他チェックと閾値の意味が
+  # 揃わなくなる）。かわりに最新ファイルの実際の更新時刻(mtime)を基準にする＝
+  # 生成直後はage=0、次回生成（1週間後）直前でage=7弱まで自然に増える、という
+  # fragments-log等と同じ挙動になるため、しきい値もfragments-logと同じ考え方
+  # （週次+猶予）を流用できる。
+  check_weekly_review_freshness() {
+    local dir="$1" threshold="$2" latest epoch age frag_rc
+    latest="$(ls -t "$dir"/20*.canvas 2>/dev/null | head -1)"
+    if [ -z "$latest" ]; then
+      # 一度もcanvasが無い＝LaunchAgent停止の疑いだが、Fragments自体が一度も
+      # 記録されていないなら「材料が無いのでweekly_review.py側の仕様どおり
+      # 生成されていないだけ」の可能性がある。Fragmentsの実在有無で区別する。
+      weekly_review_fragments_exist_since 0
+      frag_rc=$?
+      case "$frag_rc" in
+        0)
+          item_drift "[WEEKLY-REVIEW-DEAD] 週次振り返りcanvasが一度も見つかりません（${dir}）が、Fragments記録は存在します＝com.takumi009.weekly-review LaunchAgent停止の疑い。確認: launchctl list | grep weekly-review"
+          ;;
+        2)
+          item_drift "[WEEKLY-REVIEW-FRAGMENTS-CHECK-FAILED] ${VAULT}/Fragments の探索に失敗しました（権限不備等の可能性）＝週次振り返りcanvas未生成が正常なskipか実際の生成失敗か判定できません。確認: ls -la ${VAULT}/Fragments"
+          ;;
+        *)
+          log "  -> 週次振り返りcanvasが一度も見つかりません（${dir}）が、Fragments記録も一度も無いため、weekly_review.pyの仕様（対象週にFragments記録が無ければ生成しない）による正常な未生成の可能性があります。継続してFragmentsが記録されないままなら次回以降も同様です。"
+          ;;
+      esac
+      return
+    fi
+    epoch="$(stat -f %m "$latest" 2>/dev/null)"
+    if [ -z "$epoch" ]; then
+      item_drift "[WEEKLY-REVIEW-DEAD] ${latest} の更新時刻を取得できませんでした（ファイル破損等の可能性）。確認: ls -la ${dir}"
+      return
+    fi
+    age="$(age_days_from_epoch "$epoch")"
+    if [ "$age" -lt 0 ]; then
+      item_drift "[WEEKLY-REVIEW-FUTURE-DATE] ${latest} の更新時刻が未来です＝システム時計のズレの可能性。確認: ls -la ${dir}"
+      return
+    fi
+    if [ "$age" -gt "$threshold" ]; then
+      # 最新canvasの生成以降にFragments記録があるのに新しいcanvasが出ていない
+      # なら「生成すべき材料はあったのに生成されなかった」＝実際の生成失敗の
+      # 疑いが強い。Fragments記録自体が無いなら、weekly_review.py仕様どおりの
+      # 正常なskipが続いているだけの可能性があるため、drift扱いにはせず
+      # 情報表示に留める（誤報でこの監視自体の信頼性を落とさないため）。
+      weekly_review_fragments_exist_since "$epoch"
+      frag_rc=$?
+      case "$frag_rc" in
+        0)
+          item_drift "[WEEKLY-REVIEW-STALE] 最新の週次振り返りcanvas（$(basename "$latest")）の更新から ${age} 日経過（目安 ${threshold} 日）＝この間にFragments記録があるのに生成されていません。com.takumi009.weekly-review LaunchAgent停止の疑い。確認: launchctl list | grep weekly-review"
+          ;;
+        2)
+          item_drift "[WEEKLY-REVIEW-FRAGMENTS-CHECK-FAILED] ${VAULT}/Fragments の探索に失敗しました（権限不備等の可能性）＝最新の週次振り返りcanvasが${age}日前のままなのが正常なskipか実際の生成失敗か判定できません。確認: ls -la ${VAULT}/Fragments"
+          ;;
+        *)
+          log "  -> 週次振り返りcanvasの更新から${age}日経過していますが（目安${threshold}日）、この間Fragments記録が無いため、weekly_review.pyの仕様（対象週にFragments記録が無ければ生成しない）による正常な未生成の可能性があります。Fragments記録があるのに生成されない場合のみ異常として検知します。"
+          ;;
+      esac
+    else
+      log "  -> ✅ 週次振り返りcanvas: 更新${age}日前（目安${threshold}日以内）"
     fi
   }
 
@@ -605,22 +819,93 @@ else
   }
 
   #   $1=ディレクトリ $2=ラベル(drift種別プレフィクス) $3=しきい値(日・freshnessと同じ値を渡す) $4=表示名
+  #
+  # 2026-07-14 修正: 旧実装は「最新1件」だけを判定していた。drift-check
+  # LaunchAgentは毎週月曜9:30に実行され、レポート生成（fragments-log 月3:30・
+  # knowledge-merge-detect 月4:15）と同日実行のため、latestは本ツール実行時点で
+  # 常にage=0（当日生成）＝グレース期間(既定3日)を構造的に超えられず、過去の
+  # 未処理レポート（＝最新が処理されて入れ替わり、超過グレースのまま放置された
+  # 旧レポート）が永久に検知されない穴があった（外部脳監視・バックアップ機構
+  # 総点検で確定）。対象ディレクトリの「processedマーカー無し」全レポートを
+  # 判定対象にし、age > グレースのものを（複数あれば件数＋最古/最新パスで）
+  # drift計上するよう修正。STALE側チェック（latestの生成自体が停止している疑い。
+  # check_report_freshnessで既に報告済み）との二重報告は、latestがSTALE閾値超過
+  # している場合だけそのファイルを対象から除外することで避ける（それより古い
+  # 個々のレポートの未処理は「生成停止」とは別症状のため引き続き判定する）。
   check_report_processed() {
-    local dir="$1" label="$2" threshold="$3" name="$4" latest age
-    latest="$(ls "$dir"/20*.md 2>/dev/null | sort | tail -1)"
-    [ -z "$latest" ] && return
-    age="$(latest_report_age_days "$dir")" || return
-    [ "$age" -ge 0 ] || return
-    [ "$age" -le "$threshold" ] || return  # STALE側で既に報告済み
+    local dir="$1" label="$2" threshold="$3" name="$4"
+    local files latest latest_age
+    files="$(ls "$dir"/20*.md 2>/dev/null | sort)"
+    [ -z "$files" ] && return
+    latest="$(printf '%s\n' "$files" | tail -1)"
+    latest_age="$(latest_report_age_days "$dir" 2>/dev/null)" || latest_age=""
+    # 「latestが処理済みマーカーを持つか」は表示用に別途保持する（旧実装の
+    # ✅ ...処理済みマーカーあり メッセージを、latest以外に未処理レポートが
+    # 無い場合に限り引き続き出すため）。
+    local latest_processed=0
     if report_frontmatter "$latest" | grep -qE '^processed:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
-      log "  -> ✅ ${name}: 処理済みマーカーあり（$(basename "$latest" .md)）"
+      latest_processed=1
+    fi
+
+    local unprocessed_count=0 oldest_path="" oldest_age="" newest_path="" newest_age="" within_grace_count=0
+    # latestが新鮮度チェック側（STALEまたはFUTURE-DATE）で既に報告済みのため
+    # ここでは判定対象から除外した、というフラグ（Codexレビュー指摘・Minor対応:
+    # 当初STALEだけを見ておりFUTURE-DATE除外時にフラグが立たず、他に未処理対象が
+    # 無いと「未処理レポートなし」という事実と異なる健全表示になっていた）。
+    local latest_skipped_by_freshness_check=0
+    local f base epoch age
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      base="$(basename "$f" .md)"
+      epoch="$(date -j -f "%Y-%m-%d" "$base" +%s 2>/dev/null)" || continue
+      age="$(age_days_from_epoch "$epoch")"
+      if [ "$age" -lt 0 ]; then
+        # FUTURE-DATEはfreshness側で既に報告済み。二重報告しない。
+        [ "$f" = "$latest" ] && latest_skipped_by_freshness_check=1
+        continue
+      fi
+      if [ "$f" = "$latest" ] && [ -n "$latest_age" ] && [ "$latest_age" -gt "$threshold" ]; then
+        latest_skipped_by_freshness_check=1
+        continue  # 生成自体が停止している疑い＝STALE側で既に報告済み。ここでは二重報告しない
+      fi
+      if report_frontmatter "$f" | grep -qE '^processed:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
+        continue
+      fi
+      if [ "$age" -gt "$UNPROCESSED_REPORT_GRACE_DAYS" ]; then
+        unprocessed_count=$((unprocessed_count + 1))
+        if [ -z "$oldest_path" ]; then
+          oldest_path="$f"
+          oldest_age="$age"
+        fi
+        newest_path="$f"
+        newest_age="$age"
+      else
+        within_grace_count=$((within_grace_count + 1))
+      fi
+    done <<EOF
+$files
+EOF
+
+    if [ "$unprocessed_count" -gt 0 ]; then
+      # 表示は日付のみではなくフルパス（本人がそのまま開けるように・2026-07-12追加）。
+      item_drift "[${label}-UNPROCESSED] ${name}に未処理（frontmatterの processed: 行が無い）レポートが${unprocessed_count}件あります（目安 ${UNPROCESSED_REPORT_GRACE_DAYS} 日超）。最古: ${oldest_path}（${oldest_age}日前）／最新: ${newest_path}（${newest_age}日前）。次回セッションで確認・処理してください。"
       return
     fi
-    if [ "$age" -gt "$UNPROCESSED_REPORT_GRACE_DAYS" ]; then
-      # 表示は日付のみではなくフルパス（本人がそのまま開けるように・2026-07-12追加）。
-      item_drift "[${label}-UNPROCESSED] 最新の${name}（${latest}）が生成から${age}日経過してもリーダーに処理された形跡（frontmatterの processed: 行）がありません（目安 ${UNPROCESSED_REPORT_GRACE_DAYS} 日）。次回セッションで確認・処理してください。"
+    # 以下、優先順位を明示的に分岐する（Codexレビュー指摘・Minor対応:
+    # 「処理済み」と「他に猶予期間内の未処理がある」が両立する場合に片方だけを
+    # 表示すると情報が欠落する。また、latestがSTALE除外（上のループでskip）された
+    # 結果たまたま他に対象が無い場合、単純な優先順位だけだと「未処理レポートなし」
+    # という事実と異なるメッセージになり得るため専用の分岐を用意する）。
+    if [ "$latest_processed" -eq 1 ] && [ "$within_grace_count" -gt 0 ]; then
+      log "  -> ${name}: 処理済みマーカーあり（$(basename "$latest" .md)）／他に未処理のレポートが${within_grace_count}件ありますが猶予期間内です（目安${UNPROCESSED_REPORT_GRACE_DAYS}日以内）"
+    elif [ "$latest_processed" -eq 1 ]; then
+      log "  -> ✅ ${name}: 処理済みマーカーあり（$(basename "$latest" .md)）"
+    elif [ "$within_grace_count" -gt 0 ]; then
+      log "  -> ${name}: 未処理のレポートが${within_grace_count}件ありますが猶予期間内です（目安${UNPROCESSED_REPORT_GRACE_DAYS}日以内）"
+    elif [ "$latest_skipped_by_freshness_check" -eq 1 ]; then
+      log "  -> ${name}: 最新レポートは新鮮度チェック側（STALEまたはFUTURE-DATE）で既に報告済みのため、未処理判定はここでは保留します"
     else
-      log "  -> ${name}: 未処理（生成から${age}日・目安${UNPROCESSED_REPORT_GRACE_DAYS}日以内は許容）"
+      log "  -> ✅ ${name}: 未処理レポートなし"
     fi
   }
 
@@ -648,6 +933,11 @@ else
   else
     log "  -> Knowledge統合候補レポート: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.knowledge-merge-detect.plist が無い。scripts/install-vault-agents.sh 未実行）のためチェック対象外"
   fi
+  if vault_agent_installed "weekly-review"; then
+    check_weekly_review_freshness "$WEEKLY_REVIEW_DIR" "$WEEKLY_REVIEW_STALE_DAYS"
+  else
+    log "  -> 週次振り返りcanvas: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.weekly-review.plist が無い。takumi009-ai-env-private/install-private.sh --with-launchagents 未実行。メイン専用の個人ツール）のためチェック対象外"
+  fi
   # 未解決ALERT（FR12b・要件v2未決事項j）。棚卸し/fragments-log/knowledge-merge-
   # candidatesのような「定期生成物の新鮮度」チェックとは性質が異なる（ALERTは
   # イベント駆動＝正常時は1件も生成されない）ため、plist導入有無に関わらず
@@ -667,6 +957,178 @@ else
   check_log_freshness "$VAULT_RECALL_LOG" "VAULT-RECALL-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
     "vault-recall.tsv" "claude/hooks/vault-recall.sh" \
     "、またはヒット0件の日々が続いている可能性（ヒット時のみ記録する仕様のため区別できません）"
+fi
+
+echo
+echo "======================================================================"
+echo "⑦ Vaultバックアップの push 死活（main と origin/main の乖離）"
+echo "======================================================================"
+
+# しきい値・対象ブランチ名は環境変数で上書き可（ユニットテスト用。本番は既定値
+# のままでよい。VaultはREADME.md記載の運用どおり main ブランチを使う想定）。
+: "${VAULT_BACKUP_PUSH_STALE_HOURS:=24}"
+: "${VAULT_BACKUP_BRANCH:=main}"
+
+if [ ! -d "$VAULT/.git" ]; then
+  log "  -> Vaultがgit管理下にありません（${VAULT}）。このマシンに私的Vaultが無い（サブ機）想定ならチェック対象外"
+elif ! git -C "$VAULT" remote get-url origin >/dev/null 2>&1; then
+  log "  -> remote 'origin' が未設定のためチェック対象外（${VAULT}）"
+elif ! git -C "$VAULT" rev-parse --verify "${VAULT_BACKUP_BRANCH}" >/dev/null 2>&1; then
+  # ローカルブランチ自体が無い（Vaultにまだ1つもcommitが無い等）＝判定材料が
+  # そもそも無い。drift にはせずfail-openで明示表示する。
+  echo "  [VAULT-PUSH-CHECK-UNAVAILABLE] ローカルブランチ '${VAULT_BACKUP_BRANCH}' が見つかりません（Vaultにまだ1つもcommitが無い等の可能性。判定不能のためfail-open。確認: git -C ${VAULT} branch -a）"
+else
+  # 「push未反映のcommit」を rev-list の二点範囲(A..B)で厳密に求める（Codexレビュー
+  # 指摘・Major対応: 従来は local/origin のSHAが一致するかしか見ておらず、
+  # ローカルがorigin/mainより単に古い（＝reset等で巻き戻った）場合まで
+  # 「未反映commitあり」と誤検知しうる欠陥があった。rev-listなら
+  # 「originに無くlocalにあるcommit」だけを厳密に数えられ、逆方向の乖離は
+  # 自然に0件になる）。
+  if git -C "$VAULT" rev-parse --verify "origin/${VAULT_BACKUP_BRANCH}" >/dev/null 2>&1; then
+    unpushed_range="origin/${VAULT_BACKUP_BRANCH}..${VAULT_BACKUP_BRANCH}"
+    never_pushed=0
+  else
+    # origin/<branch> 参照自体が無い＝このマシンから一度も成功pushしていない
+    # （ブランチ自体はある）。従来はここをfail-open即終了にしていたが、初回pushが
+    # 認証不良等でずっと失敗し続けている最も危険なケースが永久に検知されない穴が
+    # あった（Codexレビュー指摘・Major対応）。「全commitが未反映」とみなし、
+    # 以下の経過時間判定にそのまま合流させる（=既存のSTALE猶予がそのまま
+    # 初回セットアップ直後の猶予にもなる）。
+    unpushed_range="${VAULT_BACKUP_BRANCH}"
+    never_pushed=1
+  fi
+
+  # rev-list自体の失敗（Vaultのgitオブジェクト破損等）と「未反映commitが0件」を
+  # 区別する（Codexレビュー指摘・Major対応: `|| true` で握りつぶすと、コマンド失敗も
+  # 空出力も同じ「健全」表示になってしまい、⑤のGH-CHECK-FAILEDと同じ「監視不能も
+  # 異常」の原則に反する）。
+  if ! unpushed_shas="$(git -C "$VAULT" rev-list "$unpushed_range" 2>/dev/null)"; then
+    item_drift "[VAULT-PUSH-CHECK-FAILED] git rev-list ${unpushed_range} の実行に失敗しました（Vaultのgitリポジトリ破損等の可能性）＝push死活を判定できません。確認: git -C ${VAULT} fsck"
+  elif [ -z "$unpushed_shas" ]; then
+    if [ "$never_pushed" = "1" ]; then
+      echo "  [VAULT-PUSH-CHECK-UNAVAILABLE] 判定材料が不足しています（${VAULT_BACKUP_BRANCH}に有効なcommitがありません）。判定不能のためfail-open"
+    else
+      # rev-listが空＝「originに無くlocalにあるcommit」は無い、という意味であり、
+      # localとorigin/mainが同一コミットとは限らない（localがorigin/mainより
+      # 単に遅れている＝reset等で巻き戻った場合も同じく空になる。Codexレビュー
+      # 指摘・Minor対応: 以前は無条件に「同一コミット」と表示しており、巻き戻り
+      # ケースでは事実と異なるメッセージになっていた）。
+      local_sha="$(git -C "$VAULT" rev-parse --verify "${VAULT_BACKUP_BRANCH}" 2>/dev/null || true)"
+      origin_sha="$(git -C "$VAULT" rev-parse --verify "origin/${VAULT_BACKUP_BRANCH}" 2>/dev/null || true)"
+      if [ -n "$local_sha" ] && [ "$local_sha" = "$origin_sha" ]; then
+        log "  -> ✅ ${VAULT_BACKUP_BRANCH} と origin/${VAULT_BACKUP_BRANCH} は同一コミット（push未反映の差分なし）"
+      else
+        log "  -> ✅ ${VAULT_BACKUP_BRANCH} に origin/${VAULT_BACKUP_BRANCH} へ未反映のcommitはありません（push未反映の差分なし。ローカルがorigin/${VAULT_BACKUP_BRANCH}より遅れているだけの可能性があります）"
+      fi
+    fi
+  else
+    # 未反映commit全件のコミット時刻を取り、最も古い（最小epoch）ものをSTALE判定の
+    # 基準に、最も新しい（最大epoch）ものをFUTURE-DATE判定の基準にする（Codex
+    # レビュー指摘・Major対応: `git rev-list` の出力順は履歴の走査順であり厳密な
+    # 時刻降順ではないため、末尾(tail -1)を素朴に「最古」と仮定すると、
+    # merge/cherry-pick等でコミット時刻が非単調な場合に誤ったcommitを基準にしうる。
+    # 最小epochだけで判定すると、複数の未反映commitのうち一部だけが未来日時でも
+    # 見逃す＝最大epochも別途追跡して未来判定に使う＝Codex二次レビュー指摘・
+    # Major再対応）。個々の `git log` 取得が1件でも失敗した場合は、部分的な情報で
+    # 誤った健全/STALE判定をしないよう監視不能のdriftとして扱う（Codex二次レビュー
+    # 指摘・Minor対応: 従来は失敗したSHAを黙ってスキップし、残りだけで判定を続行
+    # していた）。
+    oldest_epoch=""
+    oldest_unpushed_sha=""
+    newest_epoch=""
+    newest_unpushed_sha=""
+    epoch_fetch_failed=0
+    while IFS= read -r sha; do
+      [ -z "$sha" ] && continue
+      if ! epoch="$(git -C "$VAULT" log -1 --format=%ct "$sha" 2>/dev/null)" || [ -z "$epoch" ]; then
+        epoch_fetch_failed=1
+        continue
+      fi
+      if [ -z "$oldest_epoch" ] || [ "$epoch" -lt "$oldest_epoch" ]; then
+        oldest_epoch="$epoch"
+        oldest_unpushed_sha="$sha"
+      fi
+      if [ -z "$newest_epoch" ] || [ "$epoch" -gt "$newest_epoch" ]; then
+        newest_epoch="$epoch"
+        newest_unpushed_sha="$sha"
+      fi
+    done <<EOF
+$unpushed_shas
+EOF
+    never_pushed_note=""
+    [ "$never_pushed" = "1" ] && never_pushed_note="（一度も成功pushしていない可能性）"
+    if [ "$epoch_fetch_failed" = "1" ]; then
+      item_drift "[VAULT-PUSH-CHECK-FAILED] 未反映commitの一部でコミット時刻を取得できませんでした（Vaultのgitリポジトリ破損等の可能性）＝push死活を正しく判定できません。確認: git -C ${VAULT} log ${unpushed_range} --oneline"
+    elif [ -z "$oldest_epoch" ]; then
+      echo "  [VAULT-PUSH-CHECK-UNAVAILABLE] 未反映commitのコミット時刻を取得できませんでした（判定不能のためfail-open）"
+    else
+      now_epoch="$(date -u +%s)"
+      if [ "$newest_epoch" -gt "$now_epoch" ]; then
+        item_drift "[VAULT-PUSH-FUTURE-DATE] 未反映commit(${newest_unpushed_sha:0:8})のコミット時刻が未来です${never_pushed_note}＝システム時計のズレの可能性。確認: git -C ${VAULT} log ${unpushed_range} --oneline"
+      else
+        # 秒単位のまま閾値比較する（Codexレビュー指摘・Minor対応: 先に時間へ
+        # 切り捨ててから比較すると、24時間ちょうど〜24時間59分が非driftになる
+        # 境界漏れがあった）。表示用の時間数は参考値として別途丸める。
+        age_seconds=$(( now_epoch - oldest_epoch ))
+        threshold_seconds=$(( VAULT_BACKUP_PUSH_STALE_HOURS * 3600 ))
+        age_hours_display=$(( age_seconds / 3600 ))
+        if [ "$age_seconds" -gt "$threshold_seconds" ]; then
+          item_drift "[VAULT-PUSH-STALE] ${VAULT_BACKUP_BRANCH} に origin/${VAULT_BACKUP_BRANCH} へ未反映のcommitがあり、最も古い未反映commitから ${age_hours_display} 時間経過しています（目安 ${VAULT_BACKUP_PUSH_STALE_HOURS} 時間）${never_pushed_note}＝vault-backupのpushが詰まっている疑い。確認: tail -50 /tmp/vault-backup.log 、git -C ${VAULT} log ${unpushed_range} --oneline （fetchしていないローカル参照のみでの判定のため、他マシンからの直接pushやfetch不足など他要因の可能性も含む＝上部コメント参照）"
+        else
+          log "  -> ${VAULT_BACKUP_BRANCH} は origin/${VAULT_BACKUP_BRANCH} より進んでいますが、最も古い未反映commitから ${age_hours_display} 時間（目安${VAULT_BACKUP_PUSH_STALE_HOURS}時間以内）のため様子見です${never_pushed_note}"
+        fi
+      fi
+    fi
+  fi
+fi
+
+echo
+echo "⑦-2. scripts/backup-vault.sh のロック回収ミューテックス固着チェック"
+# 2026-07-14 追加（Codex二次レビュー指摘・Major対応）。backup-vault.shの
+# stale判定〜片付け〜再作成を1プロセスに直列化するmkdir排他ミューテックス
+# （$LOCK_FILE.reclaim）は、旧来あった自己修復（stat mtime→rmdir）を
+# 撤去しfail-closed設計にした（自己修復自体が別のABAレースを招くため。
+# scripts/backup-vault.shのコメント参照）。そのため前回実行がミューテックス
+# 保持中にクラッシュ（kill -9・電源断等）した極めて稀なケースでは、以後の
+# バックアップがcommit前にfail-closedし続け無期限に止まりうる。commitが
+# 1件も作られない＝上の⑦（ローカルcommitとorigin/mainの乖離）はrev-listが
+# 常に空のままのため、この固着を検知できない別種の穴になる。読み取りのみ
+# （削除はしない＝解除の判断はbackup-vault.sh自身の起動時ロジックに委ね、
+# ここでABAレースを再導入しない）。
+: "${VAULT_BACKUP_LOCK_FILE:=${TMPDIR:-/tmp}/aienv-backup-vault.lock}"
+: "${VAULT_BACKUP_RECLAIM_STUCK_MINUTES:=10}"  # 回収区間は通常一瞬で完了するため、10分残っていれば固着とみなす
+VAULT_BACKUP_RECLAIM_DIR="${VAULT_BACKUP_LOCK_FILE}.reclaim"
+if [ -d "$VAULT_BACKUP_RECLAIM_DIR" ]; then
+  if reclaim_mtime=$(stat -f %m "$VAULT_BACKUP_RECLAIM_DIR" 2>/dev/null) || \
+     reclaim_mtime=$(stat -c %Y "$VAULT_BACKUP_RECLAIM_DIR" 2>/dev/null); then
+    reclaim_now_epoch="$(date -u +%s)"
+    if [ "$reclaim_mtime" -gt "$reclaim_now_epoch" ]; then
+      # mtimeが未来＝システム時計のズレかファイル破損の可能性（Codex三次レビュー
+      # 指摘・Minor対応: 未来mtimeだと経過分数が負になり「-N分前・様子見」という
+      # 健全表示に誤判定されていた＝他の新鮮度チェックと同じ下限ガードを揃える）。
+      item_drift "[VAULT-BACKUP-LOCK-FUTURE-DATE] ${VAULT_BACKUP_RECLAIM_DIR} の更新時刻が未来です＝システム時計のズレかファイル破損の可能性。確認: ls -la ${VAULT_BACKUP_RECLAIM_DIR}"
+    else
+      reclaim_age_minutes=$(( ( reclaim_now_epoch - reclaim_mtime ) / 60 ))
+      if [ "$reclaim_age_minutes" -ge "$VAULT_BACKUP_RECLAIM_STUCK_MINUTES" ]; then
+        item_drift "[VAULT-BACKUP-LOCK-STUCK] backup-vault.shのロック回収ミューテックス（${VAULT_BACKUP_RECLAIM_DIR}）が${reclaim_age_minutes}分前から残っています（目安${VAULT_BACKUP_RECLAIM_STUCK_MINUTES}分）＝前回実行が回収処理中にクラッシュし、以後のバックアップがcommit前にfail-closedし続けている疑い。確認: tail -50 /tmp/vault-backup.log 。解消方法: 実行中のbackup-vault.shプロセスが無いことを確認してから rmdir ${VAULT_BACKUP_RECLAIM_DIR}"
+      else
+        log "  -> ロック回収ミューテックスは${reclaim_age_minutes}分前から存在しますが、目安${VAULT_BACKUP_RECLAIM_STUCK_MINUTES}分以内のため様子見です（backup-vault.sh実行中の可能性）"
+      fi
+    fi
+  elif [ -d "$VAULT_BACKUP_RECLAIM_DIR" ]; then
+    # statが失敗したのにディレクトリはまだ存在する＝mtime取得不能の異常
+    # （権限不備・ファイルシステム異常等）。`echo 0` でepoch0(1970年)に
+    # フォールバックすると「大昔から固着」に化けて誤ってSTUCK扱いになるため
+    # （Codex三次レビュー指摘・Minor対応）、監視不能として別種別で報告する。
+    item_drift "[VAULT-BACKUP-LOCK-CHECK-FAILED] ${VAULT_BACKUP_RECLAIM_DIR} の更新時刻を取得できませんでした（権限不備等の可能性）＝固着しているかどうか判定できません。確認: ls -la ${VAULT_BACKUP_RECLAIM_DIR}"
+  else
+    # statの実行〜再確認の間にディレクトリが消えた＝backup-vault.sh側が
+    # 正常に片付け終えただけ（健全）。stat失敗を「消えていた」と誤ってSTUCK
+    # 扱いにしない（同じくCodex三次レビュー指摘・Minor対応）。
+    log "  -> ✅ ロック回収ミューテックスは残っていません（確認中に解消されました）"
+  fi
+else
+  log "  -> ✅ ロック回収ミューテックスは残っていません"
 fi
 
 echo

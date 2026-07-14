@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """外部脳(Obsidian Vault)の想起フック(claude/hooks/vault-recall.sh)を自動採点するハーネス。
 
+使い方一覧＝Vault: Knowledge/tools-inventory.md／運用導線＝Projects/vault-hybrid-search.md
+正本ベンチ＝ai-env-private docs/vault-recall-benchmark.tsv（27問）
+
 背景: 敵対的レビュー(vault-adversarial-review-2026-07-10.md C-1)により、想起フックの
 ヒット率が「机上シミュレーション」でしか測られていないことが指摘された。改善(alias棚卸し・
 照合方式の改修)を進めるための唯一の計器として、実フックを実際に叩いて実測する。
@@ -14,8 +17,8 @@
   空行・`#`始まりの行はコメントとしてskip。
 
 オーバーレイ機能（--alias-overlay）: Vaultを一切書き換えずに「aliasを足したら
-ヒット率がどう変わるか」を試すための機能。Vaultの想起対象4フォルダ(Knowledge/
-Preferences/Decisions/Projects)だけを一時ディレクトリへコピーし、そこへ
+ヒット率がどう変わるか」を試すための機能。Vaultの想起対象5フォルダ(SCAN_DIRS＝
+Knowledge/Preferences/Decisions/Projects/Personal)だけを一時ディレクトリへコピーし、そこへ
 apply_aliases.py の process_note()（同じロジックを再利用・重複実装しない）で
 overlay TSV のaliasを適用してから、VAULT_RECALL_VAULT をその一時ディレクトリに
 向けてフックを叩く。実Vaultは最初から最後まで一切書き込まない。
@@ -47,12 +50,29 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 DEFAULT_VAULT = pathlib.Path.home() / "Data" / "obsidian"
 DEFAULT_HOOK = REPO_ROOT / "claude" / "hooks" / "vault-recall.sh"
 
-# 想起フック自身の SCAN_DIRS（claude/hooks/vault-recall.sh:33）と同じ並び。
-# オーバーレイ用の一時Vaultはこの4フォルダだけコピーすれば十分（照合ロジックの
-# 実行自体は実物のフックがそのまま行うため、ここでは「コピー範囲」の話でしかない）。
-SCAN_DIRS = ("Knowledge", "Preferences", "Decisions", "Projects")
+# 想起フックが実際に使う SCAN_DIRS（keyword_recall_helper.py:62。8.2ラウンドの
+# 統一リファクタリングでキーワード照合ロジックがclaude/hooks/vault-recall.shから
+# こちらへ移植された・vault-recall.sh自体は薄い殻でSCAN_DIRSを持たない）と同じ並び。
+# 2026-07-11のPersonal想起対象化（Decisions/2026-07-11-personal-recall-scope）で
+# 5フォルダになっている。オーバーレイ用の一時Vaultはこの5フォルダだけコピーすれば
+# 十分（照合ロジックの実行自体は実物のフックがそのまま行うため、ここでは
+# 「コピー範囲」の話でしかない）。
+SCAN_DIRS = ("Knowledge", "Preferences", "Decisions", "Projects", "Personal")
 
-MAX_CANDIDATES = 5          # 想起フックが提示する候補の上限（vault-recall.sh:294の5と同じ）
+# 想起フックが実際に提示しうる候補数の上限（2026-07-14修正・外部脳の想起・ベンチ
+# 機構の総点検・Codex gpt-5.6-sol検証済み欠陥の是正）。
+# 従来はMAX_CANDIDATES=5のみで、キーワード枠(先頭5件)しか勘定しておらず、
+# vault-recall.sh側が実際に返しうるベクトル追加枠（キーワード候補に無いものだけ・
+# 最大3件・MAX_VECTOR_EXTRA）を採点時点で切り捨てていた。結果、ベクトル追加枠経由
+# でしかヒットしない質問が採点上falseにされうる過小評価バグだった。
+# フック本体の実値（vault-recall.sh: キーワード枠は`MAX_KEYWORD_CANDIDATES=5`／
+# ベクトル追加枠は`MAX_VECTOR_EXTRA=3`、いずれも名前付き定数・2026-07-14修正で
+# `SELECTED_IDX`構築ループのリテラル`5`から切り出した）と食い違わないよう、
+# tests/test-recall-bench.sh がこれら2定数の定義行をフック本体からgrep抽出して一致
+# 検証する（SSOT: 値の変更はフック本体側を先に直し、ここは追随するだけにする）。
+MAX_KEYWORD_CANDIDATES = 5       # キーワード枠の上限
+MAX_VECTOR_EXTRA_CANDIDATES = 3  # ベクトル追加枠（キーワード候補と重複しないもの）の上限
+MAX_CANDIDATES = MAX_KEYWORD_CANDIDATES + MAX_VECTOR_EXTRA_CANDIDATES  # 実際に提示されうる合計上限(8)
 DEFAULT_HOOK_TIMEOUT = 5.0  # 秒。実運用のフック側timeout(settings.json=2秒)より余裕を持たせる
                              # （ベンチ実行環境のプロセス起動オーバーヘッド込みで測るため）。
 
@@ -103,47 +123,131 @@ def parse_bench_tsv(path):
 def build_overlay_vault(vault_root, overlay_path):
     """SCAN_DIRSだけを一時ディレクトリへコピーし、overlay TSVのaliasを適用して返す。
     実Vault(vault_root)は一切書き込まない。呼び出し側が使用後に必ずrmtreeすること。
+
+    途中で例外（TSV読込失敗・generic-aliases.txt欠落等）が起きた場合は、既に作成済みの
+    一時ディレクトリを自分で片付けてから再送出する（2026-07-14修正・Codexレビュー指摘・
+    Minor: 従来は呼び出し側main()がoverlay_dir変数へ代入する前に例外を送出すると、
+    tmp_dirが誰にも参照されないまま残ってしまっていた＝作成済みの一時Vaultコピーが
+    リークするだけで実Vaultへの実害は無いが、3年ノーメンテ運用での/tmp肥大化を避ける）。
     """
     tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="recall-bench-vault-"))
-    tmp_resolved = tmp_dir.resolve()
-    for d in SCAN_DIRS:
-        src = vault_root / d
-        if src.is_dir():
-            shutil.copytree(src, tmp_dir / d)
+    try:
+        tmp_resolved = tmp_dir.resolve()
+        for d in SCAN_DIRS:
+            src = vault_root / d
+            if src.is_dir():
+                shutil.copytree(src, tmp_dir / d)
 
-    rows = apply_aliases.parse_tsv(str(overlay_path))
-    generic_words = apply_aliases.load_generic_aliases()
-    today = datetime.date.today().isoformat()
-    applied = skipped = 0
-    for relpath, aliases in rows:
-        # overlay TSVの相対パスが絶対パス・"../"・symlink等で一時Vaultの外を指していても
-        # 書き換えないようにする（Codexレビュー指摘・Critical: apply_aliases.py本体の
-        # resolve()+relative_to()チェックはmain()内にしか無く、process_note()自体は
-        # パス検証をしない純粋関数のため、呼び出し側=ここで独立に必ず確認する）。
-        candidate = tmp_dir / relpath
-        try:
-            resolved = candidate.resolve()
-            resolved.relative_to(tmp_resolved)
-        except (OSError, ValueError):
-            print(f"WARN: overlay対象パスが一時Vaultの外を指しているためskipします: {relpath}", file=sys.stderr)
-            skipped += 1
+        rows = apply_aliases.parse_tsv(str(overlay_path))
+        # generic-aliases.txtが欠落/空のまま続行しない（fail-closed・2026-07-14修正・
+        # Codex一次レビュー指摘・Major: apply_aliases.py本体はmain()でfail-closed化
+        # 済みだが、load_generic_aliases()自体は「無ければ空集合」を返す純粋関数のため、
+        # ここで直接それを呼ぶと本来skipすべき汎用aliasがオーバーレイへ紛れ込み、誤った
+        # 採点結果を生みかねない。apply_aliases.require_generic_aliases()へ差し替え、
+        # fail-closedの判定を1箇所に集約する）。
+        generic_words = apply_aliases.require_generic_aliases()
+        today = datetime.date.today().isoformat()
+        applied = skipped = 0
+        for relpath, aliases in rows:
+            # overlay TSVの相対パスが絶対パス・"../"・symlink等で一時Vaultの外を指していても
+            # 書き換えないようにする（Codexレビュー指摘・Critical: apply_aliases.py本体の
+            # resolve()+relative_to()チェックはmain()内にしか無く、process_note()自体は
+            # パス検証をしない純粋関数のため、呼び出し側=ここで独立に必ず確認する）。
+            candidate = tmp_dir / relpath
+            try:
+                resolved = candidate.resolve()
+                resolved.relative_to(tmp_resolved)
+            except (OSError, ValueError):
+                print(f"WARN: overlay対象パスが一時Vaultの外を指しているためskipします: {relpath}", file=sys.stderr)
+                skipped += 1
+                continue
+            if not resolved.is_file():
+                print(f"WARN: overlay対象ノートが一時Vaultに見つかりません（コピー範囲外か存在しない）: {relpath}",
+                      file=sys.stderr)
+                skipped += 1
+                continue
+            text = resolved.read_text(encoding="utf-8")
+            result = apply_aliases.process_note(text, aliases, generic_words, today)
+            if result["error"]:
+                print(f"WARN: overlay適用失敗 {relpath}: {result['error']}", file=sys.stderr)
+                skipped += 1
+                continue
+            if result["changed"]:
+                # apply_aliases.write_note_atomic()を再利用（2026-07-14修正・リーダー指示
+                # apply_aliases.py:307のatomic化と同じ理由。ここは一時コピーへの書込みで
+                # 実害は小さいが、process_note()等と同様にロジック重複を避けるため共通化する）。
+                apply_aliases.write_note_atomic(resolved, result["new_text"])
+                applied += 1
+        print(f"overlay適用: {applied}件（skip {skipped}件） ※一時コピーのみ・実Vaultは無変更", file=sys.stderr)
+        return tmp_dir
+    except BaseException:
+        # require_generic_aliases()のsys.exit(1)（SystemExit＝BaseExceptionのみ捕捉されExceptionでは
+        # 捕捉されない）も含めて確実に一時ディレクトリを片付けてから再送出する。
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+# vault-recall.sh のログ契約（claude/hooks/vault-recall.sh log_error()/log_fact()）:
+# ERROR行は `log_row "ERROR\t\t${SESSION_ID:-}\t$1[\t${LOG_LEVEL_INFO}]"` として書かれ、
+# log_row()自身がさらに先頭へ"$ts\t"を付ける。tabで分割すると
+# [ts, "ERROR", "", session_id, message, (level省略可)] の5〜6列になる（3列目=空文字は
+# vault_inventory.py側の「3列目=ノート相対パス」パーサに誤集計させないための意図的な
+# 空欄・同ファイルの該当コメント参照）。fail-openの検知はこの2列目（0-indexで1）が
+# 固定文字列"ERROR"かどうかで判定する。
+LOG_ERROR_MARKER_COL = 1     # 0-indexでの列位置（"ERROR"固定文字列）
+LOG_ERROR_MESSAGE_COL = 4    # 0-indexでの列位置（エラーメッセージ本文）
+
+# ERROR行の中には「真の失敗(fail-open)」ではなく「パイプラインが正常完走した上での
+# 事実記録」（claude/hooks/vault-recall.sh log_fact()・削除済みノートのベクトル残存
+# 除外/読取不可ノート件数）が混在する。2026-07-14修正・外部脳の想起・ベンチ機構の
+# 総点検: 従来はこの区別をメッセージ本文の部分一致(BENIGN_ERROR_MARKER)だけで行って
+# おり、しかもこのマーカーは削除済みノート残存の1ケースしかカバーしておらず
+# （読取不可ノート件数のメッセージは非該当のためfail-open扱いされてしまう漏れが
+# あった）、hook側の文言が変わると無言で判定が壊れる脆い状態だった。log_fact()は
+# 6列目に固定文字列"INFO"(LOG_LEVEL_INFO_VALUE)を付与するため、ここでも文言では
+# なく列の値で判定する（フォーマットベースの判別へ置換・Codex一次レビュー指摘）。
+# 列が無い（6列未満）場合は従来どおり真の失敗として扱う（fail-closed寄りの安全側＝
+# 新形式を出せない壊れたhookを誤って無害と判定しない）。
+LOG_LEVEL_COL = 5            # 0-indexでの列位置（"INFO"なら正常完走時の事実記録）
+LOG_LEVEL_INFO_VALUE = "INFO"
+
+
+def _read_new_error_rows(log_path, offset_before):
+    """log_pathのoffset_beforeバイト以降に追記された行のうち、vault-recall.shの
+    log_error()契約（上記LOG_ERROR_MARKER_COL列が"ERROR"固定文字列）に一致する行の
+    メッセージ一覧を返す。log_fact()由来の行（LOG_LEVEL_COL列がLOG_LEVEL_INFO_VALUE・
+    実際にはfail-openではない正常完走時の事実記録）は除外する。
+
+    戻り値はメッセージのリスト、またはログ読み取り自体に失敗した場合はNone
+    （空リスト=「検査したがERROR行は無かった」とNone=「検査できなかった」を
+    呼び出し側が区別できるようにする・Codex一次レビュー指摘・Major: 読み取り失敗を
+    空リストへフォールバックすると、ログ検査が機能しない状況を静かに「fail-open
+    なし」と誤認してしまい、このハーネス自体が無言のfail-openになる）。
+
+    offset_beforeはos.path.getsize()由来のバイト数のため、text modeの
+    seek()（0以外はtell()が返したcookieでなければ未定義動作）ではなくバイナリ
+    modeで開いてseekし、読み取ったバイト列を最後にUTF-8としてdecodeする
+    （Codex一次レビュー指摘・Major: text modeへ生のバイトoffsetを渡すのは
+    移植性が無く、環境によってはValueErrorで落ちうる）。
+    """
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(offset_before)
+            new_bytes = f.read()
+    except OSError:
+        return None
+    new_text = new_bytes.decode("utf-8", errors="replace")
+    messages = []
+    for line in new_text.splitlines():
+        if not line:
             continue
-        if not resolved.is_file():
-            print(f"WARN: overlay対象ノートが一時Vaultに見つかりません（コピー範囲外か存在しない）: {relpath}",
-                  file=sys.stderr)
-            skipped += 1
-            continue
-        text = resolved.read_text(encoding="utf-8")
-        result = apply_aliases.process_note(text, aliases, generic_words, today)
-        if result["error"]:
-            print(f"WARN: overlay適用失敗 {relpath}: {result['error']}", file=sys.stderr)
-            skipped += 1
-            continue
-        if result["changed"]:
-            resolved.write_text(result["new_text"], encoding="utf-8")
-            applied += 1
-    print(f"overlay適用: {applied}件（skip {skipped}件） ※一時コピーのみ・実Vaultは無変更", file=sys.stderr)
-    return tmp_dir
+        cols = line.split("\t")
+        if len(cols) > LOG_ERROR_MARKER_COL and cols[LOG_ERROR_MARKER_COL] == "ERROR":
+            if len(cols) > LOG_LEVEL_COL and cols[LOG_LEVEL_COL] == LOG_LEVEL_INFO_VALUE:
+                continue  # log_fact()由来＝正常完走時の事実記録（真の失敗ではない）
+            msg = cols[LOG_ERROR_MESSAGE_COL] if len(cols) > LOG_ERROR_MESSAGE_COL else "(メッセージ列なし)"
+            messages.append(msg)
+    return messages
 
 
 def run_hook(hook_path, vault_dir, prompt, session_id, log_path, timeout):
@@ -156,6 +260,17 @@ def run_hook(hook_path, vault_dir, prompt, session_id, log_path, timeout):
     env = os.environ.copy()
     env["VAULT_RECALL_VAULT"] = str(vault_dir)
     env["VAULT_RECALL_LOG"] = str(log_path)
+
+    # このクエリの呼び出し前のログサイズを記録しておき、このクエリ中に追記された行
+    # だけを検査対象にする（2026-07-14修正・リーダー指示: VAULT_RECALL_LOGをフックへ
+    # 渡すだけで一度も読まずに削除していたバグの是正）。score()は全クエリで同じ
+    # log_pathを使い回すが、呼び出しは逐次実行（並行実行しない）のため、オフセット
+    # 方式で「このクエリ分」だけを安全に切り出せる。
+    try:
+        log_offset_before = os.path.getsize(log_path)
+    except OSError:
+        log_offset_before = 0
+
     try:
         proc = subprocess.run(
             ["bash", str(hook_path)], input=payload, capture_output=True, text=True,
@@ -168,6 +283,25 @@ def run_hook(hook_path, vault_dir, prompt, session_id, log_path, timeout):
 
     if proc.returncode != 0:
         return [], f"hookが非0終了しました（rc={proc.returncode}）: {proc.stderr.strip()[:200]}"
+
+    # fail-open検知（2026-07-14修正・リーダー指示: VAULT_RECALL_LOGをフックへ渡す
+    # だけで一度も読まずに削除していたバグの是正）。additionalContextの有無に
+    # 関わらず、exit 0直後にここで検査する（Codex一次レビュー指摘・Major:
+    # 「出力が空の場合だけ」に限定すると、keyword/vectorの片方だけがfail-openし
+    # もう片方が候補を返したケースでadditionalContextが非空になり、劣化した
+    # 計測結果をそのまま正常採点してしまう＝ベクトル経由でしか出ない期待ノートを
+    # 「通常のmiss」と誤認しうる）。vault-recall.shのlog_heartbeat()は
+    # PIPELINE_HAD_ERRORが立っていれば書かない契約（同ファイルの該当コメント参照）
+    # なので、候補の有無に関わらずERROR行の有無だけで「fail-openが起きたか」を
+    # 判定できる。
+    fail_open_msgs = _read_new_error_rows(log_path, log_offset_before)
+    if fail_open_msgs is None:
+        return [], ("想起ログ（VAULT_RECALL_LOG）の読み取りに失敗しました。fail-open検知が"
+                     "できないため計測失敗として扱います。")
+    if fail_open_msgs:
+        return [], (f"hookはexit 0で完了しましたが、想起ログにfail-openの記録が"
+                     f"{len(fail_open_msgs)}件あります（候補の有無に関わらず計測失敗として扱います）: "
+                     f"{fail_open_msgs[0][:200]}")
 
     out = proc.stdout.strip()
     if not out:
@@ -217,7 +351,19 @@ def run_hook(hook_path, vault_dir, prompt, session_id, log_path, timeout):
     if ctx.strip() and not candidates:
         return [], f"additionalContextはあるが候補行を1件も抽出できませんでした（表示フォーマット変更の可能性）: {ctx[:200]!r}"
 
-    return candidates[:MAX_CANDIDATES], None
+    # 候補数がフック契約の上限(MAX_CANDIDATES=8)を超えている場合も、無言で先頭8件だけを
+    # 正常系として切り詰めない（2026-07-14修正・Codex一次レビュー指摘・Major: 旧実装の
+    # `candidates[:MAX_CANDIDATES]` は、フック側が契約を超えて壊れている（例:
+    # キーワード枠の5件上限が効いていない等の回帰）ケースを「たまたま先頭8件が正常」と
+    # 誤認させ、9件目以降にしか無い期待ノートを静かにmiss扱いにしてしまう。上限超過は
+    # hookエラーとして可視化し、他のフォーマット異常系と同じ経路で判定不能扱いにする）。
+    if len(candidates) > MAX_CANDIDATES:
+        return [], (f"候補数がフック契約の上限({MAX_CANDIDATES}件=キーワード枠"
+                     f"{MAX_KEYWORD_CANDIDATES}件+ベクトル追加枠{MAX_VECTOR_EXTRA_CANDIDATES}件)を"
+                     f"超えています（{len(candidates)}件・hookが契約を超えて壊れている可能性）: "
+                     f"{candidates[:MAX_CANDIDATES + 3]}")
+
+    return candidates, None
 
 
 def note_aliases(vault_dir, relpath):

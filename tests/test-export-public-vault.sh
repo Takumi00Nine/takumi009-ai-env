@@ -810,6 +810,83 @@ EOF
   rm -rf "$WORK"
 }
 
+# register_tmp のサブシェル伝播バグ回帰テスト（2026-07-14）:
+# `VAR="$(register_tmp)"` はコマンド置換＝サブシェル実行のため、関数内での
+# TMP_FILES+=() が親シェルへ伝播せず cleanup() が常に空配列を見ていた
+# （mktemp の一時ファイルが仕様に反して毎回残留するバグ）。
+# register_tmp の mktemp には識別用プレフィックス（-t export-public-vault）を
+# 付けているので、既定のシステム一時領域を実行前後でスキャンして残留の有無を確認する。
+#
+# 注意（Codexレビュー指摘・Minor）: macOS(BSD)の mktemp は `-t` 使用時も TMPDIR
+# 環境変数を無視し、常に確定的なユーザー毎の既定一時領域を使う（テスト側で専用
+# TMPDIR に隔離できない）。そのため「件数」ではなく「ファイル名の集合」を
+# 実行前後でdiffし、このテスト実行中に増えて消えなかったファイルだけを検出する
+# （他プロセスが同時に無関係なファイルを作成・削除しても誤検知しにくい）。
+discover_mktemp_dir() {
+  local probe dir
+  probe="$(mktemp -t export-public-vault-probe)"
+  dir="$(dirname "$probe")"
+  rm -f "$probe"
+  printf '%s' "$dir"
+}
+
+snapshot_tmp() {
+  local dir="$1"
+  find "$dir" -maxdepth 1 -name 'export-public-vault.*' 2>/dev/null | sort
+}
+
+echo "=== 7. register_tmp: 正常系実行後にmktempの一時ファイルが残らない（TMP_FILES伝播バグ回帰） ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  REPO_DIR="$WORK/repo"
+  make_base_vault "$VAULT_DIR"
+  new_repo "$REPO_DIR"
+  MKTMP_DIR="$(discover_mktemp_dir)"
+
+  before=$(snapshot_tmp "$MKTMP_DIR")
+  rc=0
+  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
+  after=$(snapshot_tmp "$MKTMP_DIR")
+  new_leftover=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
+
+  assert_eq "正常系 exit 0" "0" "$rc"
+  assert_eq "register_tmpのmktemp一時ファイルが今回の実行で増えたまま残っていない（正常系）" "" "$new_leftover"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 7b. register_tmp: fail-fast経路（異常終了）でも一時ファイルが残らない ==="
+{
+  # basename形式のprivate link（3-b・register_tmp呼び出し後にfailする経路）を使う。
+  # フォルダ付き形式（3-a）は register_tmp を1つも呼ばずにfailするため、
+  # 「register_tmp呼び出し済みの一時ファイルがcleanup()で確実に消える」ことの
+  # 検証にならない（Codexレビュー指摘で発覚・basename形式に修正）。
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  REPO_DIR="$WORK/repo"
+  make_base_vault "$VAULT_DIR"
+  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
+
+うっかり private へのリンク（basename形式・一時ファイル残留テスト用）: [[career-private]]
+EOF
+  new_repo "$REPO_DIR"
+  MKTMP_DIR="$(discover_mktemp_dir)"
+
+  before=$(snapshot_tmp "$MKTMP_DIR")
+  rc=0
+  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
+  after=$(snapshot_tmp "$MKTMP_DIR")
+  new_leftover=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
+
+  assert_eq "fail-fastでexit 1" "1" "$rc"
+  assert_stderr_has "理由=basename link検出（register_tmp呼び出し後にfail）" "$WORK" \
+    "Personal ノートへの wiki link（basename形式）を検出しました"
+  assert_eq "register_tmpのmktemp一時ファイルが今回の実行で増えたまま残っていない（異常系）" "" "$new_leftover"
+
+  rm -rf "$WORK"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

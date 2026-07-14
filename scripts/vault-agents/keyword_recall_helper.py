@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""外部脳ハイブリッド検索・柱②の想起フック補助（claude/hooks/vault-recall.shからsubprocess
+"""外部脳ハイブリッド検索・柱①の想起フック補助（claude/hooks/vault-recall.shからsubprocess
 で呼ばれる。8.2ラウンド「統一リファクタリング」で追加）。
 
 役割: 旧claude/hooks/vault-recall.sh（8.0/8.1ラウンド版）にbashでインライン実装されていた
@@ -108,6 +108,34 @@ CHECK_INTERVAL = 25
 
 class BudgetExceeded(Exception):
     """自己予算(monotonic)を使い切った際にscan_candidates()から送出する内部シグナル。"""
+
+
+def _list_md_names(dir_path, collate_key):
+    """dir_path直下の*.mdファイル名（隠しファイル除く）を、bashのファイル名グロブと
+    同じロケール順でソートして返す。戻り値は (names, enumeration_failed)。
+
+    フォルダが存在しない（5フォルダ全部が常に揃っている前提ではない・SCAN_DIRSの
+    どれかを未作成のVaultは正常系）場合は ([], False) を返す。フォルダは存在するが
+    列挙自体に失敗した（権限不足・I/Oエラー等）場合は ([], True) を返す。
+
+    Codexレビュー指摘・Major対応: 旧実装は `dir_path.is_dir()` でフォルダ存在を確認した
+    上で `dir_path.glob("*.md")` を `try/except OSError` で囲っていたが、実測確認の結果
+    pathlib.Path.glob() は列挙中の PermissionError 等の OSError を内部で握りつぶし、
+    空のイテレータを返す（実装がそう作られている）。そのためこの try/except は実質的に
+    発火しないデッドコードで、5フォルダ全滅（例: chmod 000）でも「候補0件の正常な
+    空振り」と区別できず、unreadable_count にも計上されず可観測性が無かった。
+    os.scandir() は同じ状況で確実に OSError を送出するため、これを使って明示的に検知する。
+    """
+    try:
+        with os.scandir(dir_path) as it:
+            names = [e.name for e in it if e.name.endswith(".md") and not e.name.startswith(".")]
+    except FileNotFoundError:
+        return [], False  # フォルダが存在しない（正常系）
+    except NotADirectoryError:
+        return [], False  # 同名の非ディレクトリが存在する（従来のis_dir()判定と同じ扱い・探索対象外）
+    except OSError:
+        return [], True  # 権限不足等でフォルダ自体を列挙できない（異常系）
+    return sorted(names, key=collate_key), False
 
 
 def parse_args(argv=None):
@@ -443,18 +471,17 @@ def scan_candidates(vault_root, prompt, deadline):
 
     for d in SCAN_DIRS:
         dir_path = vault_root / d
-        if not dir_path.is_dir():
-            continue
-        try:
-            # bashのglob("*.md")はdotglob無効時ドットファイル(隠しファイル)を対象外にする
-            # （POSIX glob規約）が、pathlib.Path.glob("*.md")は".hidden.md"にも一致して
-            # しまう＝legacyとの候補集合の食い違い(Codexレビュー指摘・Major)。明示的に
-            # 先頭"."始まりの名前を除外して同じ挙動にする。
-            names = sorted(
-                (p.name for p in dir_path.glob("*.md") if not p.name.startswith(".")),
-                key=collate_key,
-            )
-        except OSError:
+        # bashのglob("*.md")はdotglob無効時ドットファイル(隠しファイル)を対象外にする
+        # （POSIX glob規約）が、pathlib.Path.glob("*.md")は".hidden.md"にも一致して
+        # しまう＝legacyとの候補集合の食い違い(Codexレビュー指摘・Major)。_list_md_names()
+        # は明示的に先頭"."始まりの名前を除外して同じ挙動にする。
+        names, enumeration_failed = _list_md_names(dir_path, collate_key)
+        if enumeration_failed:
+            # 権限不足等でフォルダ自体を列挙できなかった（正常な「候補0件」と区別する
+            # ため unreadable_count へ計上する・Codexレビュー指摘・Major対応。個々のノート
+            # 読取失敗と同じ集計フィールドへ寄せる＝JSON出力契約(スキーマ)を変えずに
+            # 可観測にする）。
+            unreadable_count += 1
             continue
 
         for name in names:

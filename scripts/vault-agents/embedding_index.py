@@ -672,11 +672,28 @@ def _load_index_once(root, expected_model, expected_model_digest, expected_num_c
         raise IndexError_("notesの形式が不正です（配列ではありません）")
     if not isinstance(count, int) or count != len(notes):
         raise IndexError_(f"件数が不整合です（meta.count={count!r} len(notes)={len(notes)}）")
+    seen_relpaths = set()
     for n in notes:
         if not isinstance(n, dict) or not isinstance(n.get("relpath"), str) or not isinstance(n.get("content_hash"), str):
             raise IndexError_("notes内の要素形式が不正です")
         if not is_valid_relpath(n["relpath"]):
             raise IndexError_(f"notes内のrelpathが安全な形式ではありません（絶対パス/../脱出等の可能性）: {n['relpath']!r}")
+        # 重複relpathはfail-closed（IndexError_）で拒否する（Codexレビュー指摘・Major:
+        # write_generation()が呼び出し元の順序をそのまま書くだけでrelpathの一意性を
+        # 強制していないため、通常運用ではlist_vault_notes()の一意な走査結果しか渡らない
+        # が、破損/改ざんされたmeta.jsonでは重複が混入し得る）。truncated_notes側の
+        # 重複チェック（このすぐ下の別ブロック・下方参照）と同じ「メタデータの構造的
+        # 整合性はfail-closedで検証する」流儀に揃える。重複を黙って一意化する対応も
+        # 検討したが、vectors.binの並び順=notesの並び順であるIndex.vector(i)の実装上、
+        # 同一relpathに対して意味の異なる複数のベクトルが存在すること自体が「どちらが
+        # 正か決められない」矛盾したデータであり、機械的な一意化（例:
+        # 最初/最後の出現を採用）では読み手が気づかないまま不定の結果を返しかねない。
+        # symlink/パストラバーサル拒否と同様、Critical寄りの構造検証としてここで
+        # 早期にrejectする（呼び出し側=vector_recall_helper.pyはIndexError_を捕捉して
+        # fail-openするため、検索側fail-openの制約は破らない）。
+        if n["relpath"] in seen_relpaths:
+            raise IndexError_(f"notesに重複したrelpathが含まれています: {n['relpath']!r}")
+        seen_relpaths.add(n["relpath"])
 
     if expected_model is not None and model != expected_model:
         raise IndexError_(f"modelが設定と一致しません（index={model!r} expected={expected_model!r}）")

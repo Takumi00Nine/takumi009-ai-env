@@ -4,6 +4,8 @@
 # 実 Vault($HOME/Data/obsidian)には一切依存しない。--vault で毎回ダミーの
 # fixtureディレクトリを指定して実行する。generic-aliases.txt はリポジトリ本体の
 # ものをそのまま使う（別ワーカー担当・"Claude"などの語を含む前提でテストする）。
+# fail-closed化(12〜14番)のテストのみ、APPLY_ALIASES_GENERIC_FILE環境変数で
+# 一時ファイルへ差し替え、本物のリストを汚さずに「欠落/空」状態を再現する。
 #
 # 実行方法: bash tests/test-apply-aliases.sh
 
@@ -93,7 +95,7 @@ tags: [knowledge, sample]" "本文はそのまま"
   assert_contains "aliases:ブロックが追加される" "$content" 'aliases:'
   assert_contains "alias1が追加される" "$content" '"newterm1"'
   assert_contains "alias2が追加される" "$content" '"newterm2"'
-  assert_contains "updated:が当日に設定される" "$content" "updated: $(date -u +%Y-%m-%d)"
+  assert_contains "updated:が当日に設定される" "$content" "updated: $(date +%Y-%m-%d)"
   assert_contains "既存のtags:は変更されない" "$content" "tags: [knowledge, sample]"
   assert_contains "本文は変更されない" "$content" "本文はそのまま"
 
@@ -293,6 +295,212 @@ echo "=== 11. 冪等性: 同じTSVを2回applyしても2回目は変更なし(SK
   assert_contains "2回目はSKIP表示" "$out2" "SKIP Knowledge/idempotent.md: 追加すべき新規aliasがありません"
 
   rm -rf "$V" "$TSV"
+}
+
+echo "=== 12. 汎用語禁止リスト(generic-aliases.txt)が欠落している場合はfail-closedで中断し、書き込まない（2026-07-14修正・従来fail-openの是正） ==="
+{
+  V="$(mktemp -d)"
+  write_note "$V/Knowledge/no-alias.md" "date: 2026-07-01"
+  TSV="$(mktemp)"
+  printf 'Knowledge/no-alias.md\tClaude\n' > "$TSV"
+  before="$(cat "$V/Knowledge/no-alias.md")"
+
+  out="$(APPLY_ALIASES_GENERIC_FILE="/tmp/does-not-exist-generic-aliases-$$.txt" python3 "$SCRIPT" "$TSV" --vault "$V" --apply 2>&1)"
+  rc=$?
+  after="$(cat "$V/Knowledge/no-alias.md")"
+  assert_eq "リスト欠落は非0終了する" "1" "$rc"
+  assert_contains "FAILメッセージが出る" "$out" "FAIL:"
+  assert_contains "fail-closedである旨のメッセージが出る" "$out" "fail-closed"
+  assert_eq "書き込みへ進まずファイルは無変更" "$before" "$after"
+
+  # dry-run(既定・--apply無し)でも中断することを直接確認する（Codex一次レビュー指摘・
+  # Minor: --apply付きのケースしか無いと、dry-runでも中断する契約自体の回帰を検知できない）。
+  out_dryrun="$(APPLY_ALIASES_GENERIC_FILE="/tmp/does-not-exist-generic-aliases-$$.txt" python3 "$SCRIPT" "$TSV" --vault "$V" 2>&1)"
+  rc_dryrun=$?
+  assert_eq "dry-runでもリスト欠落は非0終了する" "1" "$rc_dryrun"
+  assert_contains "dry-runでもfail-closedである旨のメッセージが出る" "$out_dryrun" "fail-closed"
+
+  rm -rf "$V" "$TSV"
+}
+
+echo "=== 13. 汎用語禁止リストが存在するが有効な語が1つも無い(空/コメントのみ)場合もfail-closedで中断する ==="
+{
+  V="$(mktemp -d)"
+  write_note "$V/Knowledge/no-alias.md" "date: 2026-07-01"
+  TSV="$(mktemp)"
+  printf 'Knowledge/no-alias.md\tClaude\n' > "$TSV"
+  before="$(cat "$V/Knowledge/no-alias.md")"
+
+  EMPTY_GENERIC="$(mktemp)"
+  printf '# コメントのみ\n\n' > "$EMPTY_GENERIC"
+
+  out="$(APPLY_ALIASES_GENERIC_FILE="$EMPTY_GENERIC" python3 "$SCRIPT" "$TSV" --vault "$V" --apply 2>&1)"
+  rc=$?
+  after="$(cat "$V/Knowledge/no-alias.md")"
+  assert_eq "空リストは非0終了する" "1" "$rc"
+  assert_contains "fail-closedである旨のメッセージが出る" "$out" "fail-closed"
+  assert_eq "書き込みへ進まずファイルは無変更" "$before" "$after"
+
+  rm -rf "$V" "$TSV" "$EMPTY_GENERIC"
+}
+
+echo "=== 14. 汎用語禁止リストが正しく存在すれば従来どおり動作する(fail-closed化の回帰確認) ==="
+{
+  V="$(mktemp -d)"
+  write_note "$V/Knowledge/no-alias.md" "date: 2026-07-01"
+  TSV="$(mktemp)"
+  printf 'Knowledge/no-alias.md\tClaude|specific-unique-term\n' > "$TSV"
+
+  GOOD_GENERIC="$(mktemp)"
+  printf 'Claude\n' > "$GOOD_GENERIC"
+
+  out="$(APPLY_ALIASES_GENERIC_FILE="$GOOD_GENERIC" python3 "$SCRIPT" "$TSV" --vault "$V" --apply 2>&1)"
+  rc=$?
+  content="$(cat "$V/Knowledge/no-alias.md")"
+  assert_eq "正常なリストがあれば0終了する" "0" "$rc"
+  assert_contains "汎用語はWARNしてskipされる" "$out" 'alias "Claude"'
+  assert_contains "具体的な語は書き込まれる" "$content" '"specific-unique-term"'
+
+  rm -rf "$V" "$TSV" "$GOOD_GENERIC"
+}
+
+echo "=== 15. atomic書込み: --apply後に一時ファイル(.tmp)が残置されない（2026-07-14修正・リーダー指示） ==="
+{
+  V="$(mktemp -d)"
+  write_note "$V/Knowledge/no-alias.md" "date: 2026-07-01"
+  TSV="$(mktemp)"
+  printf 'Knowledge/no-alias.md\tnewterm1\n' > "$TSV"
+
+  python3 "$SCRIPT" "$TSV" --vault "$V" --apply >/dev/null
+  leftover="$(find "$V/Knowledge" -maxdepth 1 -name '.*.tmp' 2>/dev/null)"
+  assert_eq "一時ファイルが残置されない" "" "$leftover"
+  assert_contains "内容は正しく書き込まれる" "$(cat "$V/Knowledge/no-alias.md")" '"newterm1"'
+
+  rm -rf "$V" "$TSV"
+}
+
+echo "=== 16. atomic書込み: write_note_atomic()は書込み失敗時に元ファイルを無変更のまま保ち一時ファイルも残さない（2026-07-14修正・リーダー指示） ==="
+{
+  V="$(mktemp -d)"
+  write_note "$V/Knowledge/target.md" "date: 2026-07-01" "original body"
+  before_sum="$(md5 -q "$V/Knowledge/target.md" 2>/dev/null || md5sum "$V/Knowledge/target.md" | cut -d' ' -f1)"
+
+  PYSCRIPT="$(mktemp)"
+  cat > "$PYSCRIPT" <<PYEOF
+import sys, pathlib, os
+sys.path.insert(0, "$REPO_ROOT/scripts/vault-agents")
+import apply_aliases as aa
+
+p = pathlib.Path("$V/Knowledge/target.md")
+orig_replace = os.replace
+
+def boom(*a, **kw):
+    raise OSError("simulated os.replace failure")
+
+os.replace = boom
+try:
+    aa.write_note_atomic(p, "CORRUPTED-SHOULD-NOT-APPEAR")
+except OSError as e:
+    print("CAUGHT:", e)
+finally:
+    os.replace = orig_replace
+
+tmp_files = list(p.parent.glob("." + p.name + ".*.tmp"))
+print("TMP_LEFTOVER:", len(tmp_files))
+PYEOF
+
+  out="$(python3 "$PYSCRIPT" 2>&1)"
+  after_sum="$(md5 -q "$V/Knowledge/target.md" 2>/dev/null || md5sum "$V/Knowledge/target.md" | cut -d' ' -f1)"
+  assert_contains "os.replace失敗が例外として捕捉される" "$out" "CAUGHT: simulated os.replace failure"
+  assert_contains "一時ファイルが残置されない(0件)" "$out" "TMP_LEFTOVER: 0"
+  assert_eq "元ファイルは無変更のまま(部分書込されない)" "$before_sum" "$after_sum"
+  assert_not_contains "壊れた内容が元ファイルへ混入しない" "$(cat "$V/Knowledge/target.md")" "CORRUPTED-SHOULD-NOT-APPEAR"
+
+  rm -rf "$V" "$PYSCRIPT"
+}
+
+echo "=== 17. atomic書込み: 元ファイルのパーミッションを維持する（Codex一次レビュー指摘・Major対応: mkstemp()既定0600への意図しない変更を防ぐ） ==="
+{
+  V="$(mktemp -d)"
+  write_note "$V/Knowledge/perm-test.md" "date: 2026-07-01"
+  chmod 640 "$V/Knowledge/perm-test.md"
+  before_mode="$(python3 -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" "$V/Knowledge/perm-test.md")"
+
+  TSV="$(mktemp)"
+  printf 'Knowledge/perm-test.md\tpermalias\n' > "$TSV"
+  python3 "$SCRIPT" "$TSV" --vault "$V" --apply >/dev/null
+
+  after_mode="$(python3 -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" "$V/Knowledge/perm-test.md")"
+  assert_eq "パーミッションが維持される(0640のまま)" "$before_mode" "$after_mode"
+  assert_contains "内容は正しく書き込まれる" "$(cat "$V/Knowledge/perm-test.md")" '"permalias"'
+
+  rm -rf "$V" "$TSV"
+}
+
+echo "=== 18. symlinkノート: リンク自体を壊さずリンク先の実体へ書き込む（Codex一次レビュー指摘・Major対応: os.replace()がsymlinkを通常ファイルへ置換してしまう回帰の防止） ==="
+{
+  V="$(mktemp -d)"
+  mkdir -p "$V/Knowledge"
+  write_note "$V/Knowledge/.real-target.md" "date: 2026-07-01"
+  ln -s "$V/Knowledge/.real-target.md" "$V/Knowledge/link-note.md"
+
+  TSV="$(mktemp)"
+  printf 'Knowledge/link-note.md\tlinkedalias\n' > "$TSV"
+  python3 "$SCRIPT" "$TSV" --vault "$V" --apply >/dev/null
+
+  if [ -L "$V/Knowledge/link-note.md" ]; then
+    pass "symlinkはsymlinkのまま残る（通常ファイルへ置換されない）"
+  else
+    fail_case "symlinkはsymlinkのまま残る（通常ファイルへ置換されない）"
+  fi
+  link_target="$(readlink "$V/Knowledge/link-note.md")"
+  assert_eq "symlinkのリンク先は変わらない" "$V/Knowledge/.real-target.md" "$link_target"
+  content="$(cat "$V/Knowledge/.real-target.md")"
+  assert_contains "リンク先の実体ファイルへaliasが書き込まれる" "$content" '"linkedalias"'
+
+  rm -rf "$V" "$TSV"
+}
+
+echo "=== 19. atomic書込み: os.fchmod()失敗時もファイルディスクリプタをリークしない（Codex一次レビュー指摘・Minor2巡目対応） ==="
+{
+  V="$(mktemp -d)"
+  write_note "$V/Knowledge/fdleak-test.md" "date: 2026-07-01" "original body"
+
+  PYSCRIPT="$(mktemp)"
+  cat > "$PYSCRIPT" <<PYEOF
+import sys, pathlib, os
+sys.path.insert(0, "$REPO_ROOT/scripts/vault-agents")
+import apply_aliases as aa
+
+p = pathlib.Path("$V/Knowledge/fdleak-test.md")
+orig_fchmod = os.fchmod
+
+def boom(*a, **kw):
+    raise OSError("simulated os.fchmod failure")
+
+before_fds = len(os.listdir("/dev/fd"))
+os.fchmod = boom
+try:
+    aa.write_note_atomic(p, "CORRUPTED-SHOULD-NOT-APPEAR")
+except OSError as e:
+    print("CAUGHT:", e)
+finally:
+    os.fchmod = orig_fchmod
+
+after_fds = len(os.listdir("/dev/fd"))
+print("FD_LEAK:", after_fds - before_fds)
+tmp_files = list(p.parent.glob("." + p.name + ".*.tmp"))
+print("TMP_LEFTOVER:", len(tmp_files))
+PYEOF
+
+  out="$(python3 "$PYSCRIPT" 2>&1)"
+  content="$(cat "$V/Knowledge/fdleak-test.md")"
+  assert_contains "os.fchmod失敗が例外として捕捉される" "$out" "CAUGHT: simulated os.fchmod failure"
+  assert_contains "ファイルディスクリプタがリークしない(差分0)" "$out" "FD_LEAK: 0"
+  assert_contains "一時ファイルが残置されない(0件)" "$out" "TMP_LEFTOVER: 0"
+  assert_not_contains "壊れた内容が元ファイルへ混入しない" "$content" "CORRUPTED-SHOULD-NOT-APPEAR"
+
+  rm -rf "$V" "$PYSCRIPT"
 }
 
 echo

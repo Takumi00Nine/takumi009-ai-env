@@ -17,7 +17,11 @@
       vault-recall.tsv とのsession_id突合による「提示無視率」（提示されたのに読まれない率）＋
       reads/recallログそれぞれの死活判定（2026-07-10 敵対的レビュー C-2/M-1 対応）。
       提示無視率は直近30日（既定・環境変数で上書き可）の時間窓で計算し、同一セッションで
-      提示より前に既読だった提示は分母から除外する（2026-07-10 敵対的レビュー2回目 N-2/N-3 対応）
+      提示より前に既読だった提示は分母から除外する（2026-07-10 敵対的レビュー2回目 N-2/N-3 対応）。
+      さらに提示は (session_id, ノート) 単位に正規化して1回に数え（同一セッションでの
+      重複提示による水増しを除去）、「解析できなかったログ行」はERROR行（フックが自ら
+      記録する正常なエラーログ）と真に構文が壊れている行を分離して表示する
+      （2026-07-13 敵対的レビューround3対応）
 
 出力: ~/.claude/logs/vault-inventory/YYYY-MM-DD.md（人間向け・日本語。2026-07-11
       決定＝「読まれない人間向け資料をVaultに置かない」に伴い、Vault配下
@@ -115,6 +119,14 @@ RECALL_LOG_PATH = pathlib.Path(
 RECALL_TOP_N = 5
 DISMISS_MIN_PRESENTED = 3   # 提示無視率の分母に含める最低提示回数（1-2回のノイズを除外）
 DISMISS_TOP_N = 10          # 提示無視率ワーストの表示件数
+# claude/hooks/vault-recall.sh の HEARTBEAT_MARKER と同じ文字列（想起ヒット0件の
+# 呼び出しが「フックは動いている」ことを示すために3列目へ書く印。ノートパスではない
+# ため read_log() 上は通常の有効行として3列目非空でrowsに入るが、そのまま提示回数
+# 上位・提示無視率ワースト（どちらも実ノートを対象とした集計）へ混ぜると実ノートで
+# ないものが「よく提示されるノート」として並んでしまう＝2026-07-13外部脳round4対応・
+# 小修正4）。死活判定（recall_log_valid_end等）では従来どおり有効な活動として扱う
+# （heartbeatの導入目的そのものなので、rows自体からは除かない）。
+HEARTBEAT_MARKER = "(heartbeat)"
 
 
 def _positive_int_env(name, default):
@@ -189,6 +201,34 @@ def parse_frontmatter(text):
     return fm, text[m.end():]
 
 
+ACTIVE_STATUS_KEYS = ("active", "in_progress", "pending")
+# 先頭（前置の空白は許容）に一致させる。文字列中の任意位置を許すsearch()だと
+# "not-active"のようなハイフン区切りの値でも"active"に単語境界一致してしまう
+# （Codexレビュー指摘・Major: 当初はsearch()を使っており、このdocstringが謳う
+# 「先頭トークンだけを見て判定する」を実装が満たしていなかった）。
+_ACTIVE_STATUS_RE = re.compile(r"^\s*(?:%s)\b" % "|".join(re.escape(k) for k in ACTIVE_STATUS_KEYS))
+
+
+def status_is_active(status):
+    """frontmatterのstatus値がactive/in_progress/pendingのいずれかに該当するかを返す。
+
+    文字列値は先頭トークンを単語境界(\\b)で判定する（match()・文字列中の任意位置に
+    一致するsearch()は使わない）。旧実装は`k in fm["status"]`という部分文字列一致
+    だったため、"inactive"が"active"を含むことによって誤って停滞検知対象（active扱い）
+    になるバグがあった（Codexレビュー指摘・実装ミス）。単純な完全一致(==)にしなかったのは、
+    実Vaultのstatus値には`status: closed（2026-07-05 解決・...）`のような注記付き値が
+    実在し、これを壊さず先頭トークンだけを見て判定する必要があるため（先頭アンカー＋
+    単語境界一致ならどちらも正しく扱える。"not-active"のような非先頭一致は誤検知しない）。
+    リスト値（YAML複数行/フロー形式でstatusを書いた場合）は要素の完全一致で判定する
+    （リストの各要素は元々1トークンの値である想定のため部分一致の必要が無い）。
+    """
+    if isinstance(status, list):
+        return any(s in ACTIVE_STATUS_KEYS for s in status)
+    if isinstance(status, str):
+        return bool(_ACTIVE_STATUS_RE.match(status))
+    return False
+
+
 def normalize_aliases(val):
     """frontmatterの aliases 値（リスト/カンマ区切り文字列/未設定）を alias文字列のリストにする。"""
     if not val:
@@ -223,6 +263,15 @@ def parse_iso(ts):
     return dt
 
 
+# ERROR行は claude/hooks/vault-recall.sh の
+# `log_row "ERROR\t\t${SESSION_ID:-}\t$1[\t${LOG_LEVEL_INFO}]"` として書かれる
+# （log_error()はレベル列を省略・log_fact()だけ6列目に固定文字列"INFO"を付与する
+# ＝vault-recall.sh側コメント参照）。0-indexで添字5（6列目）がこのレベル列。
+# scripts/vault-agents/recall_bench.py の同名定数と契約を揃える（2026-07-15追加）。
+LOG_LEVEL_COL = 5
+LOG_LEVEL_INFO_VALUE = "INFO"
+
+
 def read_log(path):
     """想起/読取フックのTSVログを読む。
     形式: ISO8601時刻<TAB>session_id<TAB>ノート相対パス[<TAB>...]。ERROR行は
@@ -231,22 +280,45 @@ def read_log(path):
     使わない（従来どおり。3列目空はERROR行の目印＝下流誤集計防止のfail-open設計、
     Knowledge/fail-open-and-observable-guards §4）。
 
+    2列目が"ERROR"固定文字列の行のうち、6列目（0-indexで LOG_LEVEL_COL）に
+    vault-recall.sh log_fact() が付与する固定文字列"INFO"(LOG_LEVEL_INFO_VALUE)が
+    あるものは、真の失敗ではなくパイプライン正常完走時の事実記録（削除済みノートの
+    ベクトル残存除外・読取不可ノート件数）。2列目の"ERROR"は下流互換のため変えない
+    契約（vault-recall.sh側コメント参照）だが、error_rows（＝フックが記録した
+    "真のエラー"件数としてレポートに表示）へこのINFO行まで算入すると、レポート上
+    「ERROR行」の件数がフックの正常な事実記録で水増しされ、死活判定とは無関係な
+    表示精度の問題を生む（2026-07-15 総点検で判明。死活判定＝rows/last_activityの
+    集計には元々影響しない）。6列目が無い旧形式のERROR行（列数5以下・レベル列を
+    書かないlog_error()由来）は後方互換として従来どおりerror_rowsに数える。
+
     戻り値:
       rows: (timestamp, session_id, rel_path) のリスト。ノート相対パスを伴う
             有効行のみ（session_idの提示↔Read突合・未読判定に使う）。
-      skipped: タブ不足・時刻不正・3列目空（ERROR行含む）で rows に入らなかった
-               行数＝「解析できなかったログ行」としてレポートに出す（従来どおり）。
-      last_activity: 時刻が解析できた行（3列目が空のERROR行も含む）の最新時刻。
-               ノートへの記録が無くても「ログファイル自体は書き込まれている」ことの
-               目安になる＝reads/recallそれぞれの死活判定（stale）専用
+      skipped: タブ不足・時刻不正・「2列目がERROR以外なのに3列目が空」で rows に
+               入らなかった行数＝**真に構文として解析できなかった行**（ログ破損の
+               疑い）としてレポートに出す。
+      error_rows: 2列目が"ERROR"かつ3列目が空かつ6列目がINFO(事実記録)ではない
+               行数＝フックが自ら記録する仕様通りの正常な「真の失敗」エラーログ
+               （vault-recall.sh/vault-read-log.shのlog_error）。従来はskippedへ
+               合算し「ログ破損の疑い」として表示していたが、ERROR行は正常なログ
+               であり真の構文破損とは区別すべき（2026-07-13 敵対的レビューround3の
+               実バグ級指摘。78行の実体がERROR行78件だったのに「解析できなかった
+               行＝ログ破損の疑い」と表示していた）。log_fact()由来のINFO行は
+               skippedにもerror_rowsにも数えない（構文破損でも真の失敗でもない）。
+               死活判定（reads_log_broken等のERRORING検知）の入力としては
+               従来どおりrowsに含めず扱う（last_activityには含まれる）。
+      last_activity: 時刻が解析できた行（3列目が空のERROR行・INFO行も含む）の
+               最新時刻。ノートへの記録が無くても「ログファイル自体は書き込まれて
+               いる」ことの目安になる＝reads/recallそれぞれの死活判定（stale）専用
                （2026-07-10 敵対的レビュー M-1 対応。rowsの集計とは独立させ、
                ノート集計の可否とログの生死を混同しない）。
     """
     rows = []
     skipped = 0
+    error_rows = 0
     last_activity = None
     if not path.exists():
-        return rows, skipped, last_activity
+        return rows, skipped, error_rows, last_activity
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -261,37 +333,59 @@ def read_log(path):
         if last_activity is None or ts > last_activity:
             last_activity = ts
         if not parts[2].strip():
-            skipped += 1
+            if parts[1].strip() == "ERROR":
+                is_fact = (len(parts) > LOG_LEVEL_COL
+                           and parts[LOG_LEVEL_COL] == LOG_LEVEL_INFO_VALUE)
+                if not is_fact:
+                    error_rows += 1
+            else:
+                skipped += 1
             continue
         rows.append((ts, parts[1].strip(), parts[2]))
-    return rows, skipped, last_activity
+    return rows, skipped, error_rows, last_activity
 
 
 def compute_dismissal_rates(recall_rows, reads_rows, today):
     """「提示されたのに読まれない率」（レビューC-2の看板メトリクス）をノート別に出す。
 
-    判定: recall_rows の1提示イベント (ts, session_id, rel) ごとに、同一
-    session_id・同一 rel の reads_rows に ts以降 の Read が1件でもあれば
-    「読まれた」とみなす（同一セッション内で後からReadされたか、という素朴な定義。
-    セッション内で複数回提示された場合、1回のReadが複数の提示イベントを
-    満たすことを許容する＝厳密な1:1消費ではなく「提示後に読まれる習慣があるか」の
+    判定: 正規化後の1提示単位 (representative_ts, session_id, rel)（後述）ごとに、
+    同一 session_id・同一 rel の reads_rows に representative_ts以降 の Read が
+    1件でもあれば「読まれた」とみなす（同一セッション内で後からReadされたか、
+    という素朴な定義。厳密な1:1消費ではなく「提示後に読まれる習慣があるか」の
     指標として設計）。session_id が空（旧ログ・stdin解析失敗等）の行は突合できない
     ため「読まれた」判定に加算しない（fail-closed側＝過大評価を避ける）。
 
     集計対象は today から DISMISS_WINDOW_DAYS 日以内の提示イベントに限定する
     （全期間累積のままだとalias修正後の改善が指標に映らない＝2026-07-10
-    敵対的レビュー2回目 N-2 対応）。さらに、同一セッションで「提示より前に
-    既読」だった提示イベントは分母から除外する（正当な既読スキップを無視と
-    誤って数えないため＝同N-3対応。判定できるのは session_id が空でない行のみ）。
+    敵対的レビュー2回目 N-2 対応）。
+
+    窓内の提示イベントはさらに (session_id, rel) 単位で正規化し、同一セッション内で
+    同じノートが複数回提示されても1回に数える（2026-07-13 敵対的レビューround3・
+    「無視率改善ループ1周目の実績」対応。長時間セッションで過去の棚卸しレポートの
+    引用やフック自身の過去提示文がプロンプト本文に再登場して再ヒットし、同一ノートが
+    同一セッションで何十回も提示扱いになって無視率ワーストが水増しされるアーティ
+    ファクトを除去する。session_id が空の行は他行とグルーピングできない＝実際には
+    別セッション由来かもしれない複数行を誤って1つに集約しないよう、行インデックスで
+    ユニーク化し従来どおり1行=1提示単位のまま扱う。よってこの正規化は
+    「session_id単位の集約」ではなく厳密には「(session_id, rel)が非空の場合のみ効く
+    集約」である）。正規化後は、グループ内の最小の提示時刻（代表提示時刻）を基準に
+    「提示より前に既読」だった提示単位を分母から除外する（正当な既読スキップを
+    無視と誤って数えないため＝同N-3対応。判定できるのは session_id が空でない行のみ）。
+    既読判定そのもの（代表提示時刻以降のReadの有無）のロジックの骨格は変えない。
 
     戻り値: (rows, total_all, windowed_total, excluded_pre_read)
-      rows: [(rel_path, presented_count, read_rate_percent), ...]
-        窓内かつ既読前提示を除いた上で DISMISS_MIN_PRESENTED 回以上のノートのみ・
-        読まれた率が低い順（同率は提示回数が多い方を先に＝より確度の高い
-        「無視されている」証拠）に最大 DISMISS_TOP_N 件。
-      total_all: recall_rows 全体（窓の内外問わず）の提示イベント数。
-      windowed_total: 窓内の提示イベント数（既読前提示の除外前）。
-      excluded_pre_read: 窓内のうち「提示より前に既読」で除外した件数。
+      rows: [(rel_path, presented_normalized, read_rate_percent, raw_presented), ...]
+        窓内かつ既読前提示を除いた上で、正規化後の提示回数（session_id空の行を含む
+        ため厳密な「提示セッション数」とは限らない）が
+        DISMISS_MIN_PRESENTED 回以上のノートのみ・読まれた率が低い順（同率は提示
+        回数が多い方を先に＝より確度の高い「無視されている」証拠）に最大
+        DISMISS_TOP_N 件。raw_presented は窓内・正規化前かつ既読前提示の除外前の
+        生の提示イベント数（参考値。presented_normalizedと直接比較すると既読前
+        除外の分だけ差が出ることがある＝重複提示アーティファクトの規模を
+        大まかに掴むための数値であり、厳密な差分ではない）。
+      total_all: recall_rows 全体（窓の内外問わず）の提示イベント数（正規化前）。
+      windowed_total: 窓内の提示イベント数（正規化・既読前提示の除外前）。
+      excluded_pre_read: 正規化後のうち「提示より前に既読」で除外した件数。
     """
     reads_by_key = {}
     for ts, sid, rel in reads_rows:
@@ -300,10 +394,7 @@ def compute_dismissal_rates(recall_rows, reads_rows, today):
         reads_by_key.setdefault((sid, rel), []).append(ts)
 
     total_all = len(recall_rows)
-    windowed_total = 0
-    excluded_pre_read = 0
-    presented = Counter()
-    read_after = Counter()
+    windowed_events = []
     for ts, sid, rel in recall_rows:
         age_days = (today - ts.date()).days
         # 上限（古すぎ）だけでなく下限（未来日時＝負のage）も見る。上限しか
@@ -314,7 +405,25 @@ def compute_dismissal_rates(recall_rows, reads_rows, today):
         # 集計対象から静かに外すだけに留める。
         if age_days < 0 or age_days > DISMISS_WINDOW_DAYS:
             continue
-        windowed_total += 1
+        windowed_events.append((ts, sid, rel))
+    windowed_total = len(windowed_events)
+
+    # 参考値: 正規化前の生の提示回数（窓内）
+    raw_presented = Counter(rel for _, _sid, rel in windowed_events)
+
+    # (session_id, rel) 単位に正規化（同一グループは最初の提示時刻を代表イベントに）。
+    # session_id が空の行はグルーピングできないため、行インデックスでユニーク化し
+    # 1行=1グループのまま扱う。
+    grouped = {}
+    for idx, (ts, sid, rel) in enumerate(windowed_events):
+        key = (sid, rel) if sid else (idx, sid, rel)
+        if key not in grouped or ts < grouped[key][0]:
+            grouped[key] = (ts, sid, rel)
+
+    excluded_pre_read = 0
+    presented = Counter()
+    read_after = Counter()
+    for ts, sid, rel in grouped.values():
         read_ts_list = reads_by_key.get((sid, rel)) if sid else None
         if sid and read_ts_list and any(rts < ts for rts in read_ts_list):
             excluded_pre_read += 1
@@ -330,7 +439,7 @@ def compute_dismissal_rates(recall_rows, reads_rows, today):
         if n < DISMISS_MIN_PRESENTED:
             continue
         rate = round(read_after.get(rel, 0) / n * 100)
-        rows.append((rel, n, rate))
+        rows.append((rel, n, rate, raw_presented.get(rel, 0)))
     rows.sort(key=lambda r: (r[2], -r[1]))
     return rows[:DISMISS_TOP_N], total_all, windowed_total, excluded_pre_read
 
@@ -364,7 +473,7 @@ def main():
                 notes[rel] = (fm, body, text)
 
     missing_updated, date_drift, broken_links, stale_hits = [], [], [], []
-    status_rows, stalled = [], []
+    status_rows, stalled, status_future_dated = [], [], []
     missing_aliases, generic_alias_hits = [], []
     review_overdue, review_soon, review_invalid = [], [], []
     generic_words = load_generic_aliases()
@@ -411,7 +520,15 @@ def main():
             ref = fm.get("updated") or fm.get("date") or ""
             age = (today - datetime.date.fromisoformat(ref)).days if DATE_RE.fullmatch(ref) else None
             status_rows.append((rel, fm["status"], ref, age))
-            active = any(k in fm["status"] for k in ("active", "in_progress", "pending"))
+            # 上限（古すぎ＝停滞）だけでなく下限（未来日＝age<0）も見る（Codexレビュー
+            # 指摘: 347-353行目のcompute_dismissal_rates()・fail-open-and-observable-guards
+            # §1「閾値ガードは上下限をセットで設計する」と同じ既存原則が、ここでは
+            # 未適用だった。誤入力/システム時計ズレでupdated/dateが未来日になっていると、
+            # ageが負になり下のstalled判定（age > STALE_PROJECT_DAYS）を永久にすり抜けて
+            # 「健全」に誤判定される＝無言で見逃さず要確認へ計上する）。
+            if age is not None and age < 0:
+                status_future_dated.append((rel, fm["status"], ref, age))
+            active = status_is_active(fm["status"])
             if active and age is not None and age > STALE_PROJECT_DAYS:
                 stalled.append((rel, fm["status"], ref, age))
 
@@ -473,8 +590,11 @@ def main():
     # （提示ログ）は last_seen には混ぜない＝「提示され続けているのに一度もReadされて
     # いないノート」が未読一覧から隠れてしまう無言fail-openを修正（2026-07-10
     # 敵対的レビュー C-2 対応。旧実装は reads/recall を混合していた）。
-    reads_rows, reads_skipped, reads_last_activity = read_log(READS_LOG_PATH)
-    recall_rows, recall_skipped, recall_last_activity = read_log(RECALL_LOG_PATH)
+    reads_rows, reads_skipped, reads_error_rows, reads_last_activity = read_log(READS_LOG_PATH)
+    recall_rows, recall_skipped, recall_error_rows, recall_last_activity = read_log(RECALL_LOG_PATH)
+    # 「解析できなかった行」の要確認カウントは真に構文破損の疑いがある skipped のみ
+    # （ERROR行はフックが仕様通り記録した正常なログなので issue 数に含めない。
+    # 2026-07-13 敵対的レビューround3対応）。
     log_skipped = reads_skipped + recall_skipped
 
     last_seen = {}
@@ -523,25 +643,48 @@ def main():
             row = (rel, age)
             (unread_confirmed if log_mature else unread_watch).append(row)
 
-    recall_top = Counter(rel for _, _sid, rel in recall_rows).most_common(RECALL_TOP_N)
+    # 提示回数上位・提示無視率ワースト集計はheartbeat行（実ノートではない）を
+    # 除外する（HEARTBEAT_MARKER定義のコメント参照）。recall_rows自体（死活判定に
+    # 使う）はheartbeatを含んだまま残す。
+    recall_note_rows = [r for r in recall_rows if r[2] != HEARTBEAT_MARKER]
+    recall_top = Counter(rel for _, _sid, rel in recall_note_rows).most_common(RECALL_TOP_N)
     dismissal_rows, dismissal_total_all, dismissal_windowed, dismissal_excluded_pre_read = \
-        compute_dismissal_rates(recall_rows, reads_rows, today)
+        compute_dismissal_rates(recall_note_rows, reads_rows, today)
     # session_id が空の提示行はRead側と突合できず「読まれた」判定に加算されない
     # （fail-closed側＝過大評価を避ける設計）。無言のfail-openにしないよう件数を出す
     # （Codexレビュー指摘・Minor: 突合不能行が混ざっていることが可視化されないと、
     # 古いログ形式混在時などに提示無視率を過信しかねない）。reads側の空session_idも
     # 同じ理由で数える（Codexレビュー指摘・再レビュー分Minor: recall側だけの注記だと
     # 破損/旧形式のvault-reads.tsvによる読了率の過小評価に気づけない）。
-    recall_no_session = sum(1 for _, sid, _ in recall_rows if not sid)
+    # recall_note_rows（heartbeat除外後）で数える（Codexレビュー指摘・Minor対応:
+    # heartbeat行は「提示」ではないため、session_id空のheartbeatが混ざると
+    # 「session_idが空の提示行」注記の件数が実態より過大になり、無視率の
+    # 信頼性評価を誤解させうる）。
+    recall_no_session = sum(1 for _, sid, _ in recall_note_rows if not sid)
     reads_no_session = sum(1 for _, sid, _ in reads_rows if not sid)
 
     # ---- レポート生成 ----
+    # 要確認件数(n_issues)は本文にレポートされる⚠️付き警告種別を漏れなく積む。
+    # 過去の実装は§5(注入サイズ超過)・§8(Fragments capture停止疑い)・
+    # §11のreview_soon(14日以内到来)・session_idが空のRead/提示行(§12)を
+    # 算入しておらず、本文に⚠️が出ているのに「要確認 0件」表示になり得た
+    # （2026-07-14 外部脳バックログ・唯一未裏取りだったCodex指摘の確認により確定。
+    # unread_watch（ログ未成熟時の暫定「要観察」）は意図的に対象外のまま＝
+    # 断定ではない旨がレポート本文・コードコメント双方で明示されているため）。
+    size_over_total = total_lines > SIZE_LIMIT_TOTAL_LINES or total_bytes > SIZE_LIMIT_TOTAL
+    size_over_files = sum(1 for _f, _n_lines, _n_bytes, over in size_rows if over)
+    fragments_stopped = frag_files == 0
     n_issues = (len(missing_updated) + len(date_drift) + len(broken_links) + len(stale_hits) + len(stalled)
+                + len(status_future_dated)
                 + len(missing_aliases) + len(generic_alias_hits) + len(review_overdue) + len(review_invalid)
+                + len(review_soon)
                 + len(unread_confirmed) + (1 if log_skipped else 0)
                 + (1 if reads_log_stale else 0) + (1 if recall_log_stale else 0)
                 + (1 if reads_log_broken else 0) + (1 if recall_log_broken else 0)
-                + (1 if reads_log_future else 0) + (1 if recall_log_future else 0))
+                + (1 if reads_log_future else 0) + (1 if recall_log_future else 0)
+                + (1 if size_over_total else 0) + size_over_files
+                + (1 if fragments_stopped else 0)
+                + (1 if reads_no_session else 0) + (1 if recall_no_session else 0))
     L = []
     L.append("---")
     L.append(f"date: {today.isoformat()}")
@@ -586,6 +729,8 @@ def main():
 
     section(f"6. 停滞プロジェクト（active/in_progress/pending なのに {STALE_PROJECT_DAYS} 日以上更新なし・{len(stalled)}件）",
             stalled, lambda r: f"- `{r[0]}` — {r[1]}（最終 {r[2]}・{r[3]}日前）")
+    section(f"6b. statusノートのupdated/dateが未来日（システム時計ズレ/誤入力の疑い・{len(status_future_dated)}件）",
+            status_future_dated, lambda r: f"- `{r[0]}` — {r[1]}（{r[2]}は今日から見て未来日）")
 
     L.append("")
     L.append("## 7. status 付きノート一覧")
@@ -638,9 +783,17 @@ def main():
              "しまう無言fail-openを防ぐ＝2026-07-10 敵対的レビュー C-2 対応）。"
              f"{UNREAD_THRESHOLD_DAYS}日以上Readが無いノートは本当に必要か・aliasが弱くて"
              "想起されていないだけか、を見直す材料にする。")
-    if reads_skipped:
-        L.append(f"⚠️ 解析できなかった vault-reads.tsv 行 {reads_skipped} 件（タブ区切り不正・時刻不正）"
-                 "＝ログ破損の疑い。件数が多い場合はフックの出力形式を確認する。")
+    if reads_skipped or reads_error_rows:
+        # ERROR行（フックが自ら記録する正常なエラーログ）と真に構文が壊れている行を
+        # 分離して表示する（従来はERROR行をskippedへ合算し「ログ破損の疑い」として
+        # 表示していたため、真の破損と区別できなかった＝2026-07-13
+        # 敵対的レビューround3の実バグ級指摘対応）。
+        L.append(f"解析対象外の vault-reads.tsv 行 {reads_skipped + reads_error_rows} 件"
+                 f"（うち ERROR行 {reads_error_rows} 件・真に解析不能な行 {reads_skipped} 件）。"
+                 "ERROR行はフックが仕様通り記録した正常なエラーログ（下記の死活判定で扱う）。"
+                 + (f" ⚠️ 真に解析不能な行が {reads_skipped} 件あります"
+                    "（タブ区切り不正・時刻不正）＝ログ破損の疑い。件数が多い場合は"
+                    "フックの出力形式を確認する。" if reads_skipped else ""))
     if reads_no_session:
         L.append(f"⚠️ session_id が空のRead行 {reads_no_session} 件は提示無視率のRead側突合に使えません"
                  "（＝無視率が実態より高く出ている可能性）。")
@@ -673,19 +826,29 @@ def main():
                      for r, age in rows)
 
     L.append("")
-    L.append(f"### 提示無視率ワースト（vault-recall.tsv・提示{DISMISS_MIN_PRESENTED}回以上・ワースト{DISMISS_TOP_N}件）")
+    L.append(f"### 提示無視率ワースト（vault-recall.tsv・正規化後の提示{DISMISS_MIN_PRESENTED}回以上・ワースト{DISMISS_TOP_N}件）")
     L.append("同一セッション内で提示された後にReadされた割合。低いほど「提示されるのに読まれない」"
              "悪玉alias／不要ノートの疑い（提示→Read のsession_id突合。看板メトリクス・"
              "2026-07-10 敵対的レビュー C-2 対応）。")
+    L.append("分母は (session_id, ノート) 単位に正規化した提示回数（同一セッション内で同じ"
+             "ノートが何度も再登場しても1回に数える。長時間セッションで過去の棚卸しレポートの"
+             "引用やフック自身の過去提示文がプロンプト本文に再登場して再ヒットし、無視率ワーストが"
+             "水増しされるアーティファクトを除去＝2026-07-13 敵対的レビューround3対応。session_idが"
+             "空の行は突合不能なため正規化されず1行のまま数える＝下記の件数は厳密な「セッション数」"
+             "ではなく「正規化後の提示回数」。正規化前の生の提示回数は各行末尾に参考値として併記）。")
     L.append(f"観測: 直近{DISMISS_WINDOW_DAYS}日・全期間の提示は{dismissal_total_all}件"
              f"（うち窓内{dismissal_windowed}件を対象）。全期間累積ではなく直近の窓だけを見ることで、"
              "alias修正後の改善が次回レポートに反映されるようにしています"
              "（2026-07-10 敵対的レビュー2回目 N-2 対応）。")
-    L.append(f"うち、同一セッションで提示より前に既読だった提示{dismissal_excluded_pre_read}件は"
+    L.append(f"うち、正規化後の提示のうち提示より前に既読だった{dismissal_excluded_pre_read}件は"
              "「正当な既読スキップ」とみなし分母から除外しました"
              "（2026-07-10 敵対的レビュー2回目 N-3 対応）。")
-    if recall_skipped:
-        L.append(f"⚠️ 解析できなかった vault-recall.tsv 行 {recall_skipped} 件＝ログ破損の疑い。")
+    if recall_skipped or recall_error_rows:
+        L.append(f"解析対象外の vault-recall.tsv 行 {recall_skipped + recall_error_rows} 件"
+                 f"（うち ERROR行 {recall_error_rows} 件・真に解析不能な行 {recall_skipped} 件）。"
+                 "ERROR行はフックが仕様通り記録した正常なエラーログ（下記の死活判定で扱う）。"
+                 + (f" ⚠️ 真に解析不能な行が {recall_skipped} 件あります＝ログ破損の疑い。"
+                    if recall_skipped else ""))
     if recall_log_stale:
         L.append(f"⚠️ vault-recall.tsv: 直近 {LOG_STALE_DAYS} 日以内の有効な記録が無い"
                  f"（最終記録: {recall_log_valid_end.date().isoformat()}）"
@@ -704,9 +867,10 @@ def main():
         L.append(f"⚠️ session_id が空の提示行 {recall_no_session} 件はRead側と突合できないため、"
                  "「読まれた」に加算していません（＝無視率が実態より高く出ている可能性）。")
     if not dismissal_rows:
-        L.append("該当なし（提示3回以上のノートがまだありません）")
+        L.append(f"該当なし（正規化後の提示{DISMISS_MIN_PRESENTED}回以上のノートがまだありません）")
     else:
-        L.extend(f"- `{rel}` — 提示{n}回中 読まれた率{rate}%" for rel, n, rate in dismissal_rows)
+        L.extend(f"- `{rel}` — 提示{n}回中 読まれた率{rate}%（生提示回数{raw_n}）"
+                 for rel, n, rate, raw_n in dismissal_rows)
 
     if recall_top:
         L.append("")

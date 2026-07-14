@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-07-11
+updated: 2026-07-13
 tags: [profile, preferences]
 project: external-brain
 aliases:
@@ -17,5 +17,4 @@ aliases:
 - **技術説明**: 手厚め＝Web(Astro/PixiJS/GSAP)・3D/VRM/Blender／簡潔＝インフラ・自動化・macOS・AI/LLM活用。
 
 ## 環境・厳守
-- macOS(zsh)。anyenv 管理・Python は venv 必須（[[Preferences/anyenv-runtime-management]]・[[Preferences/python-venv]]）。Claude+Codex 併用。
-- アセット公開はライセンス基準＝公開不可ライセンスのものは公開しない（[[Preferences/absolute-rules]] 1・[[Preferences/vrm-license-policy]]）。委任＝[[Preferences/coding-delegation]]、git＝[[Preferences/git-workflow]]。
+- macOS(zsh)。anyenv 管理・Python は venv 必須（[[Preferences/anyenv-runtime-management]]・[[Preferences/python-venv]]）。Claude+Codex 併用。アセット公開はライセンス基準＝公開不可ライセンスのものは公開しない（[[Preferences/absolute-rules]] 1・[[Preferences/vrm-license-policy]]）。委任＝[[Preferences/coding-delegation]]、git＝[[Preferences/git-workflow]]。

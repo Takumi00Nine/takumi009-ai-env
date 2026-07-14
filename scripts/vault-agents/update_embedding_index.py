@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """外部脳ハイブリッド検索・柱①の埋め込みインデックス差分更新CLI。
 
+使い方一覧＝Vault: Knowledge/tools-inventory.md／運用導線＝Projects/vault-hybrid-search.md
+
 scripts/backup-vault.sh の末尾からbest-effortで（毎時）相乗り実行される
 （設計書§1柱①・§2.2・§3(b)採用案＝毎時vault-backup相乗り）。単独実行も可能。
 
@@ -10,7 +12,7 @@ scripts/backup-vault.sh の末尾からbest-effortで（毎時）相乗り実行
      必須機能ではない＝fail-open。検索側は既存インデックスのままフォールバックする）
   3. 現行インデックス(CURRENT)を「現在の設定(model/model_digest)」で検証読込。
      schema_versionまたはmodel_digest不一致ならフルリビルド（=差分無しとして全件embed）
-  4. 現存ファイル一覧（4フォルダ・README.md除く）を基準に、sha256差分検知
+  4. 現存ファイル一覧（embedding_index.SCAN_DIRSが正＝5フォルダ・README.md除く）を基準に、sha256差分検知
      （content hash一致は埋め込み再利用、不一致/新規は再embed。旧インデックスに
      あって現存しないノートは新世代のnotesリストから自然に除外＝削除ノート対応）
   5. 新世代ディレクトリへフルスナップショットを書き、CURRENTをos.replaceで原子更新

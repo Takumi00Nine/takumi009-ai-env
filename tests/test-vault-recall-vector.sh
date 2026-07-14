@@ -2,7 +2,8 @@
 # claude/hooks/vault-recall.sh のベクトル想起マージ部分（8.1ラウンド追加）のユニット
 # テスト。既存のtest-vault-recall.sh（キーワード照合ロジック）とは目的を分離し、
 # 「キーワード候補∪ベクトル候補（最大3件・別枠表示）」「候補0件即exitの位置移動」
-# 「fail-open 6ケース（付録A FR3）」を1:1の独立ケースとして検証する。
+# 「付録A FR3の6ケース（真のfail-open 5ケース＋正常な防御的除外1ケース＝
+# 2026-07-14修正でlog_fact()の事実記録へ分離）」を1:1の独立ケースとして検証する。
 #
 # 実Vault・実Ollamaには一切依存しない。埋め込みインデックスは
 # scripts/vault-agents/update_embedding_index.py を tests/fake_ollama_server.py
@@ -263,7 +264,7 @@ echo "=== 9. fail-open ケース5: 権限エラー相当（helperスクリプト
   teardown_fixture
 }
 
-echo "=== 10. fail-open ケース6: 削除済みノートのベクトル残存（インデックスの最大1時間ラグ） ==="
+echo "=== 10. 付録A FR3ケース6（真の失敗ではない正常系）: 削除済みノートのベクトル残存（インデックスの最大1時間ラグ）はlog_fact()の事実記録として残る ==="
 {
   start_fake_server
   setup_fixture
@@ -272,7 +273,7 @@ echo "=== 10. fail-open ケース6: 削除済みノートのベクトル残存�
   rc=$?
   assert_eq "exit code 0（このケースは異常ではなく正常な除外なので通常出力になりうる）" "0" "$rc"
   assert_not_contains "削除済みノートは候補に出ない" "$out" "note-gamma.md"
-  assert_contains "除外件数がERRORログに残る（付録A FR3ケース6・全ケースでログ残すという要件）" \
+  assert_contains "除外件数がlog_fact()の事実記録としてログに残る（付録A FR3ケース6・全ケースでログ残すという要件）" \
     "$(cat "$LOG")" "削除済みノートのベクトル残存を"
   stop_fake_server
   teardown_fixture
@@ -400,6 +401,224 @@ aliases:
 
   stop_fake_server
   teardown_fixture
+}
+
+echo "=== 15. 自己打ち切り（段階縮退）その1: フック予算が起動前から既に尽きていればベクトル起動自体をスキップする（8.3ラウンド新設） ==="
+{
+  start_fake_server
+  setup_fixture
+  # HOOK_BUDGET_MS=1・DEGRADE_TAIL_RESERVE_MS=0 → 打ち切り閾値1ms。stdin解析等の
+  # セットアップだけで確実にこれを超えるため、ベクトルは起動されずキーワードのみで
+  # 返る（fakeサーバへは実際に接続を試みないため遅延指定は不要）。
+  out="$(run_hook s15 "キーワードヒット専用語についての質問" \
+    env VAULT_RECALL_HOOK_BUDGET_MS=1 VAULT_RECALL_DEGRADE_TAIL_RESERVE_MS=0)"
+  rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_contains "キーワード結果は保持される" "$out" "keyword-hit-note.md"
+  assert_not_contains "ベクトル枠の見出しは出ない（起動自体をスキップしたため）" "$out" "意味的に近い候補"
+  assert_contains "自己打ち切り（段階縮退）のログが残る" "$(cat "$LOG")" \
+    "自己打ち切り（段階縮退）: フック予算(1ms)の残りが乏しいため"
+  assert_contains "起動自体をスキップした旨が明記される" "$(cat "$LOG")" "起動自体をスキップ"
+  stop_fake_server
+  teardown_fixture
+}
+
+echo "=== 16. 自己打ち切り（段階縮退）その2: 起動後にベクトルが長引く場合、自身のkill-after到達を待たずポーリングループ側で打ち切る ==="
+{
+  setup_fixture_delay2() {
+    VAULT_DIR="$(mktemp -d)"; IDX_DIR="$(mktemp -d)"; LOG="$(mktemp)"
+    write_note "$VAULT_DIR/Preferences/keyword-hit-note.md" \
+      $'date: 2026-07-01\naliases:\n  - "キーワードヒット専用語"' "本文。"
+  }
+  start_fake_server
+  setup_fixture_delay2
+  # インデックス構築は遅延なしサーバで行う。
+  python3 "$UPDATE_SCRIPT" --vault "$VAULT_DIR" --index-dir "$IDX_DIR" --base-url "$BASE_URL" >/dev/null 2>&1
+  stop_fake_server
+  # 検索時は900ms遅延させる。ベクトル自身のkill-after（budget+grace=5000+100ms）は
+  # 十分大きく取り、従来の「ベクトル自身の予算超過」killでは説明できないタイミング
+  # （打ち切り閾値500ms＜900ms遅延＜5100ms kill-after）で打ち切られることを検証する。
+  # 打ち切り閾値は500ms（HOOK_BUDGET_MS=600・RESERVE=100）とやや大きめに取り、
+  # 起動前チェック（自己打ち切りその1）へ誤って倒れないよう、典型的なセットアップ
+  # 時間（数十ms）との間に十分なマージンを確保する（Codexレビュー指摘・Minor:
+  # CI負荷でセットアップが遅延すると閾値に競合しテストが不安定になりうるため）。
+  FAKE_OLLAMA_DELAY_MS=900 start_fake_server
+  t0_ns="$(date +%s%N 2>/dev/null || echo "")"
+  out="$(run_hook s16 "キーワードヒット専用語についての質問" \
+    env VAULT_RECALL_HOOK_BUDGET_MS=600 VAULT_RECALL_DEGRADE_TAIL_RESERVE_MS=100 \
+        VAULT_RECALL_VECTOR_BUDGET_MS=5000 VAULT_RECALL_VECTOR_KILL_GRACE_MS=100)"
+  rc=$?
+  t1_ns="$(date +%s%N 2>/dev/null || echo "")"
+  assert_eq "exit code 0" "0" "$rc"
+  assert_contains "キーワード結果は保持される" "$out" "keyword-hit-note.md"
+  assert_contains "自己打ち切り（段階縮退）のログが残る（ベクトル自身のkill-after到達メッセージではない）" \
+    "$(cat "$LOG")" "打ち切り閾値500ms到達"
+  assert_not_contains "従来の予算超過メッセージにはならない" "$(cat "$LOG")" "helperの応答が予算(5000ms"
+  if [ -n "$t0_ns" ] && [ -n "$t1_ns" ] && [ "${#t0_ns}" -ge 19 ] && [ "${#t1_ns}" -ge 19 ]; then
+    elapsed_ms=$(( (10#$t1_ns - 10#$t0_ns) / 1000000 ))
+    # 900ms遅延を律儀に待っていれば900ms超になるはず。自己打ち切りにより
+    # 800ms未満（打ち切り閾値500ms＋後処理・プロセス起動オーバーヘッドの余裕）で
+    # 完了していることを確認する（環境負荷で多少ぶれてもよいよう緩めに800ms未満とする）。
+    assert_eq "900ms遅延を律儀に待たず打ち切られた（実測${elapsed_ms}ms<800ms）" "1" \
+      "$([ "$elapsed_ms" -lt 800 ] && echo 1 || echo 0)"
+  else
+    echo "  (skip) date +%s%N が使えない環境のため所要時間の実測アサーションを省略"
+  fi
+  stop_fake_server
+  teardown_fixture
+}
+
+echo "=== 17. ハートビート: 自己打ち切りでベクトルを諦めた結果キーワードも0件のときはハートビートを書かない（Codex一次レビュー指摘・Major対応） ==="
+{
+  start_fake_server
+  setup_fixture
+  # プロンプトはキーワード・ベクトルどちらとも一致しない語にする（setup_fixtureの
+  # 2ノートいずれのalias/マーカーとも無関係）。HOOK_BUDGET_MS=1で自己打ち切りその1
+  # （起動前スキップ）を確実に発火させ、ベクトルは試みられない＝結果的にキーワードも
+  # ベクトルも0件になる。この場合でもERROR行（自己打ち切りのログ）はあるので
+  # ハートビートは書かない。
+  out="$(run_hook s17 "全く無関係などうでもいい話題についての雑談です" \
+    env VAULT_RECALL_HOOK_BUDGET_MS=1 VAULT_RECALL_DEGRADE_TAIL_RESERVE_MS=0)"
+  rc=$?
+  logtext="$(cat "$LOG" 2>/dev/null || true)"
+  assert_eq "exit code 0" "0" "$rc"
+  assert_eq "標準出力は空" "" "$out"
+  assert_contains "自己打ち切りのERROR行は残る" "$logtext" "起動自体をスキップ"
+  assert_not_contains "ハートビートは書かれない（PIPELINE_HAD_ERRORにより抑止）" "$logtext" "(heartbeat)"
+  stop_fake_server
+  teardown_fixture
+}
+
+echo "=== 18. 自己打ち切り: date +%s%N が使えない環境ではこの機能だけがfail-openで無効化され、通常の想起処理は継続する（Codexレビュー指摘） ==="
+{
+  start_fake_server
+  setup_fixture
+  REAL_DATE="$(command -v date)"
+  BINDIR="$(mktemp -d)"
+  cat > "$BINDIR/date" <<EOF
+#!/bin/bash
+if [ "\$1" = "+%s%N" ]; then
+  echo "12345N"
+  exit 0
+fi
+exec "$REAL_DATE" "\$@"
+EOF
+  chmod +x "$BINDIR/date"
+  # HOOK_BUDGET_MS=1なら通常は自己打ち切りその1が即発火してベクトルは起動されない
+  # はずだが、date+%s%N が使えない（now_ms()が空文字を返す）ためこの判定自体が
+  # 無効化され、従来どおりベクトルは起動・完走することを確認する。
+  out="$(PATH="$BINDIR:$PATH" run_hook s18 "__MARK_DELTA__ について教えてほしい" \
+    env VAULT_RECALL_HOOK_BUDGET_MS=1 VAULT_RECALL_DEGRADE_TAIL_RESERVE_MS=0)"
+  rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_contains "date+%s%N不通でも自己打ち切りは発火せずベクトルが正常に起動・完走する" "$out" "意味的に近い候補"
+  assert_not_contains "自己打ち切りログは残らない" "$(cat "$LOG")" "自己打ち切り"
+  rm -rf "$BINDIR"
+  stop_fake_server
+  teardown_fixture
+}
+
+echo "=== 19. 自己打ち切り: DEGRADE_TAIL_RESERVE_MS > HOOK_BUDGET_MS でも負数化せず閾値0にクランプされクラッシュしない（境界値・Codexレビュー指摘） ==="
+{
+  start_fake_server
+  setup_fixture
+  out="$(run_hook s19 "キーワードヒット専用語についての質問" \
+    env VAULT_RECALL_HOOK_BUDGET_MS=100 VAULT_RECALL_DEGRADE_TAIL_RESERVE_MS=500)"
+  rc=$?
+  assert_eq "exit code 0（負数閾値にならずクラッシュしない）" "0" "$rc"
+  assert_contains "キーワード結果は保持される" "$out" "keyword-hit-note.md"
+  assert_contains "打ち切り閾値は0msにクランプされる" "$(cat "$LOG")" "打ち切り閾値0ms"
+  stop_fake_server
+  teardown_fixture
+}
+
+echo "=== 20. 自己打ち切り: HOOK_BUDGET_MS/DEGRADE_TAIL_RESERVE_MSが7桁以上（オーバーフロー対策の上限）でも既定値へフォールバックする（Codex一次レビュー2巡目指摘・Minor） ==="
+{
+  start_fake_server
+  setup_fixture
+  # HOOK_BUDGET_MS=1000000(7桁)が既定値2000msへ正しくフォールバックするなら、
+  # DEGRADE_TAIL_RESERVE_MS=2500(有効値)との差は 2000-2500=-500 → 0にクランプされ、
+  # 打ち切り閾値0msで即座に起動前スキップが発火するはず（もしフォールバックせず
+  # 1000000のまま算術展開に渡っていれば、差は997500で大きくベクトルは正常完走する
+  # ため、両者は観測結果で区別できる）。
+  out="$(run_hook s20a "キーワードヒット専用語についての質問" \
+    env VAULT_RECALL_HOOK_BUDGET_MS=1000000 VAULT_RECALL_DEGRADE_TAIL_RESERVE_MS=2500)"
+  rc=$?
+  assert_eq "HOOK_BUDGET_MS=1000000(7桁)でもexit code 0" "0" "$rc"
+  assert_not_contains "ベクトル枠は出ない（フォールバックにより即スキップ）" "$out" "意味的に近い候補"
+  assert_contains "HOOK_BUDGET_MSが既定値2000msへフォールバックした結果として打ち切り閾値0msになる" \
+    "$(cat "$LOG")" "フック予算(2000ms)の残りが乏しいため"
+
+  # 同様にDEGRADE_TAIL_RESERVE_MS=9999999(7桁)が既定値400msへ正しくフォールバック
+  # するなら、HOOK_BUDGET_MS=999999(有効な6桁最大値)との差は999599で大きくベクトルは
+  # 正常完走するはず（もしフォールバックせず9999999のままなら差が大きく負になり
+  # 閾値0msで即スキップされるため、両者は区別できる）。
+  out="$(run_hook s20b "__MARK_DELTA__ について教えてほしい" \
+    env VAULT_RECALL_HOOK_BUDGET_MS=999999 VAULT_RECALL_DEGRADE_TAIL_RESERVE_MS=9999999)"
+  rc=$?
+  assert_eq "DEGRADE_TAIL_RESERVE_MS=9999999(7桁)でもexit code 0" "0" "$rc"
+  assert_contains "DEGRADE_TAIL_RESERVE_MSが既定値400msへフォールバックしベクトルは正常完走する" \
+    "$out" "意味的に近い候補"
+  # このブロック内で共有しているLOGにはs20aの自己打ち切りログも既に入っているため、
+  # s20bのセッションIDに限定して自己打ち切りが発火していないことを確認する。
+  assert_not_contains "s20bでは自己打ち切りは発火しない" "$(grep 's20b' "$LOG" 2>/dev/null)" "自己打ち切り"
+  stop_fake_server
+  teardown_fixture
+}
+
+echo "=== 21. --model明示渡し: vector_recall_helper.pyへVAULT_EMBED_MODEL（既定はei.DEFAULT_MODELと同じ\"qwen3-embedding:0.6b\"）を明示的に--modelとして渡す（2026-07-14修正・外部脳の想起・ベンチ機構の総点検・環境変数一致への暗黙依存の解消） ==="
+{
+  # 実Ollama・実インデックスは不要（helperをスタブに差し替え、受け取ったargvを
+  # そのままファイルへダンプさせて--modelの値だけを確認する。テスト12のDUMP_HELPER
+  # と同じ手法）。
+  VAULT_DIR="$(mktemp -d)"
+  LOG="$(mktemp)"
+  write_note "$VAULT_DIR/Knowledge/dummy-note.md" $'date: 2026-07-14' "本文。"
+
+  ARGV_FILE="$(mktemp)"
+  ARGV_HELPER="$(mktemp)"
+  cat > "$ARGV_HELPER" <<PYEOF
+import sys
+open("$ARGV_FILE", "w").write(" ".join(sys.argv[1:]))
+print('{"candidates": [], "excluded_missing": 0}')
+PYEOF
+
+  printf '{"session_id":"s21a","prompt":"十分な長さのダミープロンプトです"}' \
+    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_VECTOR_HELPER="$ARGV_HELPER" \
+      "$SCRIPT" >/dev/null
+
+  waited=0
+  while [ ! -s "$ARGV_FILE" ] && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited + 1)); done
+  argv_text="$(cat "$ARGV_FILE")"
+  assert_contains "VAULT_EMBED_MODEL未設定時は既定値qwen3-embedding:0.6bが--modelとして渡る" "$argv_text" "--model qwen3-embedding:0.6b"
+
+  : > "$ARGV_FILE"
+  printf '{"session_id":"s21b","prompt":"十分な長さのダミープロンプトです"}' \
+    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_VECTOR_HELPER="$ARGV_HELPER" \
+      VAULT_EMBED_MODEL="custom-test-model" "$SCRIPT" >/dev/null
+
+  waited=0
+  while [ ! -s "$ARGV_FILE" ] && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited + 1)); done
+  argv_text="$(cat "$ARGV_FILE")"
+  assert_contains "VAULT_EMBED_MODEL設定時はその値が--modelとして渡る（環境変数一致への暗黙依存ではなく明示引数）" \
+    "$argv_text" "--model custom-test-model"
+
+  rm -f "$ARGV_FILE" "$ARGV_HELPER"
+  rm -rf "$VAULT_DIR"
+  rm -f "$LOG"
+}
+
+echo "=== 22. --model明示渡し: 既定値"qwen3-embedding:0.6b"の文字列リテラルはembedding_index.DEFAULT_MODELのフォールバック値と一致する（SSOT検証・値のドリフト防止） ==="
+{
+  hook_literal="$(grep -v '^[[:space:]]*#' "$SCRIPT" \
+    | grep -oE 'VECTOR_MODEL="\$\{VAULT_EMBED_MODEL:-[^}]+\}"' \
+    | grep -oE ':-[^}]+\}"$' | sed -E 's/^:-//; s/\}"$//')"
+  py_literal="$(python3 -c "import sys; sys.path.insert(0, '$REPO_ROOT/scripts/vault-agents'); import os; os.environ.pop('VAULT_EMBED_MODEL', None); import importlib; import embedding_index as ei; importlib.reload(ei); print(ei.DEFAULT_MODEL)")"
+  if [[ -z "$hook_literal" ]]; then
+    fail_case "vault-recall.shからVECTOR_MODELの既定値リテラルを抽出できなかった（grepパターンがフック側の変更でズレた可能性）"
+  else
+    assert_eq "hook側のVECTOR_MODEL既定値リテラルがembedding_index.DEFAULT_MODELのフォールバック値と一致" "$py_literal" "$hook_literal"
+  fi
 }
 
 echo

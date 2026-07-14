@@ -47,6 +47,10 @@ d_date() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%F; }
 # 対称に間違えてしまい、テストがバグを覆い隠してしまうため＝2026-07-10
 # 敵対的レビュー2回目 N-5 対応）。
 d_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -u -v"${n}"d +%Y-%m-%dT%H:%M:%SZ; }
+# `touch -t` 用のN日前/後のタイムスタンプ（BSD touch形式 [[CC]YY]MMDDhhmm[.SS]）。
+# weekly-reviewのcanvasはファイル名(対象週の月曜日)ではなくmtime基準で新鮮度判定する
+# ため、fixtureのmtimeを意図的に古くしたい場合に使う。
+d_mtime_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%Y%m%d0000; }
 
 # 最小構成の「repo」フィクスチャを作る（check-drift.shが参照する
 # claude/・codex/・vault-public/・scripts/check-drift.sh本体だけをコピーする）。
@@ -339,6 +343,34 @@ echo "=== 7. ③repoがcommit済みでクリーンならUNCOMMITTEDは出ない 
   rm -rf "$REPO" "$HOME_DIR"
 }
 
+echo "=== 7b. ③git status --porcelain の実行自体が失敗した場合は『差分なし』に混同せずGIT-STATUS-CHECK-FAILEDを検知する（2026-07-14 リーダー指摘対応） ==="
+{
+  # 旧実装は `|| true` でコマンド失敗を握りつぶしており、gitリポジトリ破損等で
+  # status自体が実行できない場合も出力ゼロ件＝「未commitの変更はありません」と
+  # 偽の健全表示になっていた（「監視不能も異常」の原則に反する）。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  git -C "$REPO" init -q
+  git -C "$REPO" config user.name test
+  git -C "$REPO" config user.email test@example.invalid
+  git -C "$REPO" add -A
+  git -C "$REPO" commit -q -m "initial"
+  # .git/HEAD を消してリポジトリを破損させる（.gitディレクトリ自体は残る＝
+  # 本ツールの `[ -d "$DIR/.git" ]` ガードは通過するが、git statusは失敗する）。
+  rm -f "$REPO/.git/HEAD"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "GIT-STATUS-CHECK-FAILEDが検知される" "$out" "[GIT-STATUS-CHECK-FAILED]"
+  assert_not_contains "偽の健全表示にはならない" "$out" "✅ 未commitの変更はありません"
+  assert_not_contains "UNCOMMITTEDと誤分類はしない（別種別）" "$out" "[UNCOMMITTED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
 echo "=== 8. ④実Vaultとvault-publicのPreferencesに差分があるとDIFFを検知する ==="
 {
   REPO="$(mktemp -d)"
@@ -353,6 +385,30 @@ echo "=== 8. ④実Vaultとvault-publicのPreferencesに差分があるとDIFF�
   assert_contains "Preferences DIFF検知" "$out" "[DIFF]"
   assert_contains "エクスポート漏れの可能性メッセージ" "$out" "export-public-vault.sh の再実行が必要な可能性"
 
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 8b. ④diff -rq の実行自体が失敗した場合は『差分なし』に混同せずDIFF-CHECK-FAILEDを検知する（2026-07-14 リーダー指摘対応） ==="
+{
+  # diff -rq のexit code: 0=差分なし／1=差分あり／2=読み取り不能等のエラー。
+  # 旧実装は `|| true` で握りつぶしており、2（エラー）も出力ゼロ件なら
+  # 「差分なし＝健全」に混同し得た。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # vault-public側のファイルを読み取り不能にして diff -rq をエラー終了させる
+  # （ディレクトリ自体の権限は残す＝一覧はできるが個別ファイルが読めない状態）。
+  chmod 000 "$REPO/vault-public/Preferences/sample.md"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "DIFF-CHECK-FAILEDが検知される" "$out" "[DIFF-CHECK-FAILED]"
+  assert_not_contains "偽の健全表示にはならない" "$out" "✅ 差分なし"
+  assert_not_contains "DIFFと誤分類はしない（別種別）" "$out" "[DIFF]"
+
+  chmod 644 "$REPO/vault-public/Preferences/sample.md"
   rm -rf "$REPO" "$HOME_DIR"
 }
 
@@ -419,6 +475,33 @@ exit 1
 EOF
   fi
   chmod +x "$bindir/gh"
+}
+
+# N時間前/後のepoch秒（BSD date。⑦のfixture用。origin/mainのコミット日時を
+# 過去/未来に固定するために使う＝ハードコード日付を使わない）。
+d_epoch_hours() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -u -v"${n}"H +%s; }
+
+# ⑦のfixture用: 指定パスをVault風のgitリポジトリにし、ローカルのbare originを
+# 設定する（tests/test-backup-vault.shの「8. remote origin設定済みならpush
+# される」と同じ方式＝実ネットワーク不要）。ブランチ名は本番のVaultと同じ main に
+# 固定する（環境のinit.defaultBranch設定に依存しないよう -b で明示）。
+make_vault_with_bare_origin() {
+  local vault="$1" bare="$2"
+  git init -q --bare "$bare"
+  mkdir -p "$vault"
+  git -C "$vault" init -q -b main
+  git -C "$vault" config user.name test
+  git -C "$vault" config user.email test@example.invalid
+  git -C "$vault" remote add origin "$bare"
+}
+
+# ⑦のfixture用: 指定epoch秒でVaultへ1コミット追加する。
+vault_commit_at() {
+  local vault="$1" epoch="$2" msg="$3"
+  echo "$msg" >> "$vault/note.md"
+  git -C "$vault" add -A
+  GIT_AUTHOR_DATE="@${epoch} +0000" GIT_COMMITTER_DATE="@${epoch} +0000" \
+    git -C "$vault" commit -q -m "$msg"
 }
 
 echo "=== 11. ⑤Vault・私的パッチrepoとも PRIVATE ならdriftにならない ==="
@@ -493,7 +576,7 @@ echo "=== 13. ⑤gh コマンドが無い場合はWARN表示のみでdriftにし
   rm -rf "$REPO" "$HOME_DIR" "$PRIVATE_REPO"
 }
 
-echo "=== 14. ⑤gh はあるが repo view が失敗（未認証等）ならWARN表示のみでdriftにしない ==="
+echo "=== 14. ⑤gh はあるが repo view が失敗（未認証等）ならGH-CHECK-FAILEDとしてdriftに計上する（2026-07-13外部脳round4対応） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
@@ -508,7 +591,8 @@ echo "=== 14. ⑤gh はあるが repo view が失敗（未認証等）ならWARN
 
   out="$(PATH="$BINDIR:$PATH" run_check "$REPO" "$HOME_DIR")"
   assert_contains "GH-CHECK-FAILED表示" "$out" "[GH-CHECK-FAILED] Vaultバックアップ"
-  assert_not_contains "[VISIBILITY]は出ない（driftにしない）" "$out" "[VISIBILITY]"
+  assert_not_contains "[VISIBILITY]は出ない（GH-CHECK-FAILEDとは別種の異常）" "$out" "[VISIBILITY]"
+  assert_contains "総drift件数1（可視性チェック実行不能もdrift計上・監視不能も異常）" "$out" "総drift件数: 1"
 
   rm -rf "$REPO" "$HOME_DIR" "$BINDIR"
 }
@@ -872,6 +956,72 @@ echo "=== 22e. ⑥未処理レポート: 既にSTALE扱いのレポートは二�
   assert_contains "VAULT-INVENTORY-STALEが検知される" "$out" "[VAULT-INVENTORY-STALE]"
   assert_not_contains "同じレポートにVAULT-INVENTORY-UNPROCESSEDは重複して出ない" "$out" "[VAULT-INVENTORY-UNPROCESSED]"
   assert_contains "総drift件数1（STALEのみ・重複無し）" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 22f. ⑥未処理レポート: 最新は処理済みでも、古い（既に置き換わった）未処理レポートは検知する（2026-07-14修正の回帰テスト。旧実装は最新1件しか見ておらず、drift-checkがレポート生成と同日実行される運用ではlatestが常にage=0でグレースを超えられず、この穴が永久検知不能だった） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  # 古いレポート（8日前・猶予3日超だがSTALE閾値10日は超えていない）は未処理のまま。
+  OLD="$(d_date -8)"
+  echo "# review old" > "$HOME_DIR/.claude/logs/fragments-log/${OLD}.md"
+  # 最新レポート（当日生成）は既に処理済み＝旧実装ではここだけを見て「健全」と誤判定していた。
+  NEW="$(d_date 0)"
+  cat > "$HOME_DIR/.claude/logs/fragments-log/${NEW}.md" <<EOF
+---
+date: ${NEW}
+processed: ${NEW}
+---
+
+# Fragments 昇格レビュー ${NEW}
+EOF
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  # 最新自体は処理済みだが、古い方が未処理のまま残っているためdrift扱いを優先する
+  # （処理済みマーカーありメッセージより「未処理が残っている」警告を優先表示）。
+  assert_contains "古い未処理レポートがFRAGMENTS-LOG-UNPROCESSEDとして検知される" "$out" "[FRAGMENTS-LOG-UNPROCESSED]"
+  assert_contains "件数1件と表示される" "$out" "未処理（frontmatterの processed: 行が無い）レポートが1件あります"
+  assert_contains "古いレポートのフルパスが表示される" "$out" "${HOME_DIR}/.claude/logs/fragments-log/${OLD}.md"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 22g. ⑥未処理レポート: 未処理が複数件あれば件数と最古/最新パスをまとめて報告する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  mkdir -p "$HOME_DIR/.claude/logs/fragments-log" \
+           "$HOME_DIR/.claude/logs" \
+           "$HOME_DIR/Library/LaunchAgents"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.fragments-log.plist"
+  # 未処理のまま放置された3件（いずれもSTALE閾値10日は超えていない）
+  D1="$(d_date -9)"; D2="$(d_date -7)"; D3="$(d_date -4)"
+  echo "# review 1" > "$HOME_DIR/.claude/logs/fragments-log/${D1}.md"
+  echo "# review 2" > "$HOME_DIR/.claude/logs/fragments-log/${D2}.md"
+  echo "# review 3" > "$HOME_DIR/.claude/logs/fragments-log/${D3}.md"
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "3件まとめて1つのdrift項目として報告される" "$out" "未処理（frontmatterの processed: 行が無い）レポートが3件あります"
+  assert_contains "最古のパスが表示される" "$out" "最古: ${HOME_DIR}/.claude/logs/fragments-log/${D1}.md"
+  assert_contains "最新のパスが表示される" "$out" "最新: ${HOME_DIR}/.claude/logs/fragments-log/${D3}.md"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -1336,6 +1486,693 @@ echo "=== 39. ⑥knowledge-merge-detect: plistは導入済みだが出力がま�
   assert_contains "plist導入済みなのに出力が無いとDEADとして検知される" "$out" "[KNOWLEDGE-MERGE-CANDIDATES-DEAD]"
   assert_not_contains "「一度も導入されていない」という対象外メッセージにはならない（plistがあるため）" \
     "$out" "vault-agentsが一度も導入されていない想定ならチェック対象外"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 40. ⑦Vaultがgit管理下に無ければ対象外（サブ機・私的Vault未clone想定） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # $HOME_DIR/Data/obsidian は git init しない（サブ機想定）。
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "対象外メッセージが出る" "$out" "Vaultがgit管理下にありません"
+  assert_not_contains "VAULT-PUSHは出ない" "$out" "[VAULT-PUSH"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 41. ⑦Vaultにremote originが未設定なら対象外 ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  git -C "$HOME_DIR/Data/obsidian" init -q -b main
+  git -C "$HOME_DIR/Data/obsidian" config user.name test
+  git -C "$HOME_DIR/Data/obsidian" config user.email test@example.invalid
+  git -C "$HOME_DIR/Data/obsidian" commit -q --allow-empty -m init
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "対象外メッセージが出る" "$out" "remote 'origin' が未設定のためチェック対象外"
+  assert_not_contains "VAULT-PUSHは出ない" "$out" "[VAULT-PUSH"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 42. ⑦mainとorigin/mainが同一コミット（push済み・健全）なら、たとえ古くてもdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -240)" "old commit (10日前)"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "同一コミットの健全メッセージが出る" "$out" "main と origin/main は同一コミット"
+  assert_not_contains "VAULT-PUSHは出ない（差分が無いので古くても誤報しない）" "$out" "[VAULT-PUSH"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 42b. ⑦ローカルmainがorigin/mainより単に古い（reset等で巻き戻った）場合は「未反映commitあり」と誤検知しない（Codex一次レビュー指摘・Major対応） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "first"
+  first_sha="$(git -C "$HOME_DIR/Data/obsidian" rev-parse HEAD)"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -40)" "second"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  # ローカルだけ先頭commitへ巻き戻す（origin/mainはsecondのまま＝ローカルが
+  # 単純に「古い」状態。SHA比較だけだと「未反映commitあり」と誤検知しうる）。
+  git -C "$HOME_DIR/Data/obsidian" reset -q --hard "$first_sha"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "巻き戻り単独ではVAULT-PUSHは出ない（rev-listで空と判定される）" "$out" "[VAULT-PUSH"
+  assert_contains "事実に即したメッセージになる（同一コミットとは断定しない・Codex二次レビュー指摘・Minor対応）" \
+    "$out" "未反映のcommitはありません（push未反映の差分なし。ローカルがorigin/mainより遅れているだけの可能性があります）"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 43. ⑦分岐しているが24時間以内なら様子見でdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -2)" "pushed 2時間前"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours 0)" "unpushed just now"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "様子見メッセージが出る" "$out" "より進んでいますが、最も古い未反映commitから"
+  assert_not_contains "[VAULT-PUSH-STALE]はまだ出ない（24時間未満）" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 44. ⑦未反映commit自体が24時間超過して待たされているとVAULT-PUSH-STALEとしてdrift計上する（2026-07-13 外部脳round4対応・欠陥① / Codex一次レビュー指摘・Major対応で『最も古い未反映commit』基準に変更） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  # origin側のtipは100時間前（十分に古いが、それ自体はもうpush済みなので無関係）。
+  # 「未反映のまま30時間待たされているcommit」がある、という状態を再現する
+  # （旧実装はorigin tipの古さだけを見ていたため、直近の未反映commitが実際には
+  # 新しくてもtipが古いだけでSTALE誤報していた＝Codexレビュー指摘・Major）。
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -100)" "pushed 100時間前"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -30)" "unpushed 30時間前"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-PUSH-STALEが検知される" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "確認コマンドが含まれる" "$out" "tail -50 /tmp/vault-backup.log"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 44b. ⑦origin tipは古いが未反映commit自体は新しい場合はSTALEにしない（Codex一次レビュー指摘・Major『origin tip基準だと誤検知する』の回帰防止） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  # origin tipは100時間前（旧実装ならこれだけでSTALE誤検知した）だが、
+  # 未反映commit自体は1時間前にできたばかり＝pushはまだ「詰まっている」とは言えない。
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -100)" "pushed 100時間前"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -1)" "unpushed 1時間前"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "origin tipが古いだけではSTALEにならない" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 45. ⑦一度もpushしていない（origin/main参照が無い）が最古commitが24時間以内なら判定不能のfail-open表示・driftにはしない（初回セットアップ直後の猶予） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -1)" "never pushed yet, but recent"
+  # push しない（origin/main 参照がローカルに無い状態を模擬）
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "VAULT-PUSH-STALEにはならない（初回セットアップ直後の猶予）" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "様子見メッセージに『一度も成功pushしていない可能性』が注記される" "$out" "一度も成功pushしていない可能性"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 45b. ⑦一度もpushしていない状態が24時間超続くとVAULT-PUSH-STALEとして検知する（Codex一次レビュー指摘・Major対応：従来はここが永久にfail-openで穴だった） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -30)" "never pushed, 30時間前のまま"
+  # push しない（初回pushが認証不良等で30時間ずっと失敗し続けている状態を模擬）
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-PUSH-STALEが検知される" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "『一度も成功pushしていない可能性』が注記される" "$out" "一度も成功pushしていない可能性"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 45c. ⑦ローカルブランチ自体が無い（commitが1つも無い）場合は判定不能のfail-open・driftにはしない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  # commitを1つも作らない（unborn main。install-backup.sh導入直後・初回backup-vault.sh
+  # 実行前を模擬）。
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-PUSH-CHECK-UNAVAILABLEが表示される" "$out" "[VAULT-PUSH-CHECK-UNAVAILABLE]"
+  assert_not_contains "VAULT-PUSH-STALEにはならない" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 46. ⑦未反映commit自体の時刻が未来日時ならVAULT-PUSH-FUTURE-DATEとして検知する（origin側ではなく未反映commit自体が未来のケース。Codex一次レビュー指摘反映） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "pushed 50時間前（正常な日時）"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours 240)" "未反映commitの時刻が未来（システム時計ズレ想定）"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-PUSH-FUTURE-DATEが検知される" "$out" "[VAULT-PUSH-FUTURE-DATE]"
+  assert_not_contains "STALEにはならない（FUTURE-DATEを優先）" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 47. ⑦VAULT_BACKUP_PUSH_STALE_HOURSで閾値を上書きできる ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -20)" "pushed 20時間前"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -4)" "unpushed 4時間前"
+
+  out="$(VAULT_BACKUP_PUSH_STALE_HOURS=3 DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
+    bash "$REPO/scripts/check-drift.sh")"
+  assert_contains "しきい値3時間に短縮すると4時間前の未反映commitでVAULT-PUSH-STALEが検知される" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 48. ⑦未反映commitの並び(git rev-listの出力順)とコミット時刻が非単調でも、最も古い時刻のcommitを正しく基準にする（Codex二次レビュー指摘・Major対応：tail -1は出力順=最古コミット時刻の保証が無い） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -200)" "pushed 200時間前"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  # 未反映commitを2つ作るが、git rev-list の出力順（履歴の新しい方=後にcommitした方
+  # が先頭）とコミット時刻の新旧をわざと逆転させる。1つ目(A)は「履歴的には古い
+  # （親）」がコミット時刻は1時間前（新しい）。2つ目(B)は「履歴的には新しい（子）」
+  # だがコミット時刻は50時間前（古い）。旧実装(tail -1)は出力順の末尾＝Aを
+  # 「最古」と誤認しSTALEを見逃す。正しい実装はBの50時間前を基準にSTALEを検知する。
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -1)" "unpushed A（履歴上は親・時刻は1時間前）"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "unpushed B（履歴上は子・時刻は50時間前で非単調）"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "非単調な時刻順でも最古(50時間前)のcommitを基準にVAULT-PUSH-STALEが検知される" "$out" "[VAULT-PUSH-STALE]"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 49. ⑦git rev-list自体の実行失敗（gitオブジェクト破損等）はVAULT-PUSH-CHECK-FAILEDとしてdrift計上する（Codex二次レビュー指摘・Major対応：『監視不能も異常』の原則） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "pushed 50時間前"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -1)" "unpushed"
+  # 未反映commit自体のloose objectを消し、git rev-list origin/main..main が
+  # "fatal: Invalid revision range" で失敗する状態を再現する（リポジトリ構造自体は
+  # 壊さない＝remote get-url/rev-parse --verifyは通常どおり成功する必要がある）。
+  unpushed_sha="$(git -C "$HOME_DIR/Data/obsidian" rev-parse HEAD)"
+  obj_file="$HOME_DIR/Data/obsidian/.git/objects/${unpushed_sha:0:2}/${unpushed_sha:2}"
+  rm -f "$obj_file"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "VAULT-PUSH-CHECK-FAILEDが検知される" "$out" "[VAULT-PUSH-CHECK-FAILED]"
+  assert_contains "総drift件数1（監視不能も異常として計上）" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 50. ⑦未反映commitが複数あり、そのうち最古(=STALE基準)ではないcommitだけが未来日時でも見逃さずFUTURE-DATEにする（Codex三次レビュー指摘・Major対応：最小epochだけでは一部だけ未来のケースを見逃す） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  BARE="$(mktemp -d)/origin.git"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "pushed 50時間前"
+  git -C "$HOME_DIR/Data/obsidian" push -q origin main
+  # 未反映commitを2つ: 1つ目は1時間前（最古=STALE基準になる・24時間以内で健全）、
+  # 2つ目は240時間後の未来（旧実装は最小epoch=1時間前だけを見るためこれを
+  # 見逃し「様子見」の健全表示になってしまっていた）。
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -1)" "unpushed 1時間前（最古）"
+  vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours 240)" "unpushed 未来240時間（最古ではない）"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "最古ではない未来commitも見逃さずVAULT-PUSH-FUTURE-DATEが検知される" "$out" "[VAULT-PUSH-FUTURE-DATE]"
+  assert_not_contains "様子見の健全表示にはならない" "$out" "のため様子見です"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR" "$(dirname "$BARE")"
+}
+
+echo "=== 51. ⑥weekly-reviewが健全（最新canvasのmtimeが新しい）ならdriftにならない（2026-07-14追加） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
+           "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # weekly-reviewは takumi009-ai-env-private 側の任意機能。LaunchAgent plistの
+  # 実在で導入判定する（他のvault-agentsと同じゲート方式）。
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
+  # ファイル名は「対象週の月曜日」（生成日ではない）だが、判定はmtime基準。
+  echo '{}' > "$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "週次振り返りcanvasが健全と表示される" "$out" "✅ 週次振り返りcanvas: 更新0日前"
+  assert_not_contains "WEEKLY-REVIEWのdriftは出ない" "$out" "[WEEKLY-REVIEW-"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 52. ⑥weekly-reviewが一度も生成されていない(DEAD)と検知する（Fragments記録は存在＝材料はあったのに未生成） ==="
+{
+  # 2026-07-14 リーダー指摘対応: weekly_review.pyは対象週にFragments記録が
+  # 無ければ意図的に未生成のまま終わる仕様のため、Fragments記録が実在する
+  # （＝生成すべき材料はあった）場合に限りDEAD/STALEをdrift計上する。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
+           "$HOME_DIR/Data/obsidian/Fragments" \
+           "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
+  # ディレクトリはあるが中身が空（一度も生成されていない）。Fragments記録は存在する。
+  echo "# fragment" > "$HOME_DIR/Data/obsidian/Fragments/$(d_date -3).md"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "WEEKLY-REVIEW-DEADが検知される" "$out" "[WEEKLY-REVIEW-DEAD]"
+  assert_contains "確認コマンドが含まれる" "$out" "launchctl list | grep weekly-review"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 52b. ⑥weekly-review未生成でもFragments記録が一度も無ければ、weekly_review.py仕様どおりの正常な未生成としてdriftにしない（2026-07-14 リーダー指摘対応） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
+           "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
+  # canvasもFragmentsも一度も無い（$HOME_DIR/Data/obsidian/Fragments 自体を作らない）。
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "WEEKLY-REVIEW-DEADは出ない（Fragments記録が無い正常な未生成）" "$out" "[WEEKLY-REVIEW-DEAD]"
+  assert_contains "仕様どおりの未生成である旨の情報表示が出る" "$out" "weekly_review.pyの仕様（対象週にFragments記録が無ければ生成しない）による正常な未生成の可能性"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 53. ⑥weekly-reviewが期限超過(STALE)だと検知する（ファイル名ではなくmtime基準・Fragments記録は存在＝材料はあったのに未生成） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
+           "$HOME_DIR/Data/obsidian/Fragments" \
+           "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
+  CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
+  echo '{}' > "$CANVAS"
+  # 目安10日を超える15日前のmtimeに書き換える（生成が止まっている疑いを模擬）。
+  touch -t "$(d_mtime_ts -15)" "$CANVAS"
+  # canvas生成後（15日前より新しい・3日前）にFragments記録がある＝材料はあった。
+  echo "# fragment" > "$HOME_DIR/Data/obsidian/Fragments/$(d_date -3).md"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "WEEKLY-REVIEW-STALEが検知される" "$out" "[WEEKLY-REVIEW-STALE]"
+  assert_contains "確認コマンドが含まれる" "$out" "launchctl list | grep weekly-review"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 53b. ⑥weekly-reviewが古くても、生成以降Fragments記録が無ければweekly_review.py仕様どおりの正常な未生成としてdriftにしない（2026-07-14 リーダー指摘対応） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
+           "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
+  CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
+  echo '{}' > "$CANVAS"
+  touch -t "$(d_mtime_ts -15)" "$CANVAS"
+  # Fragmentsディレクトリ自体を作らない（生成以降、記録が一度も無い想定）。
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "WEEKLY-REVIEW-STALEは出ない（生成以降Fragments記録が無い正常な未生成）" "$out" "[WEEKLY-REVIEW-STALE]"
+  assert_contains "仕様どおりの未生成である旨の情報表示が出る" "$out" "weekly_review.pyの仕様（対象週にFragments記録が無ければ生成しない）による正常な未生成の可能性"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 53c. ⑥weekly-review: canvas生成と同じ暦日に書かれたFragmentも『生成以降の記録』として扱う（Codex三次レビュー指摘・Major対応：日付比較の粒度不一致） ==="
+{
+  # canvasのmtime（時刻成分あり）とFragmentsのファイル名日付（0時扱い）を
+  # 単純比較すると、canvas生成と同じ暦日に書かれたFragmentが誤って「canvasより
+  # 古い」扱いになり、以後Fragmentが増えなければSTALEを永久に抑止しうる欠陥が
+  # あった。canvasのmtimeをその日の0時へ正規化してから比較する修正を検証する。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
+           "$HOME_DIR/Data/obsidian/Fragments" \
+           "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
+  CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
+  echo '{}' > "$CANVAS"
+  # 15日前の04:00（weekly_review.pyの実運用スケジュールと同じ時刻帯）にmtimeを設定。
+  touch -t "$(date -v-15d +%Y%m%d)0400" "$CANVAS"
+  # Fragmentは同じ暦日（15日前）の記録。時刻は保持されずファイル名日付のみ
+  # （0時扱い）だが、実際にはcanvas生成(04:00)より後に書かれた可能性がある。
+  echo "# fragment same day" > "$HOME_DIR/Data/obsidian/Fragments/$(d_date -15).md"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "同じ暦日のFragmentでもWEEKLY-REVIEW-STALEが検知される" "$out" "[WEEKLY-REVIEW-STALE]"
+  assert_not_contains "正常な未生成の誤判定にはならない" "$out" "正常な未生成の可能性があります"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 53d. ⑥weekly-review: Fragments探索自体が失敗した場合は『記録なし』と混同せずWEEKLY-REVIEW-FRAGMENTS-CHECK-FAILEDを検知する（Codex三次レビュー指摘・Major対応） ==="
+{
+  # find がディレクトリ権限不備等で探索できない場合、従来は出力ゼロ件＝
+  # 「Fragments記録なし＝正常な未生成」と誤って同一視していた
+  # （「監視不能も異常」の原則に反する）。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
+           "$HOME_DIR/Data/obsidian/Fragments/sub" \
+           "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
+  CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
+  echo '{}' > "$CANVAS"
+  touch -t "$(d_mtime_ts -15)" "$CANVAS"
+  echo "# fragment" > "$HOME_DIR/Data/obsidian/Fragments/sub/$(d_date -3).md"
+  chmod 000 "$HOME_DIR/Data/obsidian/Fragments/sub"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "WEEKLY-REVIEW-FRAGMENTS-CHECK-FAILEDが検知される" "$out" "[WEEKLY-REVIEW-FRAGMENTS-CHECK-FAILED]"
+  assert_not_contains "正常な未生成として握りつぶされない" "$out" "正常な未生成の可能性があります"
+  assert_not_contains "STALEとは別種別（探索できず判定不能なだけ）" "$out" "[WEEKLY-REVIEW-STALE]"
+
+  chmod 755 "$HOME_DIR/Data/obsidian/Fragments/sub"
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 54. ⑥weekly-review未導入（LaunchAgent plist無し）ならチェック対象外 ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/Library/LaunchAgents" "$HOME_DIR/.claude/logs"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # plistもExplorations/weekly-reviewディレクトリも置かない＝未導入を模擬。
+  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
+  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "任意機能未導入メッセージが出る" "$out" "週次振り返りcanvas: 任意機能未導入"
+  assert_not_contains "WEEKLY-REVIEWのdriftは出ない" "$out" "[WEEKLY-REVIEW-"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 55. ⑥weekly-reviewのcanvasはVault同期される出力のため、それだけではvault-agents『導入済み』とみなさない（Codexレビュー指摘・Major対応） ==="
+{
+  # WEEKLY_REVIEW_DIR は $VAULT 配下＝Vault自体が複数マシン間でgit同期されるため、
+  # 他の出力先（$HOME/.claude/logs/... 配下・ローカル専用）とは異なり、
+  # reads/recallフックもweekly-review LaunchAgentも一切導入していないサブ機でも
+  # 「他マシンが生成したcanvasをVault同期で受け取っているだけ」で存在し得る。
+  # この場合にvault-agents『導入済み』と誤認してreads/recallのDEADを誤報しないこと
+  # を確認する（2026-07-14 Codex一次レビュー指摘・Major対応）。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # weekly-reviewのLaunchAgent plistは置かない（このマシンには未導入）。
+  # reads/recallログも置かない（このマシンでは標準フックすら未セットアップの想定）。
+  # canvasだけがVault同期で存在する状態を模擬する。
+  echo '{}' > "$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "vault-agents未導入の対象外メッセージが出る（canvasの存在だけでは導入済みとみなさない）" \
+    "$out" "vault-agentsが一度も導入されていない想定ならチェック対象外"
+  assert_not_contains "VAULT-READS-LOG-DEADは誤報されない" "$out" "[VAULT-READS-LOG-DEAD]"
+  assert_not_contains "VAULT-RECALL-LOG-DEADは誤報されない" "$out" "[VAULT-RECALL-LOG-DEAD]"
+  assert_not_contains "WEEKLY-REVIEW-DEADも出ない（未導入としてスキップされるため）" "$out" "[WEEKLY-REVIEW-"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 56. ⑥age_days_from_epoch: 24時間未満の未来mtimeも切り捨てず必ずFUTURE-DATEとして検知する（Codex二次レビュー指摘・Minor対応） ==="
+{
+  # bashの整数除算は0方向へ丸めるため、旧実装は「-3600秒（1時間未来）」のような
+  # 24時間未満の未来スキューを `-3600/86400=0` に丸めてしまい、「未来なのに
+  # 経過日数0＝健全」と誤判定していた。weekly-reviewのmtime基準FUTURE-DATE判定
+  # （新規追加）で顕在化するため、ここで直接検証する。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
+           "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
+           "$HOME_DIR/Library/LaunchAgents"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
+  CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
+  echo '{}' > "$CANVAS"
+  # 1時間後（24時間未満の未来）のmtimeにする。
+  touch -t "$(date -v+1H +%Y%m%d%H%M)" "$CANVAS"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "24時間未満の未来mtimeでもWEEKLY-REVIEW-FUTURE-DATEが検知される" "$out" "[WEEKLY-REVIEW-FUTURE-DATE]"
+  assert_not_contains "未来日時が健全（更新0日前）に誤判定されない" "$out" "✅ 週次振り返りcanvas: 更新0日前"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 57. ⑦-2 backup-vault.shのロック回収ミューテックスが長時間残っているとVAULT-BACKUP-LOCK-STUCKとして検知する（2026-07-14追加・Codex二次レビュー指摘・Major対応） ==="
+{
+  # backup-vault.shの回収ミューテックス自己修復を撤去しfail-closedにした結果、
+  # 前回実行がミューテックス保持中にクラッシュすると以後commit前に止まり続け、
+  # ⑦（push死活）のrev-list判定には何も現れない別種の穴になる。ミューテックス
+  # ディレクトリ自体の新鮮度を直接読む本チェックで検知できることを確認する。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  FAKE_LOCK="$HOME_DIR/fake-backup-vault.lock"
+  mkdir -p "${FAKE_LOCK}.reclaim"
+  # 20分前のmtimeにして「回収処理中にクラッシュして固着した」状況を模擬する
+  # （既定の目安10分を超えさせる）。
+  touch -t "$(date -v-20M +%Y%m%d%H%M)" "${FAKE_LOCK}.reclaim"
+
+  out="$(VAULT_BACKUP_LOCK_FILE="$FAKE_LOCK" DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
+    bash "$REPO/scripts/check-drift.sh")"
+  assert_contains "VAULT-BACKUP-LOCK-STUCKが検知される" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
+  assert_contains "手動解除の案内が含まれる" "$out" "rmdir ${FAKE_LOCK}.reclaim"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 58. ⑦-2 ロック回収ミューテックスが目安時間以内（実行中の可能性）なら様子見でdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  FAKE_LOCK="$HOME_DIR/fake-backup-vault.lock"
+  mkdir -p "${FAKE_LOCK}.reclaim"
+  # 作成直後（0分前）＝目安10分以内のため様子見。
+
+  out="$(VAULT_BACKUP_LOCK_FILE="$FAKE_LOCK" DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
+    bash "$REPO/scripts/check-drift.sh")"
+  assert_not_contains "VAULT-BACKUP-LOCK-STUCKは出ない（目安時間以内）" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
+  assert_contains "様子見メッセージが出る" "$out" "様子見です"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 59. ⑦-2 ロック回収ミューテックスが無ければ健全表示でdriftにならない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  FAKE_LOCK="$HOME_DIR/fake-backup-vault.lock"
+  # 回収ミューテックス自体を作らない（通常状態）。
+
+  out="$(VAULT_BACKUP_LOCK_FILE="$FAKE_LOCK" DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
+    bash "$REPO/scripts/check-drift.sh")"
+  assert_not_contains "VAULT-BACKUP-LOCK-STUCKは出ない" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
+  assert_contains "健全メッセージが出る" "$out" "✅ ロック回収ミューテックスは残っていません"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 60. ⑦-2 ロック回収ミューテックスの更新時刻が未来ならVAULT-BACKUP-LOCK-FUTURE-DATEとして検知する（Codex三次レビュー指摘・Minor対応） ==="
+{
+  # mtimeが未来だと経過分数が負になり、旧実装は「-N分前・様子見」という
+  # 健全表示に誤判定していた（システム時計のズレ・ファイル破損を見逃す）。
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  FAKE_LOCK="$HOME_DIR/fake-backup-vault.lock"
+  mkdir -p "${FAKE_LOCK}.reclaim"
+  touch -t "$(date -v+2H +%Y%m%d%H%M)" "${FAKE_LOCK}.reclaim"
+
+  out="$(VAULT_BACKUP_LOCK_FILE="$FAKE_LOCK" DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
+    bash "$REPO/scripts/check-drift.sh")"
+  assert_contains "VAULT-BACKUP-LOCK-FUTURE-DATEが検知される" "$out" "[VAULT-BACKUP-LOCK-FUTURE-DATE]"
+  assert_not_contains "様子見の健全表示にはならない" "$out" "様子見です"
+  assert_not_contains "STUCK扱いにもしない（別種別に分離）" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
 
   rm -rf "$REPO" "$HOME_DIR"
 }

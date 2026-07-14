@@ -1,6 +1,6 @@
 ---
 date: 2026-06-15
-updated: 2026-07-10
+updated: 2026-07-13
 tags: [preference, permissions, commands, security, claude-code]
 project: meta
 related:
@@ -62,6 +62,12 @@ aliases:
 - 回避は `"defaultMode": "acceptEdits"` だが編集を広く自動承認するため、この用途では非推奨。
 
 許可設定の置き場所：`~/.claude/settings.json`（ユーザー設定＝全プロジェクト共通）。プロジェクト限定の `settings.local.json` には置かない。
+
+## Auto mode 分類器の観測事実（日付付き・仕様は更新で変わりうる）
+
+- **一度ユーザーが却下したコマンドは、後から口頭 GO があっても分類器が止め続ける**（2026-07-08 実測・例: `gh repo create`）。却下後にやはり実行したくなったら、AI に再試行させず**ユーザーが `!` プレフィックスで直接実行**する。
+- **LaunchAgent 設置（plist 配置・load）は「永続化」として明示レビュー要求と判定される**（2026-07-08 実測）。外部公開・永続化系はユーザー実行に回すのが正解。
+- **認証情報の実体化はブロックされる**（2026-07-07 実測・正当）: `cmux browser cookies get` → curl への受け渡しは、teammate 依頼経由の無人運転では「user intent 不成立」としてブロック。**無人運転での資産調達は認証不要の公開資産が基本線**・認証つき調達（BOOTH 等）は人間同席時に行う。完全無人化にはユーザーによる限定許可の付与が必要。
 
 ## MCP の書込・外部作用系 allow について（再指摘しない）
 書込・外部作用系の MCP 操作（外部サービスへの書込・投稿・機器操作など）は **allow に入れない**。「クラウドルーティンの無人実行に local allow が要る」という理由づけは**誤り**で、クラウドルーティンは MCP コネクタ経由で動作しローカルの `permissions.allow` を参照しない（[[Knowledge/cloud-routines-use-connectors-not-local-allow]]）。対話時の書込/外部操作は Auto mode 分類器が判定する（＝確認が出た方が安全）。**レビュー時に「自動化のため auto-allow が必須」と誤って再提案しない。**

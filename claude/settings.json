@@ -222,5 +222,8 @@
       }
     }
   },
-  "theme": "dark"
+  "theme": "dark",
+  "enabledPlugins": {
+    "skill-creator@claude-plugins-official": true
+  }
 }

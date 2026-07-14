@@ -258,6 +258,47 @@ echo "=== 12. n_batch超過クエリでも成功する（options.num_ctx/num_bat
   rm -rf "$VAULT_DIR" "$IDX_DIR"
 }
 
+echo "=== 13. モデル不一致: インデックス構築時と異なる期待モデルを渡すとexit非0（Codexレビュー指摘・model_digest/model検証の是正） ==="
+{
+  # update_embedding_index.pyは--modelが/api/tagsに無ければbuildをskipするため、
+  # 構築時のモデル名でfakeサーバのtagsも合わせておく必要がある。読み込み側の
+  # --model不一致検証はローカルのmeta.json比較のみで発火しHTTPには依存しないため、
+  # ここではfakeサーバのモデル名は構築時の"model-a"のままでよい。
+  FAKE_OLLAMA_MODEL="model-a" start_fake_server
+  VAULT_DIR="$(mktemp -d)"
+  IDX_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Knowledge/a.md" "__MARK_X__ 本文"
+  python3 "$UPDATE_SCRIPT" --vault "$VAULT_DIR" --index-dir "$IDX_DIR" --base-url "$BASE_URL" --model "model-a" >/dev/null 2>&1
+
+  out="$(python3 "$SCRIPT" --query "何か質問です十分な長さです" --vault "$VAULT_DIR" --index-dir "$IDX_DIR" \
+    --base-url "$BASE_URL" --model "model-b" 2>&1)"
+  rc=$?
+  [[ "$rc" -ne 0 ]] && pass "モデル不一致はexit非0" || fail_case "exit 0になってしまった"
+  assert_contains "モデル不一致のメッセージ" "$out" "modelが設定と一致しません"
+
+  stop_fake_server
+  rm -rf "$VAULT_DIR" "$IDX_DIR"
+}
+
+echo "=== 14. モデル一致: --modelで明示した期待モデルがインデックスと一致すれば従来どおり正常に候補が返る ==="
+{
+  FAKE_OLLAMA_MODEL="model-a" start_fake_server
+  VAULT_DIR="$(mktemp -d)"
+  IDX_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Knowledge/a.md" "__MARK_X__ 本文"
+  python3 "$UPDATE_SCRIPT" --vault "$VAULT_DIR" --index-dir "$IDX_DIR" --base-url "$BASE_URL" --model "model-a" >/dev/null 2>&1
+
+  out="$(python3 "$SCRIPT" --query "__MARK_X__ の質問" --vault "$VAULT_DIR" --index-dir "$IDX_DIR" \
+    --base-url "$BASE_URL" --model "model-a" --threshold 0)"
+  rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  n="$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['candidates']))")"
+  assert_eq "候補が1件返る" "1" "$n"
+
+  stop_fake_server
+  rm -rf "$VAULT_DIR" "$IDX_DIR"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

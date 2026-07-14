@@ -67,6 +67,9 @@ def parse_args(argv=None):
     ap.add_argument("--query", default=None, help="クエリ文字列。省略時はstdinから読む")
     ap.add_argument("--vault", default=str(DEFAULT_VAULT), help=f"Vaultのルート（既定: {DEFAULT_VAULT}）")
     ap.add_argument("--index-dir", default=None, help="インデックス置き場所（既定: embedding_index.index_root()）")
+    ap.add_argument("--model", default=ei.DEFAULT_MODEL,
+                     help=f"インデックス読込時に検証する期待モデル名（既定: {ei.DEFAULT_MODEL}・"
+                          "update_embedding_index.pyの--model既定値と同じSSOT=embedding_index.DEFAULT_MODEL）")
     ap.add_argument("--base-url", default=ei.DEFAULT_BASE_URL)
     ap.add_argument("--budget-ms", type=float, default=DEFAULT_BUDGET_MS, help="このプロセス自身の予算(ms)")
     ap.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
@@ -99,7 +102,18 @@ def main(argv=None):
     vault_root = pathlib.Path(args.vault)
 
     try:
-        index = ei.load_index(args.index_dir, expected_model=None, retries=1)
+        # expected_modelを渡してmodel検証を有効化する（設計書§2.2「読み手はschema_version/
+        # model_digest/dim/件数/vectors.binバイト長を検証」違反の是正・Codexレビュー指摘。
+        # 従来はNoneを渡しており、embedding_index.load_index()内のmodel検証チェックが
+        # 常に省略されていた。ollama_embed()呼び出しには常にindex.model（インデックスに
+        # 記録済みのモデル名）を使うため、モデル切替時（例: 0.6b→4b）でも次元さえ一致すれば
+        # dim不一致チェックをすり抜け、設定変更後もインデックスが再構築されるまで
+        # 永久に旧モデルでクエリembedし続けてしまう（無言の設定ドリフト）。ここで
+        # 現在の設定（--model・既定はSSOTのembedding_index.DEFAULT_MODEL）と
+        # インデックスのmodelを照合し、不一致ならインデックス側の検証で早期にfail-open
+        # させる（EXIT_INDEX_UNAVAILABLE・bash側は次のフルリビルドまでベクトル想起を
+        # 諦める＝キーワード想起は影響を受けない）。
+        index = ei.load_index(args.index_dir, expected_model=args.model, retries=1)
     except ei.IndexError_ as e:
         print(f"インデックスを読み込めません: {e}", file=sys.stderr)
         return EXIT_INDEX_UNAVAILABLE

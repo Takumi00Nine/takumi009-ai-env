@@ -155,6 +155,35 @@ echo "=== 4. --alias-overlay: 実Vaultを書き換えずに仮想的にaliasを�
   rm -rf "$VAULT_DIR" "$BENCH" "$OVERLAY"
 }
 
+echo "=== 4b. --alias-overlay: 汎用語禁止リストが欠落/空でもfail-openで続行せず中断する（2026-07-14修正・Codex一次レビュー指摘・Major対応） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Preferences/mcp-global-install.md" $'date: 2026-07-10'
+
+  BENCH="$(mktemp)"
+  printf 'npxで都度起動していいですか、十分な長さのプロンプトです\tPreferences/mcp-global-install.md\n' > "$BENCH"
+
+  OVERLAY="$(mktemp)"
+  printf 'Preferences/mcp-global-install.md\tnpxで都度起動\n' > "$OVERLAY"
+
+  # 一時ディレクトリ残置チェックは共有/tmp全体ではなく専用TMPDIR配下だけを見る
+  # （Codex一次レビュー指摘・Minor: 共有/tmpだと並列実行中の他プロセスが同時期に
+  # 同じprefixのディレクトリを作る/消すタイミングと衝突して誤判定しうる）。
+  SCRATCH_TMPDIR="$(mktemp -d)"
+  err="$(APPLY_ALIASES_GENERIC_FILE="/tmp/does-not-exist-generic-aliases-$$.txt" \
+    VAULT_RECALL_DISABLE_VECTOR=1 TMPDIR="$SCRATCH_TMPDIR" python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" \
+    --alias-overlay "$OVERLAY" 2>&1 >/dev/null)"
+  rc=$?
+  after_dirs="$(find "$SCRATCH_TMPDIR" -maxdepth 1 -name 'recall-bench-vault-*' 2>/dev/null)"
+  assert_eq "リスト欠落時は非0終了する（採点まで進めない）" "1" "$rc"
+  assert_contains "fail-closedである旨のメッセージが出る" "$err" "fail-closed"
+  # 一時Vaultコピーがtmpに残らないこと（build_overlay_vaultのtry/exceptクリーンアップ確認）。
+  assert_eq "一時Vaultコピーが残置されない" "" "$after_dirs"
+  rm -rf "$SCRATCH_TMPDIR"
+
+  rm -rf "$VAULT_DIR" "$BENCH" "$OVERLAY"
+}
+
 echo "=== 5. フック異常時の頑健性: 空出力(正常miss)は握りつぶさずfailにする ==="
 {
   FAKE_HOOK="$(mktemp)"
@@ -367,6 +396,242 @@ HOOKEOF
   assert_not_contains "誤ったrelpathがPASS扱いのcandidatesとして混入しない" "$out" "PASS"
 
   rm -rf "$VAULT_DIR" "$BENCH" "$FAKE_HOOK"
+}
+
+echo "=== 15. MAX_CANDIDATESがキーワード枠+ベクトル追加枠の合計(8件)まで切り詰めない（2026-07-14修正・過小評価バグの回帰確認） ==="
+{
+  FAKE_HOOK="$(mktemp)"
+  # フックが実際に返しうる最大構成（キーワード枠5件＋ベクトル追加枠3件=8件）を模す。
+  # 旧MAX_CANDIDATES=5だとここが5件に切り詰められ、6〜8件目でしかヒットしない
+  # 質問がFAIL扱いされてしまっていた。
+  cat > "$FAKE_HOOK" <<'HOOKEOF'
+#!/bin/bash
+cat >/dev/null
+ctx='外部脳の関連ノート候補（必要なら Read）:
+- Knowledge/kw1.md（一致: x）
+- Knowledge/kw2.md（一致: x）
+- Knowledge/kw3.md（一致: x）
+- Knowledge/kw4.md（一致: x）
+- Knowledge/kw5.md（一致: x）
+
+意味的に近い候補（キーワード一致なし・必要なら Read）:
+- Knowledge/vec1.md（類似度: 0.9）
+- Knowledge/vec2.md（類似度: 0.8）
+- Knowledge/vec3.md（類似度: 0.7）'
+  python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'UserPromptSubmit','additionalContext':sys.argv[1]}}))" "$ctx"
+HOOKEOF
+
+  VAULT_DIR="$(mktemp -d)"
+  BENCH="$(mktemp)"
+  # ベクトル追加枠(8件目=vec3.md)でしかヒットしない質問を期待ノートにする。
+  printf '何かについて質問したい、十分な長さのプロンプトです\tKnowledge/vec3.md\n' > "$BENCH"
+
+  out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$FAKE_HOOK" --json 2>/dev/null)"
+  n_cand="$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["results"][0]["candidates"]))')"
+  hits="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hits"])')"
+  assert_eq "8件全部が候補として保持される(5件に切り詰められない)" "8" "$n_cand"
+  assert_eq "8件目=ベクトル追加枠の3件目でもPASSと判定される" "1" "$hits"
+
+  rm -rf "$VAULT_DIR" "$BENCH" "$FAKE_HOOK"
+}
+
+echo "=== 16. 候補数がフック契約の上限(8件)を超える場合はhookエラーとして扱う（無言で先頭8件だけを正常系扱いしない・Codex一次レビュー指摘・Major対応） ==="
+{
+  FAKE_HOOK="$(mktemp)"
+  # 9件（キーワード枠5件のはずが6件返っている想定）を返す壊れたフックを模す。
+  cat > "$FAKE_HOOK" <<'HOOKEOF'
+#!/bin/bash
+cat >/dev/null
+ctx='外部脳の関連ノート候補（必要なら Read）:
+- Knowledge/kw1.md（一致: x）
+- Knowledge/kw2.md（一致: x）
+- Knowledge/kw3.md（一致: x）
+- Knowledge/kw4.md（一致: x）
+- Knowledge/kw5.md（一致: x）
+- Knowledge/kw6.md（一致: x）
+
+意味的に近い候補（キーワード一致なし・必要なら Read）:
+- Knowledge/vec1.md（類似度: 0.9）
+- Knowledge/vec2.md（類似度: 0.8）
+- Knowledge/vec3.md（類似度: 0.7）'
+  python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'UserPromptSubmit','additionalContext':sys.argv[1]}}))" "$ctx"
+HOOKEOF
+
+  VAULT_DIR="$(mktemp -d)"
+  BENCH="$(mktemp)"
+  printf '何かについて質問したい、十分な長さのプロンプトです\tKnowledge/kw1.md\n' > "$BENCH"
+
+  out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$FAKE_HOOK" 2>/dev/null)"
+  rc=$?
+  assert_eq "契約超過(9件)はhookのインフラ異常としてexit 2になる" "2" "$rc"
+  assert_contains "契約超過の理由がFAIL一覧に表示される" "$out" "フック契約の上限"
+  assert_not_contains "契約超過を先頭8件だけの正常PASSとして誤魔化さない" "$out" "[ 1] PASS"
+
+  rm -rf "$VAULT_DIR" "$BENCH" "$FAKE_HOOK"
+}
+
+echo "=== 17. MAX_KEYWORD_CANDIDATES/MAX_VECTOR_EXTRA_CANDIDATES定数がフック本体(vault-recall.sh)の実値と一致する（SSOT検証・値のドリフト防止） ==="
+{
+  # 2026-07-14修正・外部脳の想起・ベンチ機構の総点検: 従来hook側はキーワード枠の
+  # 上限がループ内のリテラル`5`のままハードコードされており、ここでは
+  # `for ((i = 0; i < N && i < [0-9]+; i++)); do` というループ構文そのものをanchorに
+  # 抽出していた。hook側を名前付き定数MAX_KEYWORD_CANDIDATESへ切り出したことに伴い、
+  # MAX_VECTOR_EXTRAと同様に定数定義行(`^MAX_KEYWORD_CANDIDATES=[0-9]+`)を直接
+  # 抽出する方式へ揃える（値そのものは変えない・SSOTのanchorをより単純で頑健な
+  # ものへ置き換えるだけ）。コメント中の同じ数字列や無関係な行への誤マッチを
+  # 避けるため、`#`始まり行（行頭の空白許容）は事前に grep -v で除外してから探索
+  # する（Codex一次レビュー指摘・Major/Minor: 抽出できなければfail_caseで明示的に
+  # 落とす＝このハードニングをすり抜けても「静かに一致した扱い」にはならない）。
+  hook_kw_cap="$(grep -v '^[[:space:]]*#' "$HOOK" \
+    | grep -oE '^MAX_KEYWORD_CANDIDATES=[0-9]+' | grep -oE '[0-9]+$')"
+  hook_vec_extra="$(grep -v '^[[:space:]]*#' "$HOOK" \
+    | grep -oE '^MAX_VECTOR_EXTRA=[0-9]+' | grep -oE '[0-9]+$')"
+  py_kw_cap="$(python3 -c "import sys; sys.path.insert(0, '$REPO_ROOT/scripts/vault-agents'); import recall_bench as rb; print(rb.MAX_KEYWORD_CANDIDATES)")"
+  py_vec_extra="$(python3 -c "import sys; sys.path.insert(0, '$REPO_ROOT/scripts/vault-agents'); import recall_bench as rb; print(rb.MAX_VECTOR_EXTRA_CANDIDATES)")"
+
+  if [[ -z "$hook_kw_cap" || -z "$hook_vec_extra" ]]; then
+    fail_case "vault-recall.shから定数を抽出できなかった（grepパターンがフック側の変更でズレた可能性）"
+  else
+    assert_eq "キーワード枠上限がhook本体と一致" "$hook_kw_cap" "$py_kw_cap"
+    assert_eq "ベクトル追加枠上限がhook本体と一致" "$hook_vec_extra" "$py_vec_extra"
+  fi
+
+  # 定数が宣言されているだけで実際のループが古いリテラルへ戻っていても上のSSOT検証は
+  # 通ってしまう（Codex一次レビュー指摘・Minor対応: 定数値どうしの比較だけでは
+  # 「定数が実際に使われているか」までは検証できない）。SELECTED_IDX構築ループ・
+  # ベクトル追加枠ループが実際に名前付き定数を参照していることを直接確認する。
+  kw_loop_uses_const="$(grep -c 'for ((i = 0; i < N && i < MAX_KEYWORD_CANDIDATES; i++)); do' "$HOOK" 2>/dev/null || true)"
+  vec_loop_uses_const="$(grep -c 'VEC_EXTRA_COUNT < MAX_VECTOR_EXTRA;' "$HOOK" 2>/dev/null || true)"
+  assert_eq "SELECTED_IDX構築ループが実際にMAX_KEYWORD_CANDIDATESを参照している" "1" "$kw_loop_uses_const"
+  assert_eq "ベクトル追加枠ループが実際にMAX_VECTOR_EXTRAを参照している" "1" "$vec_loop_uses_const"
+}
+
+echo "=== 18. fail-open検知: keyword helperが異常終了して出力が空になった場合、正常な0件ヒットと区別してhookエラーにする（2026-07-14修正・リーダー指示: VAULT_RECALL_LOGを渡すだけで一度も読まずに削除していたバグの是正） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Knowledge/unrelated-note.md" $'date: 2026-07-10\naliases:\n  - "veryspecificalias"'
+  BROKEN_HELPER="$(mktemp -d)/broken-keyword-helper.py"
+  printf '#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n' > "$BROKEN_HELPER"
+
+  BENCH="$(mktemp)"
+  printf '全く関係ない話題について質問したいと思います\tKnowledge/unrelated-note.md\n' > "$BENCH"
+
+  out="$(VAULT_RECALL_DISABLE_VECTOR=1 VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" \
+    python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  rc=$?
+  assert_eq "fail-open混入時はexit 2で異常として扱う" "2" "$rc"
+  assert_contains "無言で0件ヒット扱いにせずhookエラーとして表示する" "$out" "⚠️ hookエラー"
+  assert_contains "fail-openの記録がある旨のメッセージが出る" "$out" "fail-openの記録が"
+  assert_not_contains "fail-open混入をノイズ検査の健全な0件と誤魔化さない" "$out" "[ 1] PASS"
+
+  rm -rf "$VAULT_DIR" "$BENCH" "$(dirname "$BROKEN_HELPER")"
+}
+
+echo "=== 19. fail-open検知の回帰確認: keyword/vectorとも正常完走した健全な0件ヒット(ハートビート)はhookエラーにしない ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Knowledge/unrelated-note.md" $'date: 2026-07-10\naliases:\n  - "veryspecificalias"'
+
+  BENCH="$(mktemp)"
+  printf '全く関係ない話題について質問したいと思います\tKnowledge/nonexistent-note.md\n' > "$BENCH"
+
+  out="$(VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  rc=$?
+  assert_eq "健全な0件ヒットはexit 0のまま" "0" "$rc"
+  assert_contains "健全な0件ヒットはFAIL(通常のmiss)として扱われる" "$out" "[ 1] FAIL"
+  assert_not_contains "健全な0件ヒットをhookエラーと誤検知しない" "$out" "hookエラー"
+
+  rm -rf "$VAULT_DIR" "$BENCH"
+}
+
+echo "=== 20. fail-open検知(Codex一次レビュー指摘・Major対応): keywordはヒットしvector helperだけがfail-openした場合も、additionalContextが非空でも計測失敗として扱う ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Preferences/python-venv.md" \
+    $'date: 2026-07-10\naliases:\n  - "venv未有効ブロック"'
+  BROKEN_VECTOR_HELPER="$(mktemp -d)/broken-vector-helper.py"
+  printf '#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n' > "$BROKEN_VECTOR_HELPER"
+
+  BENCH="$(mktemp)"
+  printf 'Pythonのパッケージをインストールするときのvenv未有効ブロックの決まりは？\tPreferences/python-venv.md\n' > "$BENCH"
+
+  out="$(VAULT_RECALL_VECTOR_HELPER="$BROKEN_VECTOR_HELPER" python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  rc=$?
+  assert_eq "keywordヒットありでもvector fail-open混入時はexit 2" "2" "$rc"
+  assert_contains "非空出力(候補あり)でもhookエラーとして表示される" "$out" "⚠️ hookエラー"
+  assert_not_contains "劣化した計測結果をPASSとして誤魔化さない" "$out" "[ 1] PASS"
+
+  rm -rf "$VAULT_DIR" "$BENCH" "$(dirname "$BROKEN_VECTOR_HELPER")"
+}
+
+echo "=== 21. fail-open検知の回帰確認(2026-07-14修正・外部脳の想起・ベンチ機構の総点検): log_fact()由来の事実記録（読取不可ノート件数）は文言ではなく形式(レベル列)で判別され、hookエラーと誤検知しない（旧BENIGN_ERROR_MARKERはこのケースを未カバーだった漏れの修正） ==="
+{
+  # 期待ノート列には読取不可ノート自身を含めない（recall_bench.pyのnote_aliases()は
+  # FAIL一覧表示用に期待ノートのaliasesを直接読むため、期待ノート自身が読取不可だと
+  # 別の既知の問題（このテストのスコープ外）でPermissionErrorになる。ここでは
+  # 「Vault内に読取不可ノートが1件存在する状態で、無関係な質問をして健全な0件ヒット
+  # (ハートビート)になる」というテスト19相当の状況を作り、log_fact()由来の事実記録が
+  # 誤ってhookエラー扱いされないことだけを確認する）。
+  VAULT_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Knowledge/locked-note.md" $'date: 2026-07-10\naliases:\n  - "lockedbodyalias"'
+  chmod 000 "$VAULT_DIR/Knowledge/locked-note.md"
+
+  BENCH="$(mktemp)"
+  printf '全く関係ない話題について質問したいと思います\tKnowledge/nonexistent-note.md\n' > "$BENCH"
+
+  out="$(VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  rc=$?
+  chmod 644 "$VAULT_DIR/Knowledge/locked-note.md"
+  assert_eq "読取不可ノートの事実記録だけならexit 0のまま（hookエラーではない）" "0" "$rc"
+  assert_contains "健全な0件ヒットはFAIL(通常のmiss)として扱われる" "$out" "[ 1] FAIL"
+  assert_not_contains "読取不可の事実記録をhookエラーと誤検知しない" "$out" "hookエラー"
+
+  rm -rf "$VAULT_DIR" "$BENCH"
+}
+
+echo "=== 22. _read_new_error_rows()単体: 6列目がINFOの行だけが真の失敗判定から除外される（root実行環境のchmod依存を避けた決定的検証・Codex一次レビュー指摘・Minor対応） ==="
+{
+  LOG2="$(mktemp)"
+  printf '2026-07-14T00:00:00Z\tERROR\t\tsessA\t真の失敗メッセージ\n' > "$LOG2"
+  printf '2026-07-14T00:00:01Z\tERROR\t\tsessA\t正常完走時の事実記録\tINFO\n' >> "$LOG2"
+
+  py_out="$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_ROOT/scripts/vault-agents')
+import recall_bench as rb
+msgs = rb._read_new_error_rows('$LOG2', 0)
+print(len(msgs))
+print(msgs[0] if msgs else '')
+")"
+  n_msgs="$(printf '%s' "$py_out" | sed -n '1p')"
+  first_msg="$(printf '%s' "$py_out" | sed -n '2p')"
+  assert_eq "6列目がINFOの行は除外され、5列の真の失敗行だけが1件残る" "1" "$n_msgs"
+  assert_eq "残る1件のメッセージは真の失敗行のもの" "真の失敗メッセージ" "$first_msg"
+
+  rm -f "$LOG2"
+}
+
+echo "=== 23. fail-open検知: helperのstderrにタブ+INFOが混入していても、hook側のサニタイズにより偽のINFOマーカーは生成されず、真の失敗としてexit 2のまま検知され続ける（Codex一次レビュー指摘・Major対応の回帰確認） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  write_note "$VAULT_DIR/Preferences/python-venv.md" \
+    $'date: 2026-07-10\naliases:\n  - "venv未有効ブロック"'
+  BROKEN_HELPER="$(mktemp -d)/broken-keyword-helper-tab.py"
+  cat > "$BROKEN_HELPER" <<'PYEOF'
+import sys
+sys.stderr.write("boom\tINFO\n")
+sys.exit(1)
+PYEOF
+
+  BENCH="$(mktemp)"
+  printf 'Pythonのパッケージをインストールするときのvenv未有効ブロックの決まりは？\tPreferences/python-venv.md\n' > "$BENCH"
+
+  out="$(VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  rc=$?
+  assert_eq "stderrにタブ+INFOを混入させたfail-openは偽装されずexit 2のまま" "2" "$rc"
+  assert_contains "hookエラーとして検知される（偽のINFOマーカーで無害判定されない）" "$out" "⚠️ hookエラー"
+
+  rm -rf "$VAULT_DIR" "$BENCH" "$(dirname "$BROKEN_HELPER")"
 }
 
 echo

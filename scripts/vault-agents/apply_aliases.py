@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """外部脳(Obsidian Vault) alias 一括適用ユーティリティ（リーダーが手動実行する道具）。
 
+使い方一覧＝Vault: Knowledge/tools-inventory.md／運用導線＝Projects/vault-hybrid-search.md
+
 想起フック（claude/hooks/vault-recall.sh）はノートの frontmatter の `aliases:` と
 ファイル名を照合キーにする。既存ノートの多くには aliases が無いため、棚卸し
 （scripts/vault-agents/vault_inventory.py §9-10）や調査で見つけた候補alias群を
@@ -16,8 +18,13 @@
     本文はテキストとしてそのまま温存する。full YAML round-tripはしない＝
     PyYAML等のフォーマット崩れリスクを避ける）。
   - `scripts/vault-agents/generic-aliases.txt`（別ツール vault_inventory.py §10 と
-    共有の汎用語禁止リスト）に該当する alias は警告してそのノートへの追加をskipする
-    （リストが無ければ何もチェックしない＝fail-open）。
+    共有の汎用語禁止リスト）に該当する alias は警告してそのノートへの追加をskipする。
+    2026-07-14修正（外部脳の想起・ベンチ機構の総点検・Codex gpt-5.6-sol検証済み欠陥）:
+    従来はこのリストが欠落/空でも「何もチェックしない」まま処理を続行する fail-open
+    だったため、リスト破損時に汎用語が無警告で書き込まれかねなかった。現在は
+    リストが存在しない、または有効な語を1つも含まない場合、書き込み前（dry-runでも）
+    に fail-closed でエラー終了する。パスは `APPLY_ALIASES_GENERIC_FILE` 環境変数で
+    差し替え可能（テスト用）。
   - PyYAML等の外部ライブラリは使わない（標準ライブラリのみ）。
 
 使い方:
@@ -28,12 +35,19 @@
 import argparse
 import datetime
 import difflib
+import os
 import pathlib
 import re
+import stat
 import sys
+import tempfile
 
 VAULT = pathlib.Path.home() / "Data" / "obsidian"
-GENERIC_ALIASES_FILE = pathlib.Path(__file__).parent / "generic-aliases.txt"
+# APPLY_ALIASES_GENERIC_FILE環境変数でテスト用に差し替え可能（既定はリポジトリ本体の
+# generic-aliases.txt）。fail-closed化（後述load_generic_aliases/main()）のユニット
+# テストで、本物のリストを汚さずに「欠落/空」状態を再現するために使う。
+GENERIC_ALIASES_FILE = pathlib.Path(
+    os.environ.get("APPLY_ALIASES_GENERIC_FILE", str(pathlib.Path(__file__).parent / "generic-aliases.txt")))
 
 # vault_inventory.py の parse_frontmatter() が読める2形式（フロー配列・ブロックリスト）
 # を書く/読む側でも同じ形式として扱う。
@@ -48,6 +62,8 @@ DATE_RE = re.compile(r"^date:\s*.*$")
 def load_generic_aliases():
     """generic-aliases.txt を読み、小文字化した禁止語の集合を返す（無ければ空集合）。
     vault_inventory.py の load_generic_aliases() と同じ書式（1行1語・#コメント可）。
+    単体では欠落/空をチェックしない純粋関数（fail-closedの判定はrequire_generic_aliases()
+    に集約する）。
     """
     words = set()
     if GENERIC_ALIASES_FILE.exists():
@@ -55,6 +71,29 @@ def load_generic_aliases():
             word = line.split("#", 1)[0].strip()
             if word:
                 words.add(word.lower())
+    return words
+
+
+def require_generic_aliases():
+    """load_generic_aliases()を呼び、欠落/空ならfail-closedでプロセスを終了する（exit 1）。
+
+    2026-07-14修正（外部脳の想起・ベンチ機構の総点検・Codex gpt-5.6-sol検証済み欠陥の
+    是正）: リストが欠落/空の状態は「汎用語チェックが安全に機能しない」ことを意味し、
+    load_generic_aliases()単体（空集合を返すだけの純粋関数）を直接呼ぶ全ての呼び出し元
+    （本ファイルのmain()、および scripts/vault-agents/recall_bench.py の
+    build_overlay_vault() ―どちらも独立した呼び出し元で重複実装するとfail-closedの
+    抜け漏れが起きやすいため、ここへ集約する）が共通してこの関数を経由する契約にする。
+    書き込み・採点いずれの用途でも、チェックが機能しない状態のまま処理を続けない。
+    """
+    if not GENERIC_ALIASES_FILE.exists():
+        print(f"FAIL: {GENERIC_ALIASES_FILE} が見つかりません。汎用語禁止チェックを安全に"
+              "行えないため中断します（fail-closed）。", file=sys.stderr)
+        sys.exit(1)
+    words = load_generic_aliases()
+    if not words:
+        print(f"FAIL: {GENERIC_ALIASES_FILE} に有効な語が1つもありません。汎用語禁止チェックを"
+              "安全に行えないため中断します（fail-closed）。", file=sys.stderr)
+        sys.exit(1)
     return words
 
 
@@ -179,6 +218,66 @@ def apply_updated(lines, today):
     return lines
 
 
+def write_note_atomic(path, text):
+    """ノートへのtext書込みをatomicに行う（2026-07-14修正・リーダー指示: 従来の
+    `path.write_text()` 直書きは非atomicで、書込み中のクラッシュ・強制終了・
+    ディスク枯渇等で部分書込（frontmatterが壊れた中途半端な内容）がそのまま
+    正規パスに残るリスクがあった）。同ディレクトリに一時ファイルを作って書き込み、
+    os.replace()で置き換える。この方式なら書込み完了前にプロセスが死んでも、
+    正規パスの内容は「更新前の全文」か「更新後の全文」のいずれかにしかならない
+    （POSIXのos.replaceは同一ファイルシステム内でatomicなrenameを保証。同じ
+    ディレクトリへ一時ファイルを作るため別ファイルシステムを跨ぐ心配が無い）。
+    knowledge_merge.py の save_state_atomic() と同じパターン（tempfile.mkstemp +
+    os.fdopen + os.replace、失敗時は一時ファイルをunlinkしてから例外を再送出）。
+
+    呼び出し側の注意（Codex一次レビュー指摘・Major）: `path` がsymlinkの場合、
+    os.replace()はリンクそのものを通常ファイルへ置き換えてしまいリンク先は
+    更新されない。symlinkノートを扱う呼び出し側は、解決済みの実体パスを渡すこと
+    （apply_aliases.main()・recall_bench.build_overlay_vault()はいずれも既に
+    resolve()済みのパスを渡す設計にしてある）。
+    """
+    path = pathlib.Path(path)
+    # 既存ファイルのパーミッションを一時ファイルへ引き継ぐ（Codex一次レビュー指摘・
+    # Major: tempfile.mkstemp()は既定0600で作成するため、対策なしだと
+    # os.replace()後にノートの元パーミッション(例: 0644)が0600へ変わってしまう）。
+    # 新規作成（既存ファイルが無い）の場合はNoneのままにし、mkstemp()の既定
+    # （プロセスumask適用済みの0600）に委ねる。
+    original_mode = None
+    try:
+        original_mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        original_mode = None
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    fd_owned_by_file_obj = False  # os.fdopen()が成功しfdの所有権をfileオブジェクトへ渡したか
+    try:
+        if original_mode is not None:
+            os.fchmod(fd, original_mode)  # ここで失敗した場合、fdはまだ生の整数のまま
+        f = os.fdopen(fd, "w", encoding="utf-8")
+        fd_owned_by_file_obj = True  # 以降はf.close()がfdのcloseを担う（os.close()と併用しない）
+        try:
+            f.write(text)
+        finally:
+            f.close()
+        os.replace(tmp_path, path)
+    except BaseException:
+        # KeyboardInterrupt等のBaseException（Exceptionのサブクラスではない）でも
+        # 一時ファイルを残さない（Codex一次レビュー指摘・Minor）。os.fchmod()や
+        # os.fdopen()自体が失敗した場合、fdはまだfileオブジェクトに包まれておらず
+        # 生の整数のままなので、二重closeを避けつつここで明示的にcloseする
+        # （Codex一次レビュー指摘・Minor2巡目: 従来はこの経路でfdがcloseされず
+        # ファイルディスクリプタがリークしていた）。
+        if not fd_owned_by_file_obj:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def process_note(text, new_aliases, generic_words, today):
     """1ノート分のテキストを処理し、結果dictを返す（書き込みはしない・純粋関数）。
 
@@ -248,10 +347,13 @@ def main():
         print("適用対象がありません（TSVが空、または全行が不正/コメントでskipされました）。")
         return
 
-    generic_words = load_generic_aliases()
-    if not GENERIC_ALIASES_FILE.exists():
-        print(f"NOTE: {GENERIC_ALIASES_FILE} が見つかりません。汎用語チェックはskipします。",
-              file=sys.stderr)
+    # fail-closed（2026-07-14修正・Codex検証済み欠陥の是正）: 汎用語禁止リストが
+    # 欠落/空の場合、これまでは「何もチェックしない」まま書き込みまで進んでいた
+    # （fail-open）。汎用語チェックが安全に機能しない状態で処理を続けると、本来
+    # skipすべき汎用alias（"Claude"等）が無警告でVaultへ書き込まれうるため、
+    # dry-run/--applyいずれの場合でも書き込みより前でエラー終了する（require_generic_aliases()
+    # 経由・sys.exit(1)）。
+    generic_words = require_generic_aliases()
     today = datetime.date.today().isoformat()
 
     n_changed = n_skip_missing = n_skip_nochange = n_error = 0
@@ -302,7 +404,12 @@ def main():
         sys.stdout.writelines(diff)
 
         if args.apply:
-            path.write_text(result["new_text"], encoding="utf-8")
+            # symlinkノートの場合、書込み先はリンクそのものではなく解決済みの実体
+            # (resolved)にする（Codex一次レビュー指摘・Major: os.replace()はpathが
+            # symlinkだとリンク自体を通常ファイルへ置き換えてしまい、リンク先の実体は
+            # 更新されないままリンクが消える回帰を招く。read_text()はsymlinkを透過的に
+            # 辿るため気づきにくい）。resolvedは冒頭のVault境界チェックで既に計算済み。
+            write_note_atomic(resolved, result["new_text"])
 
         n_changed += 1
 
