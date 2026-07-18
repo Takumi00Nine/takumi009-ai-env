@@ -2,7 +2,7 @@
 date: 2026-06-14
 tags: [preference, git, github, security]
 project: meta
-updated: 2026-07-10
+updated: 2026-07-18
 related:
   - "[[Preferences/readme-bilingual]]"
 aliases:
@@ -76,6 +76,20 @@ commit/push/private作成/force-push・`visibility=private`・visibilityの読�
 
 - git push の認証は **OS の資格情報ストア**を使う（トークンをファイルに書かない。設定・スコープの実運用詳細＝[[Knowledge/github-auth-ops]]・private）。
 - commit/push はローカル git で行う（MCP の push_files は履歴が分かれるので使わない。MCP は Issue/PR/検索/読み取り用）。
+
+## 🚩 ルール：push 前に未push コミットを整理する（push済みは書き換えない）
+
+**push する前に、未push のローカルコミット（`origin/main..HEAD`）を少数の論理的コミットに集約してから push する。** wip/fixup/export snapshot 等のノイズを潰し、意味の区切りでまとめる。
+
+- **書き換えてよいのは未push 分だけ。push 済みコミット（特に `origin/main`）は書き換えない＝force-push しない。**
+  - **Why**: サブ機がこのリポジトリ（takumi009-ai-env）を `git pull --ff-only` で定期自動追従している（`scripts/update-sub.sh`）。push済み履歴を rewrite すると ff 不可で pull が失敗し、**サブ機の自動更新が止まる**（復旧に各クローンで手動 `git fetch && git reset --hard origin/main` が必要）。公開履歴の書き換えは取り消しにくい。※自分専用の未共有ブランチの整理に force-push を使うのは可。禁止対象は「他が既に追従している push済み履歴」。
+- **やり方（この環境は `git rebase -i` 不可）**:
+  - 1コミット化: `git reset --soft origin/main && git commit`。
+  - 複数コミット化: フェーズ境界ごとに `git reset --hard <境界commit>` → `git reset --soft <前の新commit>` → `git commit` を繰り返す（各中間ツリーが元と一致＝**内容ロスなし**）。
+  - **集約後、元HEADとのツリー差分がゼロであることを検証**（`git diff --quiet <backup> HEAD`）してから本ブランチを移す。**バックアップブランチ**（例 `backup-before-tidy`）を push まで残す。
+- 集約の**粒度（1つ / 複数）は本人に確認**する。**push 自体は本人専任**（外部脳系リポジトリ＝[[Preferences/coding-delegation]]）。
+
+**Why:** fixup/wip/export の細かいコミットがそのまま公開履歴に残ると、後から「何が入ったか」を追いにくい。push は不可逆な公開操作なので、その直前に一度きれいにする。ただし整理は"まだ誰も見ていない未push分"に限定し、既に共有された履歴には触れない。
 
 ## 🚩 ルール：GitHub Release はキリの良いタイミングで提案する
 
