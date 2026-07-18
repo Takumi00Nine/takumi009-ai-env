@@ -91,11 +91,11 @@ source "$SCRIPT_DIR/lib/macos-notify.sh"
 : "${TIMEOUT_VAULT_INVENTORY:=180}"
 : "${TIMEOUT_KNOWLEDGE_MERGE:=300}"
 : "${TIMEOUT_DECISION_PROPAGATION:=120}"
-: "${TIMEOUT_MAINTENANCE_APPLY:=420}"
+: "${TIMEOUT_MAINTENANCE_APPLY:=720}"
 # maintenance_apply.py自身の内部--claude-timeout（上記TIMEOUT_MAINTENANCE_APPLYより
 # 短くする＝外側のmaintenance_run_step.pyタイムアウトが内側より先に発火すると
 # 内部の状況が分からないまま強制終了されるため、内側を先に切れさせる）。
-: "${MAINTENANCE_APPLY_CLAUDE_TIMEOUT:=300}"
+: "${MAINTENANCE_APPLY_CLAUDE_TIMEOUT:=600}"
 : "${MAINTENANCE_APPLY_MAX_MERGE_ACTIONS:=2}"
 # ヘッドレスClaudeのモデル・バイナリ（maintenance_apply.py側の既定＝
 # MAINTENANCE_APPLY_MODEL/MAINTENANCE_APPLY_CLAUDE_BIN環境変数）をそのまま

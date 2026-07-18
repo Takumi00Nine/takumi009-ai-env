@@ -43,7 +43,7 @@
              未展開のパスになり動かない）
              （未検証・実機ロールアウト時に確認が必要＝リーダーへの
              申告事項）。 -->
-        <string>__AIENV_HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>__AIENV_HOME__/.anyenv/envs/nodenv/shims:__AIENV_HOME__/.anyenv/envs/pyenv/shims:__AIENV_HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
     <key>StartCalendarInterval</key>
     <dict>

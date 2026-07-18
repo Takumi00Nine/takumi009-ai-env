@@ -2181,10 +2181,124 @@ pathlib.Path('$FJSON').write_text(json.dumps(payload))
   assert_contains "--disable-slash-commandsが渡される" "$ARGV" "--disable-slash-commands"
   assert_contains "--strict-mcp-configが渡される" "$ARGV" "--strict-mcp-config"
   assert_contains "--disallowedTools mcp__* が渡される" "$ARGV" $'--disallowedTools\nmcp__*'
-  assert_contains "--max-turns 1 が渡される" "$ARGV" $'--max-turns\n1'
+  assert_contains "--max-turns 既定値(DEFAULT_MAX_TURNS=8)が渡される" "$ARGV" $'--max-turns\n8'
   assert_contains "--model 引数がCLI指定値(haiku)で渡される" "$ARGV" $'--model\nhaiku'
   assert_contains "--output-format json が渡される" "$ARGV" $'--output-format\njson'
   assert_contains "--mcp-configは一切渡されない（--strict-mcp-configとの二重防御の前提）" "$(echo "$ARGV" | grep -c -- '--mcp-config$' || true)" "0"
+}
+
+echo "=== 62. main(): --max-turnsをCLIで明示指定するとその値がargvへ渡る（実データ量ではmax-turns 1が高頻度でerror_max_turnsになり得る実機バグの修正対象） ==="
+{
+  V="$WORK_ROOT/t48/vault"; mkdir -p "$V/Knowledge" "$V/Fragments/2026-07"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+# Fragments 2026-07-15
+- **断片N**：max-turns引数検証用。
+EOF
+  FJSON="$WORK_ROOT/t48/fragments.json"
+  python3 -c "
+import sys, hashlib, json, pathlib
+sys.path.insert(0, '$LIB_DIR')
+import fragments_log
+vault = pathlib.Path('$V')
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+payload = {'fragments': [{'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'date': '2026-07-15',
+           'heading_or_bullet': entries[0][0], 'body': entries[0][2]}], 'truncated': []}
+pathlib.Path('$FJSON').write_text(json.dumps(payload))
+"
+  RESP="$WORK_ROOT/t48/response.json"
+  echo '{"is_error": false, "permission_denials": [], "structured_output": {"actions": []}}' > "$RESP"
+  ARGV_FILE="$WORK_ROOT/t48/argv.txt"
+  W="$WORK_ROOT/t48/work"
+  FAKE_CLAUDE_MODE=respond FAKE_CLAUDE_RESPONSE_FILE="$RESP" FAKE_CLAUDE_SAVE_ARGV="$ARGV_FILE" \
+    python3 "$SCRIPT" --vault "$V" --workdir "$W" --claude-bin "$FAKE_CLAUDE" \
+    --fragments-json "$FJSON" --max-turns 4 > "$WORK_ROOT/t48/stdout.txt" 2>&1
+  ARGV="$(cat "$ARGV_FILE")"
+  assert_contains "CLI --max-turns 4 指定がargvへ反映される" "$ARGV" $'--max-turns\n4'
+}
+
+echo "=== 63. main(): 環境変数MAINTENANCE_APPLY_MAX_TURNSでargparseの既定値が上書きされ、CLI未指定時のargvへ実際に反映される（Codex一次レビュー指摘Minor対応: モジュール定数の値だけでなくargvへの伝播経路まで確認する） ==="
+{
+  V="$WORK_ROOT/t49/vault"; mkdir -p "$V/Knowledge" "$V/Fragments/2026-07"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+# Fragments 2026-07-15
+- **断片N**：環境変数経由max-turns検証用。
+EOF
+  FJSON="$WORK_ROOT/t49/fragments.json"
+  python3 -c "
+import sys, hashlib, json, pathlib
+sys.path.insert(0, '$LIB_DIR')
+import fragments_log
+vault = pathlib.Path('$V')
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+payload = {'fragments': [{'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'date': '2026-07-15',
+           'heading_or_bullet': entries[0][0], 'body': entries[0][2]}], 'truncated': []}
+pathlib.Path('$FJSON').write_text(json.dumps(payload))
+"
+  RESP="$WORK_ROOT/t49/response.json"
+  echo '{"is_error": false, "permission_denials": [], "structured_output": {"actions": []}}' > "$RESP"
+  ARGV_FILE="$WORK_ROOT/t49/argv.txt"
+  W="$WORK_ROOT/t49/work"
+  MAINTENANCE_APPLY_MAX_TURNS=12 \
+    FAKE_CLAUDE_MODE=respond FAKE_CLAUDE_RESPONSE_FILE="$RESP" FAKE_CLAUDE_SAVE_ARGV="$ARGV_FILE" \
+    python3 "$SCRIPT" --vault "$V" --workdir "$W" --claude-bin "$FAKE_CLAUDE" \
+    --fragments-json "$FJSON" > "$WORK_ROOT/t49/stdout.txt" 2>&1
+  ARGV="$(cat "$ARGV_FILE")"
+  assert_contains "MAINTENANCE_APPLY_MAX_TURNS=12がCLI未指定時にargvの--max-turnsへ反映される" "$ARGV" $'--max-turns\n12'
+}
+
+echo "=== 63b. main(): 環境変数MAINTENANCE_APPLY_MAX_TURNSとCLI --max-turnsが同時指定された場合、CLI指定が優先される（独立検証Codex一次レビュー指摘Minor対応: テスト62/63が個別検証のみでCLI優先の同時指定回帰が無かったため追加） ==="
+{
+  V="$WORK_ROOT/t49b/vault"; mkdir -p "$V/Knowledge" "$V/Fragments/2026-07"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+# Fragments 2026-07-15
+- **断片N**：CLIとenv同時指定時の優先順位検証用。
+EOF
+  FJSON="$WORK_ROOT/t49b/fragments.json"
+  python3 -c "
+import sys, hashlib, json, pathlib
+sys.path.insert(0, '$LIB_DIR')
+import fragments_log
+vault = pathlib.Path('$V')
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+payload = {'fragments': [{'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'date': '2026-07-15',
+           'heading_or_bullet': entries[0][0], 'body': entries[0][2]}], 'truncated': []}
+pathlib.Path('$FJSON').write_text(json.dumps(payload))
+"
+  RESP="$WORK_ROOT/t49b/response.json"
+  echo '{"is_error": false, "permission_denials": [], "structured_output": {"actions": []}}' > "$RESP"
+  ARGV_FILE="$WORK_ROOT/t49b/argv.txt"
+  W="$WORK_ROOT/t49b/work"
+  MAINTENANCE_APPLY_MAX_TURNS=3 \
+    FAKE_CLAUDE_MODE=respond FAKE_CLAUDE_RESPONSE_FILE="$RESP" FAKE_CLAUDE_SAVE_ARGV="$ARGV_FILE" \
+    python3 "$SCRIPT" --vault "$V" --workdir "$W" --claude-bin "$FAKE_CLAUDE" \
+    --fragments-json "$FJSON" --max-turns 4 > "$WORK_ROOT/t49b/stdout.txt" 2>&1
+  ARGV="$(cat "$ARGV_FILE")"
+  assert_contains "MAINTENANCE_APPLY_MAX_TURNS=3とCLI --max-turns 4の同時指定でCLI値4が優先されargvへ反映される" "$ARGV" $'--max-turns\n4'
+  assert_not_contains "同時指定時にenv値3がargvへ紛れ込んでいない" "$ARGV" $'--max-turns\n3'
 }
 
 echo

@@ -113,6 +113,21 @@ DEFAULT_CLAUDE_BIN = os.environ.get("MAINTENANCE_APPLY_CLAUDE_BIN", "claude")
 DEFAULT_MODEL = os.environ.get("MAINTENANCE_APPLY_MODEL", "sonnet")
 DEFAULT_CLAUDE_TIMEOUT = 300.0
 
+# `--max-turns`の既定値（2026-07-18実機スモークテストで確定した修正）。
+# ヘッドレスClaudeは`--tools ""`でツールを全無効化していても、構造化出力
+# 自体を内部的なtool_useとして返す（応答のstop_reasonがtool_use）ため、
+# しばしば「推論1ターン＋出力1ターン」以上のターンを要する。旧来の
+# `--max-turns 1`はこの挙動により**ケースにより**（応答が2ターン以内に
+# 収まるかどうか次第の非決定的な事象として）`error_max_turns`
+#（terminal_reason: max_turns・structured_output: null）に陥り得た。
+# 実データ量（fragments 52件）での実機検証では高頻度でこの失敗を再現し、
+# 発生時はPhase2がanomaly（claude_exit_error）としてVaultへ一切書き込め
+# なくなっていた（fail-safe自体は設計通り機能したが、夜間バッチが実質
+# 何もしない回が多発しうる状態だった）。実機検証では`--max-turns 4`で
+# num_turns=2の実消費で成功したため、余裕を見て8を既定にする
+# （--tools ""でツールが無くエージェント的暴走はしないため大きめでも安全）。
+DEFAULT_MAX_TURNS = int(os.environ.get("MAINTENANCE_APPLY_MAX_TURNS", "8"))
+
 VALID_ACTIONS = ("promote", "merge", "skip")
 
 # validate_structured_output()のadditionalProperties:false相当チェック用
@@ -275,8 +290,8 @@ def build_output_schema(frag_ids, merge_ids):
     }
 
 
-def invoke_claude(claude_bin, model, system_prompt_path, schema, material, timeout):
-    """ヘッドレスClaudeを1回起動する（`--max-turns 1`）。
+def invoke_claude(claude_bin, model, system_prompt_path, schema, material, timeout, max_turns=DEFAULT_MAX_TURNS):
+    """ヘッドレスClaudeを1回起動する（`--max-turns`は既定でDEFAULT_MAX_TURNS）。
 
     戻り値: (structured_output_or_None, anomaly_kind_or_None, detail_or_None)。
     anomaly_kindがNoneでない場合、structured_outputは常にNone（呼び出し側は
@@ -288,7 +303,7 @@ def invoke_claude(claude_bin, model, system_prompt_path, schema, material, timeo
     )
     argv = [
         claude_bin, "-p", prompt_text,
-        "--tools", "", "--disable-slash-commands", "--max-turns", "1",
+        "--tools", "", "--disable-slash-commands", "--max-turns", str(max_turns),
         "--output-format", "json", "--json-schema", json.dumps(schema, ensure_ascii=False),
         # MCPの二重遮断（設計書§2.1・実装時要望: --toolsはMCPツールを対象外
         # とするため、--mcp-configを渡さないことでMCPサーバ自体を一切ロード
@@ -1575,6 +1590,10 @@ def build_argparser():
     ap.add_argument("--claude-bin", default=DEFAULT_CLAUDE_BIN)
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--claude-timeout", type=float, default=DEFAULT_CLAUDE_TIMEOUT)
+    ap.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS,
+                     help="ヘッドレスClaudeの--max-turns（構造化出力もtool_use扱いで"
+                          "複数ターンを要する場合があり、実データ量では1だと"
+                          "高頻度で失敗するため既定8）")
     ap.add_argument("--max-merge-actions", type=int, default=DEFAULT_MAX_MERGE_ACTIONS)
     ap.add_argument("--dry-run", action="store_true", help="Vaultへ書き込まず判定結果のみ表示する")
     ap.add_argument("--today", default=None, help="YYYY-MM-DD（テスト用の日付固定。省略時は実行日）")
@@ -1697,7 +1716,8 @@ def main(argv=None):
         system_prompt_path.write_text(build_system_prompt(args.max_merge_actions), encoding="utf-8")
 
         structured, anomaly_kind, anomaly_detail = invoke_claude(
-            args.claude_bin, args.model, system_prompt_path, schema, material, args.claude_timeout)
+            args.claude_bin, args.model, system_prompt_path, schema, material, args.claude_timeout,
+            max_turns=args.max_turns)
         if anomaly_kind:
             print(f"ANOMALY: {anomaly_kind}: {anomaly_detail}", file=sys.stderr)
             _write_status_file(status_file, ok=False, anomaly=True,
