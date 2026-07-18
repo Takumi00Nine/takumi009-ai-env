@@ -4,15 +4,20 @@
 
 役割: 旧claude/hooks/vault-recall.sh（8.0/8.1ラウンド版）にbashでインライン実装されていた
 「キーワード全体一致＋トークン部分一致の二段構え」照合ロジックを、挙動を一切変えずに
-Pythonへ移植したもの。vault-recall.shは本helperとvector_recall_helper.pyを並列に起動し、
-両者の結果をマージして表示するだけの薄い殻になった（設計はリーダー承認済み・
-claude/hooks/vault-recall-legacy.sh に移植元の全文をロールバック用に保全してある）。
+Pythonへ移植したもの。8.1ラウンドで追加されたvector_recall_helper.py（Ollama embed→
+cosine類似のベクトル想起）は2026-07-16簡素化
+（[[Decisions/2026-07-16-remove-vector-search-embedding-infra]]）で撤去済み。以後
+vault-recall.shは本helper単独をサブプロセス起動して表示するだけの薄い殻になった
+（移植元の全文は `git log -- claude/hooks/vault-recall-legacy.sh` で参照可能。
+vault-recall-legacy.sh自体もこの簡素化で削除した）。
 
-移植方針: ロジックはvault-recall-legacy.shのコメントに書かれた設計判断（全体一致優先・
-トークン部分一致はratio matched*3>=total・汎用トークン除外・活用形フォールバック・
-カタカナ境界分割・部分一致は1ノート最大1回加点、等）をすべてそのまま踏襲する。各関数の
-対応関係はlegacyスクリプト内の同名関数コメントを参照。ここでは「なぜbashからPythonへ
-移すのか」ではなく「移植時にbash実装のどの癖を意図的に模倣したか」だけを記す。
+移植方針: ロジックはlegacy版（vault-recall-legacy.sh）のコメントに書かれた設計判断
+（全体一致優先・トークン部分一致はratio matched*3>=total・汎用トークン除外・
+活用形フォールバック・カタカナ境界分割・部分一致は1ノート最大1回加点、等）をすべて
+そのまま踏襲する。各関数の対応関係はlegacyスクリプト内の同名関数コメントを参照
+（`git log -p -- claude/hooks/vault-recall-legacy.sh` で全文を確認できる）。ここでは
+「なぜbashからPythonへ移すのか」ではなく「移植時にbash実装のどの癖を意図的に
+模倣したか」だけを記す。
 
 走査順（tie-break）の再現について: 同スコアのノートはbashのグロブ展開順（ファイル走査順）
 で先着優先になる（O(n²)選択ロジックの`>`比較の副作用）。bashのファイル名グロブは現在の
@@ -407,7 +412,8 @@ def score_note(keys, prompt):
 
     重複キーの扱い: legacyはKEY_SEP前後を挟んだ完全一致部分文字列検索で「既にヒット済みの
     同一キー文字列」を弾いていた（prefix関係にある別キーを誤って重複扱いしないための
-    Codexレビュー対応・vault-recall-legacy.sh参照）。Pythonでは集合(set)による完全一致の
+    Codexレビュー対応。全文は`git log -p -- claude/hooks/vault-recall-legacy.sh`参照）。
+    Pythonでは集合(set)による完全一致の
     メンバーシップ判定がそのまま同じ振る舞いになる（prefix問題がそもそも起きない、より
     単純で同値な実装）。
     """

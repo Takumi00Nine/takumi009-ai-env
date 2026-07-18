@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.takumi009.vault-backup</string>
+    <string>com.takumi009.backup-vault</string>
     <key>ProgramArguments</key>
     <array>
         <string>__AIENV_HOME__/work/takumi009-ai-env/scripts/backup-vault.sh</string>
@@ -20,8 +20,8 @@
     <key>RunAtLoad</key>
     <false/>
     <key>StandardOutPath</key>
-    <string>/tmp/vault-backup.log</string>
+    <string>/tmp/backup-vault.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/vault-backup.log</string>
+    <string>/tmp/backup-vault.log</string>
 </dict>
 </plist>

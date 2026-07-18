@@ -70,6 +70,10 @@ make_fake_repo() {
   mkdir -p "$repo/scripts" "$repo/vault-public/Personal"
   cp "$REPO_ROOT/$SCRIPT_REL" "$repo/scripts/audit.sh"
   chmod +x "$repo/scripts/audit.sh"
+  # audit.sh は2026-07-16簡素化でscripts/lib/personal-link-check.shをsourceするように
+  # なったため、fixture repoにも同ファイルを複製する（cleanup決定#5）。
+  mkdir -p "$repo/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/personal-link-check.sh" "$repo/scripts/lib/personal-link-check.sh"
   echo "# README（テスト用ダミー）" > "$repo/README.md"
   echo "MIT（テスト用ダミー）" > "$repo/LICENSE"
   cat > "$repo/.gitignore" <<'EOF'
@@ -359,8 +363,9 @@ echo "=== 12. REPO が git リポジトリでない場合は exit 2（監査失�
   REPO_DIR="$(mktemp -d)"
   VAULT_DIR="$(mktemp -d)"
   WORK="$(mktemp -d)"
-  mkdir -p "$REPO_DIR/scripts"
+  mkdir -p "$REPO_DIR/scripts/lib"
   cp "$REPO_ROOT/$SCRIPT_REL" "$REPO_DIR/scripts/audit.sh"
+  cp "$REPO_ROOT/scripts/lib/personal-link-check.sh" "$REPO_DIR/scripts/lib/personal-link-check.sh"
   chmod +x "$REPO_DIR/scripts/audit.sh"
   # git init しない
 

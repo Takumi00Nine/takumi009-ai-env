@@ -3,9 +3,10 @@
 # キーワード全体一致＋トークン部分一致の二段構え。8.2ラウンド「統一リファクタリング」で
 # claude/hooks/vault-recall.shからPythonへ移植した際に新設）。
 #
-# helperを直接subprocessで叩く（vector_recall_helper.pyのテストと同じ流儀）。挙動の
-# 詳細な期待値は claude/hooks/vault-recall-legacy.sh のコメント・旧tests/test-vault-recall.sh
-# と揃えてある（移植元と挙動を完全一致させる検収条件のため）。
+# helperを直接subprocessで叩く。挙動の詳細な期待値は claude/hooks/vault-recall-legacy.sh
+# （2026-07-16簡素化で削除済み・全文は `git log -p -- claude/hooks/vault-recall-legacy.sh`
+# 参照）のコメント・旧tests/test-vault-recall.shと揃えてある（移植元と挙動を完全一致
+# させる検収条件のため）。
 #
 # 実行方法: bash tests/test-keyword-recall-helper.sh
 

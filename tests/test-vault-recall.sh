@@ -59,18 +59,15 @@ write_note() {
 }
 
 # vault-recall.sh を実行し、標準出力(JSON文字列)を返す。
-# VAULT_RECALL_DISABLE_VECTOR=1（8.1ラウンド追加のキルスイッチ）を常に付ける:
-# 本ファイルはキーワード照合ロジック専用のテストであり、ベクトル想起の挙動は
-# tests/test-vault-recall-vector.sh 側で個別に検証する。無効化しないと、リポジトリ内
-# 既定の埋め込みインデックス置き場(.cache/vault-embeddings/)にたまたま実Vaultの
-# インデックスが存在する状態でテストを走らせた場合に、キーワード除外対象のはずの
-# ノート（absolute-rules.md等）がベクトル候補として紛れ込み、テストが環境依存で
-# 不安定になる（実際に発生した回帰の再発防止＝Codexレビュー相当の自己発見）。
+# 2026-07-16簡素化でベクトル想起（旧VAULT_RECALL_DISABLE_VECTORキルスイッチ・
+# tests/test-vault-recall-vector.sh・tests/test-vector-recall-helper.sh）は
+# embedding_index.pyごと撤去済み（[[Decisions/2026-07-16-remove-vector-search-embedding-infra]]）。
+# 本ファイルはkeyword_recall_helper.py単独のキーワード照合ロジックを検証する。
 run_recall() {
   local vault="$1" log="$2" prompt="$3" session="${4:-sess-1}"
   local input
   input="$(jq -n --arg p "$prompt" --arg s "$session" '{session_id: $s, prompt: $p}')"
-  printf '%s' "$input" | VAULT_RECALL_VAULT="$vault" VAULT_RECALL_LOG="$log" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT"
+  printf '%s' "$input" | VAULT_RECALL_VAULT="$vault" VAULT_RECALL_LOG="$log" "$SCRIPT"
 }
 
 echo "=== 1. 正常ヒット: aliases(ブロックリスト)とファイル名由来キーの両方が拾われる ==="
@@ -210,7 +207,7 @@ echo "=== 8. fail-open: 壊れたJSON入力でもexit 0・ログにERROR行（3�
   VAULT_DIR="$(mktemp -d)"
   LOG="$(mktemp -d)/vault-recall.tsv"
 
-  out="$(printf 'not valid json at all' | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT")"
+  out="$(printf 'not valid json at all' | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" "$SCRIPT")"
   rc=$?
   assert_eq "exit code 0（プロンプト処理を妨げない）" "0" "$rc"
   assert_eq "標準出力は空" "" "$out"
@@ -250,7 +247,7 @@ echo "=== 9b. session_idがJSONに無くても候補は無言で消えず通常�
     $'date: 2026-07-10\naliases:\n  - "excludedsessiontestkeyword"'
 
   out="$(printf '{"prompt":"excludedsessiontestkeywordについて教えて"}' \
-    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT")"
+    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" "$SCRIPT")"
   rc=$?
   assert_eq "exit code 0" "0" "$rc"
   ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
@@ -336,7 +333,7 @@ echo "=== 13. jqが無い環境でもexit 0・ERROR行を残す（Codexレビュ
   done
 
   out=$(printf '{"session_id":"s1","prompt":"これは十分に長いプロンプトです確認"}' \
-    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" PATH="$BINDIR" "$SCRIPT" 2>&1)
+    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" PATH="$BINDIR" "$SCRIPT" 2>&1)
   rc=$?
   assert_eq "exit code 0（jq不在でも落ちない）" "0" "$rc"
   assert_eq "標準出力は空" "" "$out"
@@ -483,7 +480,7 @@ echo "=== 20. fail-open: カタカナ境界分割用のgrepが無くてもexit 0
   done
 
   out=$(printf '{"session_id":"s1","prompt":"変更したときのチェックってどうやるんだっけ"}' \
-    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" PATH="$BINDIR" "$SCRIPT" 2>&1)
+    | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" PATH="$BINDIR" "$SCRIPT" 2>&1)
   rc=$?
   assert_eq "grep不在でもexit code 0" "0" "$rc"
 
@@ -591,7 +588,7 @@ echo "=== 26. ハートビート: keyword helperがfail-openした呼び出し�
 
   input="$(jq -n --arg p "全く関係ない話題について質問したいと思います" --arg s "hb-error-sess" '{session_id: $s, prompt: $p}')"
   out="$(printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" \
-    VAULT_RECALL_DISABLE_VECTOR="1" VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" "$SCRIPT")"
+    VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" "$SCRIPT")"
   rc=$?
   logtext="$(cat "$LOG" 2>/dev/null || true)"
   assert_eq "exit code 0" "0" "$rc"
@@ -614,7 +611,7 @@ echo "=== 27. ハートビート: 直前ハートビートが再書込み間隔(
   printf '%s\thb-old-sess\t(heartbeat)\n' "$old_ts" > "$LOG"
 
   input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その5" --arg s "hb-old-sess" '{session_id: $s, prompt: $p}')"
-  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT" >/dev/null
+  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" "$SCRIPT" >/dev/null
   rc=$?
 
   n_lines="$(grep -c . "$LOG" 2>/dev/null || true)"
@@ -637,7 +634,7 @@ echo "=== 28. ハートビート: 再書込み間隔内(既定1日)なら従来�
   printf '%s\thb-recent-sess\t(heartbeat)\n' "$recent_ts" > "$LOG"
 
   input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その6" --arg s "hb-recent-sess" '{session_id: $s, prompt: $p}')"
-  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT" >/dev/null
+  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" "$SCRIPT" >/dev/null
 
   n_lines="$(grep -c . "$LOG" 2>/dev/null || true)"
   assert_eq "1時間前(既定閾値1日未満)のハートビートは引き続き抑制される" "1" "$n_lines"
@@ -654,7 +651,7 @@ echo "=== 29. ハートビート: 直前行のタイムスタンプが解析で�
   printf 'not-a-valid-timestamp\thb-broken-ts-sess\t(heartbeat)\n' > "$LOG"
 
   input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その7" --arg s "hb-broken-ts-sess" '{session_id: $s, prompt: $p}')"
-  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT" >/dev/null
+  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" "$SCRIPT" >/dev/null
   rc=$?
 
   n_lines="$(grep -c . "$LOG" 2>/dev/null || true)"
@@ -676,7 +673,7 @@ echo "=== 29b. ハートビート: BSD date -jが寛容にパース成功して�
     LOG="$(mktemp -d)/vault-recall.tsv"
     printf '%s\thb-lenient-ts-sess\t(heartbeat)\n' "$bad_ts" > "$LOG"
     input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その7b" --arg s "hb-lenient-ts-sess" '{session_id: $s, prompt: $p}')"
-    printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT" >/dev/null
+    printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" "$SCRIPT" >/dev/null
     rc=$?
     n_lines="$(grep -c . "$LOG" 2>/dev/null || true)"
     assert_eq "「${bad_ts}」でもexit code 0" "0" "$rc"
@@ -695,7 +692,7 @@ echo "=== 30. ハートビート: VAULT_RECALL_HEARTBEAT_REFRESH_AFTER_Sが不�
 
   for bad in "abc" "-100" "12.5" ""; do
     input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その8" --arg s "hb-badenv-${bad:-empty}" '{session_id: $s, prompt: $p}')"
-    printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" \
+    printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" \
       VAULT_RECALL_HEARTBEAT_REFRESH_AFTER_S="$bad" "$SCRIPT" >/dev/null
     rc=$?
     assert_eq "VAULT_RECALL_HEARTBEAT_REFRESH_AFTER_S=${bad:-<空文字>} でもexit code 0（既定値へフォールバック）" "0" "$rc"
@@ -753,7 +750,7 @@ echo "=== 33. ハートビート: 直前行のタイムスタンプが未来（�
   printf '%s\thb-future-sess\t(heartbeat)\n' "$future_ts" > "$LOG"
 
   input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その10" --arg s "hb-future-sess" '{session_id: $s, prompt: $p}')"
-  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" "$SCRIPT" >/dev/null
+  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" "$SCRIPT" >/dev/null
   rc=$?
 
   n_lines="$(grep -c . "$LOG" 2>/dev/null || true)"
@@ -775,7 +772,7 @@ echo "=== 34. ハートビート: VAULT_RECALL_HEARTBEAT_REFRESH_AFTER_Sで指�
   # 30秒前のハートビートに対し閾値=3600秒（1時間）なら、まだ新しいので抑制される。
   printf '%s\thb-custom-sess\t(heartbeat)\n' "$ts_30s_ago" > "$LOG"
   input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その11" --arg s "hb-custom-sess" '{session_id: $s, prompt: $p}')"
-  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" \
+  printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" \
     VAULT_RECALL_HEARTBEAT_REFRESH_AFTER_S=3600 "$SCRIPT" >/dev/null
   n_lines="$(grep -c . "$LOG" 2>/dev/null || true)"
   assert_eq "30秒前は閾値3600秒未満のため抑制される" "1" "$n_lines"
@@ -784,7 +781,7 @@ echo "=== 34. ハートビート: VAULT_RECALL_HEARTBEAT_REFRESH_AFTER_Sで指�
   # いることの確認（既定値86400のままなら誤ってこのケースも1のまま通ってしまう）。
   printf '%s\thb-custom-sess2\t(heartbeat)\n' "$ts_30s_ago" > "$LOG"
   input2="$(jq -n --arg p "全く関係ない話題について質問したいと思います その12" --arg s "hb-custom-sess2" '{session_id: $s, prompt: $p}')"
-  printf '%s' "$input2" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" VAULT_RECALL_DISABLE_VECTOR="1" \
+  printf '%s' "$input2" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" \
     VAULT_RECALL_HEARTBEAT_REFRESH_AFTER_S=10 "$SCRIPT" >/dev/null
   n_lines2="$(grep -c . "$LOG" 2>/dev/null || true)"
   assert_eq "同じ30秒経過でも閾値10秒なら書き直される（既定値へ無視して固定されていない確認）" "2" "$n_lines2"
@@ -809,7 +806,7 @@ PYEOF
 
   input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その13" --arg s "sanitize-sess" '{session_id: $s, prompt: $p}')"
   out="$(printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" \
-    VAULT_RECALL_DISABLE_VECTOR="1" VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" "$SCRIPT")"
+    VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" "$SCRIPT")"
   rc=$?
 
   n_lines="$(grep -c . "$LOG" 2>/dev/null || true)"
@@ -825,6 +822,49 @@ PYEOF
     "$err_line" "boom second-line INFO"
 
   rm -rf "$VAULT_DIR" "$(dirname "$LOG")" "$(dirname "$BROKEN_HELPER")"
+}
+
+echo "=== 36. 予算超過: keyword helperが応答予算(+猶予)を超えて遅延すると強制終了されfail-openする（1プロセス化に伴うプロセスライフサイクル検証・Codex一次レビュー指摘・Minor対応: ベクトル撤去で失われたタイムアウト/kill検証の再移植） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  LOG="$(mktemp -d)/vault-recall.tsv"
+  write_note "$VAULT_DIR/Knowledge/unrelated-note.md" $'date: 2026-07-10\naliases:\n  - "veryspecificalias"'
+  SLOW_HELPER="$(mktemp -d)/slow-keyword-helper.py"
+  cat > "$SLOW_HELPER" <<'PYEOF'
+import sys
+import time
+time.sleep(30)
+sys.exit(0)
+PYEOF
+
+  input="$(jq -n --arg p "全く関係ない話題について質問したいと思います その14" --arg s "slow-sess" '{session_id: $s, prompt: $p}')"
+  start_epoch="$(date +%s)"
+  out="$(printf '%s' "$input" | VAULT_RECALL_VAULT="$VAULT_DIR" VAULT_RECALL_LOG="$LOG" \
+    VAULT_RECALL_KEYWORD_HELPER="$SLOW_HELPER" \
+    VAULT_RECALL_KEYWORD_BUDGET_MS="100" VAULT_RECALL_KEYWORD_KILL_GRACE_MS="50" \
+    "$SCRIPT")"
+  rc=$?
+  end_epoch="$(date +%s)"
+  elapsed=$((end_epoch - start_epoch))
+
+  logtext="$(cat "$LOG" 2>/dev/null || true)"
+  assert_eq "exit code 0（フック契約どおりexit 0を維持）" "0" "$rc"
+  assert_eq "標準出力は空" "" "$out"
+  assert_contains "予算超過による強制終了がERROR行として残る" "$logtext" "helperの応答が予算"
+  # 30秒sleepするhelperを、予算(100ms)+猶予(50ms)の設定で数秒以内に強制終了できて
+  # いることを確認する（fail-openのポーリング/kill機構が実際に効いていることの
+  # 直接検証。緩めの上限(10秒)は sleep 0.025 のポーリング精度・CI環境の揺れを
+  # 吸収するため）。
+  assert_eq "強制終了により30秒待たされず数秒以内に完了する（プロセスがkillされている証拠）" "1" \
+    "$([ "$elapsed" -lt 10 ] && echo 1 || echo 0)"
+
+  # 強制終了された子プロセス（sleep中のPython）が孤児化して残っていないことを
+  # 確認する（kill -9 が実際にプロセスへ届いていることの直接証拠）。
+  sleep 0.2
+  orphan_count="$(pgrep -f "$SLOW_HELPER" 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "強制終了された子プロセスが残置しない" "0" "$orphan_count"
+
+  rm -rf "$VAULT_DIR" "$(dirname "$LOG")" "$(dirname "$SLOW_HELPER")"
 }
 
 echo

@@ -3,7 +3,7 @@
 # codex/config.toml の再生成・Vaultの Preferences 再同期・新しい骨格フォルダの
 # 補充を行う（2026-07-08 本人発案・サブ専用）。
 #
-# launchagents/com.takumi009.sub-update.plist から1日2回（09:00/13:00）無人実行
+# launchagents/com.takumi009.update-sub.plist から1日2回（09:00/13:00）無人実行
 # される前提のスクリプト（install-sub.sh が配置する。**サブ専用**＝メインでは
 # 設置しない。メインは編集側なので自動pullは多地点編集事故のもと）。
 #

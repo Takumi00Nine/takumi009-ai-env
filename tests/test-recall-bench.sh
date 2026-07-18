@@ -131,22 +131,14 @@ echo "=== 4. --alias-overlay: 実Vaultを書き換えずに仮想的にaliasを�
   BENCH="$(mktemp)"
   printf 'npxで都度起動していいですか、十分な長さのプロンプトです\tPreferences/mcp-global-install.md\n' > "$BENCH"
 
-  # VAULT_RECALL_DISABLE_VECTORで実行環境の実Vault埋め込みインデックス
-  # （~/.cache/vault-embeddings/等）混入を遮断する。このテストは一時fixture Vaultに対して
-  # フックを実行するが、フックはVECTOR_HELPERの既定インデックス置き場（実Vault分と共通）を
-  # 参照するため、実インデックスに偶然relpathが一致するノートがあるとキーワード一致0件でも
-  # ベクトル想起経由で候補提示されてしまい、このテストが環境依存でflakyになっていた
-  # （実機で再現・原本コードでも同じ箇所が同じ理由で失敗することを確認済み）。本テストは
-  # キーワード照合(alias-overlay)の検証が目的でありベクトル想起の挙動とは無関係なため、
-  # 無効化してもテストの意図は変わらない。
-  before_out="$(VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  before_out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
   assert_contains "overlay無しではFAIL（aliasが無いので提示されない）" "$before_out" "[ 1] FAIL"
 
   OVERLAY="$(mktemp)"
   printf 'Preferences/mcp-global-install.md\tnpxで都度起動\n' > "$OVERLAY"
   BEFORE_SUM="$(md5 -q "$VAULT_DIR/Preferences/mcp-global-install.md" 2>/dev/null || md5sum "$VAULT_DIR/Preferences/mcp-global-install.md" | cut -d' ' -f1)"
 
-  after_out="$(VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" --alias-overlay "$OVERLAY" 2>/dev/null)"
+  after_out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" --alias-overlay "$OVERLAY" 2>/dev/null)"
   assert_contains "overlay適用後はPASSになる" "$after_out" "[ 1] PASS"
 
   AFTER_SUM="$(md5 -q "$VAULT_DIR/Preferences/mcp-global-install.md" 2>/dev/null || md5sum "$VAULT_DIR/Preferences/mcp-global-install.md" | cut -d' ' -f1)"
@@ -171,7 +163,7 @@ echo "=== 4b. --alias-overlay: 汎用語禁止リストが欠落/空でもfail-o
   # 同じprefixのディレクトリを作る/消すタイミングと衝突して誤判定しうる）。
   SCRATCH_TMPDIR="$(mktemp -d)"
   err="$(APPLY_ALIASES_GENERIC_FILE="/tmp/does-not-exist-generic-aliases-$$.txt" \
-    VAULT_RECALL_DISABLE_VECTOR=1 TMPDIR="$SCRATCH_TMPDIR" python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" \
+    TMPDIR="$SCRATCH_TMPDIR" python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" \
     --alias-overlay "$OVERLAY" 2>&1 >/dev/null)"
   rc=$?
   after_dirs="$(find "$SCRATCH_TMPDIR" -maxdepth 1 -name 'recall-bench-vault-*' 2>/dev/null)"
@@ -398,12 +390,10 @@ HOOKEOF
   rm -rf "$VAULT_DIR" "$BENCH" "$FAKE_HOOK"
 }
 
-echo "=== 15. MAX_CANDIDATESがキーワード枠+ベクトル追加枠の合計(8件)まで切り詰めない（2026-07-14修正・過小評価バグの回帰確認） ==="
+echo "=== 15. MAX_CANDIDATESがキーワード枠の上限(5件)まで候補を保持する（2026-07-16簡素化でベクトル追加枠は撤去済み・キーワード枠のみの回帰確認） ==="
 {
   FAKE_HOOK="$(mktemp)"
-  # フックが実際に返しうる最大構成（キーワード枠5件＋ベクトル追加枠3件=8件）を模す。
-  # 旧MAX_CANDIDATES=5だとここが5件に切り詰められ、6〜8件目でしかヒットしない
-  # 質問がFAIL扱いされてしまっていた。
+  # フックが実際に返しうる最大構成（キーワード枠5件のみ）を模す。
   cat > "$FAKE_HOOK" <<'HOOKEOF'
 #!/bin/bash
 cat >/dev/null
@@ -412,33 +402,28 @@ ctx='外部脳の関連ノート候補（必要なら Read）:
 - Knowledge/kw2.md（一致: x）
 - Knowledge/kw3.md（一致: x）
 - Knowledge/kw4.md（一致: x）
-- Knowledge/kw5.md（一致: x）
-
-意味的に近い候補（キーワード一致なし・必要なら Read）:
-- Knowledge/vec1.md（類似度: 0.9）
-- Knowledge/vec2.md（類似度: 0.8）
-- Knowledge/vec3.md（類似度: 0.7）'
+- Knowledge/kw5.md（一致: x）'
   python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'UserPromptSubmit','additionalContext':sys.argv[1]}}))" "$ctx"
 HOOKEOF
 
   VAULT_DIR="$(mktemp -d)"
   BENCH="$(mktemp)"
-  # ベクトル追加枠(8件目=vec3.md)でしかヒットしない質問を期待ノートにする。
-  printf '何かについて質問したい、十分な長さのプロンプトです\tKnowledge/vec3.md\n' > "$BENCH"
+  # 5件目(kw5.md)でしかヒットしない質問を期待ノートにする。
+  printf '何かについて質問したい、十分な長さのプロンプトです\tKnowledge/kw5.md\n' > "$BENCH"
 
   out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$FAKE_HOOK" --json 2>/dev/null)"
   n_cand="$(printf '%s' "$out" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["results"][0]["candidates"]))')"
   hits="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hits"])')"
-  assert_eq "8件全部が候補として保持される(5件に切り詰められない)" "8" "$n_cand"
-  assert_eq "8件目=ベクトル追加枠の3件目でもPASSと判定される" "1" "$hits"
+  assert_eq "5件全部が候補として保持される" "5" "$n_cand"
+  assert_eq "5件目でもPASSと判定される" "1" "$hits"
 
   rm -rf "$VAULT_DIR" "$BENCH" "$FAKE_HOOK"
 }
 
-echo "=== 16. 候補数がフック契約の上限(8件)を超える場合はhookエラーとして扱う（無言で先頭8件だけを正常系扱いしない・Codex一次レビュー指摘・Major対応） ==="
+echo "=== 16. 候補数がフック契約の上限(5件)を超える場合はhookエラーとして扱う（無言で先頭5件だけを正常系扱いしない・Codex一次レビュー指摘・Major対応） ==="
 {
   FAKE_HOOK="$(mktemp)"
-  # 9件（キーワード枠5件のはずが6件返っている想定）を返す壊れたフックを模す。
+  # 6件（キーワード枠5件のはずが6件返っている想定）を返す壊れたフックを模す。
   cat > "$FAKE_HOOK" <<'HOOKEOF'
 #!/bin/bash
 cat >/dev/null
@@ -448,12 +433,7 @@ ctx='外部脳の関連ノート候補（必要なら Read）:
 - Knowledge/kw3.md（一致: x）
 - Knowledge/kw4.md（一致: x）
 - Knowledge/kw5.md（一致: x）
-- Knowledge/kw6.md（一致: x）
-
-意味的に近い候補（キーワード一致なし・必要なら Read）:
-- Knowledge/vec1.md（類似度: 0.9）
-- Knowledge/vec2.md（類似度: 0.8）
-- Knowledge/vec3.md（類似度: 0.7）'
+- Knowledge/kw6.md（一致: x）'
   python3 -c "import json,sys; print(json.dumps({'hookSpecificOutput':{'hookEventName':'UserPromptSubmit','additionalContext':sys.argv[1]}}))" "$ctx"
 HOOKEOF
 
@@ -463,47 +443,42 @@ HOOKEOF
 
   out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$FAKE_HOOK" 2>/dev/null)"
   rc=$?
-  assert_eq "契約超過(9件)はhookのインフラ異常としてexit 2になる" "2" "$rc"
+  assert_eq "契約超過(6件)はhookのインフラ異常としてexit 2になる" "2" "$rc"
   assert_contains "契約超過の理由がFAIL一覧に表示される" "$out" "フック契約の上限"
-  assert_not_contains "契約超過を先頭8件だけの正常PASSとして誤魔化さない" "$out" "[ 1] PASS"
+  assert_not_contains "契約超過を先頭5件だけの正常PASSとして誤魔化さない" "$out" "[ 1] PASS"
 
   rm -rf "$VAULT_DIR" "$BENCH" "$FAKE_HOOK"
 }
 
-echo "=== 17. MAX_KEYWORD_CANDIDATES/MAX_VECTOR_EXTRA_CANDIDATES定数がフック本体(vault-recall.sh)の実値と一致する（SSOT検証・値のドリフト防止） ==="
+echo "=== 17. MAX_KEYWORD_CANDIDATES定数がフック本体(vault-recall.sh)の実値と一致する（SSOT検証・値のドリフト防止） ==="
 {
   # 2026-07-14修正・外部脳の想起・ベンチ機構の総点検: 従来hook側はキーワード枠の
   # 上限がループ内のリテラル`5`のままハードコードされており、ここでは
   # `for ((i = 0; i < N && i < [0-9]+; i++)); do` というループ構文そのものをanchorに
   # 抽出していた。hook側を名前付き定数MAX_KEYWORD_CANDIDATESへ切り出したことに伴い、
-  # MAX_VECTOR_EXTRAと同様に定数定義行(`^MAX_KEYWORD_CANDIDATES=[0-9]+`)を直接
-  # 抽出する方式へ揃える（値そのものは変えない・SSOTのanchorをより単純で頑健な
-  # ものへ置き換えるだけ）。コメント中の同じ数字列や無関係な行への誤マッチを
-  # 避けるため、`#`始まり行（行頭の空白許容）は事前に grep -v で除外してから探索
-  # する（Codex一次レビュー指摘・Major/Minor: 抽出できなければfail_caseで明示的に
-  # 落とす＝このハードニングをすり抜けても「静かに一致した扱い」にはならない）。
+  # 定数定義行(`^MAX_KEYWORD_CANDIDATES=[0-9]+`)を直接抽出する方式へ揃える（値その
+  # ものは変えない・SSOTのanchorをより単純で頑健なものへ置き換えるだけ）。コメント
+  # 中の同じ数字列や無関係な行への誤マッチを避けるため、`#`始まり行（行頭の空白
+  # 許容）は事前に grep -v で除外してから探索する（Codex一次レビュー指摘・
+  # Major/Minor: 抽出できなければfail_caseで明示的に落とす＝このハードニングを
+  # すり抜けても「静かに一致した扱い」にはならない）。2026-07-16簡素化で
+  # ベクトル追加枠(MAX_VECTOR_EXTRA)は撤去済みのためキーワード枠のみを検証する。
   hook_kw_cap="$(grep -v '^[[:space:]]*#' "$HOOK" \
     | grep -oE '^MAX_KEYWORD_CANDIDATES=[0-9]+' | grep -oE '[0-9]+$')"
-  hook_vec_extra="$(grep -v '^[[:space:]]*#' "$HOOK" \
-    | grep -oE '^MAX_VECTOR_EXTRA=[0-9]+' | grep -oE '[0-9]+$')"
   py_kw_cap="$(python3 -c "import sys; sys.path.insert(0, '$REPO_ROOT/scripts/vault-agents'); import recall_bench as rb; print(rb.MAX_KEYWORD_CANDIDATES)")"
-  py_vec_extra="$(python3 -c "import sys; sys.path.insert(0, '$REPO_ROOT/scripts/vault-agents'); import recall_bench as rb; print(rb.MAX_VECTOR_EXTRA_CANDIDATES)")"
 
-  if [[ -z "$hook_kw_cap" || -z "$hook_vec_extra" ]]; then
+  if [[ -z "$hook_kw_cap" ]]; then
     fail_case "vault-recall.shから定数を抽出できなかった（grepパターンがフック側の変更でズレた可能性）"
   else
     assert_eq "キーワード枠上限がhook本体と一致" "$hook_kw_cap" "$py_kw_cap"
-    assert_eq "ベクトル追加枠上限がhook本体と一致" "$hook_vec_extra" "$py_vec_extra"
   fi
 
   # 定数が宣言されているだけで実際のループが古いリテラルへ戻っていても上のSSOT検証は
   # 通ってしまう（Codex一次レビュー指摘・Minor対応: 定数値どうしの比較だけでは
-  # 「定数が実際に使われているか」までは検証できない）。SELECTED_IDX構築ループ・
-  # ベクトル追加枠ループが実際に名前付き定数を参照していることを直接確認する。
+  # 「定数が実際に使われているか」までは検証できない）。SELECTED_IDX構築ループが
+  # 実際に名前付き定数を参照していることを直接確認する。
   kw_loop_uses_const="$(grep -c 'for ((i = 0; i < N && i < MAX_KEYWORD_CANDIDATES; i++)); do' "$HOOK" 2>/dev/null || true)"
-  vec_loop_uses_const="$(grep -c 'VEC_EXTRA_COUNT < MAX_VECTOR_EXTRA;' "$HOOK" 2>/dev/null || true)"
   assert_eq "SELECTED_IDX構築ループが実際にMAX_KEYWORD_CANDIDATESを参照している" "1" "$kw_loop_uses_const"
-  assert_eq "ベクトル追加枠ループが実際にMAX_VECTOR_EXTRAを参照している" "1" "$vec_loop_uses_const"
 }
 
 echo "=== 18. fail-open検知: keyword helperが異常終了して出力が空になった場合、正常な0件ヒットと区別してhookエラーにする（2026-07-14修正・リーダー指示: VAULT_RECALL_LOGを渡すだけで一度も読まずに削除していたバグの是正） ==="
@@ -516,7 +491,7 @@ echo "=== 18. fail-open検知: keyword helperが異常終了して出力が空�
   BENCH="$(mktemp)"
   printf '全く関係ない話題について質問したいと思います\tKnowledge/unrelated-note.md\n' > "$BENCH"
 
-  out="$(VAULT_RECALL_DISABLE_VECTOR=1 VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" \
+  out="$(VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" \
     python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
   rc=$?
   assert_eq "fail-open混入時はexit 2で異常として扱う" "2" "$rc"
@@ -527,7 +502,7 @@ echo "=== 18. fail-open検知: keyword helperが異常終了して出力が空�
   rm -rf "$VAULT_DIR" "$BENCH" "$(dirname "$BROKEN_HELPER")"
 }
 
-echo "=== 19. fail-open検知の回帰確認: keyword/vectorとも正常完走した健全な0件ヒット(ハートビート)はhookエラーにしない ==="
+echo "=== 19. fail-open検知の回帰確認: keyword helperが正常完走した健全な0件ヒット(ハートビート)はhookエラーにしない ==="
 {
   VAULT_DIR="$(mktemp -d)"
   write_note "$VAULT_DIR/Knowledge/unrelated-note.md" $'date: 2026-07-10\naliases:\n  - "veryspecificalias"'
@@ -535,33 +510,13 @@ echo "=== 19. fail-open検知の回帰確認: keyword/vectorとも正常完走�
   BENCH="$(mktemp)"
   printf '全く関係ない話題について質問したいと思います\tKnowledge/nonexistent-note.md\n' > "$BENCH"
 
-  out="$(VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
   rc=$?
   assert_eq "健全な0件ヒットはexit 0のまま" "0" "$rc"
   assert_contains "健全な0件ヒットはFAIL(通常のmiss)として扱われる" "$out" "[ 1] FAIL"
   assert_not_contains "健全な0件ヒットをhookエラーと誤検知しない" "$out" "hookエラー"
 
   rm -rf "$VAULT_DIR" "$BENCH"
-}
-
-echo "=== 20. fail-open検知(Codex一次レビュー指摘・Major対応): keywordはヒットしvector helperだけがfail-openした場合も、additionalContextが非空でも計測失敗として扱う ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  write_note "$VAULT_DIR/Preferences/python-venv.md" \
-    $'date: 2026-07-10\naliases:\n  - "venv未有効ブロック"'
-  BROKEN_VECTOR_HELPER="$(mktemp -d)/broken-vector-helper.py"
-  printf '#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n' > "$BROKEN_VECTOR_HELPER"
-
-  BENCH="$(mktemp)"
-  printf 'Pythonのパッケージをインストールするときのvenv未有効ブロックの決まりは？\tPreferences/python-venv.md\n' > "$BENCH"
-
-  out="$(VAULT_RECALL_VECTOR_HELPER="$BROKEN_VECTOR_HELPER" python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
-  rc=$?
-  assert_eq "keywordヒットありでもvector fail-open混入時はexit 2" "2" "$rc"
-  assert_contains "非空出力(候補あり)でもhookエラーとして表示される" "$out" "⚠️ hookエラー"
-  assert_not_contains "劣化した計測結果をPASSとして誤魔化さない" "$out" "[ 1] PASS"
-
-  rm -rf "$VAULT_DIR" "$BENCH" "$(dirname "$BROKEN_VECTOR_HELPER")"
 }
 
 echo "=== 21. fail-open検知の回帰確認(2026-07-14修正・外部脳の想起・ベンチ機構の総点検): log_fact()由来の事実記録（読取不可ノート件数）は文言ではなく形式(レベル列)で判別され、hookエラーと誤検知しない（旧BENIGN_ERROR_MARKERはこのケースを未カバーだった漏れの修正） ==="
@@ -579,7 +534,7 @@ echo "=== 21. fail-open検知の回帰確認(2026-07-14修正・外部脳の想�
   BENCH="$(mktemp)"
   printf '全く関係ない話題について質問したいと思います\tKnowledge/nonexistent-note.md\n' > "$BENCH"
 
-  out="$(VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  out="$(python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
   rc=$?
   chmod 644 "$VAULT_DIR/Knowledge/locked-note.md"
   assert_eq "読取不可ノートの事実記録だけならexit 0のまま（hookエラーではない）" "0" "$rc"
@@ -626,7 +581,7 @@ PYEOF
   BENCH="$(mktemp)"
   printf 'Pythonのパッケージをインストールするときのvenv未有効ブロックの決まりは？\tPreferences/python-venv.md\n' > "$BENCH"
 
-  out="$(VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" VAULT_RECALL_DISABLE_VECTOR=1 python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
+  out="$(VAULT_RECALL_KEYWORD_HELPER="$BROKEN_HELPER" python3 "$SCRIPT" "$BENCH" --vault "$VAULT_DIR" --hook "$HOOK" 2>/dev/null)"
   rc=$?
   assert_eq "stderrにタブ+INFOを混入させたfail-openは偽装されずexit 2のまま" "2" "$rc"
   assert_contains "hookエラーとして検知される（偽のINFOマーカーで無害判定されない）" "$out" "⚠️ hookエラー"

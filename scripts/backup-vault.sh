@@ -3,8 +3,9 @@
 #
 # 詳細は README.md「Vault バックアップの運用」節を参照。
 #
-# launchagents/com.takumi009.vault-backup.plist から1時間おきに無人実行される
-# 前提のスクリプト（scripts/install-backup.sh が配置する）。
+# launchagents/com.takumi009.backup-vault.plist から1時間おきに無人実行される
+# 前提のスクリプト（scripts/install-backup.sh が配置する。旧ラベル名
+# com.takumi009.vault-backupは2026-07-16簡素化で改名済み＝設計書§5）。
 #
 # 処理順序:
 #   1. スクリプト自身の多重起動防止ロック（PIDファイル方式。stale なら自動解除）
@@ -28,8 +29,41 @@
 # パスは $HOME 相対（VAULT・LOCK_FILE は環境変数で上書き可＝ユニットテスト用。
 # 本番実行時は既定値のまま呼べば良い）。VAULT_BACKUP_BRANCH は
 # scripts/check-drift.sh と同一名の環境変数（既定 "main"）＝SSOT。
+#
+# --status-file <path>: 省略可。機械可読な実行結果（completed/no-change/busy/
+# error のいずれか1語）をscripts/lib/status-file.sh経由で書く（設計書§1.2
+# 「maintenance.sh Phase0がbackup-vault.shを--status-file付きで呼ぶ」向け。
+# 2026-07-16簡素化・PR1.5からの持ち越し）。省略時は従来どおり何も書かない
+# （既存のLaunchAgent無引数呼び出しと完全互換）。
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 多重起動防止ロック（PIDファイル方式・stale自動解除）は scripts/maintenance.sh
+# （週次ランナー・PR2）とも共有する（2026-07-16簡素化・cleanup決定#10・PR1.5③）。
+# status-file.shは--status-fileの読み書き（同じくPR2のmaintenance.shと共用）。
+# shellcheck source=scripts/lib/pid-lock.sh
+source "$SCRIPT_DIR/lib/pid-lock.sh"
+# shellcheck source=scripts/lib/status-file.sh
+source "$SCRIPT_DIR/lib/status-file.sh"
+
+STATUS_FILE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --status-file)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "[backup-vault] FAIL: --status-file には値が必要です" >&2
+        exit 1
+      fi
+      STATUS_FILE="$2"
+      shift 2
+      ;;
+    *)
+      echo "[backup-vault] FAIL: 不明な引数です: $1" >&2
+      exit 1
+      ;;
+  esac
+done
 
 : "${VAULT:=$HOME/Data/obsidian}"
 : "${LOCK_FILE:=${TMPDIR:-/tmp}/aienv-backup-vault.lock}"
@@ -40,116 +74,65 @@ set -euo pipefail
 # 「前回実行がクラッシュして片付けられなかったロック」と「今まさに実行中」を
 # 十分な余裕を持って区別できる。
 STALE_LOCK_SECONDS="${STALE_LOCK_SECONDS:-3600}"
+# maintenance.sh（週次ランナー・PR2・未実装）がPhase0〜Phase3の間保持するVault
+# 書込ロック。本スクリプトは自分では取得・作成しない（is_pid_lock_heldによる
+# 読み取り専用チェックのみ＝設計書§1.2「backup-vault.sh側にも軽量チェックを
+# 追加（毎時backupとの競合対策）」）。
+: "${VAULT_WRITER_LOCK_FILE:=$HOME/.claude/logs/maintenance/vault-writer.lock}"
 
 log() { echo "[backup-vault] $*"; }
 warn() { echo "[backup-vault] WARN: $*" >&2; }
-fail() { echo "[backup-vault] FAIL: $*" >&2; exit 1; }
+fail() {
+  echo "[backup-vault] FAIL: $*" >&2
+  write_status_file "$STATUS_FILE" error
+  exit 1
+}
 
 [[ -d "$VAULT" ]] || fail "VAULT が見つかりません: $VAULT"
 command -v git >/dev/null 2>&1 || fail "git が見つかりません"
 
 # --- 1. 多重起動防止ロック（PIDファイル方式・原子的に取得） ---
-# PIDを記録し、そのPIDが実際に生きているかを毎回 kill -0 で確認することで、
-# プロセスが異常終了(kill -9・電源断等)して片付けられなかった stale なロックを
-# 安全に自動解除できるようにする。
-# ロック取得自体は bash の noclobber（`set -C`）を使い、「ファイルが無い時だけ
-# 作成に成功する」という原子的な操作にする（Codexレビュー指摘・Major：
-# 素朴な `[[ -f ]]` チェック→`echo >` の2段階だと、ほぼ同時に2プロセスが
-# 起動した場合に両方とも「ロックが無い」と判定して素通りしてしまうTOCTOUレースがあった）。
-try_create_lock() {
-  ( set -C; echo "$$" > "$LOCK_FILE" ) 2>/dev/null
-}
-
-# stale判定〜片付け〜再作成の一連の操作を1プロセスだけが行うよう直列化する
-# ための回収専用ミューテックス（$LOCK_FILE とは別物。mkdirはPOSIX上atomicな
-# 排他取得手段＝同じディレクトリを複数プロセスが同時にmkdirしても成功できるのは
-# 1プロセスだけ）。
-#
-# 2026-07-14 修正（外部脳監視・バックアップ機構総点検で確定したレース。旧実装は
-# stale判定後に無条件 `rm -f` していたため、A・Bがほぼ同時に同じstaleロックを
-# 検出すると、Aがrm→再作成した直後にBが古い"stale"判定のまま無条件rmしてしまい、
-# Aの*有効な新規ロック*を消して二重実行が起き得た。その後 `mv`（rename）による
-# 「片付ける権利の奪取」に変更したが、Codex一次レビューで指摘の通りそれでも
-# ABA問題が残っていた: 「読んだ時点でstaleと判定した内容」と「実際にmvする時点の
-# 中身」が一致する保証が無く、A再作成後にBが古い判定に基づき`mv`するとAの有効な
-# ロックをやはり奪ってしまう。mkdirミューテックスなら、①ミューテックス取得 →
-# ②その場でPIDを改めて読み直し生存確認（ここが重要: 古い判定結果を使い回さない）
-# → ③本当にstaleな時だけrm→再作成、という順序を1プロセスに直列化でき、
-# 「読んだ時点」と「片付ける時点」がズレない）。
-#
-# このミューテックス自体が stale になった場合（＝前回実行がミューテックス保持中に
-# クラッシュ〈kill -9・電源断等〉した極めて稀なケース）は、あえて自動解除しない
-# （Codex二次レビュー指摘・Critical対応: 一度は `stat`でmtime判定→`rmdir`する
-# 自己修復を実装したが、mtime判定とrmdirの間にも同じABAが再発し得る＝
-# rmdirはパス名だけを見て「今そこにあるものが何であれ」削除してしまうため、
-# 判定後に別プロセスが正規に再作成した有効なミューテックスを誤って奪える。
-# 回収区間は数命令のみで通常は一瞬のため、無理に自動回復を狙うより、競合が
-# 解消しなければ明示的にfail()して気付けるようにする方が安全＝二重実行より
-# 「稀に手動での後片付けが要る」方を選ぶ設計判断）。この失敗は無人実行時は
-# ログ（/tmp/vault-backup.log）にのみ残るが、commit/pushが止まり続ければ
-# scripts/check-drift.sh ⑦（Vaultバックアップのpush死活監視）が24時間以内に
-# 検知して通知するため、無限に無言で死ぬことはない。
-#
+# 実装は scripts/lib/pid-lock.sh（acquire_pid_lock）に抽出済み（2026-07-16簡素化・
+# PR1.5③。ロジック自体は敵対的レビュー3巡を経た挙動を一切変えていない＝
+# noclobberによる原子取得・ABA対策のmkdir回収ミューテックス・回収ミューテックス
+# 自体はfail-closedで自動解除しない設計。詳細は同ファイルのコメント参照）。
 # 既存のロック形式（$LOCK_FILE にPIDを書いた1個のファイル）自体は変更していない
 # （tests/test-backup-vault.sh の `echo "$$" > "$LOCK"` 等の既存前提と完全互換）。
-RECLAIM_MUTEX_DIR="${LOCK_FILE}.reclaim"
+# STATUS_FILEを渡すことで、busy/error確定時に自動でwrite_status_fileされる。
+acquire_pid_lock "$LOCK_FILE" "$STALE_LOCK_SECONDS" "backup-vault" "$STATUS_FILE"
 
-acquire_lock() {
-  if try_create_lock; then
-    trap 'rm -f "$LOCK_FILE"' EXIT
-    return
+# --- 1b. Vault書込ロック（maintenance.sh保持）の軽量チェック（読み取り専用） ---
+# maintenance.sh自身がPhase0/Phase3で本スクリプトを（Vault書込ロックを保持した
+# ままの状態で）意図的に呼び出す場合は、このチェックをbypassする
+# （2026-07-16 maintenance.sh実装時に発見・追加: このチェックの本来の目的は
+# 「毎時LaunchAgent発火のbackup-vault.shが、maintenance.sh実行中の複数ステップ
+# 書込みと競合しないよう横から割り込ませない」ことであり、maintenance.sh自身が
+# 呼ぶ分（設計書§1.2 Phase0の直前スナップショット・Phase3の最終commit）まで
+# 阻止してしまうと、ロックを取得した本人が自分の意図した呼び出しで永遠に
+# blockされる自己矛盾になる）。
+#
+# bypassの判定は単なる真偽値フラグではなく、`MAINTENANCE_LOCK_OWNER_PID`に
+# 渡された値がロックファイルへ実際に書かれているPIDと一致するかで行う
+# （2026-07-16 Codexレビュー指摘Major対応: 当初は`MAINTENANCE_INTERNAL_CALL=1`
+# という単純な真偽値フラグだった。`launchctl setenv`・plist設定ミス・手動
+# 実行等でこの環境変数がアンビエントに`=1`のまま毎時LaunchAgent側の
+# backup-vault.sh実行に漏れ残っていた場合、無関係な実行までVault書込
+# ロックの排他をbypassしてしまいうる。ロックファイルの実際のPIDと照合する
+# ことで、「本当にこのロックを取得したプロセス自身からの呼び出しか」を
+# 検証できるようにする＝真に自分自身が保持しているロックでなければ
+# bypassしない）。
+_bypass_writer_lock_check=0
+if [[ -n "${MAINTENANCE_LOCK_OWNER_PID:-}" && -f "$VAULT_WRITER_LOCK_FILE" ]]; then
+  _lock_file_pid="$(cat "$VAULT_WRITER_LOCK_FILE" 2>/dev/null || true)"
+  if [[ -n "$_lock_file_pid" && "$_lock_file_pid" == "$MAINTENANCE_LOCK_OWNER_PID" ]]; then
+    _bypass_writer_lock_check=1
   fi
-  # 既に存在＝実行中 or stale。中身のPIDを見て判定する。
-  local old_pid
-  old_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-    log "既に実行中です（pid=${old_pid}）。今回はskipします。"
-    exit 0
-  fi
-  # stale の疑い。1つのループに統一し、毎回まず「既に別プロセスが（回収
-  # ミューテックスを介した経路・通常の初回取得経路のどちらであれ）有効なロックを
-  # 取得済みでないか」を確認してから、取れていなければ回収ミューテックスの取得を
-  # 試みる（Codex二次レビュー指摘・Minor対応: 旧実装は「回収ミューテックス取得後の
-  # rm→再作成」が別プロセスとのごく短い競合で失敗すると、たとえその別プロセスが
-  # 正常に取得して即座に完了しただけであっても即fail()していた。ループ先頭へ戻って
-  # 現在の所有者を再確認する形にすることで、正常な競合を異常終了にしない）。
-  local attempt
-  for attempt in $(seq 1 20); do
-    old_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-      log "ロック再取得中に別プロセスが先に取得しました（pid=${old_pid}）。今回はskipします。"
-      exit 0
-    fi
-    if mkdir "$RECLAIM_MUTEX_DIR" 2>/dev/null; then
-      # ミューテックス取得後に改めてPIDを読み直す（ここまでの間に別プロセスが
-      # 有効な新規ロックを再作成していないか、古い判定を使い回さず再確認する）。
-      old_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-      if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
-        rmdir "$RECLAIM_MUTEX_DIR" 2>/dev/null || true
-        log "既に実行中です（pid=${old_pid}）。今回はskipします。"
-        exit 0
-      fi
-      warn "stale なロックファイルを検出しました（pid=${old_pid:-unknown} は生存していません）。解除して続行します: $LOCK_FILE"
-      rm -f "$LOCK_FILE"
-      local created=0
-      try_create_lock && created=1
-      rmdir "$RECLAIM_MUTEX_DIR" 2>/dev/null || true
-      if [[ "$created" -eq 1 ]]; then
-        trap 'rm -f "$LOCK_FILE"' EXIT
-        return
-      fi
-      # rm直後・再作成までのごく一瞬に、ミューテックスを介さない通常の初回取得
-      # （try_create_lock・関数先頭）を行う別プロセスが先にロックを取得できた
-      # 場合（正常な競合。二重実行にはならない）。即fail()せずループ先頭へ戻り、
-      # 現在の所有者を再確認する。
-      continue
-    fi
-    # 回収ミューテックスは他プロセスが保持中。少し待ってから再試行する。
-    sleep 0.05
-  done
-  fail "ロック取得に失敗しました（他プロセスとの競合が解消しません。回収ミューテックス（${RECLAIM_MUTEX_DIR}）が長時間残っている場合は、前回実行がクラッシュした痕跡の可能性があります。実行中のbackup-vault.shプロセスが無いことを確認してから手動で削除してください: rmdir ${RECLAIM_MUTEX_DIR}）: $LOCK_FILE"
-}
-acquire_lock
+fi
+if [[ "$_bypass_writer_lock_check" -ne 1 ]] && is_pid_lock_held "$VAULT_WRITER_LOCK_FILE"; then
+  log "Vault書込ロックを別プロセス（maintenance.sh）が保持中のため、今回のcommitは見送ります: $VAULT_WRITER_LOCK_FILE"
+  write_status_file "$STATUS_FILE" busy
+  exit 0
+fi
 
 # --- 2. git index.lock 対策（stale なら自動解除、新しければ今回はskip） ---
 INDEX_LOCK="$VAULT/.git/index.lock"
@@ -161,6 +144,7 @@ if [[ -e "$INDEX_LOCK" ]]; then
     rm -f "$INDEX_LOCK"
   else
     log "git index.lock が新しく（${lock_age}秒前）、別のgit操作が進行中の可能性があるため今回はskipします。"
+    write_status_file "$STATUS_FILE" busy
     exit 0
   fi
 fi
@@ -194,9 +178,11 @@ fi
 # --- 4. git add -A → 差分があれば commit ---
 git -C "$VAULT" add -A
 
+HAD_CHANGES=0
 if git -C "$VAULT" diff --cached --quiet; then
   log "変更なし。commit をスキップします"
 else
+  HAD_CHANGES=1
   # commit用identityが無いと素のGitエラーで落ちて分かりにくいので事前検知する
   # （export-public-vault.shと同方針）。
   if ! git -C "$VAULT" var GIT_AUTHOR_IDENT >/dev/null 2>&1; then
@@ -223,21 +209,19 @@ else
   warn "remote 'origin' が未設定のため push をスキップしました（commit までは完了）。remote設定は本人が行う運用です。"
 fi
 
-# --- 6. 埋め込みインデックスのbest-effort更新（外部脳ハイブリッド検索・柱①）---
-# 毎時のvault-backup相乗り（設計書§1柱①・§2.2・§3(b)採用案）。Vaultのcommit/pushとは
-# 独立した処理のため、失敗してもこのスクリプト自体はFAILにしない（best-effort＝
-# インデックス更新はバックアップの必須要件ではない。update_embedding_index.py自身が
-# Ollama不通等をfail-openでexit 0にする設計だが、万一非0で終わっても無視する）。
-UPDATE_EMBEDDING_INDEX="${UPDATE_EMBEDDING_INDEX_SCRIPT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vault-agents/update_embedding_index.py}"
-if [[ -f "$UPDATE_EMBEDDING_INDEX" ]]; then
-  PYTHON_BIN_FOR_INDEX="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
-  if "$PYTHON_BIN_FOR_INDEX" "$UPDATE_EMBEDDING_INDEX" --vault "$VAULT"; then
-    log "埋め込みインデックス更新を実行しました"
-  else
-    warn "埋め込みインデックス更新が非0終了しました（best-effort・バックアップ自体は正常完了扱い）"
-  fi
+# --- 6. 埋め込みインデックスのbest-effort更新（廃止） ---
+# 2026-07-16簡素化（[[Decisions/2026-07-16-remove-vector-search-embedding-infra]]）で
+# ベクトル検索基盤を埋め込み基盤ごと撤去したため、毎時のvault-backup相乗り
+# （update_embedding_index.py呼び出し）も不要になり削除した。旧実装を読みたい場合は
+# `git log -p scripts/backup-vault.sh` を参照。
+
+# push失敗はWARNに留め致命的エラーとしない（上記コメント参照）ため、
+# completed/no-changeの判定はpush結果に左右されない＝ローカルcommit（または
+# 「変更なし」の確認）まで到達できたことをもって成功とする。
+if [[ "$HAD_CHANGES" -eq 1 ]]; then
+  write_status_file "$STATUS_FILE" completed
 else
-  warn "update_embedding_index.pyが見つからないためインデックス更新をskipしました: $UPDATE_EMBEDDING_INDEX"
+  write_status_file "$STATUS_FILE" no-change
 fi
 
 log "done."

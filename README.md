@@ -42,23 +42,21 @@ takumi009-ai-env/
 │   ├── install-main.sh          # Installer for the main environment (symlink setup; supports --with-dotfiles)
 │   ├── install-sub.sh           # Installer for the sub environment (sets up the Vault skeleton, then delegates to install-main.sh)
 │   ├── install-backup.sh        # Installer for the Vault-backup LaunchAgent
-│   ├── install-vault-agents.sh  # Installer for the 2 Vault-cultivation LaunchAgents (main only)
+│   ├── install-maintenance.sh   # Installer for the weekly maintenance-runner LaunchAgent (main only)
 │   ├── setup-codex-mcp.sh       # Registers the codex MCP with Claude Code (auto-run by install-main.sh)
 │   ├── backup-vault.sh          # Periodically git commits (+pushes) the Vault
+│   ├── maintenance.sh           # Weekly maintenance runner (backup snapshot + detection + headless-Claude apply + summary; main only)
 │   ├── update-sub.sh            # Periodically refreshes the sub's rules (sub only; installed by install-sub.sh)
 │   ├── export-public-vault.sh   # Exports the Vault's public folder to vault-public/
 │   ├── check-drift.sh           # Manual audit tool that detects "drift" in symlinks/config.toml/repo/vault-public/private repo visibility
-│   ├── drift-notify.sh          # Wrapper that runs check-drift.sh and sends a macOS notification if drift>0 (main only; auto-installed by install-main.sh)
 │   ├── audit.sh                 # One-shot pre-publish audit (NG words/username paths/secrets over full git history, tracked-file drift, completeness); `--quick` skips the (slow) history scan and only checks the current tree
-│   ├── vault-agents/            # 2 Vault-cultivation scripts (vault_inventory.py, etc.; main-only feature)
+│   ├── vault-agents/            # Detectors driven by maintenance.sh (vault_inventory.py, fragments_log.py, knowledge_merge_candidates.py, decision_propagation.py, maintenance_apply.py, etc.; main-only feature)
 │   ├── ngwords.txt              # NG-word definitions (private data; **not included in this repository** — see "Setup" below)
 │   └── templates/               # README templates for the private skeleton folders
 ├── launchagents/
-│   ├── com.takumi009.vault-backup.plist       # Runs the Vault backup hourly (main only)
-│   ├── com.takumi009.vault-inventory.plist    # Generates the Vault inventory report twice a month (main only)
-│   ├── com.takumi009.fragments-log.plist      # Generates the Fragments promotion candidate log weekly (main only)
-│   ├── com.takumi009.sub-update.plist         # Auto-refreshes the rules twice a day (sub only)
-│   └── com.takumi009.drift-check.plist        # Detects drift weekly and sends a macOS notification if drift>0 (main only; auto-installed by install-main.sh)
+│   ├── com.takumi009.backup-vault.plist       # Runs the Vault backup hourly (main only)
+│   ├── com.takumi009.maintenance.plist        # Runs the weekly maintenance runner (main only)
+│   └── com.takumi009.update-sub.plist         # Auto-refreshes the rules twice a day (sub only)
 ├── vault-public/                # Snapshot of the Vault's designated public folders (see below)
 ├── Brewfile                     # Dependency formulae installed via `brew bundle` (see below)
 └── tests/                       # Unit tests for the scripts above
@@ -97,14 +95,14 @@ git clone <URL of this repository> ~/work/takumi009-ai-env
 cd ~/work/takumi009-ai-env
 scripts/install-main.sh          # Symlinks claude/ and codex/ into ~/.claude and ~/.codex
 scripts/install-backup.sh        # Installs the Vault-backup LaunchAgent
-scripts/install-vault-agents.sh  # Installs the 2 Vault-cultivation LaunchAgents (optional, main only)
+scripts/install-maintenance.sh   # Installs the weekly maintenance-runner LaunchAgent (main only)
 ```
 
 - `install-main.sh` moves any existing real file to `<dest>.pre-aienv.bak` only the first time before replacing it with a symlink (safe to re-run = idempotent). Use the `--dry-run` option to preview the plan only.
 - Only `codex/config.toml` is generated as a real file — not a symlink — with the placeholder (`__AIENV_HOME__`) replaced by the actual home path (because plain TOML doesn't support shell variable expansion).
-- Both `install-backup.sh` and `install-vault-agents.sh` only place the LaunchAgents (bootstrap+enable) — they do **not** trigger an immediate run (kickstart) (because initializing the Vault as a Git repository for the first time is meant to be a staged rollout. Either wait for the next scheduled run, or once you're ready, run `launchctl kickstart -k` manually).
+- Both `install-backup.sh` and `install-maintenance.sh` only place the LaunchAgents (bootstrap+enable) — they do **not** trigger an immediate run (kickstart) (because initializing the Vault as a Git repository for the first time is meant to be a staged rollout. Either wait for the next scheduled run, or once you're ready, run `launchctl kickstart -k` manually).
 - At the end, `install-main.sh` automatically runs `scripts/setup-codex-mcp.sh`, which **auto-registers the codex MCP** (`mcp__codex__codex`/`codex-reply`, the core of the review setup) (`claude mcp add codex -s user -- <absolute path to codex> mcp-server`; skipped/idempotent if already registered). On environments where Claude Code / the codex command aren't installed, registration fails, but the installer as a whole still continues with a WARN rather than stopping. To register manually, run `scripts/setup-codex-mcp.sh` standalone, or run the suggested `claude mcp add` command directly.
-- At the end, `install-main.sh` likewise installs the **weekly drift-notification LaunchAgent** (`com.takumi009.drift-check.plist`, main only). It runs `scripts/drift-notify.sh` unattended every Monday at 09:30 (which runs `scripts/check-drift.sh` and sends a macOS notification via `osascript` if drift>0), preventing the situation where `scripts/check-drift.sh` is created but forgotten and goes stale (as with the other LaunchAgents, this only installs it — it does not kickstart it immediately). When delegated from `install-sub.sh` (internal flag `--sub-delegate`), this step is automatically skipped and not installed on sub machines.
+- The weekly drift-notification LaunchAgent (`com.takumi009.drift-check.plist` / `scripts/drift-notify.sh`) that `install-main.sh` used to install, and the standalone Vault-cultivation LaunchAgents (`vault-inventory`/`fragments-log`/`knowledge-merge-detect`) formerly installed by `install-vault-agents.sh`, were all removed/consolidated on 2026-07-16 (see [[Decisions/2026-07-16-nightly-batch-direct-write]] in the Vault). `install-maintenance.sh` migrates any of these 4 retired LaunchAgent labels still loaded on the machine (bootout + remove) before installing the new `com.takumi009.maintenance` LaunchAgent. The unattended weekly path now lives entirely in the new `maintenance.sh` runner.
 - On the main environment, a **private patch (a separate private repository)** is layered on top of this base package. The private patch contains the Vault's substance (`~/Data/obsidian`) and settings that cannot be made public. See that repository's own documentation for its setup steps.
 
 #### Sub environment
@@ -120,7 +118,7 @@ The sub environment is self-contained with just the base package and does not in
 1. If `$HOME/Data/obsidian` doesn't exist, copies the contents of `vault-public/` (public snapshot + private skeleton) to build the Vault skeleton (does not overwrite if it already exists).
 2. Symlinking of `claude/`/`codex/` and codex MCP registration are done by calling `install-main.sh` directly (shared logic).
 3. The Vault-cultivation and backup LaunchAgents are **not installed** (main-only features).
-4. **Automatic rule updates**: installs `com.takumi009.sub-update.plist` (runs `scripts/update-sub.sh` twice a day, at 09:00/13:00). It `git pull --ff-only`s this repository, and if there are changes, automatically regenerates `codex/config.toml`, re-syncs `vault-public/Preferences/` (**touches nothing outside Preferences**, so local `Fragments` etc. on the sub machine are not deleted), and fills in any new skeleton folders. If there are no changes, it exits quietly (since subs aren't meant to be edited, a `git pull` that can't fast-forward normally shouldn't happen, but if it does, it just prints a warning and stops rather than force-overwriting).
+4. **Automatic rule updates**: installs `com.takumi009.update-sub.plist` (runs `scripts/update-sub.sh` twice a day, at 09:00/13:00). It `git pull --ff-only`s this repository, and if there are changes, automatically regenerates `codex/config.toml`, re-syncs `vault-public/Preferences/` (**touches nothing outside Preferences**, so local `Fragments` etc. on the sub machine are not deleted), and fills in any new skeleton folders. If there are no changes, it exits quietly (since subs aren't meant to be edited, a `git pull` that can't fast-forward normally shouldn't happen, but if it does, it just prints a warning and stops rather than force-overwriting).
 
 On sub machines, private notes such as `Personal/profile-personal.md` and `Knowledge/mistakes.md` don't exist, but since `bootstrap-vault.sh` (the SessionStart hook) is designed to only list **files that actually exist** as required reading, no "not found" warnings appear.
 
@@ -134,20 +132,20 @@ If `$HOME/work/dotfiles` doesn't exist, it `git clone`s it ([Takumi00Nine/dotfil
 
 ### Vault Backup Operations
 
-`scripts/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). It has locking to prevent concurrent runs (mutual exclusion via atomic file creation) and stale detection for `git index.lock`, and is meant to run unattended every hour via `launchagents/com.takumi009.vault-backup.plist` (installed by `scripts/install-backup.sh`).
+`scripts/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). It has locking to prevent concurrent runs (mutual exclusion via atomic file creation) and stale detection for `git index.lock`, and is meant to run unattended every hour via `launchagents/com.takumi009.backup-vault.plist` (installed by `scripts/install-backup.sh`).
 
 The user creates and configures the remote for the Vault's backup destination (a private repo) themselves (the scripts in this repository never create a remote on their own).
 
-### Vault Cultivation Tools (main only)
+### Weekly Maintenance Runner (main only)
 
-`scripts/vault-agents/` contains 2 tools that periodically inventory and log the external brain (Obsidian Vault). All of them only read the Vault and write reports (Markdown) under `$HOME/.claude/logs/` — they never write into the Vault itself (moved out of `Explorations/` on 2026-07-11; see [[Decisions/2026-07-11-vault-maintenance-hands-off]] in the Vault — "don't put human-facing docs nobody reads inside the Vault").
+`scripts/maintenance.sh` is the single weekly runner (Monday 03:00, installed by `scripts/install-maintenance.sh`) that replaced the older separate Vault-cultivation LaunchAgents on 2026-07-16 (see [[Decisions/2026-07-16-nightly-batch-direct-write]] in the Vault — "the nightly batch writes to the Vault directly, no more report → leader-processes-it indirection"). It runs in 4 phases:
 
-| Script | Content | Schedule |
-|---|---|---|
-| `vault_inventory.py` | Inventory report of policy notes: missing `updated`, broken links, remnants of superseded policies, etc. | 1st and 15th of each month, 03:00 |
-| `fragments_log.py` | Weekly log of Fragments (daily fragments) promotion candidates | Every Monday, 03:30 |
+- **Phase 0** — takes a pre-run snapshot via `backup-vault.sh`, acquires a Vault write-lock (PID file, held through Phase 3), and retries `export-public-vault.sh` if the `vault-public/Preferences` snapshot is behind.
+- **Phase 1 (detection only, read-only)** — runs, in order, `check-drift.sh` (environment health gate; a real drift finding or execution error fails the whole run fast before anything is written), `fragments_log.py`, `vault_inventory.py`, `knowledge_merge_candidates.py`, and `decision_propagation.py`. Steps 2–5 are isolated from each other's failures.
+- **Phase 2** — `scripts/vault-agents/maintenance_apply.py` sends the Phase 1 detection results to a single headless Claude Code call (tool use fully disabled, JSON-Schema-constrained structured output, independently re-validated) and, only for validated, safe actions, promotes Fragments into `Knowledge/Decisions/Projects/Preferences`, non-destructively merges obviously-duplicate `Knowledge/` notes (2/week cap), or applies machine-computed `updated:` fixes — all with TOCTOU re-checks immediately before each write.
+- **Phase 3** — appends a one-line summary to today's Fragments file, updates `last-run.json`, takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
 
-The corresponding 2 LaunchAgents are installed by `scripts/install-vault-agents.sh` (main only, optional). Note: these plists hard-code `/usr/bin/python3` (macOS's system Python) as the interpreter.
+All intermediate files and machine-readable status files for a given run live under `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/`, with `~/.claude/logs/maintenance/latest` always pointing at the most recent run.
 
 ### Drift Detection (check-drift.sh)
 
@@ -163,7 +161,7 @@ Checks the following 5 points and lists them (**it does not exit 1 even if drift
 4. Whether `vault-public/Preferences` differs from the real Vault's `Preferences` (detects export omissions from `export-public-vault.sh`)
 5. Whether the remote of the Vault backup / private-patch repo (`AIENV_PRIVATE_REPO`, default `~/work/takumi009-ai-env-private`) is still actually **private** on GitHub (`gh repo view --json visibility`). This is a standing check for whether a repository that should be private was accidentally made public. Not applicable if the remote isn't configured; if `gh` isn't installed/authenticated, it's shown only as a warning rather than counted as drift (the ai-env repo itself is "planned to go public," so it's excluded from this check)
 
-This script itself is a manually-run report tool, but via `scripts/drift-notify.sh` it also runs unattended once a week (Monday 09:30) from `launchagents/com.takumi009.drift-check.plist` (main only; auto-installed by `install-main.sh`), and sends a macOS notification if there is even one item of drift.
+This script itself is a manually-run report tool. The former weekly unattended path (`scripts/drift-notify.sh` / `launchagents/com.takumi009.drift-check.plist`, Monday 09:30, macOS notification on drift>0) was removed on 2026-07-16; the unattended run now happens as check ① of the new `maintenance.sh` runner's Phase 1 (see above), with a `--json` mode added for that machine-readable use.
 
 ### Restore Runbook (Disaster Recovery / Main Migration)
 
@@ -187,9 +185,9 @@ cd ~/work/takumi009-ai-env && brew bundle
 ~/work/takumi009-ai-env-private/install-private.sh   # Restores docs/ and ngwords
 
 # 4. Rebuild the environment
-scripts/install-main.sh --with-dotfiles   # symlinks + dotfiles + codex MCP registration + weekly drift notification
+scripts/install-main.sh --with-dotfiles   # symlinks + dotfiles + codex MCP registration
 scripts/install-backup.sh                 # Resume hourly backups
-scripts/install-vault-agents.sh           # Vault-cultivation tools (optional)
+scripts/install-maintenance.sh            # Resume the weekly maintenance runner
 
 # 5. Log in to each app (manual): Claude Code / Codex / others
 ```
@@ -210,18 +208,17 @@ bash tests/test-export-public-vault.sh
 bash tests/test-backup-vault.sh
 bash tests/test-bootstrap-vault.sh
 bash tests/test-install-sub.sh
-bash tests/test-install-vault-agents.sh
+bash tests/test-install-backup.sh
+bash tests/test-install-maintenance.sh
 bash tests/test-with-dotfiles.sh
 bash tests/test-check-drift.sh
-bash tests/test-drift-notify.sh
-bash tests/test-install-main-drift-check.sh
 bash tests/test-setup-codex-mcp.sh
 bash tests/test-install-main-codex-mcp.sh
 bash tests/test-update-sub.sh
 bash tests/test-audit.sh
 ```
 
-None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). Currently 13 suites / 359 assertions, all passing.
+None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). This list predates several `tests/test-*.sh` files added during the 2026-07-16 simplification project (e.g. `test-shell-lib.sh`, `test-vault-lib.sh`, `test-merge-checks.sh`, `test-maintenance-run-step.sh`, and others) — run `ls tests/test-*.sh` for the full, current set and suite count (intentionally not restated here as a fixed number, to avoid drifting out of sync again).
 
 ### License
 
@@ -266,23 +263,21 @@ takumi009-ai-env/
 │   ├── install-main.sh          # メイン環境用インストーラ（symlink化。--with-dotfiles対応）
 │   ├── install-sub.sh           # サブ環境用インストーラ（Vault骨格配置＋install-main.shへ委譲）
 │   ├── install-backup.sh        # Vaultバックアップ用LaunchAgentのインストーラ
-│   ├── install-vault-agents.sh  # Vault育成系LaunchAgent2種のインストーラ（メイン専用）
+│   ├── install-maintenance.sh   # 週次メンテナンスランナー用LaunchAgentのインストーラ（メイン専用）
 │   ├── setup-codex-mcp.sh       # codex MCPをClaude Codeへ登録するスクリプト（install-main.shが自動実行）
 │   ├── backup-vault.sh          # Vaultを定期的にgit commit（+push）するスクリプト
+│   ├── maintenance.sh           # 週次メンテナンスランナー（バックアップ＋検出＋ヘッドレスClaude適用＋サマリ。メイン専用）
 │   ├── update-sub.sh            # サブのルールを定期的に最新化するスクリプト（サブ専用。install-sub.shが設置）
 │   ├── export-public-vault.sh   # Vaultのpublicフォルダを vault-public/ へエクスポートするスクリプト
 │   ├── check-drift.sh           # symlink/config.toml/repo/vault-public/private repo可視性の「ズレ」を検知する手動監査ツール
-│   ├── drift-notify.sh          # check-drift.shを実行しdrift>0ならmacOS通知するラッパ（メイン専用。install-main.shが自動設置）
 │   ├── audit.sh                 # public公開前の総監査ツール（git履歴全体のNGワード/実ユーザー名パス/シークレット・追跡ファイル逸脱・完備性）。`--quick` で履歴スキャン（重い）を省き現在ツリーのみ実行
-│   ├── vault-agents/            # Vault育成系スクリプト2種（vault_inventory.py等。メイン専用機能）
+│   ├── vault-agents/            # maintenance.shが起動する検出器群（vault_inventory.py・fragments_log.py・knowledge_merge_candidates.py・decision_propagation.py・maintenance_apply.py等。メイン専用機能）
 │   ├── ngwords.txt              # NGワード定義（私的データのため**このリポジトリには含まれない**。詳細は「導入手順」参照）
 │   └── templates/               # private骨格フォルダ用のREADMEテンプレ
 ├── launchagents/
-│   ├── com.takumi009.vault-backup.plist       # Vaultバックアップを毎時実行（メイン専用）
-│   ├── com.takumi009.vault-inventory.plist    # Vault棚卸しレポートを月2回生成（メイン専用）
-│   ├── com.takumi009.fragments-log.plist      # Fragments昇格候補ログを毎週生成（メイン専用）
-│   ├── com.takumi009.sub-update.plist         # ルールを1日2回自動最新化（サブ専用）
-│   └── com.takumi009.drift-check.plist        # ズレを週1で検知しdrift>0ならmacOS通知（メイン専用。install-main.shが自動設置）
+│   ├── com.takumi009.backup-vault.plist       # Vaultバックアップを毎時実行（メイン専用）
+│   ├── com.takumi009.maintenance.plist        # 週次メンテナンスランナーを実行（メイン専用）
+│   └── com.takumi009.update-sub.plist         # ルールを1日2回自動最新化（サブ専用）
 ├── vault-public/                # Vaultのpublic指定フォルダのスナップショット（後述）
 ├── Brewfile                     # `brew bundle` で導入する依存formula（後述）
 └── tests/                       # 上記スクリプト群のユニットテスト
@@ -321,14 +316,14 @@ git clone <このリポジトリのURL> ~/work/takumi009-ai-env
 cd ~/work/takumi009-ai-env
 scripts/install-main.sh          # claude/・codex/ を ~/.claude・~/.codex へ symlink 化
 scripts/install-backup.sh        # Vaultバックアップ用LaunchAgentを配置
-scripts/install-vault-agents.sh  # Vault育成系LaunchAgent2種を配置（任意・メイン専用機能）
+scripts/install-maintenance.sh   # 週次メンテナンスランナー用LaunchAgentを配置（メイン専用機能）
 ```
 
 - `install-main.sh` は既存の実ファイルを初回だけ `<dest>.pre-aienv.bak` に退避してから symlink に置き換えます（再実行しても安全＝冪等）。`--dry-run` オプションで計画だけを確認できます。
 - `codex/config.toml` だけは symlink ではなく、プレースホルダ（`__AIENV_HOME__`）を実ホームパスへ置換した実ファイルとして生成されます（plain TOML はシェル変数展開されないため）。
-- `install-backup.sh`・`install-vault-agents.sh` はどちらも LaunchAgent の配置（bootstrap+enable）までを行い、**即時実行（kickstart）はしません**（Vault の初回git化は段階的ロールアウトが前提のため。初回実行は次回の定期発火を待つか、準備が整ってから手動で `launchctl kickstart -k` してください）。
+- `install-backup.sh`・`install-maintenance.sh` はどちらも LaunchAgent の配置（bootstrap+enable）までを行い、**即時実行（kickstart）はしません**（Vault の初回git化は段階的ロールアウトが前提のため。初回実行は次回の定期発火を待つか、準備が整ってから手動で `launchctl kickstart -k` してください）。
 - `install-main.sh` は末尾で `scripts/setup-codex-mcp.sh` を自動実行し、**codex MCP（`mcp__codex__codex`/`codex-reply`、レビュー体制の中核）を自動登録**します（`claude mcp add codex -s user -- <codexの絶対パス> mcp-server`。既に登録済みならskip・冪等）。Claude Code / codex コマンドが未導入の環境では登録に失敗しますが、その場合も installer 全体は止まらず WARN で続行します。手動で登録する場合は `scripts/setup-codex-mcp.sh` を単体実行するか、案内される `claude mcp add` コマンドを直接実行してください。
-- `install-main.sh` は同じく末尾で**週次drift通知LaunchAgent**（`com.takumi009.drift-check.plist`。メイン専用）も配置します。毎週月曜09:30に `scripts/drift-notify.sh`（`scripts/check-drift.sh` を実行し drift>0 なら `osascript` でmacOS通知）を無人実行し、`scripts/check-drift.sh` を作っても実行し忘れて陳腐化する事態を防ぎます（他のLaunchAgentと同様、配置のみで即時kickstartはしません）。`install-sub.sh` からの委譲時（内部フラグ `--sub-delegate`）は自動的にskipされ、サブ機には設置されません。
+- `install-main.sh` が配置していた**週次drift通知LaunchAgent**（`com.takumi009.drift-check.plist`／`scripts/drift-notify.sh`）と、`install-vault-agents.sh`（撤去済み）が配置していたVault育成系LaunchAgent3種（`vault-inventory`／`fragments-log`／`knowledge-merge-detect`）は、いずれも2026-07-16の簡素化で撤去・統合しました（Vault内 `Decisions/2026-07-16-nightly-batch-direct-write` 参照）。`install-maintenance.sh` はこの旧4ラベルがまだマシンに残っていれば移行（bootout＋削除）してから新設の `com.takumi009.maintenance` LaunchAgentを設置します。週次無人実行の経路は新設の `maintenance.sh` ランナーへ完全に移りました。
 - メイン環境では、この基本パッケージの上に**私的パッチ（別のprivateリポジトリ）**を重ねます。私的パッチには Vault の実体（`~/Data/obsidian`）や、公開できない設定が含まれます。私的パッチの導入手順は当該リポジトリ側のドキュメントを参照してください。
 
 #### サブ環境
@@ -344,7 +339,7 @@ scripts/install-sub.sh
 1. `$HOME/Data/obsidian` が無ければ `vault-public/` の中身（public スナップショット＋private骨格）をコピーして Vault の骨格を作る（既に存在する場合は上書きしません）。
 2. `claude/`・`codex/` の symlink 化・codex MCP登録は `install-main.sh` をそのまま呼び出して行う（ロジックは共通）。
 3. Vault育成系・バックアップの LaunchAgent は**インストールしません**（メイン専用機能）。
-4. **ルールの自動最新化**: `com.takumi009.sub-update.plist`（`scripts/update-sub.sh` を1日2回＝09:00/13:00に起動）を設置します。このリポジトリを `git pull --ff-only` し、変化があれば `codex/config.toml` の再生成・`vault-public/Preferences/` の再同期（**Preferences以外には一切触れません**＝サブ機ローカルの `Fragments` 等は消えません）・新しい骨格フォルダの補充を自動で行います。変化が無ければ静かに終了します（サブは編集しない運用のため `git pull` が fast-forward できない事態は通常起きませんが、その場合は警告を出すだけで停止し、強制上書きはしません）。
+4. **ルールの自動最新化**: `com.takumi009.update-sub.plist`（`scripts/update-sub.sh` を1日2回＝09:00/13:00に起動）を設置します。このリポジトリを `git pull --ff-only` し、変化があれば `codex/config.toml` の再生成・`vault-public/Preferences/` の再同期（**Preferences以外には一切触れません**＝サブ機ローカルの `Fragments` 等は消えません）・新しい骨格フォルダの補充を自動で行います。変化が無ければ静かに終了します（サブは編集しない運用のため `git pull` が fast-forward できない事態は通常起きませんが、その場合は警告を出すだけで停止し、強制上書きはしません）。
 
 サブ機では `Personal/profile-personal.md`・`Knowledge/mistakes.md` 等の private ノートが存在しませんが、`bootstrap-vault.sh`（SessionStartフック）は**存在するファイルだけ**を必読リストに載せる設計のため、「見つかりません」という警告は出ません。
 
@@ -358,20 +353,20 @@ scripts/install-main.sh --with-dotfiles   # または install-sub.sh --with-dotf
 
 ### Vault バックアップの運用
 
-`scripts/backup-vault.sh` は `$HOME/Data/obsidian` を対象に、変更があれば `git add -A && git commit`（メッセージ: `backup: YYYY-MM-DD HH:MM`）し、remote `origin` が設定済みの場合のみ push します（未設定なら commit までで警告を出して終了）。多重起動防止のロック（原子的なファイル作成による排他制御）・`git index.lock` のstale検知つきで、`launchagents/com.takumi009.vault-backup.plist`（`scripts/install-backup.sh` が配置）から1時間おきに無人実行される想定です。
+`scripts/backup-vault.sh` は `$HOME/Data/obsidian` を対象に、変更があれば `git add -A && git commit`（メッセージ: `backup: YYYY-MM-DD HH:MM`）し、remote `origin` が設定済みの場合のみ push します（未設定なら commit までで警告を出して終了）。多重起動防止のロック（原子的なファイル作成による排他制御）・`git index.lock` のstale検知つきで、`launchagents/com.takumi009.backup-vault.plist`（`scripts/install-backup.sh` が配置）から1時間おきに無人実行される想定です。
 
 Vault のバックアップ先（private repo）の作成・remote設定は本人が行います（このリポジトリのスクリプトは remote を勝手に作成しません）。
 
-### Vault育成系ツール（メイン専用機能）
+### 週次メンテナンスランナー（メイン専用機能）
 
-`scripts/vault-agents/` には、外部脳(Obsidian Vault)を定期的に棚卸し・記録するツール2種を収録しています。いずれも Vault を読み取ってレポート（Markdown）を `$HOME/.claude/logs/` 配下へ出力するだけで、Vault 自体には一切書き込みません（2026-07-11、`Explorations/` 配下から移設。「読まれない人間向け資料をVaultに置かない」方針＝Vault内 `Decisions/2026-07-11-vault-maintenance-hands-off` 参照）。
+`scripts/maintenance.sh` は、2026-07-16の簡素化で旧来の個別Vault育成系LaunchAgentを統合した単一の週次ランナーです（毎週月曜03:00・`scripts/install-maintenance.sh` が設置。Vault内 `Decisions/2026-07-16-nightly-batch-direct-write`「夜間バッチが直接Vaultへ書く・レポート→リーダー処理の間接ループを廃止」参照）。4フェーズで構成されます:
 
-| スクリプト | 内容 | 実行タイミング |
-|---|---|---|
-| `vault_inventory.py` | 方針ノートの updated 欠落・リンク切れ・旧方針の残存等の棚卸しレポート | 毎月1日・15日 03:00 |
-| `fragments_log.py` | Fragments（日次断片）の週次昇格候補ログ | 毎週月曜 03:30 |
+- **Phase 0** — `backup-vault.sh` で直前スナップショットを取得し、Vault書込ロック（PIDファイル・Phase 3終了まで保持）を取得。`vault-public/Preferences` のスナップショットが遅れていれば `export-public-vault.sh` を再試行。
+- **Phase 1（検出のみ・読み取り専用）** — `check-drift.sh`（環境ヘルスの門番。実drift検知や実行異常はここで即座にfail-fastしVaultへは一切書き込まない）→ `fragments_log.py` → `vault_inventory.py` → `knowledge_merge_candidates.py` → `decision_propagation.py` の順で実行。②〜⑤は互いの失敗から隔離される。
+- **Phase 2** — `scripts/vault-agents/maintenance_apply.py` がPhase 1の検出結果をヘッドレスClaude Codeへ1回だけ渡し（ツール使用を完全無効化・JSON Schemaで構造を強制した出力を独立に再検証）、安全と確認できたactionのみ、Fragmentsを `Knowledge/Decisions/Projects/Preferences` へ昇格、Knowledge内の明白な重複ノートの非破壊マージ（週2件上限）、機械的に決定済みの `updated:` 修正のいずれかをVaultへ適用する（各書込み直前にTOCTOU再照合）。
+- **Phase 3** — 実施サマリをFragments当日ファイルへ1行追記、`last-run.json` を更新、`backup-vault.sh` で最終スナップショットを取得、Vault書込ロックを解放、異常時のみmacOS通知、30日超過のログを削除。
 
-対応する LaunchAgent 2種は `scripts/install-vault-agents.sh` が配置します（メイン専用・任意）。注記: これらのplistはインタプリタとして `/usr/bin/python3`（macOS標準のPython）をハードコードしています。
+各回の中間ファイル・機械可読status-fileは `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/` 配下にまとまり、`~/.claude/logs/maintenance/latest` が常に最新の実行を指します。
 
 ### ズレの検知（check-drift.sh）
 
@@ -387,7 +382,7 @@ scripts/check-drift.sh
 4. `vault-public/Preferences` と実Vaultの `Preferences` に差分が無いか（`export-public-vault.sh` のエクスポート漏れ検知）
 5. Vaultバックアップ・私的パッチrepo（`AIENV_PRIVATE_REPO`、既定 `~/work/takumi009-ai-env-private`）の remote が GitHub上で実際に **private** のままか（`gh repo view --json visibility`）。private であるべきリポジトリが誤って public 化されていないかの恒久チェックです。remote未設定は対象外、`gh` 未導入・未認証時は drift にはせず警告表示のみ（ai-env 本体は「public化予定」のためこのチェックの対象外）
 
-このスクリプト自体は手動実行のレポートツールですが、`scripts/drift-notify.sh` 経由で `launchagents/com.takumi009.drift-check.plist`（メイン専用・`install-main.sh` が自動設置）から週1（月曜09:30）で無人実行され、drift が1件でもあれば macOS 通知で知らせます。
+このスクリプト自体は手動実行のレポートツールです。従来の週次無人実行経路（`scripts/drift-notify.sh`／`launchagents/com.takumi009.drift-check.plist`。毎週月曜09:30・drift1件以上でmacOS通知）は2026-07-16に撤去し、無人実行は新設の `maintenance.sh` ランナーのPhase 1①として行うようになりました（機械可読な `--json` モードもこの用途で追加。上記Vault決定参照）。
 
 ### 復元 Runbook（災害復旧・メインの移転）
 
@@ -411,9 +406,9 @@ cd ~/work/takumi009-ai-env && brew bundle
 ~/work/takumi009-ai-env-private/install-private.sh   # docs/・ngwords を張り戻す
 
 # 4. 環境の再構築
-scripts/install-main.sh --with-dotfiles   # symlink 化＋dotfiles＋codex MCP 登録＋週次drift通知
+scripts/install-main.sh --with-dotfiles   # symlink 化＋dotfiles＋codex MCP 登録
 scripts/install-backup.sh                 # 毎時バックアップ再開
-scripts/install-vault-agents.sh           # Vault 育成系（任意）
+scripts/install-maintenance.sh            # 週次メンテナンスランナー再開
 
 # 5. 各アプリのログイン（手動）: Claude Code / Codex / その他
 ```
@@ -434,18 +429,17 @@ bash tests/test-export-public-vault.sh
 bash tests/test-backup-vault.sh
 bash tests/test-bootstrap-vault.sh
 bash tests/test-install-sub.sh
-bash tests/test-install-vault-agents.sh
+bash tests/test-install-backup.sh
+bash tests/test-install-maintenance.sh
 bash tests/test-with-dotfiles.sh
 bash tests/test-check-drift.sh
-bash tests/test-drift-notify.sh
-bash tests/test-install-main-drift-check.sh
 bash tests/test-setup-codex-mcp.sh
 bash tests/test-install-main-codex-mcp.sh
 bash tests/test-update-sub.sh
 bash tests/test-audit.sh
 ```
 
-いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。現時点で13スイート・359アサーション、全てpassしています。
+いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。このリストは2026-07-16簡素化プロジェクトで追加された複数の`tests/test-*.sh`（例: `test-shell-lib.sh`・`test-vault-lib.sh`・`test-merge-checks.sh`・`test-maintenance-run-step.sh`等）を反映できていません。現時点の全テスト・スイート数は`ls tests/test-*.sh`で確認してください（本節が最後に更新された時点より増えているため、ここに固定の件数は書きません＝また食い違う事故を避けるため）。
 
 ### ライセンス
 [MIT](LICENSE)

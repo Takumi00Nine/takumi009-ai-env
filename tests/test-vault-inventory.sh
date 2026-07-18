@@ -40,6 +40,15 @@ assert_not_contains() {
   fi
 }
 
+assert_eq() {
+  local desc="$1" expected="$2" actual="$3"
+  if [[ "$expected" == "$actual" ]]; then
+    pass "$desc"
+  else
+    fail_case "$desc (expected=$expected actual=$actual)"
+  fi
+}
+
 # N日前/後のYYYY-MM-DD（BSD date。0や正数にも+符号を明示しないと date が拒否する）
 d_date() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%F; }
 # N日前/後のISO8601時刻（BSD date）。時刻はローカル正午に固定し、tz変換や実行時刻の
@@ -102,10 +111,11 @@ write_note() {
   } > "$vault/$rel"
 }
 
-# vault_inventory.py を --force 実行し、当日レポートの中身を返す
+# vault_inventory.py を実行し、当日レポートの中身を返す（2026-07-16簡素化で
+# 隔週間隔ガード・--forceオプションを撤去したため常に実行される）。
 run_inventory() {
   local vault_home="$1"
-  HOME="$vault_home" python3 "$SCRIPT" --force >/dev/null
+  HOME="$vault_home" python3 "$SCRIPT" >/dev/null
   cat "$(ls "$vault_home/.claude/logs/vault-inventory"/20*.md | sort | tail -1)"
 }
 
@@ -232,7 +242,7 @@ echo "=== 5. 未読ノート検出（§12）: ログが浅い（90日未満）�
   printf '%s\tsess1\tKnowledge/seen-recently.md\n' "$(d_ts -10)" > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "ログ蓄積中の注記（開始日つき・断定しない）が出る" "$out" "ログ蓄積中（開始日: $(d_date -10)"
@@ -274,7 +284,7 @@ echo "=== 6. 未読ノート検出（§12）: ログが90日以上 → 確定判
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_not_contains "ログが十分溜まっていれば「ログ蓄積中」の注記は出ない" "$out" "ログ蓄積中"
@@ -309,7 +319,7 @@ echo "=== 7. §12: 混在タイムゾーン（naive/aware）・破損ログ行�
   } > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall-none.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "aware/naive混在でもクラッシュせずレポートが生成される" "$out" "## 12. 未読ノート"
@@ -355,7 +365,7 @@ echo "=== 9. README.md は§12(未読ノート)の対象外 ==="
   printf '%s\tsess1\tKnowledge/dummy-to-make-log-mature.md\n' "$(d_ts -100)" > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall-none.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_not_contains "Knowledge/README.mdは未読リストに出ない" "$out" "Knowledge/README.md\`（"
@@ -401,7 +411,7 @@ echo "=== 11a. rename/delete済みノートへの古いログが成熟判定を�
   } > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall-none.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "現存ノートの記録(10日分)だけで成熟度を判定する＝ログ蓄積中の注記が出る" \
@@ -428,7 +438,7 @@ echo "=== 11. ログが直近LOG_STALE_DAYS以内に無い → フック停止�
   } > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall-none.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "フック停止の疑い（直近記録なし）が注記される" "$out" "直近 30 日以内の有効な記録が無い"
@@ -509,7 +519,7 @@ echo "=== 13. 提示無視率（session_id突合・C-2）: 同一セッション
   } > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "同一セッション内で後からReadされたノートは読まれた率100%" \
@@ -547,7 +557,7 @@ echo "=== 20. 提示無視率: 時間窓の境界（N-2・窓内=30日以内・�
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "30日以内の3件だけが集計され、31日前は含まれない" \
@@ -590,7 +600,7 @@ echo "=== 21. 提示無視率: 既読前提示の部分除外（N-3・一部の�
   } > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "既読より前の4セッションだけが分母に残り読まれた率100%（既読より後の2セッションは除外）" \
@@ -616,7 +626,7 @@ echo "=== 14. 提示無視率: 提示3回未満のノートはワーストに出
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_not_contains "提示2回のノートはワーストリストに出ない（分母3回未満は除外）" \
@@ -640,7 +650,7 @@ echo "=== 15. ログ別死活判定（M-1）: recallだけ停止していてもr
   printf '%s\tsessA\tKnowledge/split-stale-note.md\tk\n' "$(d_ts -60)" > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "recallログの停止疑いが個別に注記される" "$out" "vault-recall.tsv: 直近 30 日以内の有効な記録が無い"
@@ -663,7 +673,7 @@ echo "=== 16. ログ別死活判定（M-1）: 逆パターン（readsだけ停�
   printf '%s\tsessA\tKnowledge/split-stale-note2.md\tk\n' "$(d_ts -5)" > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "readsログの停止疑いが個別に注記される" "$out" "vault-reads.tsv: 直近 30 日以内の有効な記録が無い"
@@ -692,7 +702,7 @@ echo "=== 17. ログ死活（Codexレビュー指摘・Major）: ERROR行だけ�
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "readsがERROR行だけでも「毎回失敗し続けている疑い」が出る" \
@@ -730,7 +740,7 @@ echo "=== 18. ログ死活（Codexレビュー指摘・Major）: 未来日時の
   printf '%s\tsessA\tKnowledge/future-log-note.md\tk\n' "$(d_ts 3650)" > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "readsの未来日時が注記される" "$out" "vault-reads.tsv: 最終記録が未来日時"
@@ -750,7 +760,7 @@ echo "=== 19. session_idが空のRead行（Codexレビュー指摘・再レビ�
   printf '%s\t\tKnowledge/x.md\n' "$(d_ts -5)" > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall-none.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "session_idが空のRead行が注記される" "$out" "session_id が空のRead行 1 件"
@@ -772,7 +782,7 @@ echo "=== 22. 提示無視率: VAULT_DISMISS_WINDOW_DAYS が不正値でもク�
   for bad in "not-a-number" "-5" "0" ""; do
     rc=0
     VAULT_DISMISS_WINDOW_DAYS="$bad" VAULT_READS_LOG="/nonexistent-dir/r.tsv" VAULT_RECALL_LOG="/nonexistent-dir/c.tsv" \
-      HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null 2>&1 || rc=$?
+      HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null 2>&1 || rc=$?
     if [[ "$rc" == "0" ]]; then
       pass "VAULT_DISMISS_WINDOW_DAYS=\"$bad\" でもクラッシュしない(exit 0)"
     else
@@ -807,7 +817,7 @@ echo "=== 23. 提示無視率: 未来日時の提示イベントは窓内に含�
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "未来日時1件を除いた3件だけが集計される" \
@@ -840,7 +850,7 @@ echo "=== 24. 提示無視率: 同一セッション内の同一ノート重複�
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_not_contains "同一セッション内の重複提示は正規化後1セッションに集約され、閾値(3)未満のためワーストに出ない" \
@@ -875,7 +885,7 @@ echo "=== 25. 提示無視率: 複数セッションそれぞれの重複提示�
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "正規化後3セッション・生提示回数9件が併記される" \
@@ -915,7 +925,7 @@ echo "=== 26. 提示無視率: 同一セッション内の重複提示の代表�
   } > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "代表時刻は入力順序でなく最小ts(-20日)。-15日のReadは代表より後なので3セッションとも読まれた率100%" \
@@ -943,7 +953,7 @@ echo "=== 27. 提示無視率: session_idが空の重複提示行は(session_id,
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "session_idが空の3行はグルーピングされず1行=1提示のまま3件として数えられる" \
@@ -975,7 +985,7 @@ echo "=== 28. §12: heartbeat行（claude/hooks/vault-recall.shの3列目'(heart
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_not_contains "heartbeat行は提示回数上位おまけに出ない" "$out" "(heartbeat)\` —"
@@ -999,7 +1009,7 @@ echo "=== 29. §12: heartbeat行しかvault-recall.tsvに無くても死活判�
   printf '%s\thbonly1\t(heartbeat)\n' "$(d_ts -5)" > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_not_contains "heartbeatのみでも直近記録ありとみなされフック停止疑いは注記されない" \
@@ -1039,7 +1049,7 @@ echo "=== 29b. §12: session_idが空のheartbeat行は『session_idが空の提
   } > "$LOGDIR/vault-recall.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_contains "session_idが空の提示行は実ノート1件のみ数えられる（heartbeat2件は混ざらない）" \
@@ -1281,11 +1291,11 @@ echo "=== 36. 要確認件数(n_issues): §12 session_idが空のRead/提示行�
   printf '%s\t\tKnowledge/n-issues-no-session-dummy.md\tk\n' "$(d_ts -5)" > "$LOGDIR/vault-recall.tsv"
 
   before_n="$(extract_n_issues "$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall-none.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")")"
 
   out_after="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
   after_n="$(extract_n_issues "$out_after")"
 
@@ -1319,7 +1329,7 @@ echo "=== 37. read_log()のerror_rows: claude/hooks/vault-recall.sh log_fact()�
   printf '%s\tsessA\tKnowledge/dummy.md\n' "$(d_ts -1)" > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   # 4行中、6列目"INFO"の事実記録2件はERROR件数からもskipped件数からも除外され、
@@ -1347,11 +1357,332 @@ echo "=== 37b. read_log()のerror_rows: vault-recall.tsvが全てlog_fact()由�
   printf '%s\tsessA\tKnowledge/dummy.md\n' "$(d_ts -1)" > "$LOGDIR/vault-reads.tsv"
 
   out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" --force >/dev/null && \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
     cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
 
   assert_not_contains "INFO行しか無い場合は「解析対象外の vault-recall.tsv 行」の注記自体が出ない（ERROR行0件・真に解析不能な行0件のため）" \
     "$out" "解析対象外の vault-recall.tsv 行"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 38. 2026-07-16簡素化: 隔週間隔ガードを撤去し常に実行される（--force不要・連続2回実行しても両方成功） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+
+  rc1=0; rc2=0
+  HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null 2>&1 || rc1=$?
+  HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null 2>&1 || rc2=$?
+  assert_eq "1回目もexit 0" "0" "$rc1"
+  assert_eq "2回目(同日再実行)もskipせずexit 0" "0" "$rc2"
+  n_reports="$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "同日再実行でもレポートは作られる(1件・同日は上書き)" "1" "$n_reports"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 39. --json: missing_updated（Preferences限定）のFIX候補が計算される(fixable=true・fix_date=date値) ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+  write_note "$V" "Preferences/fixable-note.md" $'date: 2026-01-01'
+
+  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  fixable="$(printf '%s' "$out" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/fixable-note.md'][0]
+print(c['fixable'], c['fix_date'], c['skip_reason'])
+")"
+  assert_eq "fixable=Trueでfix_date=2026-01-01・skip_reasonはNone" "True 2026-01-01 None" "$fixable"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 40. --json: date:フィールドが無いnoteはno_date_fieldでfix不可 ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+  write_note "$V" "Preferences/no-date-note.md" $'tags: [x]'
+
+  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  reason="$(printf '%s' "$out" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/no-date-note.md'][0]
+print(c['fixable'], c['skip_reason'])
+")"
+  assert_eq "fixable=False・skip_reason=no_date_field" "False no_date_field" "$reason"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 41. --json: 不正な日付形式(fromisoformat失敗)はinvalid_date_formatでfix不可 ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+  write_note "$V" "Preferences/bad-date-note.md" $'date: not-a-date'
+
+  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  reason="$(printf '%s' "$out" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/bad-date-note.md'][0]
+print(c['fixable'], c['skip_reason'])
+")"
+  assert_eq "fixable=False・skip_reason=invalid_date_format" "False invalid_date_format" "$reason"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 42. --json: 未来日時のdate:はfuture_dateでfix不可（誤って未来日付をupdatedへ転記しない） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+  future="$(d_date 30)"
+  write_note "$V" "Preferences/future-date-note.md" "date: $future"
+
+  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  reason="$(printf '%s' "$out" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/future-date-note.md'][0]
+print(c['fixable'], c['skip_reason'])
+")"
+  assert_eq "fixable=False・skip_reason=future_date" "False future_date" "$reason"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 43. --json: date:キーが重複しているnoteはduplicate_date_keyでfix不可（frontmatter異常・どちらが正か機械的に決められない） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+  mkdir -p "$V/Preferences"
+  printf -- '---\ndate: 2026-01-01\ndate: 2026-02-02\n---\n\n本文\n' > "$V/Preferences/dup-date-note.md"
+
+  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  reason="$(printf '%s' "$out" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/dup-date-note.md'][0]
+print(c['fixable'], c['skip_reason'])
+")"
+  assert_eq "fixable=False・skip_reason=duplicate_date_key" "False duplicate_date_key" "$reason"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 43b. --json: FIX候補にはinv-<sha256[:12]>形式の安定IDとsource_sha256（TOCTOU対策用）が含まれる（設計書§2.2/§2.4・maintenance_apply.py未実装向け） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+  write_note "$V" "Preferences/fixable-note.md" $'date: 2026-01-01'
+
+  out1="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  info1="$(printf '%s' "$out1" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/fixable-note.md'][0]
+print(c['id'])
+print(c['source_sha256'])
+")"
+  id1="$(echo "$info1" | sed -n '1p')"
+  sha1="$(echo "$info1" | sed -n '2p')"
+
+  assert_eq "idはinv-プレフィックス+12文字16進" "1" \
+    "$(echo "$id1" | grep -qE '^inv-[0-9a-f]{12}$' && echo 1 || echo 0)"
+  assert_eq "source_sha256は64文字16進(sha256)" "1" \
+    "$(echo "$sha1" | grep -qE '^[0-9a-f]{64}$' && echo 1 || echo 0)"
+
+  # ノートの実際のsha256と一致することを直接検証する（内容ベースIDの根拠）。
+  expected_sha="$(python3 -c "import hashlib; print(hashlib.sha256(open('$V/Preferences/fixable-note.md', 'rb').read()).hexdigest())")"
+  assert_eq "source_sha256はノート全文の実際のsha256と一致する" "$expected_sha" "$sha1"
+
+  # 同じrelpathなら2回実行しても同じidになる（決定的・連番ではない）。
+  out2="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  id2="$(printf '%s' "$out2" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/fixable-note.md'][0]
+print(c['id'])
+")"
+  assert_eq "同一relpathなら再実行しても同じidになる(決定的)" "$id1" "$id2"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 43c. --json: FIX候補のsource_sha256はノート内容が変わればTOCTOU検知できるよう別の値になる ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+  write_note "$V" "Preferences/toctou-note.md" $'date: 2026-01-01'
+
+  out1="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  sha_before="$(printf '%s' "$out1" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/toctou-note.md'][0]
+print(c['source_sha256'])
+")"
+
+  # ノート本文を書き換える（TOCTOU: Phase1検出後にVaultが変化したケースを模擬）。
+  printf -- '---\ndate: 2026-01-01\n---\n\n本文が変わった\n' > "$V/Preferences/toctou-note.md"
+
+  out2="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  sha_after="$(printf '%s' "$out2" | python3 -c "
+import json,sys
+data = json.load(sys.stdin)
+c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/toctou-note.md'][0]
+print(c['source_sha256'])
+")"
+
+  assert_eq "内容が変わればsource_sha256も変わる(TOCTOU再照合で不一致検知できる)" "1" \
+    "$([[ "$sha_before" != "$sha_after" ]] && echo 1 || echo 0)"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 44. --json: 標準出力はJSON1行のみ（人間向けメッセージは標準エラーへ回る・maintenance_run_step.pyがjson.loads()できる契約） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+
+  stdout_out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/tmp/vi-test-stderr.log)"
+  stderr_out="$(cat /tmp/vi-test-stderr.log)"
+  rc=0
+  echo "$stdout_out" | python3 -c "import json,sys; json.load(sys.stdin)" || rc=$?
+  assert_eq "標準出力全体が有効なJSONとしてパースできる" "0" "$rc"
+  assert_contains "人間向けメッセージは標準エラーに出る" "$stderr_out" "レポート生成:"
+
+  rm -f /tmp/vi-test-stderr.log
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 45. 必読6ファイルのうち1つが欠けてもクラッシュせずwarningとしてレポート§5に載る（tester独立検証で発見・リーダー裁定2026-07-16対応） ==="
+{
+  # 以前はBOOTSTRAP_FILES内の必読ファイルを無条件でread_text()しており、
+  # いずれか1つでも欠けると未処理のFileNotFoundErrorでCLI全体がクラッシュ
+  # していた（サブ機・骨格未整備のVault・ファイル名変更直後等で実際に
+  # 起こりうる）。claude/hooks/bootstrap-vault.sh側の「存在するファイルだけ
+  # 必読リストに載せる」という既存の扱いに揃え、クラッシュさせず「検出のみ」
+  # としてレポートへwarning表示する。
+  # make_clean_vault はn_issues=0のクリーンな状態を作る（要確認件数への
+  # 個別種別の算入テストと同じ土台）。欠落前後でn_issuesが0→1へ増分する
+  # ことまで直接確認する（Codexレビュー指摘Minor対応: 「要確認」という
+  # 文字列自体は件数に関わらず常にレポート冒頭へ出るため、文字列containsだけ
+  # ではn_issuesへの加算漏れを検出できなかった）。
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+
+  out_before="$(run_inventory "$VAULT_HOME")"
+  n_before="$(extract_n_issues "$out_before")"
+  assert_eq "欠落前はn_issues=0(クリーンなVault)" "0" "$n_before"
+
+  rm -f "$V/Preferences/coding-delegation.md"
+
+  rc=0
+  out="$(run_inventory "$VAULT_HOME")" || rc=$?
+  assert_eq "1ファイル欠落でもクラッシュせずexit 0のまま完走する" "0" "$rc"
+  assert_contains "欠落ファイルがwarningとして§5に載る" "$out" "Preferences/coding-delegation.md\` — ⚠️ ファイルが見つかりません"
+  assert_contains "残り5ファイルの注入サイズ監視は健在（§5見出し自体は変わらない）" "$out" "## 5. 必読6ファイルの注入サイズ"
+  n_after="$(extract_n_issues "$out")"
+  assert_eq "欠落後はn_issuesが0→1へ増分する(要確認件数へ正しく加算される)" "1" "$n_after"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 45b. --json実行でも必読ファイル欠落でクラッシュせずexit 0で有効なJSONを返しn_issuesへ加算される（同上・Codexレビュー指摘Minor対応） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+  rm -f "$V/Knowledge/mistakes.md"
+
+  rc=0
+  stdout_out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)" || rc=$?
+  assert_eq "必読ファイル欠落＋--jsonでもexit 0のまま完走する" "0" "$rc"
+  parse_rc=0
+  echo "$stdout_out" | python3 -c "import json,sys; json.load(sys.stdin)" || parse_rc=$?
+  assert_eq "標準出力は引き続き有効なJSONとしてパースできる" "0" "$parse_rc"
+  json_n_issues="$(echo "$stdout_out" | python3 -c "import json,sys; print(json.load(sys.stdin)['n_issues'])")"
+  assert_eq "JSON payloadのn_issuesにも欠落1件が加算される(クリーンなVault起点なので1になる)" "1" "$json_n_issues"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 46. Vault内に壊れたsymlink(.md)があってもクラッシュせず「読込に失敗したノート」として警告表示する（リーダー裁定2026-07-16: 出荷パイプラインのクラッシュ級は今直す・読込失敗は警告表示を採用） ==="
+{
+  # 全Vault走査（.mdファイル全般の読込ループ）にも、BOOTSTRAP_FILESと同型の
+  # クラッシュ余地がCodexレビューで指摘され、リーダー裁定により水平展開で
+  # 修正した。壊れたsymlink（リンク先が存在しない）は`p.is_file()`がFalseを
+  # 返すため検知できる。
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+  ln -s "$V/Knowledge/does-not-exist.md" "$V/Knowledge/broken-link.md"
+
+  rc=0
+  out="$(run_inventory "$VAULT_HOME")" || rc=$?
+  assert_eq "壊れたsymlinkがあってもクラッシュせずexit 0のまま完走する" "0" "$rc"
+  assert_contains "壊れたsymlinkが「読込に失敗したノート」として§0に載る" "$out" "Knowledge/broken-link.md\` —"
+  n_after="$(extract_n_issues "$out")"
+  assert_eq "壊れたsymlinkの検出もn_issuesへ1件加算される" "1" "$n_after"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 46b. 壊れたsymlinkへのwikilinkは§3リンク切れとしても検出される（stemsへ登録しない設計・Codexレビュー指摘Minor対応） ==="
+{
+  # 修正前は存在チェックより先に無条件でstemsへ登録していたため、壊れた
+  # symlinkや`.md`名ディレクトリを指すwikilinkが「リンク先は存在する」と
+  # 誤判定され、§3リンク切れ検出から漏れる（過少検出）欠陥があった。
+  # is_file()==Trueの場合のみstemsへ登録するよう修正したことで、§0（読込
+  # 失敗）と§3（リンク切れ）の両方で正しく検出されることを確認する。
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+  ln -s "$V/Knowledge/does-not-exist.md" "$V/Knowledge/broken-link.md"
+  write_note "$V" "Knowledge/linker.md" "date: 2026-01-01" "本文 [[broken-link]] への言及。"
+
+  rc=0
+  out="$(run_inventory "$VAULT_HOME")" || rc=$?
+  assert_eq "壊れたsymlinkへのwikilinkがあってもクラッシュせずexit 0のまま完走する" "0" "$rc"
+  assert_contains "壊れたsymlink自体は§0(読込に失敗したノート)に載る" "$out" "Knowledge/broken-link.md\` —"
+  assert_contains "壊れたsymlinkを指すwikilinkは§3リンク切れとしても検出される(stemsに残っていない)" \
+    "$out" "Knowledge/linker.md\` → \`[[broken-link]]\`"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== 47. Vault内に\`.md\`という名前のディレクトリがあってもクラッシュせず「読込に失敗したノート」として警告表示する（同上のリーダー裁定対応） ==="
+{
+  # `.md`拡張子だが実体がディレクトリの場合、read_text()はIsADirectoryError
+  # を送出する。is_file()がFalseを返すため、こちらもBOOTSTRAP_FILESと同じ
+  # 存在チェックだけで検知でき、try/exceptまで到達しない。
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+  mkdir -p "$V/Knowledge/weird-dir.md"
+  echo "not a note" > "$V/Knowledge/weird-dir.md/inner.txt"
+
+  rc=0
+  out="$(run_inventory "$VAULT_HOME")" || rc=$?
+  assert_eq "\`.md\`名ディレクトリがあってもクラッシュせずexit 0のまま完走する" "0" "$rc"
+  assert_contains "\`.md\`名ディレクトリが「読込に失敗したノート」として§0に載る" "$out" "Knowledge/weird-dir.md\` —"
+  n_after="$(extract_n_issues "$out")"
+  assert_eq "\`.md\`名ディレクトリの検出もn_issuesへ1件加算される" "1" "$n_after"
 
   rm -rf "$VAULT_HOME"
 }

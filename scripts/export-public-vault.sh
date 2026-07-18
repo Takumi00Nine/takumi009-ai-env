@@ -42,6 +42,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Personal リンク検出ロジックは scripts/audit.sh と共有する（2026-07-16 簡素化・
+# cleanup決定#5。複製解消の詳細は同ファイルのコメント参照）。
+# shellcheck source=scripts/lib/personal-link-check.sh
+source "$SCRIPT_DIR/lib/personal-link-check.sh"
+
 : "${VAULT:=$HOME/Data/obsidian}"
 : "${AIENV_REPO:=$HOME/work/takumi009-ai-env}"
 : "${NGWORDS_FILE:=$SCRIPT_DIR/ngwords.txt}"
@@ -126,36 +131,10 @@ done
 # rg は「マッチ0件」を exit 1 で返す（正常系）。exit 2 以上は rg 自体のエラーなので
 # それも検知対象にする（「マッチなし」と「rg が壊れて何も見ていない」を混同しない）。
 
-# basename 形式の wiki link パターン（[[name]] / [[name|alias]] / [[name#Heading]] /
-# [[name^blockid]] の全バリエーションを拾う）を1つの denylist basename から生成する。
-# 3-a/3-b（fail-fast）・3-e（report-only）の両方で使い回す共通関数。
-#
-# 空白許容ポリシー（2026-07-08、tester 独立検証で発見された2件のMajorへの対応）:
-#  1件目: name と区切り文字（| # ^ ]）の**間**の空白 → `[[:space:]]*` を区切り文字の前に追加
-#         （例: `[[career-private | alias]]` のようにpipeエイリアスの可読性目的で空白を
-#          入れる書き方はObsidian実務でよくあるが、空白なし前提の正規表現だとすり抜けていた）
-#  2件目: `[[` **直後**の空白 → `[[:space:]]*` を name の前にも追加
-#         （例: `[[ career-private]]` のようなタイプミス/IME確定時の余分な空白）
-# うっかり検知が本チェックの存在意義のため、いずれも必須修正（Major×2件）。
-build_basename_pattern_file() {
-  local denylist="$1" out="$2" name escaped
-  : > "$out"
-  while IFS= read -r name; do
-    [[ -z "$name" ]] && continue
-    escaped=$(printf '%s' "$name" | sed -e 's/[.[\*^$()+?{}|\\]/\\&/g')
-    printf '\\[\\[[[:space:]]*%s[[:space:]]*([|#\\^]|\\])\n' "$escaped" >> "$out"
-  done < "$denylist"
-}
-
-# フォルダ付き wiki link（[[Personal/xxx]] 等）検出用の正規表現を生成する。3-a/3-eで共用。
-# `[[` 直後・フォルダ名とスラッシュの間、両方に `[[:space:]]*` で空白を許容する
-# （tester 独立検証で発見・Major: `[[ Personal/career-private]]` のように [[ 直後に
-# 空白を挟む書き方が検出をすり抜けていた。フォルダ名とスラッシュの間の空白＝
-# `[[Personal /career-private]]` も同種のリスクとして併せて許容する＝設計判断）。
-folder_link_regex() {
-  local alt="$1"
-  printf '\\[\\[[[:space:]]*(%s)[[:space:]]*/' "$alt"
-}
+# basename形式パターン生成(personal_link_build_basename_pattern_file)・
+# フォルダ付きlink正規表現(personal_link_folder_regex)は
+# scripts/lib/personal-link-check.sh へ抽出済み（3-a/3-b・3-eで共用。
+# scripts/audit.shとも共有＝2026-07-16簡素化・cleanup決定#5）。
 
 # 3-a. Personal フォルダへの wiki link（フォルダ付き形式: [[Personal/xxx]] 等）: fail-fast
 #      -i（大文字小文字非依存）: macOSはcase-insensitiveなファイルシステムのため、
@@ -166,7 +145,7 @@ log "check: Personal folder wiki link (folder-qualified, fail-fast)"
 folder_alt=$(printf '%s|' "${FAIL_LINK_FOLDERS[@]}")
 folder_alt="${folder_alt%|}"
 rc=0
-rg -n -i -P "$(folder_link_regex "$folder_alt")" "$STAGING_DIR" || rc=$?
+rg -n -i -P "$(personal_link_folder_regex "$folder_alt")" "$STAGING_DIR" || rc=$?
 if [[ $rc -eq 0 ]]; then
   fail "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
 elif [[ $rc -gt 1 ]]; then
@@ -180,15 +159,8 @@ log "check: Personal note basename wiki link (denylist auto-generated, fail-fast
 register_tmp; BASENAME_DENYLIST="$REGISTER_TMP_RESULT"
 register_tmp; BASENAME_PATTERN_FILE="$REGISTER_TMP_RESULT"
 
-: > "$BASENAME_DENYLIST"
-for dir in "${FAIL_LINK_FOLDERS[@]}"; do
-  if [[ -d "$VAULT/$dir" ]]; then
-    find "$VAULT/$dir" -type f -name '*.md' -exec basename {} .md \; >> "$BASENAME_DENYLIST"
-  fi
-done
-sort -u -o "$BASENAME_DENYLIST" "$BASENAME_DENYLIST"
-
-build_basename_pattern_file "$BASENAME_DENYLIST" "$BASENAME_PATTERN_FILE"
+personal_link_build_basename_denylist "$VAULT" "${FAIL_LINK_FOLDERS[@]}" "$BASENAME_DENYLIST"
+personal_link_build_basename_pattern_file "$BASENAME_DENYLIST" "$BASENAME_PATTERN_FILE"
 
 if [[ -s "$BASENAME_PATTERN_FILE" ]]; then
   rc=0
@@ -247,20 +219,13 @@ register_tmp; REPORT_LINES_FILE="$REGISTER_TMP_RESULT"
 report_folder_alt=$(printf '%s|' "${REPORT_LINK_FOLDERS[@]}")
 report_folder_alt="${report_folder_alt%|}"
 rc=0
-rg -n -i -P "$(folder_link_regex "$report_folder_alt")" "$STAGING_DIR" >> "$REPORT_LINES_FILE" || rc=$?
+rg -n -i -P "$(personal_link_folder_regex "$report_folder_alt")" "$STAGING_DIR" >> "$REPORT_LINES_FILE" || rc=$?
 [[ $rc -gt 1 ]] && log "WARN: report-only rg 実行エラー (folder-qualified, exit $rc)。レポートが不完全な可能性があります"
 
 register_tmp; REPORT_BASENAME_DENYLIST="$REGISTER_TMP_RESULT"
 register_tmp; REPORT_BASENAME_PATTERN_FILE="$REGISTER_TMP_RESULT"
-: > "$REPORT_BASENAME_DENYLIST"
-for dir in "${REPORT_LINK_FOLDERS[@]}"; do
-  if [[ -d "$VAULT/$dir" ]]; then
-    find "$VAULT/$dir" -type f -name '*.md' -exec basename {} .md \; >> "$REPORT_BASENAME_DENYLIST"
-  fi
-done
-sort -u -o "$REPORT_BASENAME_DENYLIST" "$REPORT_BASENAME_DENYLIST"
-
-build_basename_pattern_file "$REPORT_BASENAME_DENYLIST" "$REPORT_BASENAME_PATTERN_FILE"
+personal_link_build_basename_denylist "$VAULT" "${REPORT_LINK_FOLDERS[@]}" "$REPORT_BASENAME_DENYLIST"
+personal_link_build_basename_pattern_file "$REPORT_BASENAME_DENYLIST" "$REPORT_BASENAME_PATTERN_FILE"
 if [[ -s "$REPORT_BASENAME_PATTERN_FILE" ]]; then
   rc=0
   rg -n -i -P -f "$REPORT_BASENAME_PATTERN_FILE" "$STAGING_DIR" >> "$REPORT_LINES_FILE" || rc=$?

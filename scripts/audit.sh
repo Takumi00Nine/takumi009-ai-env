@@ -10,11 +10,10 @@
 #   4. 追跡ファイルの逸脱（git ls-files に docs/・ngwords.txt・.DS_Store が
 #      含まれていないこと＝ .gitignore の破れ検知）
 #   5. Personal リンク（現在の vault-public。export-public-vault.sh の 3-a/3-b と
-#      同等の検出。ロジックは同スクリプトから複製している＝担当ワーカーの
-#      ファイル範囲制約により export-public-vault.sh を source/変更できないため
-#      「難しければ同等パターンを実装」の指示に基づく複製。2026-07-08。
-#      folder_link_regex / build_basename_pattern_file のロジックを変えた場合は
-#      export-public-vault.sh 側も同時に見直すこと）
+#      同等の検出。検出ロジックは scripts/lib/personal-link-check.sh へ抽出し
+#      export-public-vault.sh と共有している＝2026-07-16簡素化・cleanup決定#5で
+#      複製を解消済み。旧実装は2026-07-08〜複製のまま運用されていた
+#      〈担当ワーカーのファイル範囲制約による一時的な複製〉）
 #   6. 完備性（README.md・LICENSE・.gitignore・scripts/install-main.sh の存在）
 #
 # --quick オプション: 1〜3の履歴スキャン（重い）を省き、4〜6の現在ツリーのみ実行する
@@ -36,6 +35,12 @@
 set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が止まらないようにする。check-drift.shと同方針）
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Personal リンク検出ロジックは scripts/export-public-vault.sh と共有する
+# （2026-07-16 簡素化・cleanup決定#5。複製解消の詳細は scripts/lib/personal-link-check.sh
+# 参照）。
+# shellcheck source=scripts/lib/personal-link-check.sh
+source "$SCRIPT_DIR/lib/personal-link-check.sh"
 
 : "${REPO:=$(cd "$SCRIPT_DIR/.." && pwd)}"
 : "${NGWORDS_FILE:=$REPO/scripts/ngwords.txt}"
@@ -209,9 +214,9 @@ if [[ ! -d "$VAULT_PUBLIC" ]]; then
   ng_item "Personal リンク: vault-public が見つかりません: $VAULT_PUBLIC"
 else
   # フォルダ付き wiki link（[[Personal/xxx]] 等）検出用の正規表現。
-  # `[[` 直後・フォルダ名とスラッシュの間、両方に空白を許容する
-  # （export-public-vault.sh folder_link_regex と同じ意図の複製）。
-  folder_pattern='\[\[[[:space:]]*(Personal)[[:space:]]*/'
+  # scripts/lib/personal-link-check.sh を export-public-vault.sh と共有する
+  # （2026-07-16簡素化・cleanup決定#5。複製解消）。
+  folder_pattern="$(personal_link_folder_regex "Personal")"
   FOLDER_HITS="$(register_tmp)"
   link_scan_error=0
   rc=0
@@ -225,19 +230,19 @@ else
   : > "$BASENAME_HITS"
   if [[ -d "$VAULT/Personal" ]]; then
     BASENAME_DENYLIST="$(register_tmp)"
-    find "$VAULT/Personal" -type f -name '*.md' -exec basename {} .md \; > "$BASENAME_DENYLIST" 2>/dev/null
-    sort -u -o "$BASENAME_DENYLIST" "$BASENAME_DENYLIST"
-    BASENAME_PATTERN_FILE="$(register_tmp)"
-    : > "$BASENAME_PATTERN_FILE"
-    while IFS= read -r name; do
-      [[ -z "$name" ]] && continue
-      escaped=$(printf '%s' "$name" | sed -e 's/[.[\*^$()+?{}|\\]/\\&/g')
-      printf '\\[\\[[[:space:]]*%s[[:space:]]*([|#\\^]|\\])\n' "$escaped" >> "$BASENAME_PATTERN_FILE"
-    done < "$BASENAME_DENYLIST"
-    if [[ -s "$BASENAME_PATTERN_FILE" ]]; then
-      rc=0
-      rg -n -i -P -f "$BASENAME_PATTERN_FILE" "$VAULT_PUBLIC" > "$BASENAME_HITS" 2>/dev/null || rc=$?
-      [[ "$rc" -gt 1 ]] && link_scan_error=1
+    # findが1件でも失敗した場合はdenylistが不完全な可能性があり、そのまま検査を
+    # 続けると本来検出すべきPersonalリンクを見逃しうる（fail-open化を防ぐ・
+    # Codexレビュー指摘・Major対応）。「検査不能」として扱う。
+    if ! personal_link_build_basename_denylist "$VAULT" Personal "$BASENAME_DENYLIST"; then
+      link_scan_error=1
+    else
+      BASENAME_PATTERN_FILE="$(register_tmp)"
+      personal_link_build_basename_pattern_file "$BASENAME_DENYLIST" "$BASENAME_PATTERN_FILE"
+      if [[ -s "$BASENAME_PATTERN_FILE" ]]; then
+        rc=0
+        rg -n -i -P -f "$BASENAME_PATTERN_FILE" "$VAULT_PUBLIC" > "$BASENAME_HITS" 2>/dev/null || rc=$?
+        [[ "$rc" -gt 1 ]] && link_scan_error=1
+      fi
     fi
   else
     log "  basename形式チェック: $VAULT/Personal が見つからないためスキップ（実Vault非依存の環境では想定内）"

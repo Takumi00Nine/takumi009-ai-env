@@ -389,7 +389,8 @@ echo "=== 16. atomic書込み: write_note_atomic()は書込み失敗時に元フ
   cat > "$PYSCRIPT" <<PYEOF
 import sys, pathlib, os
 sys.path.insert(0, "$REPO_ROOT/scripts/vault-agents")
-import apply_aliases as aa
+# write_note_atomic()は2026-07-16簡素化でvault_lib.pyへ抽出済み。
+import vault_lib
 
 p = pathlib.Path("$V/Knowledge/target.md")
 orig_replace = os.replace
@@ -399,7 +400,7 @@ def boom(*a, **kw):
 
 os.replace = boom
 try:
-    aa.write_note_atomic(p, "CORRUPTED-SHOULD-NOT-APPEAR")
+    vault_lib.write_note_atomic(p, "CORRUPTED-SHOULD-NOT-APPEAR")
 except OSError as e:
     print("CAUGHT:", e)
 finally:
@@ -470,7 +471,9 @@ echo "=== 19. atomic書込み: os.fchmod()失敗時もファイルディスク�
   cat > "$PYSCRIPT" <<PYEOF
 import sys, pathlib, os
 sys.path.insert(0, "$REPO_ROOT/scripts/vault-agents")
-import apply_aliases as aa
+# write_note_atomic()は2026-07-16簡素化でvault_lib.pyへ抽出済み（apply_aliases.pyも
+# 同じ実体をvault_lib経由で呼ぶ）。
+import vault_lib
 
 p = pathlib.Path("$V/Knowledge/fdleak-test.md")
 orig_fchmod = os.fchmod
@@ -481,7 +484,7 @@ def boom(*a, **kw):
 before_fds = len(os.listdir("/dev/fd"))
 os.fchmod = boom
 try:
-    aa.write_note_atomic(p, "CORRUPTED-SHOULD-NOT-APPEAR")
+    vault_lib.write_note_atomic(p, "CORRUPTED-SHOULD-NOT-APPEAR")
 except OSError as e:
     print("CAUGHT:", e)
 finally:

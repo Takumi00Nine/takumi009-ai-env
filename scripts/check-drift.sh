@@ -26,29 +26,42 @@
 #      drift件数に乗らず、私的リポジトリの意図しない公開化を検知するはずの
 #      安全網自体が静かに無効化していても週次通知に出ない穴があった＝
 #      「監視不能も異常」として明示的に検知対象にする）。
-#   ⑥ vault-agents（棚卸し・fragments-log・weekly-review・想起/読取ログフック）の死活。
-#      「最新の棚卸しレポートが古すぎる」「fragments-logが古すぎる」
-#      「vault-reads.tsv/vault-recall.tsvの最終記録が古すぎる」のいずれかを検知する
-#      （2026-07-10 敵対的レビュー M-1/M-2 対応。3年ノーメンテ運用では「本人が定期的に
-#      レポートを見に行く」以外に死活を知る手段が無かった＝検知網そのものが無人だと
-#      無言で死ぬ穴を塞ぐ）。加えて「レポートは生成されているがリーダーに処理された
-#      形跡（frontmatterの processed: 行）が無いまま何日も放置されている」も検知する
-#      （2026-07-11 決定・claude/hooks/bootstrap-vault.sh の未処理レポート検知の
-#      二次安全網。判定基準は同じ。2026-07-14修正: 従来は「最新1件」しか見ておらず、
-#      drift-check LaunchAgent（毎週月曜9:30）がレポート生成（fragments-log 月3:30・
-#      knowledge-merge-detect 月4:15）と同日実行のため、latestは常にage=0＝グレース
-#      （既定3日）を構造的に超えられず、過去の未処理レポートが永久に検知されない
-#      穴があった＝対象ディレクトリの未処理（processedマーカー無し）レポート全件を
-#      判定対象に変更）。棚卸し・fragments-logの出力先は同決定で
-#      Vault配下(Explorations/...)から $HOME/.claude/logs/ 配下へ移設済み
-#      （「読まれない人間向け資料をVaultに置かない」）。$VAULT が無い
-#      （サブ機・私的Vault未clone）場合は対象外。棚卸し・fragments-logは
-#      README.mdにも明記の「メイン専用・任意」機能（scripts/install-vault-agents.sh
+#   ⑥ vault-agents（maintenance.sh週次ランナー・weekly-review・想起/読取ログ
+#      フック）の死活。「maintenance.shの最終開始(started_at)が古すぎる」
+#      「vault-reads.tsv/vault-recall.tsvの最終記録が古すぎる」のいずれかを
+#      検知する（2026-07-10 敵対的レビュー M-1/M-2 対応。3年ノーメンテ運用では
+#      「本人が定期的にレポートを見に行く」以外に死活を知る手段が無かった＝
+#      検知網そのものが無人だと無言で死ぬ穴を塞ぐ）。
+#      旧・未処理レポート検知（frontmatterのprocessed:マーカー監視）・未解決ALERT監視・
+#      個別のvault_inventory.py/fragments_log.py/knowledge_merge_candidates.py
+#      レポート新鮮度チェック（LaunchAgent単位）は2026-07-16簡素化
+#      （[[Decisions/2026-07-16-nightly-batch-direct-write]]・設計書§4「check-drift.sh
+#      のレポート未処理検知・ALERT監視を削除、maintenance新鮮度チェック
+#      （started_atの経過日数のみで判定＝自己ロックアウト対策）に置換」）で
+#      撤去し、単一の週次ランナー com.takumi009.maintenance
+#      （scripts/maintenance.sh。上記3スクリプトはそのPhase1から呼ばれる
+#      検出専用CLIへ縮小し、個別LaunchAgentは持たない）の死活を
+#      last-run.json基準でまとめて見る方式へ統合した（「レポート→リーダー
+#      処理」の間接ループ廃止・ALERT機構の生成元knowledge_merge.py撤去のため。
+#      旧実装は`git log -p`参照）。started_atはmaintenance.shが実行開始
+#      直後に無条件で更新する値であり、実行中に一部の検出/適用が失敗しても
+#      更新され続ける（＝「実行はされているが失敗し続けている」ことまでは
+#      本チェックでは検知しない。それはmaintenance.sh自身の異常時macOS通知が
+#      担う。本チェックは「そもそも起動すらしていない」自己ロックアウトの
+#      検知に専念する設計判断＝リーダー裁定2026-07-16）。
+#      $VAULT が無い
+#      （サブ機・私的Vault未clone）場合は対象外。maintenance.shは
+#      README.mdにも明記の「メイン専用」機能（scripts/install-maintenance.sh
 #      を実行していなければ対応LaunchAgent plistが無い）なので、reads/recallログ
 #      （install-main.shで標準導入・任意ではない）とは別に、LaunchAgent plistの
-#      実在で個別に導入判定してからチェックする（Codexレビュー指摘・Major:
+#      実在＋launchd上のロード状態（読み取り専用の`launchctl print`照会。
+#      本チェックがcheck-drift.sh初のlaunchctl呼び出しだが、状態照会のみで
+#      何も変更しないため冒頭の「読み取りのみ」方針には反しない＝
+#      リーダー裁定2026-07-16「(a) plist存在＋launchctl登録」対応）で個別に
+#      導入・稼働判定してからチェックする（Codexレビュー指摘・Major:
 #      reads/recallログだけが存在する普通のmain構成で、未導入の任意機能まで
-#      毎回DEAD誤報していた）。weekly-review（「今週の歩み」週次振り返りcanvas。
+#      毎回DEAD誤報していた。この設計自体は踏襲する）。
+#      weekly-review（「今週の歩み」週次振り返りcanvas。
 #      takumi009-ai-env-private/tools/weekly-review/weekly_review.py・
 #      LaunchAgent com.takumi009.weekly-review が毎週月曜04:00に無人実行）も同型の
 #      新鮮度チェック対象に追加（2026-07-14。従来は本ツールに一切の言及が無く
@@ -62,8 +75,10 @@
 #      2回目 N-5 対応。以前はローカルTZとして解釈しており、JST環境では±9hずれ、
 #      日境界付近では経過日数が1日多くカウントされ得た＝日単位閾値の誤判定要因）。
 #   ⑦ vault-backup（scripts/backup-vault.sh）の push 死活。push失敗はWARNとして
-#      /tmp/vault-backup.log（launchagents/com.takumi009.vault-backup.plistが
-#      指定する一時領域・再起動で揮発）へ出るのみで、origin(GitHub)との乖離が
+#      /tmp/backup-vault.log（launchagents/com.takumi009.backup-vault.plistが
+#      指定する一時領域・再起動で揮発。2026-07-16簡素化でLAラベル・ログファイル名を
+#      com.takumi009.vault-backup→com.takumi009.backup-vaultへ改名＝設計書§5）へ
+#      出るのみで、origin(GitHub)との乖離が
 #      長期化しても気付く手段が無かった（2026-07-13 外部脳round4白紙レビュー
 #      新発見の監視穴①対応）。ネットワークアクセスはしない（git fetch はしない。
 #      本ツール冒頭の「読み取りのみ」方針どおり）ため、ローカルの
@@ -93,14 +108,41 @@
 #
 # **fail-fast はしない**（1件でも検知したらexitさせる export-public-vault.sh とは
 # 役割が違う。本ツール自体は常にexit 0の「一覧表示するだけ」の手動確認用レポート
-# ツールで、必要な時に手で実行する運用＝設計方針。ただし本ツールが陳腐化しない
-# よう、scripts/drift-notify.sh 経由で launchagents/com.takumi009.drift-check.plist
-# （メイン専用）から週1で無人実行され、drift>0ならmacOS通知される
-# （2026-07-08 adoption-critic指摘対応・H-2）。
+# ツールで、必要な時に手で実行する運用＝設計方針。
+# 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で、
+# 週次無人実行の経路は scripts/drift-notify.sh／LaunchAgent
+# com.takumi009.drift-check（毎週月曜9:30・macOS通知）から、新設の
+# maintenance.sh（週次ランナー・PR2）Phase 1 ①へ移す。旧drift-notify.shは
+# 撤去した（通知は異常時のみに縮小・「通知は見ていない」本人指摘）。
+# maintenance.sh導入までの間、本ツールは手動実行のみの運用となる。
 #
 # 読み取りのみ（実 ~/.claude・~/.codex・実Vaultには一切書き込まない）。
 #
 # 使い方: scripts/check-drift.sh
+#   --json: 末尾の人間向けサマリ行の直後に、機械可読なJSON1行を追加でstdoutへ
+#     出力する（設計書§1.2「①check-drift.sh実行（per-item機械可読出力を追加＝
+#     改訂v2）」＝maintenance.sh Phase1①向け・2026-07-16簡素化）。それ以外の
+#     出力（全ての人間向け診断行）は--json有無に関わらず一切変更しない
+#     （既存の全アサーション・運用フローとの完全後方互換を優先＝既存の
+#     990行規模の診断ロジック・十数箇所のitem_drift()呼び出しを個別に
+#     stdout/stderr分離するのは変更範囲・リスクが大きすぎると判断。呼び出し側
+#     は「stdoutの最終行だけがJSON、それより前は全て人間向けテキスト」という
+#     契約でパースする）。
+#     JSON形式: {"total_drift": N, "item4_drift": M, "drift_excluding_item4":
+#     N-M}（item4 = ④vault-public/Preferences差分。design上この項目だけは
+#     環境故障ではなく公開同期待ちの実体差分のためfail-fast対象から除外する
+#     ＝改訂v2 §1.2）。**除外されるのは「④の内容差分（[MISSING]/[DIFF]）」
+#     のみ**であり、「④の検査自体が実行できない異常（[DIFF-CHECK-FAILED]）」
+#     はitem4_driftに含めず通常のdrift（drift_excluding_item4側）として扱う
+#     （2026-07-16 Codexレビュー指摘Major対応: 改訂v2 §1.2は「④の差分は除外・
+#     実行異常はfail-fast対象」と明記しており、実行異常まで除外すると
+#     「監視不能も異常」という本スクリプト自身の方針に反するため）。
+#   終了コード: --json未指定時は**常に0**（既存の「fail-fastしない設計」を
+#     維持＝tests/test-check-drift.sh「exit codeは常に0」の既存契約を壊さない）。
+#     --json指定時のみ、drift_excluding_item4>0でexit 1にする（maintenance.sh
+#     Phase1①の「④を除いたdrift件数>0または実行異常/timeoutならfail-fast」を
+#     終了コードだけでも機械判定できるようにする。呼び出し側はJSON本体でも
+#     二重に確認できる）。
 
 set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が止まらないようにする）
 
@@ -111,10 +153,27 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 # （ユニットテスト用。本番は既定値のままでよい＝README.md「導入手順」記載のパス）。
 : "${AIENV_PRIVATE_REPO:=$HOME/work/takumi009-ai-env-private}"
 
+JSON_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --json) JSON_MODE=1 ;;
+    *) echo "[check-drift] FAIL: 不明な引数です: $arg" >&2; exit 2 ;;
+  esac
+done
+
 TOTAL_DRIFT=0
+# ④(vault-public/Preferences差分)専用カウンタ。この項目だけはPhase1①の
+# fail-fast判定から除外する（改訂v2 §1.2）ため、TOTAL_DRIFTとは別に集計する。
+ITEM4_DRIFT=0
 
 log() { echo "[check-drift] $*"; }
 item_drift() { echo "  - $*"; TOTAL_DRIFT=$((TOTAL_DRIFT + 1)); }
+# ④(vault-public/Preferences差分)の**内容差分**専用item_drift()ラッパー
+# （[MISSING]・[DIFF]の2箇所のみで使う。[DIFF-CHECK-FAILED]＝検査実行自体の
+# 異常は対象外＝通常のitem_drift()を使う。2026-07-16 Codexレビュー指摘Major
+# 対応）。通常のitem_drift()と全く同じ出力・TOTAL_DRIFTカウントを行ったうえで、
+# 追加でITEM4_DRIFTも加算する。
+item4_drift() { item_drift "$@"; ITEM4_DRIFT=$((ITEM4_DRIFT + 1)); }
 
 echo "======================================================================"
 echo "① symlink が repo を向いているか"
@@ -290,7 +349,7 @@ echo "======================================================================"
 VP_PREFS="$DIR/vault-public/Preferences"
 VAULT_PREFS="$VAULT/Preferences"
 if [ ! -d "$VP_PREFS" ]; then
-  item_drift "[MISSING] $VP_PREFS が見つかりません（export-public-vault.sh 未実行？）"
+  item4_drift "[MISSING] $VP_PREFS が見つかりません（export-public-vault.sh 未実行？）"
 elif [ ! -d "$VAULT_PREFS" ]; then
   log "  -> 実Vaultの Preferences が見つかりません（${VAULT_PREFS}）。このマシンに私的パッチが無い（サブ機）想定ならチェック対象外"
 else
@@ -304,9 +363,16 @@ else
     log "  -> ✅ 差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
   elif [ "$diff_rc" -eq 1 ]; then
     n=$(printf '%s\n' "$diff_out" | grep -c . || true)
-    item_drift "[DIFF] 実Vault と vault-public/Preferences に差分が ${n} 件あります（export-public-vault.sh の再実行が必要な可能性）"
+    item4_drift "[DIFF] 実Vault と vault-public/Preferences に差分が ${n} 件あります（export-public-vault.sh の再実行が必要な可能性）"
     printf '%s\n' "$diff_out" | sed 's/^/    /'
   else
+    # DIFF-CHECK-FAILEDは「④の内容差分」ではなく「④の検査自体が実行できない」
+    # という実行異常であり、改訂v2 §1.2は「④の差分は除外するが実行異常は
+    # fail-fast対象」と明記している（2026-07-16 Codexレビュー指摘Major対応:
+    # 当初item4_drift()にしていたため、diff -rqが失敗するだけでfail-fastを
+    # すり抜けられてしまっていた＝本スクリプト自身の「監視不能も異常」という
+    # 方針とも矛盾していた）。通常のitem_drift()（drift_excluding_item4に
+    # 算入される）を使う。
     item_drift "[DIFF-CHECK-FAILED] diff -rq ${VAULT_PREFS} ${VP_PREFS} の実行に失敗しました（exit ${diff_rc}。ファイル読み取り不能等の可能性）＝差分の有無を判定できません。確認: diff -rq ${VAULT_PREFS} ${VP_PREFS}"
     printf '%s\n' "$diff_out" | sed 's/^/    /'
   fi
@@ -444,38 +510,23 @@ done
 
 echo
 echo "======================================================================"
-echo "⑥ vault-agents 死活チェック（棚卸し・fragments-log・weekly-review・reads/recallログ）"
+echo "⑥ vault-agents 死活チェック（maintenance.sh週次ランナー・weekly-review・reads/recallログ）"
 echo "======================================================================"
 
-# vault_inventory.py（隔週）・fragments_log.py（週次）のLaunchAgentと、
+# maintenance.sh（週次ランナー・com.takumi009.maintenance）と、
 # vault-recall.sh/vault-read-log.sh（UserPromptSubmit/PostToolUseフック）が
-# 「動いているはずなのに実は死んでいる」を検知する。vault_inventory.py 側にも
-# §12でreads/recallの死活を出すが、そちらは本人がレポートを開かないと見えない
-# （M-2で指摘された穴そのもの）。ここは既存の週次drift通知に相乗りさせ、
-# 見に行かなくても通知される経路にする。
-#
-# しきい値は vault_inventory.py §12（レポート本文内の参考情報・目安30日）より
-# 厳しくしている。ここは能動通知の発火条件＝早めに鳴らしてよい
-# （「誤報を恐れて沈黙するより軽い誤報を許容する側に倒す」設計方針）。
-: "${VAULT_INVENTORY_STALE_DAYS:=20}"    # 隔週(目安15日) + 猶予
-: "${FRAGMENTS_LOG_STALE_DAYS:=10}"      # 週次(目安7日) + 猶予
+# 「動いているはずなのに実は死んでいる」を検知する。ここは既存の週次drift
+# 通知に相乗りさせ、見に行かなくても通知される経路にする。
 : "${VAULT_AGENT_LOG_STALE_DAYS:=7}"
 : "${VAULT_READS_LOG:=$HOME/.claude/logs/vault-reads.tsv}"
 : "${VAULT_RECALL_LOG:=$HOME/.claude/logs/vault-recall.tsv}"
-# fragments-log（旧fragments-review）・vault-inventory のレポート出力先
-# （2026-07-11 決定でVault配下(Explorations/...)から $HOME/.claude/logs/ 配下へ
-# 移設。claude/hooks/bootstrap-vault.sh・scripts/vault-agents/fragments_log.py・
-# vault_inventory.py と同じ既定値・同じ環境変数名）。
-: "${FRAGMENTS_LOG_DIR:=$HOME/.claude/logs/fragments-log}"
-: "${VAULT_INVENTORY_LOG_DIR:=$HOME/.claude/logs/vault-inventory}"
-# knowledge-merge-candidates（外部脳Knowledge自律整理・柱②・週次・2026-07-12追加）の
-# レポート出力先。claude/hooks/bootstrap-vault.sh・
-# scripts/vault-agents/knowledge_merge_candidates.py と同じ既定値・同じ環境変数名。
-: "${KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR:=$HOME/.claude/logs/knowledge-merge-candidates}"
-: "${KNOWLEDGE_MERGE_STALE_DAYS:=10}"    # 週次(目安7日) + 猶予（fragments-logと同型）
-# 未解決ALERTレポート出力先（FR12b／要件v2未決事項j）。knowledge_merge.py等の
-# マージ実行側が生成する想定（本ツールは読み取りのみ）。
-: "${VAULT_MERGE_ALERTS_DIR:=$HOME/.claude/logs/vault-merge-alerts}"
+# maintenance.sh（週次ランナー）の死活判定に使うlast-run.json（scripts/
+# maintenance.shが実行開始直後にstarted_atを無条件更新する自己ロックアウト
+# 対策ファイル）。既定値はmaintenance.sh自身のLAST_RUN_FILE既定値と同一
+# （2026-07-16簡素化・設計書§4「maintenance新鮮度チェック（started_atの
+# 経過日数のみで判定）」・リーダー裁定2026-07-16）。
+: "${MAINTENANCE_LAST_RUN_FILE:=$HOME/.claude/logs/maintenance/last-run.json}"
+: "${MAINTENANCE_STALE_DAYS:=8}"    # 週次(目安7日) + 猶予1日（リーダー裁定2026-07-16の明示値）
 # weekly-review（「今週の歩み」週次振り返りcanvas・takumi009-ai-env-private/
 # tools/weekly-review/weekly_review.py。LaunchAgent com.takumi009.weekly-review が
 # 毎週月曜04:00に無人実行。2026-07-14追加＝外部脳監視・バックアップ機構総点検で
@@ -483,43 +534,36 @@ echo "======================================================================"
 # 出力先。private repo側のスクリプトと同じ既定値。
 : "${WEEKLY_REVIEW_DIR:=$VAULT/Explorations/weekly-review}"
 : "${WEEKLY_REVIEW_STALE_DAYS:=10}"      # 週次(目安7日) + 猶予（fragments-logと同型）
-# 未処理レポートの猶予日数（2026-07-11 決定・claude/hooks/bootstrap-vault.sh の
-# 未処理レポート検知と同じ判定基準＝frontmatter `processed: YYYY-MM-DD` の有無）。
-# bootstrap-vault.sh は毎セッション気づけるための一次検知、こちらは「気づいたのに
-# 何セッションも処理されないまま放置」を捕捉する二次の安全網。生成直後は未処理が
-# 正常（次回セッションで処理されるまでの間）なので、STALE系より短い猶予を持たせる。
-: "${UNPROCESSED_REPORT_GRACE_DAYS:=3}"
 
-# 棚卸し・fragments-logは README.md にも明記の「メイン専用・任意」機能で、
+# maintenance.shは README.md にも明記の「メイン専用」機能で、
 # vault-reads.tsv/vault-recall.tsv を書くフック（vault-recall.sh/vault-read-log.sh。
-# install-main.shで標準導入・任意ではない）とは導入の必須性が異なる（Codexレビュー
+# install-main.shで標準導入）とは導入の必須性が異なる（Codexレビュー
 # 指摘・Major: reads/recallログだけが存在する状態＝任意機能は未導入だが標準フックは
 # 動いている、というごく普通の main機構成で、下のvault_agents_untouchedだけで
-# ゲートすると棚卸し/fragments-logのDEADが恒常的に誤報され続けてしまう）。
+# ゲートするとDEADが恒常的に誤報され続けてしまう。旧vault-inventory/
+# fragments-log/knowledge-merge-detect時代からの設計方針をそのまま踏襲）。
 # LaunchAgent plist（$HOME/Library/LaunchAgents/com.takumi009.<name>.plist）の
-# 実在をもって「この任意機能を導入したか」を個別に判定し、未導入ならレポート系の
-# 新鮮度・未処理チェックそのものをスキップする（reads/recallログの死活判定には
-# 影響しない＝任意機能の未導入で標準フックの死活検知まで消してしまわないため）。
+# 実在をもって「この機能を導入したか」を個別に判定し、未導入なら新鮮度チェック
+# そのものをスキップする（reads/recallログの死活判定には影響しない＝
+# 未導入で標準フックの死活検知まで消してしまわないため）。
 : "${LAUNCH_AGENTS_DIR:=$HOME/Library/LaunchAgents}"
 vault_agent_installed() {
   [ -f "${LAUNCH_AGENTS_DIR}/com.takumi009.$1.plist" ]
 }
 
-# vault-agents関連のシグナル（棚卸し・fragments-logの出力2種＋reads/recallログ2種＋
-# 棚卸し・fragments-logのLaunchAgent plist2種＝計6種）が1つも無ければ「一度も
-# 導入されていない」とみなしてセクション全体を対象外にする（旧実装は
-# $VAULT/Explorations の有無で判定していたが、2026-07-11 決定で棚卸し・
-# fragments-logの出力先がVault配下から $HOME/.claude/logs/ 配下へ移り、
-# Explorations自体がもう作られなくなったため判定基準を移設先へ合わせた）。
-# plist2種もシグナルに含める（Codexレビュー指摘・Major再指摘: 出力4種だけで
+# vault-agents関連のシグナル（reads/recallログ2種＋maintenance/weekly-reviewの
+# LaunchAgent plist2種＋maintenanceのlast-run.json＝計5種）が1つも無ければ
+# 「一度も導入されていない」とみなしてセクション全体を対象外にする（旧実装は
+# vault-inventory/fragments-log/knowledge-merge-detectの出力ディレクトリ有無も
+# シグナルに含んでいたが、これら3スクリプトはmaintenance.sh Phase1から呼ばれる
+# 検出専用CLIへ縮小し個別LaunchAgentを持たなくなったため、判定基準を
+# maintenance側の signal へ差し替えた＝2026-07-16簡素化・リーダー裁定対応）。
+# plistもシグナルに含める（Codexレビュー指摘・Major再指摘: 出力の有無だけで
 # 判定すると「plistは導入済みだが初回実行前・またはジョブが一度も成功していない」
 # ケースが出力側の不在と見分けられず、セクション全体が対象外になって本来出るべき
 # DEADが出せなくなる）。
 vault_agents_untouched=1
-[ -d "$FRAGMENTS_LOG_DIR" ] && vault_agents_untouched=0
-[ -d "$VAULT_INVENTORY_LOG_DIR" ] && vault_agents_untouched=0
-[ -d "$KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR" ] && vault_agents_untouched=0
-[ -d "$VAULT_MERGE_ALERTS_DIR" ] && vault_agents_untouched=0
+[ -f "$MAINTENANCE_LAST_RUN_FILE" ] && vault_agents_untouched=0
 # WEEKLY_REVIEW_DIR は $VAULT 配下（Vault自体は複数マシン間でgit同期される）を
 # 意図的に signal から除外している（Codexレビュー指摘・Major対応: 他の出力先
 # （$HOME/.claude/logs/... 配下）はローカル専用でマシン間同期されないが、
@@ -530,15 +574,13 @@ vault_agents_untouched=1
 # だけで行う）。
 [ -f "$VAULT_READS_LOG" ] && vault_agents_untouched=0
 [ -f "$VAULT_RECALL_LOG" ] && vault_agents_untouched=0
-vault_agent_installed "vault-inventory" && vault_agents_untouched=0
-vault_agent_installed "fragments-log" && vault_agents_untouched=0
-vault_agent_installed "knowledge-merge-detect" && vault_agents_untouched=0
+vault_agent_installed "maintenance" && vault_agents_untouched=0
 vault_agent_installed "weekly-review" && vault_agents_untouched=0
 
 if [ ! -d "$VAULT" ]; then
   log "  -> Vaultが見つかりません（${VAULT}）。このマシンに私的Vaultが無い（サブ機）想定ならチェック対象外"
 elif [ "$vault_agents_untouched" = "1" ]; then
-  log "  -> vault-agentsの出力（${FRAGMENTS_LOG_DIR}・${VAULT_INVENTORY_LOG_DIR}・${KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR}・${VAULT_MERGE_ALERTS_DIR}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）・weekly-review plist（${LAUNCH_AGENTS_DIR}/com.takumi009.weekly-review.plist）が1件も見つかりません。vault-agentsが一度も導入されていない想定ならチェック対象外"
+  log "  -> vault-agentsの出力（${MAINTENANCE_LAST_RUN_FILE}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）・maintenance/weekly-review plist（${LAUNCH_AGENTS_DIR}/com.takumi009.{maintenance,weekly-review}.plist）が1件も見つかりません。vault-agentsが一度も導入されていない想定ならチェック対象外"
 else
   # epoch(秒)から現在までの経過日数を返す。未来のepoch（時計ズレ・ファイル破損）
   # では負値をそのまま返す＝呼び出し側で「未来日=異常」と判定できるようにする
@@ -566,18 +608,6 @@ else
     else
       echo $(( diff / 86400 ))
     fi
-  }
-
-  # ディレクトリ内の最新 YYYY-MM-DD.md の日付から today までの経過日数を返す
-  # （BSD date。1件も無ければ非0で返し、呼び出し側で「一度も生成されていない」扱い）。
-  latest_report_age_days() {
-    local dir="$1" latest base epoch
-    latest="$(ls "$dir"/20*.md 2>/dev/null | sort | tail -1)"
-    [ -z "$latest" ] && return 1
-    base="$(basename "$latest")"
-    base="${base%.md}"
-    epoch="$(date -j -f "%Y-%m-%d" "$base" +%s 2>/dev/null)" || return 1
-    age_days_from_epoch "$epoch"
   }
 
   # TSVログの最終行1列目(ISO8601・末尾Z)の経過日数を返す（無ければ非0で返す）。
@@ -617,22 +647,77 @@ else
     age_days_from_epoch "$epoch"
   }
 
-  # レポート系（棚卸し・fragments-log）1件分の判定をまとめる。
-  #   $1=ディレクトリ $2=ラベル(drift種別プレフィクス) $3=しきい値(日) $4=表示名 $5=grep対象LaunchAgent名
-  check_report_freshness() {
-    local dir="$1" label="$2" threshold="$3" name="$4" agent="$5" age
-    if ! age="$(latest_report_age_days "$dir")"; then
-      item_drift "[${label}-DEAD] ${name}が一度も見つかりません（${dir}）＝com.takumi009.${agent} LaunchAgent停止の疑い。確認: launchctl list | grep ${agent}"
-      return
-    fi
-    if [ "$age" -lt 0 ]; then
-      item_drift "[${label}-FUTURE-DATE] ${dir} の最新ファイル名の日付が未来です＝ファイル名破損かシステム時計のズレの可能性。確認: ls ${dir}"
-      return
-    fi
-    if [ "$age" -gt "$threshold" ]; then
-      item_drift "[${label}-STALE] 最新の${name}が ${age} 日前（目安 ${threshold} 日）＝com.takumi009.${agent} LaunchAgent停止の疑い。確認: launchctl list | grep ${agent}"
+  # maintenance.sh週次ランナー1件分の判定をまとめる（2026-07-16簡素化・
+  # 設計書§4「maintenance新鮮度チェック（started_atの経過日数のみで判定＝
+  # 自己ロックアウト対策）」・リーダー裁定2026-07-16「(a) plist存在＋
+  # launchctl登録 (b) last-run.jsonのstarted_at経過日数（週次なので8日超で
+  # drift扱い）」への対応。旧vault-inventory/knowledge-merge-detectの個別
+  # check_report_freshness()はこの単一チェックへ統合した）。
+  #
+  # (a) plistの実在＋launchd上のロード状態を確認する。plist自体はこの関数の
+  #     呼び出し元でvault_agent_installed()により既に確認済み（未導入なら
+  #     この関数自体を呼ばない）なので、ここでは「plistはあるのにlaunchd上に
+  #     ロードされていない」ケースのみを追加で検知する。launchctlコマンドが
+  #     無い実行環境（macOS以外）では確認そのものをスキップし、情報表示のみ
+  #     に留める（drift扱いにはしない＝「監視不能も異常」の原則は、後続の
+  #     started_at基準の判定でカバーされるため、launchctl不在自体は致命では
+  #     ない）。
+  check_maintenance_freshness() {
+    local f="$MAINTENANCE_LAST_RUN_FILE" started_at epoch age
+
+    if command -v launchctl >/dev/null 2>&1; then
+      if ! launchctl print "gui/$(id -u)/com.takumi009.maintenance" >/dev/null 2>&1; then
+        item_drift "[MAINTENANCE-NOT-LOADED] com.takumi009.maintenance.plistは存在しますが、launchd上にロードされていません＝bootstrap未実行か手動でbootoutされた可能性。確認: launchctl print gui/$(id -u)/com.takumi009.maintenance ／ 再導入: scripts/install-maintenance.sh"
+      fi
     else
-      log "  -> ✅ ${name}: ${age}日前（目安${threshold}日以内）"
+      log "  -> maintenance.sh週次ランナー: launchctlコマンドが見つからないためlaunchd上のロード状態を確認できません（macOS以外の実行環境の可能性）"
+    fi
+
+    # (b) last-run.jsonのstarted_at経過日数。
+    if [ ! -f "$f" ]; then
+      item_drift "[MAINTENANCE-DEAD] last-run.jsonが一度も見つかりません（${f}）＝maintenance.shが一度も実行されていない疑い。確認: launchctl kickstart -k gui/$(id -u)/com.takumi009.maintenance"
+      return
+    fi
+
+    # last-run.jsonの読み取りはmaintenance.sh自身のread_last_run_field()と
+    # 同じpython3 json.load方式（本ツールとしては初のpython3依存だが、
+    # maintenance.sh側が既に前提としている依存なので新規追加ではない）。
+    # ファイルパスはPythonコード文字列へ直接埋め込まず sys.argv 経由で渡す
+    # （Codexレビュー指摘・Major対応: シェル変数のコード直接埋め込みは、
+    # パスに ' が含まれるだけで構文が壊れ、細工されたパスでは任意コード実行の
+    # 経路になりうる。$MAINTENANCE_LAST_RUN_FILE は環境変数で上書き可能なため
+    # 単一ユーザーローカル運用でも防御的に塞ぐ）。
+    started_at="$(python3 -c "
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as fh:
+        d = json.load(fh)
+    v = d.get('started_at')
+    print(v if isinstance(v, str) else '')
+except Exception:
+    print('')
+" "$f" 2>/dev/null)"
+    if [ -z "$started_at" ]; then
+      item_drift "[MAINTENANCE-DEAD] ${f} からstarted_atを読み取れませんでした（壊れているか未生成）＝maintenance.sh停止の疑い。確認: cat ${f}"
+      return
+    fi
+
+    started_at="${started_at%Z}"
+    epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$started_at" +%s 2>/dev/null)"
+    if [ -z "$epoch" ]; then
+      item_drift "[MAINTENANCE-DEAD] ${f} のstarted_at（${started_at}）を日時として解析できませんでした＝ファイル破損の可能性。確認: cat ${f}"
+      return
+    fi
+
+    age="$(age_days_from_epoch "$epoch")"
+    if [ "$age" -lt 0 ]; then
+      item_drift "[MAINTENANCE-FUTURE-DATE] ${f} のstarted_atが未来です＝ファイル破損かシステム時計のズレの可能性。確認: cat ${f}"
+      return
+    fi
+    if [ "$age" -gt "$MAINTENANCE_STALE_DAYS" ]; then
+      item_drift "[MAINTENANCE-STALE] maintenance.shの最終開始（started_at）から ${age} 日経過（目安 ${MAINTENANCE_STALE_DAYS} 日）＝週次ランナー停止の疑い。確認: launchctl print gui/$(id -u)/com.takumi009.maintenance ／ $HOME/.claude/logs/maintenance/latest 配下のログ"
+    else
+      log "  -> ✅ maintenance.sh週次ランナー: 最終開始 ${age}日前（目安${MAINTENANCE_STALE_DAYS}日以内）"
     fi
   }
 
@@ -681,16 +766,15 @@ EOF
 
   # weekly-review（週次振り返りcanvas）1件分の新鮮度判定。$1=ディレクトリ $2=しきい値(日)
   #
-  # 棚卸し・fragments-log等（latest_report_age_days＝ファイル名の日付＝生成日）とは
-  # 判定方式を変えている。weekly_review.pyの出力ファイル名は「生成日」ではなく
+  # check_maintenance_freshness()（started_at＝実行開始日時基準）とは判定方式を
+  # 変えている。weekly_review.pyの出力ファイル名は「生成日」ではなく
   # 「対象週（直前の完全な週）の月曜日」＝生成日の7日前固定になるため、ファイル名
-  # ベースで判定すると生成直後でも常にage=7からスタートしてしまい、latest_report_
-  # age_days/check_report_freshnessと同じしきい値運用ができない（オフセットの
-  # 分だけしきい値を余分に緩める必要が生じ、STALE等の他チェックと閾値の意味が
-  # 揃わなくなる）。かわりに最新ファイルの実際の更新時刻(mtime)を基準にする＝
-  # 生成直後はage=0、次回生成（1週間後）直前でage=7弱まで自然に増える、という
-  # fragments-log等と同じ挙動になるため、しきい値もfragments-logと同じ考え方
-  # （週次+猶予）を流用できる。
+  # ベースで判定すると生成直後でも常にage=7からスタートしてしまい、started_at
+  # 基準と同じしきい値運用ができない（オフセットの分だけしきい値を余分に緩める
+  # 必要が生じ、STALE等の他チェックと閾値の意味が揃わなくなる）。かわりに
+  # 最新ファイルの実際の更新時刻(mtime)を基準にする＝生成直後はage=0、次回生成
+  # （1週間後）直前でage=7弱まで自然に増える、という設計にすることで、しきい値も
+  # 他チェックと同じ考え方（週次+猶予）を流用できる。
   check_weekly_review_freshness() {
     local dir="$1" threshold="$2" latest epoch age frag_rc
     latest="$(ls -t "$dir"/20*.canvas 2>/dev/null | head -1)"
@@ -785,172 +869,24 @@ EOF
     log "  -> ✅ ${name}: 最終記録 ${age}日前"
   }
 
-  # レポート系1件分の「未処理」判定（2026-07-11 決定・claude/hooks/bootstrap-vault.sh
-  # の未処理レポート検知と同じ基準＝最新レポートのfrontmatterに
-  # `processed: YYYY-MM-DD` 行が無ければ未処理）。bootstrap-vault.sh は毎セッションの
-  # 一次検知、こちらは「セッションが開かれても何日も処理されないまま放置」を捕捉する
-  # 二次の安全網（週次drift通知に相乗り）。DEAD/FUTURE-DATE/STALE は
-  # check_report_freshness 側で既に報告済みのため、ここでは二重報告しない
-  # （レポートが1件も無い・日付が未来・既にSTALE閾値を超えている場合は静かに戻る＝
-  # 「新しい報告が来ていない」という同一原因の症状を2種類のdrift項目で重複報告しない）。
-  # ファイル先頭のfrontmatter（先頭行が `---` の場合のみ、次の `---` 行の直前まで）を
-  # 標準出力へ書く。先頭行が `---` でない・読み取れない等はfrontmatter無し扱いで
-  # 空を返す（claude/hooks/bootstrap-vault.sh と同じ実装＝frontmatter外の本文に
-  # 偶然 `processed: YYYY-MM-DD` があってもマーカーと誤認しない。Codexレビュー
-  # 指摘・Major）。
-  report_frontmatter() {
-    awk 'NR==1 { if ($0 != "---") exit; next } /^---[[:space:]]*$/ { exit } { print }' "$1" 2>/dev/null
-  }
+  # 未処理レポート検知（旧check_report_processed）・未解決ALERT監視
+  # （旧count_unresolved_alerts）は撤去した（2026-07-16簡素化・
+  # [[Decisions/2026-07-16-nightly-batch-direct-write]]で「レポート→リーダー処理」の
+  # 間接ループとALERT機構（knowledge_merge.py由来。同スクリプトは撤去済み）を廃止。
+  # 旧実装を読みたい場合は `git log -p scripts/check-drift.sh` を参照）。
+  # 旧vault-inventory/knowledge-merge-detectの個別DEAD/FUTURE-DATE/STALE検知は
+  # check_maintenance_freshness()（started_at基準）へ統合した
+  # （設計書§4・リーダー裁定2026-07-16）。
 
-  # ディレクトリ内の*.mdファイルのうち、frontmatterに`resolved: YYYY-MM-DD`行が
-  # 無いもの（＝未解決ALERT）の件数を返す（claude/hooks/bootstrap-vault.shの
-  # count_unresolved_alerts()と同じ判定基準。FR12b／要件v2未決事項j「resolved確認
-  # までの全マージ停止ラッチ」の週次drift通知側での可視化）。ALERTファイル名は
-  # 日付先頭固定ではない想定（候補IDベース等）のため*.md全件を対象にする。
-  count_unresolved_alerts() {
-    local dir="$1" count=0 f
-    for f in "$dir"/*.md; do
-      [ -e "$f" ] || continue
-      if ! report_frontmatter "$f" | grep -qE '^resolved:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
-        count=$((count + 1))
-      fi
-    done
-    echo "$count"
-  }
-
-  #   $1=ディレクトリ $2=ラベル(drift種別プレフィクス) $3=しきい値(日・freshnessと同じ値を渡す) $4=表示名
-  #
-  # 2026-07-14 修正: 旧実装は「最新1件」だけを判定していた。drift-check
-  # LaunchAgentは毎週月曜9:30に実行され、レポート生成（fragments-log 月3:30・
-  # knowledge-merge-detect 月4:15）と同日実行のため、latestは本ツール実行時点で
-  # 常にage=0（当日生成）＝グレース期間(既定3日)を構造的に超えられず、過去の
-  # 未処理レポート（＝最新が処理されて入れ替わり、超過グレースのまま放置された
-  # 旧レポート）が永久に検知されない穴があった（外部脳監視・バックアップ機構
-  # 総点検で確定）。対象ディレクトリの「processedマーカー無し」全レポートを
-  # 判定対象にし、age > グレースのものを（複数あれば件数＋最古/最新パスで）
-  # drift計上するよう修正。STALE側チェック（latestの生成自体が停止している疑い。
-  # check_report_freshnessで既に報告済み）との二重報告は、latestがSTALE閾値超過
-  # している場合だけそのファイルを対象から除外することで避ける（それより古い
-  # 個々のレポートの未処理は「生成停止」とは別症状のため引き続き判定する）。
-  check_report_processed() {
-    local dir="$1" label="$2" threshold="$3" name="$4"
-    local files latest latest_age
-    files="$(ls "$dir"/20*.md 2>/dev/null | sort)"
-    [ -z "$files" ] && return
-    latest="$(printf '%s\n' "$files" | tail -1)"
-    latest_age="$(latest_report_age_days "$dir" 2>/dev/null)" || latest_age=""
-    # 「latestが処理済みマーカーを持つか」は表示用に別途保持する（旧実装の
-    # ✅ ...処理済みマーカーあり メッセージを、latest以外に未処理レポートが
-    # 無い場合に限り引き続き出すため）。
-    local latest_processed=0
-    if report_frontmatter "$latest" | grep -qE '^processed:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
-      latest_processed=1
-    fi
-
-    local unprocessed_count=0 oldest_path="" oldest_age="" newest_path="" newest_age="" within_grace_count=0
-    # latestが新鮮度チェック側（STALEまたはFUTURE-DATE）で既に報告済みのため
-    # ここでは判定対象から除外した、というフラグ（Codexレビュー指摘・Minor対応:
-    # 当初STALEだけを見ておりFUTURE-DATE除外時にフラグが立たず、他に未処理対象が
-    # 無いと「未処理レポートなし」という事実と異なる健全表示になっていた）。
-    local latest_skipped_by_freshness_check=0
-    local f base epoch age
-    while IFS= read -r f; do
-      [ -z "$f" ] && continue
-      base="$(basename "$f" .md)"
-      epoch="$(date -j -f "%Y-%m-%d" "$base" +%s 2>/dev/null)" || continue
-      age="$(age_days_from_epoch "$epoch")"
-      if [ "$age" -lt 0 ]; then
-        # FUTURE-DATEはfreshness側で既に報告済み。二重報告しない。
-        [ "$f" = "$latest" ] && latest_skipped_by_freshness_check=1
-        continue
-      fi
-      if [ "$f" = "$latest" ] && [ -n "$latest_age" ] && [ "$latest_age" -gt "$threshold" ]; then
-        latest_skipped_by_freshness_check=1
-        continue  # 生成自体が停止している疑い＝STALE側で既に報告済み。ここでは二重報告しない
-      fi
-      if report_frontmatter "$f" | grep -qE '^processed:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]*$'; then
-        continue
-      fi
-      if [ "$age" -gt "$UNPROCESSED_REPORT_GRACE_DAYS" ]; then
-        unprocessed_count=$((unprocessed_count + 1))
-        if [ -z "$oldest_path" ]; then
-          oldest_path="$f"
-          oldest_age="$age"
-        fi
-        newest_path="$f"
-        newest_age="$age"
-      else
-        within_grace_count=$((within_grace_count + 1))
-      fi
-    done <<EOF
-$files
-EOF
-
-    if [ "$unprocessed_count" -gt 0 ]; then
-      # 表示は日付のみではなくフルパス（本人がそのまま開けるように・2026-07-12追加）。
-      item_drift "[${label}-UNPROCESSED] ${name}に未処理（frontmatterの processed: 行が無い）レポートが${unprocessed_count}件あります（目安 ${UNPROCESSED_REPORT_GRACE_DAYS} 日超）。最古: ${oldest_path}（${oldest_age}日前）／最新: ${newest_path}（${newest_age}日前）。次回セッションで確認・処理してください。"
-      return
-    fi
-    # 以下、優先順位を明示的に分岐する（Codexレビュー指摘・Minor対応:
-    # 「処理済み」と「他に猶予期間内の未処理がある」が両立する場合に片方だけを
-    # 表示すると情報が欠落する。また、latestがSTALE除外（上のループでskip）された
-    # 結果たまたま他に対象が無い場合、単純な優先順位だけだと「未処理レポートなし」
-    # という事実と異なるメッセージになり得るため専用の分岐を用意する）。
-    if [ "$latest_processed" -eq 1 ] && [ "$within_grace_count" -gt 0 ]; then
-      log "  -> ${name}: 処理済みマーカーあり（$(basename "$latest" .md)）／他に未処理のレポートが${within_grace_count}件ありますが猶予期間内です（目安${UNPROCESSED_REPORT_GRACE_DAYS}日以内）"
-    elif [ "$latest_processed" -eq 1 ]; then
-      log "  -> ✅ ${name}: 処理済みマーカーあり（$(basename "$latest" .md)）"
-    elif [ "$within_grace_count" -gt 0 ]; then
-      log "  -> ${name}: 未処理のレポートが${within_grace_count}件ありますが猶予期間内です（目安${UNPROCESSED_REPORT_GRACE_DAYS}日以内）"
-    elif [ "$latest_skipped_by_freshness_check" -eq 1 ]; then
-      log "  -> ${name}: 最新レポートは新鮮度チェック側（STALEまたはFUTURE-DATE）で既に報告済みのため、未処理判定はここでは保留します"
-    else
-      log "  -> ✅ ${name}: 未処理レポートなし"
-    fi
-  }
-
-  if vault_agent_installed "vault-inventory"; then
-    check_report_freshness "$VAULT_INVENTORY_LOG_DIR" "VAULT-INVENTORY" \
-      "$VAULT_INVENTORY_STALE_DAYS" "棚卸しレポート" "vault-inventory"
-    check_report_processed "$VAULT_INVENTORY_LOG_DIR" "VAULT-INVENTORY" \
-      "$VAULT_INVENTORY_STALE_DAYS" "棚卸しレポート"
+  if vault_agent_installed "maintenance"; then
+    check_maintenance_freshness
   else
-    log "  -> 棚卸しレポート: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.vault-inventory.plist が無い。scripts/install-vault-agents.sh 未実行）のためチェック対象外"
-  fi
-  if vault_agent_installed "fragments-log"; then
-    check_report_freshness "$FRAGMENTS_LOG_DIR" "FRAGMENTS-LOG" \
-      "$FRAGMENTS_LOG_STALE_DAYS" "fragments-logレポート" "fragments-log"
-    check_report_processed "$FRAGMENTS_LOG_DIR" "FRAGMENTS-LOG" \
-      "$FRAGMENTS_LOG_STALE_DAYS" "fragments-logレポート"
-  else
-    log "  -> fragments-logレポート: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.fragments-log.plist が無い。scripts/install-vault-agents.sh 未実行）のためチェック対象外"
-  fi
-  if vault_agent_installed "knowledge-merge-detect"; then
-    check_report_freshness "$KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR" "KNOWLEDGE-MERGE-CANDIDATES" \
-      "$KNOWLEDGE_MERGE_STALE_DAYS" "Knowledge統合候補レポート" "knowledge-merge-detect"
-    check_report_processed "$KNOWLEDGE_MERGE_CANDIDATES_LOG_DIR" "KNOWLEDGE-MERGE-CANDIDATES" \
-      "$KNOWLEDGE_MERGE_STALE_DAYS" "Knowledge統合候補レポート"
-  else
-    log "  -> Knowledge統合候補レポート: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.knowledge-merge-detect.plist が無い。scripts/install-vault-agents.sh 未実行）のためチェック対象外"
+    log "  -> maintenance.sh週次ランナー: 未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.maintenance.plist が無い。scripts/install-maintenance.sh 未実行）のためチェック対象外"
   fi
   if vault_agent_installed "weekly-review"; then
     check_weekly_review_freshness "$WEEKLY_REVIEW_DIR" "$WEEKLY_REVIEW_STALE_DAYS"
   else
     log "  -> 週次振り返りcanvas: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.weekly-review.plist が無い。takumi009-ai-env-private/install-private.sh --with-launchagents 未実行。メイン専用の個人ツール）のためチェック対象外"
-  fi
-  # 未解決ALERT（FR12b・要件v2未決事項j）。棚卸し/fragments-log/knowledge-merge-
-  # candidatesのような「定期生成物の新鮮度」チェックとは性質が異なる（ALERTは
-  # イベント駆動＝正常時は1件も生成されない）ため、plist導入有無に関わらず
-  # ディレクトリが存在すれば常にチェックする（bootstrap-vault.shの④と同じ考え方）。
-  if [ -d "$VAULT_MERGE_ALERTS_DIR" ]; then
-    unresolved_alert_count="$(count_unresolved_alerts "$VAULT_MERGE_ALERTS_DIR")"
-    if [ "$unresolved_alert_count" -gt 0 ]; then
-      item_drift "[VAULT-MERGE-ALERT-UNRESOLVED] ${VAULT_MERGE_ALERTS_DIR} に未解決ALERT（frontmatterのresolved:行が無いファイル）が${unresolved_alert_count}件あります＝Knowledgeマージ全体が停止中の疑い（FR10ラッチ）。確認: ls ${VAULT_MERGE_ALERTS_DIR}"
-    else
-      log "  -> ✅ 未解決ALERT: 0件"
-    fi
-  else
-    log "  -> 未解決ALERT: ${VAULT_MERGE_ALERTS_DIR} が無い（ALERT未発生の想定）ためチェック対象外"
   fi
   check_log_freshness "$VAULT_READS_LOG" "VAULT-READS-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
     "vault-reads.tsv" "claude/hooks/vault-read-log.sh"
@@ -1073,7 +1009,7 @@ EOF
         threshold_seconds=$(( VAULT_BACKUP_PUSH_STALE_HOURS * 3600 ))
         age_hours_display=$(( age_seconds / 3600 ))
         if [ "$age_seconds" -gt "$threshold_seconds" ]; then
-          item_drift "[VAULT-PUSH-STALE] ${VAULT_BACKUP_BRANCH} に origin/${VAULT_BACKUP_BRANCH} へ未反映のcommitがあり、最も古い未反映commitから ${age_hours_display} 時間経過しています（目安 ${VAULT_BACKUP_PUSH_STALE_HOURS} 時間）${never_pushed_note}＝vault-backupのpushが詰まっている疑い。確認: tail -50 /tmp/vault-backup.log 、git -C ${VAULT} log ${unpushed_range} --oneline （fetchしていないローカル参照のみでの判定のため、他マシンからの直接pushやfetch不足など他要因の可能性も含む＝上部コメント参照）"
+          item_drift "[VAULT-PUSH-STALE] ${VAULT_BACKUP_BRANCH} に origin/${VAULT_BACKUP_BRANCH} へ未反映のcommitがあり、最も古い未反映commitから ${age_hours_display} 時間経過しています（目安 ${VAULT_BACKUP_PUSH_STALE_HOURS} 時間）${never_pushed_note}＝vault-backupのpushが詰まっている疑い。確認: tail -50 /tmp/backup-vault.log 、git -C ${VAULT} log ${unpushed_range} --oneline （fetchしていないローカル参照のみでの判定のため、他マシンからの直接pushやfetch不足など他要因の可能性も含む＝上部コメント参照）"
         else
           log "  -> ${VAULT_BACKUP_BRANCH} は origin/${VAULT_BACKUP_BRANCH} より進んでいますが、最も古い未反映commitから ${age_hours_display} 時間（目安${VAULT_BACKUP_PUSH_STALE_HOURS}時間以内）のため様子見です${never_pushed_note}"
         fi
@@ -1110,7 +1046,7 @@ if [ -d "$VAULT_BACKUP_RECLAIM_DIR" ]; then
     else
       reclaim_age_minutes=$(( ( reclaim_now_epoch - reclaim_mtime ) / 60 ))
       if [ "$reclaim_age_minutes" -ge "$VAULT_BACKUP_RECLAIM_STUCK_MINUTES" ]; then
-        item_drift "[VAULT-BACKUP-LOCK-STUCK] backup-vault.shのロック回収ミューテックス（${VAULT_BACKUP_RECLAIM_DIR}）が${reclaim_age_minutes}分前から残っています（目安${VAULT_BACKUP_RECLAIM_STUCK_MINUTES}分）＝前回実行が回収処理中にクラッシュし、以後のバックアップがcommit前にfail-closedし続けている疑い。確認: tail -50 /tmp/vault-backup.log 。解消方法: 実行中のbackup-vault.shプロセスが無いことを確認してから rmdir ${VAULT_BACKUP_RECLAIM_DIR}"
+        item_drift "[VAULT-BACKUP-LOCK-STUCK] backup-vault.shのロック回収ミューテックス（${VAULT_BACKUP_RECLAIM_DIR}）が${reclaim_age_minutes}分前から残っています（目安${VAULT_BACKUP_RECLAIM_STUCK_MINUTES}分）＝前回実行が回収処理中にクラッシュし、以後のバックアップがcommit前にfail-closedし続けている疑い。確認: tail -50 /tmp/backup-vault.log 。解消方法: 実行中のbackup-vault.shプロセスが無いことを確認してから rmdir ${VAULT_BACKUP_RECLAIM_DIR}"
       else
         log "  -> ロック回収ミューテックスは${reclaim_age_minutes}分前から存在しますが、目安${VAULT_BACKUP_RECLAIM_STUCK_MINUTES}分以内のため様子見です（backup-vault.sh実行中の可能性）"
       fi
@@ -1135,3 +1071,16 @@ echo
 echo "======================================================================"
 log "総drift件数: ${TOTAL_DRIFT}"
 echo "======================================================================"
+
+if [ "$JSON_MODE" = "1" ]; then
+  DRIFT_EXCLUDING_ITEM4=$((TOTAL_DRIFT - ITEM4_DRIFT))
+  # 呼び出し側（maintenance.sh Phase1①）は「stdoutの最終行だけがJSON」という
+  # 契約でパースする（ファイル冒頭の使い方コメント参照）。ここまでの人間向け
+  # 出力は変更していないため、このJSON行が常にstdoutの最終行になる。
+  printf '{"total_drift": %d, "item4_drift": %d, "drift_excluding_item4": %d}\n' \
+    "$TOTAL_DRIFT" "$ITEM4_DRIFT" "$DRIFT_EXCLUDING_ITEM4"
+  if [ "$DRIFT_EXCLUDING_ITEM4" -gt 0 ]; then
+    exit 1
+  fi
+  exit 0
+fi

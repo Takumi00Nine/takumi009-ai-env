@@ -181,51 +181,11 @@ else
   fi
 fi
 
-# --- 週次drift通知LaunchAgent（com.takumi009.drift-check.plist）。**メイン専用**。
-#     install-backup.sh・install-vault-agents.sh と同方式＝実ファイルコピー＋
-#     __AIENV_HOME__プレースホルダ置換＋bootstrap+enableのみ（即時kickstartはしない）。
-#     scripts/check-drift.sh が陳腐化しないよう、週1（月曜09:30）で無人実行して
-#     drift>0ならmacOS通知する（scripts/drift-notify.sh 経由）。
-#     --sub-delegate（install-sub.shからの委譲）の場合はメイン専用機能としてskipする
-#     （2026-07-08 adoption-critic指摘「陳腐化防止の宿題」対応・設計決定H-2）。 ---
-if [ "$IS_SUB_DELEGATE" = "1" ]; then
-  log "--sub-delegate のため週次drift通知LaunchAgentの設置はskipします（メイン専用機能）"
-else
-  DRIFT_CHECK_PLIST="com.takumi009.drift-check.plist"
-  DRIFT_CHECK_SRC="$DIR/launchagents/$DRIFT_CHECK_PLIST"
-  DRIFT_CHECK_DEST="$HOME/Library/LaunchAgents/$DRIFT_CHECK_PLIST"
-  DRIFT_CHECK_LABEL="${DRIFT_CHECK_PLIST%.plist}"
-  DRIFT_CHECK_DOMAIN="gui/$(id -u)"
-
-  if [ ! -e "$DRIFT_CHECK_SRC" ]; then
-    warn "$DRIFT_CHECK_PLIST が見つかりません（checkout破損の可能性）: $DRIFT_CHECK_SRC"
-  elif [ "$DRY_RUN" = "1" ]; then
-    log "[dry-run] would generate: $DRIFT_CHECK_DEST <- $DRIFT_CHECK_SRC （__AIENV_HOME__ を $HOME へ置換）"
-    log "[dry-run] would run: launchctl bootout ${DRIFT_CHECK_DOMAIN}/${DRIFT_CHECK_LABEL} （既存があれば一旦アンロード。無ければ無視）"
-    log "[dry-run] would run: launchctl bootstrap $DRIFT_CHECK_DOMAIN $DRIFT_CHECK_DEST"
-    log "[dry-run] would run: launchctl enable ${DRIFT_CHECK_DOMAIN}/${DRIFT_CHECK_LABEL}"
-    log "[dry-run] （kickstartは行わない＝即時実行しない設計。次回発火（月曜09:30）か手動kickstart待ち）"
-  else
-    mkdir -p "$(dirname "$DRIFT_CHECK_DEST")"
-    drift_escaped_home=$(printf '%s' "$HOME" | sed -e 's/[&\]/\\&/g' -e 's/#/\\#/g')
-    drift_tmp="$(mktemp "$(dirname "$DRIFT_CHECK_DEST")/.$(basename "$DRIFT_CHECK_DEST").aienv-tmp.XXXXXX")"
-    sed "s#__AIENV_HOME__#${drift_escaped_home}#g" "$DRIFT_CHECK_SRC" > "$drift_tmp"
-    mv "$drift_tmp" "$DRIFT_CHECK_DEST"
-    log "generated: $DRIFT_CHECK_DEST <- $DRIFT_CHECK_SRC （__AIENV_HOME__ を $HOME へ置換）"
-
-    if [ "$SKIP_LAUNCHCTL" = "1" ]; then
-      log "SKIP_LAUNCHCTL=1 のため launchctl 操作はskipします（テスト用）"
-    else
-      launchctl bootout "$DRIFT_CHECK_DOMAIN/$DRIFT_CHECK_LABEL" 2>/dev/null || true
-      if launchctl bootstrap "$DRIFT_CHECK_DOMAIN" "$DRIFT_CHECK_DEST" 2>/dev/null; then
-        launchctl enable "$DRIFT_CHECK_DOMAIN/$DRIFT_CHECK_LABEL" 2>/dev/null || true
-        log "launchd: (re)loaded ${DRIFT_CHECK_LABEL}（即時実行はしていません。週1＝月曜09:30に自動チェックされます）"
-      else
-        warn "launchd: bootstrap failed for ${DRIFT_CHECK_LABEL}（手動でロードしてください: launchctl bootstrap $DRIFT_CHECK_DOMAIN $DRIFT_CHECK_DEST）"
-      fi
-    fi
-  fi
-fi
+# 週次drift通知LaunchAgent（com.takumi009.drift-check.plist・scripts/drift-notify.sh）は
+# 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で撤去した。
+# 週次無人実行の経路は新設 maintenance.sh（PR2・install-maintenance.shが設置）へ移す。
+# 既存マシンで稼働中の旧LAは install-maintenance.sh の移行処理（旧ラベルのbootout）で
+# 片付ける（本スクリプトでは何もしない）。
 
 # --- dotfiles（部品・下請け）。--with-dotfiles 明示時のみ ---
 # git clone・dotfiles/install.sh の実行はどちらも「実システムへの実行」であり

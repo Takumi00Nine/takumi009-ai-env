@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-07-13
+updated: 2026-07-15
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -14,7 +14,7 @@ aliases:
 
 ## どのフォルダに何を書くか
 - **Fragments/**＝未確定・副産物の入口（append-only・日次 `Fragments/YYYY-MM/YYYY-MM-DD.md`）。作業・判断が一段落したら、後で使える断片を応答前にその場で短く追記し、確定したら下記フォルダへ昇格。
-- **Knowledge/**＝技術知見・調査結果・背景／**Decisions/**＝複数案から選んだ判断とその理由（`YYYY-MM-DD-topic.md`）／**Projects/**＝進行中の状態と next_action／**Preferences/**＝今どう動くかの運用ルール（⚠️public）／**Personal/**＝ユーザーの個人情報。**Blogs/**・**Explorations/**（AI整理のキャンバス）＝人間向けで読みやすさ優先。他フォルダはAI向け＝トークン効率優先。
+- **Knowledge/**＝技術知見・調査結果・背景／**Decisions/**＝複数案から選んだ判断とその理由（`YYYY-MM-DD-topic.md`）／**Projects/**＝進行中の状態と next_action／**Preferences/**＝今どう動くかの運用ルール（⚠️public）／**Personal/**＝ユーザーの個人情報。**Blogs/**・**Explorations/**＝**外部脳の対象外**（人間向け成果物。Obsidian で扱うため Vault に同居しているだけ＝[[Decisions/2026-07-15-blogs-explorations-out-of-external-brain]]）。読みやすさ優先で書き、外部脳6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）はAI向け＝トークン効率優先。
 
 ## public 執筆の掟（public＝Preferences/ のみ。他フォルダはすべて private）
 1. 個人情報・経緯・エピソードを書かない（ルールは「今どう動くか」だけに削ぐ。理由・経緯は Decisions へ、個人の事実は Personal へ）。

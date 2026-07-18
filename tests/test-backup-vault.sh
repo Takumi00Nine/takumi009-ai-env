@@ -57,19 +57,24 @@ count_commits() {
 # GIT_AUTHOR_*/GIT_COMMITTER_* を環境変数で渡すことで、backup-vault.sh 自身が
 # 初回 git init するケース（事前に `git config` できない）でも、sandbox/CI に
 # global git identity が無い環境で失敗しないようにする（Codexレビュー指摘・Major）。
+#
+# VAULT_WRITER_LOCK_FILE は既定で「テストごとの未使用パス」に強制する
+# （2026-07-16簡素化・PR2: 明示的に上書きしない限り、実HOME配下の
+# ~/.claude/logs/maintenance/vault-writer.lock を読みに行ってしまい、将来
+# maintenance.sh が実際にこのロックを保持している環境でテストを実行すると
+# 意図せずbusy扱いになり得るため。$4で個別に上書きできるようにする）。
 run_backup() {
-  local vault="$1" lock="$2" stale="${3:-3600}"
-  # UPDATE_EMBEDDING_INDEX_SCRIPT=/dev/null にして埋め込みインデックス更新の
-  # best-effort呼び出し（8.1ラウンド追加）を確実にno-op化する。backup-vault.shの
-  # テストはgit commit/pushロジックの検証が目的であり、実Ollama/実ネットワークへの
-  # 依存や実リポジトリの.cache/vault-embeddings/への副作用を持ち込まないため
-  # （/dev/nullは `[[ -f ]]` が偽になるのでWARN1行を出してskipされる＝別テストで
-  # 明示的に検証する）。
+  local vault="$1" lock="$2" stale="${3:-3600}" writer_lock="${4:-$WORK/unused-writer.lock}" status_file="${5:-}"
+  local extra_args=()
+  [[ -n "$status_file" ]] && extra_args=(--status-file "$status_file")
+  # 空配列を`set -u`下で`${extra_args[@]}`展開するとbash 3.2（macOS既定）では
+  # "unbound variable"エラーになるため、`${extra_args[@]+...}`のnounset安全な
+  # 展開イディオムを使う。
   STALE_LOCK_SECONDS="$stale" VAULT="$vault" LOCK_FILE="$lock" \
-    UPDATE_EMBEDDING_INDEX_SCRIPT="/dev/null" \
+    VAULT_WRITER_LOCK_FILE="$writer_lock" \
     GIT_AUTHOR_NAME="backup-vault-test" GIT_AUTHOR_EMAIL="test@example.invalid" \
     GIT_COMMITTER_NAME="backup-vault-test" GIT_COMMITTER_EMAIL="test@example.invalid" \
-    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log"
+    "$SCRIPT" ${extra_args[@]+"${extra_args[@]}"} >"$WORK/stdout.log" 2>"$WORK/stderr.log"
 }
 
 echo "=== 1. 正常系: 未git化のVaultを init + 初回commit（remote未設定はWARN） ==="
@@ -383,14 +388,12 @@ echo "=== 9. 排他制御: ほぼ同時に2プロセス起動しても片方だ�
   echo "note 1" > "$VAULT_DIR/note1.md"
   LOCK="$WORK/lock"
 
-  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
-    UPDATE_EMBEDDING_INDEX_SCRIPT="/dev/null" \
+  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" VAULT_WRITER_LOCK_FILE="$WORK/unused-writer.lock" \
     GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
     GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
     "$SCRIPT" >"$WORK/stdout1.log" 2>"$WORK/stderr1.log" &
   pid1=$!
-  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
-    UPDATE_EMBEDDING_INDEX_SCRIPT="/dev/null" \
+  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" VAULT_WRITER_LOCK_FILE="$WORK/unused-writer.lock" \
     GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
     GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
     "$SCRIPT" >"$WORK/stdout2.log" 2>"$WORK/stderr2.log" &
@@ -412,79 +415,6 @@ echo "=== 9. 排他制御: ほぼ同時に2プロセス起動しても片方だ�
   rm -rf "$WORK"
 }
 
-echo "=== 10. 埋め込みインデックス更新（8.1ラウンド追加）: best-effort呼び出し・成功時はログに残る ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  mkdir -p "$VAULT_DIR"
-  echo "note 1" > "$VAULT_DIR/note1.md"
-  LOCK="$WORK/lock"
-  STUB="$WORK/stub-update.py"
-  cat > "$STUB" <<'PYEOF'
-import sys
-print("stub: ok")
-sys.exit(0)
-PYEOF
-
-  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
-    UPDATE_EMBEDDING_INDEX_SCRIPT="$STUB" \
-    GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
-    GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
-    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log"
-  rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_stdout_has "成功ログが出る" "$WORK" "埋め込みインデックス更新を実行しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 11. 埋め込みインデックス更新が非0終了してもbackup-vault.sh自体はFAILにしない（best-effort） ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  mkdir -p "$VAULT_DIR"
-  echo "note 1" > "$VAULT_DIR/note1.md"
-  LOCK="$WORK/lock"
-  STUB="$WORK/stub-update-fail.py"
-  cat > "$STUB" <<'PYEOF'
-import sys
-sys.exit(1)
-PYEOF
-
-  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
-    UPDATE_EMBEDDING_INDEX_SCRIPT="$STUB" \
-    GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
-    GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
-    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log"
-  rc=$?
-  assert_eq "非0終了でもbackup-vault.sh自体はexit 0" "0" "$rc"
-  assert_stderr_has "best-effort失敗のWARNが出る" "$WORK" "埋め込みインデックス更新が非0終了しました"
-  commits=$(count_commits "$VAULT_DIR")
-  assert_eq "commit自体は正常に完了している" "1" "$commits"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 12. update_embedding_index.pyが見つからない場合もWARNのみでexit 0 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  mkdir -p "$VAULT_DIR"
-  echo "note 1" > "$VAULT_DIR/note1.md"
-  LOCK="$WORK/lock"
-
-  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
-    UPDATE_EMBEDDING_INDEX_SCRIPT="$WORK/does-not-exist.py" \
-    GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
-    GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
-    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log"
-  rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_stderr_has "見つからない旨のWARNが出る" "$WORK" "見つからないためインデックス更新をskipしました"
-
-  rm -rf "$WORK"
-}
-
 echo "=== 13. 排他制御: staleロックをほぼ同時に複数プロセスが検出しても二重実行しない（回収ミューテックスの回帰テスト） ==="
 {
   # 旧実装は stale 判定後に無条件 `rm -f` していたため、複数プロセスがほぼ同時に
@@ -497,11 +427,14 @@ echo "=== 13. 排他制御: staleロックをほぼ同時に複数プロセス�
   # commit数だけでは「本処理（クリティカルセクション）に複数プロセスが同時に
   # 入り込んでいないか」を厳密には検証できない（後発が先発のcommit後に到達すれば
   # 差分無しで正常終了し、commit数は結果的に1のままになり得るため。Codex一次
-  # レビュー指摘・Major）。そこで UPDATE_EMBEDDING_INDEX_SCRIPT
-  # （backup-vault.shが本処理の最後に必ず呼ぶbest-effortフック）に、
-  # O_CREAT|O_EXCL による原子的なマーカーファイル作成で「他のプロセスが
-  # まだクリティカルセクション内にいないか」を検知するスタブを差し込み、
-  # 重複進入があれば violations ファイルに記録させる。
+  # レビュー指摘・Major）。acquire_lock() 直後から実行される git コマンド全呼び出しを
+  # O_EXCLマーカー方式で監視する `git` ラッパーをPATHの先頭に差し込み、「ロック
+  # 取得後の本処理区間そのもの」への重複進入を検証する（旧実装は本処理の最後に
+  # 必ず呼ばれる埋め込みインデックス更新best-effortフックにも同種のマーカーを
+  # 仕込んでいたが、2026-07-16簡素化でそのフック自体を撤去したため、gitラッパー
+  # 側の検証だけで足りる＝gitラッパーはacquire_lock()直後からtrap EXITでの
+  # ロック解放直前までの全git呼び出しを覆っており、埋め込みindex呼び出しが
+  # あった旧末尾区間より広い範囲をカバーする）。
   WORK="$(mktemp -d)"
   VAULT_DIR="$WORK/vault"
   mkdir -p "$VAULT_DIR"
@@ -509,38 +442,6 @@ echo "=== 13. 排他制御: staleロックをほぼ同時に複数プロセス�
   LOCK="$WORK/lock"
   echo "999999" > "$LOCK"   # 存在しないであろうPID（stale確定）
 
-  OVERLAP_STUB="$WORK/overlap-detect-stub.py"
-  cat > "$OVERLAP_STUB" <<'PYEOF'
-import sys, os, time
-
-vault = sys.argv[sys.argv.index("--vault") + 1]
-base = os.path.dirname(os.path.abspath(vault))
-marker = os.path.join(base, "critical-section-marker")
-violations = os.path.join(base, "overlap-violations.log")
-
-got_marker = True
-try:
-    fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    os.close(fd)
-except FileExistsError:
-    got_marker = False
-
-if not got_marker:
-    with open(violations, "a") as f:
-        f.write("overlap pid=%d\n" % os.getpid())
-else:
-    # マーカー保持中に十分な時間待つことで、排他が壊れていれば他プロセスの
-    # 同時到達を高確率で捉える（排他が健全なら誰も同時にここへ来ない）。
-    time.sleep(0.3)
-    os.remove(marker)
-sys.exit(0)
-PYEOF
-
-  # 上のembedding-indexスタブは「本処理の末尾」しか監視できず、途中で
-  # git index.lock 判定によりexit 0する経路等は通過しない（Codex二次レビュー
-  # 指摘・Major）。acquire_lock() 直後から実行される git コマンド全呼び出しを
-  # 同じO_EXCLマーカー方式で監視する `git` ラッパーをPATHの先頭に差し込み、
-  # 「ロック取得後の本処理区間そのもの」への重複進入をより直接的に検証する。
   REAL_GIT_BIN="$(command -v git)"
   mkdir -p "$WORK/bin"
   cat > "$WORK/bin/git" <<EOF
@@ -565,8 +466,7 @@ EOF
   pids=()
   for i in $(seq 1 "$N"); do
     PATH="$WORK/bin:$PATH" \
-      STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
-      UPDATE_EMBEDDING_INDEX_SCRIPT="$OVERLAP_STUB" \
+      STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" VAULT_WRITER_LOCK_FILE="$WORK/unused-writer.lock" \
       GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
       GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
       "$SCRIPT" >"$WORK/stdout-$i.log" 2>"$WORK/stderr-$i.log" &
@@ -581,8 +481,6 @@ EOF
 
   commits=$(count_commits "$VAULT_DIR")
   assert_eq "stale解除の競合があってもcommitは1つだけ" "1" "$commits"
-  assert_eq "クリティカルセクション末尾(埋め込み更新)への重複進入が検出されない" "0" \
-    "$([[ -f "$WORK/overlap-violations.log" ]] && wc -l < "$WORK/overlap-violations.log" | tr -d ' ' || echo 0)"
   assert_eq "ロック取得後のgit呼び出し区間への重複進入が検出されない" "0" \
     "$([[ -f "$WORK/git-overlap-violations.log" ]] && wc -l < "$WORK/git-overlap-violations.log" | tr -d ' ' || echo 0)"
 
@@ -610,6 +508,261 @@ echo "=== 13b. 排他制御: 回収ミューテックスが（前回実行のク
   commits=$(count_commits "$VAULT_DIR")
   assert_eq "commitはされない（二重実行にはならない）" "0" "$commits"
   assert_stderr_has "手動削除を促すFAILメッセージが出る" "$WORK" "手動で削除してください"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 14. Vault書込ロック: maintenance.sh(想定)が保持中(生存PID)なら今回のcommitを見送る(busy・exit 0)(設計書§1.2) ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  WRITER_LOCK="$WORK/vault-writer.lock"
+  echo "$$" > "$WRITER_LOCK"   # このテストプロセス自身のPID（確実に生存）
+
+  rc=0
+  run_backup "$VAULT_DIR" "$LOCK" 3600 "$WRITER_LOCK" || rc=$?
+  assert_eq "Vault書込ロック保持中はexit 0（skip）" "0" "$rc"
+  commits=$(count_commits "$VAULT_DIR")
+  assert_eq "commitはされない" "0" "$commits"
+  assert_stdout_has "Vault書込ロック保持中のメッセージが出る" "$WORK" "Vault書込ロックを別プロセス"
+  # 自スクリプトの多重起動防止ロック($LOCK)自体は取得・解放されている
+  # （見送ったのはgit操作だけ）ことも確認する。
+  assert_eq "自スクリプトのロックファイルは残らない(解放済み)" "0" \
+    "$([[ -e "$LOCK" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 14b. Vault書込ロック: MAINTENANCE_LOCK_OWNER_PIDがロックファイルの実PIDと一致すればbypassして通常どおりcommitする(設計書§1.2) ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  WRITER_LOCK="$WORK/vault-writer.lock"
+  echo "$$" > "$WRITER_LOCK"   # このテストプロセス自身のPID（確実に生存）
+
+  rc=0
+  MAINTENANCE_LOCK_OWNER_PID="$$" \
+    STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" VAULT_WRITER_LOCK_FILE="$WRITER_LOCK" \
+    GIT_AUTHOR_NAME="backup-vault-test" GIT_AUTHOR_EMAIL="test@example.invalid" \
+    GIT_COMMITTER_NAME="backup-vault-test" GIT_COMMITTER_EMAIL="test@example.invalid" \
+    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+  assert_eq "PID一致時はexit 0（通常どおり実行）" "0" "$rc"
+  commits=$(count_commits "$VAULT_DIR")
+  assert_eq "PID一致時はcommitされる（busyでskipされない）" "1" "$commits"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 14c. Vault書込ロック: MAINTENANCE_LOCK_OWNER_PIDが未設定なら従来どおりbusyでskipする（bypassが誤って常時有効化されていないことの確認） ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  WRITER_LOCK="$WORK/vault-writer.lock"
+  echo "$$" > "$WRITER_LOCK"
+
+  rc=0
+  run_backup "$VAULT_DIR" "$LOCK" 3600 "$WRITER_LOCK" || rc=$?
+  assert_eq "未設定なら従来どおりbusy(exit 0・skip)" "0" "$rc"
+  commits=$(count_commits "$VAULT_DIR")
+  assert_eq "commitはされない" "0" "$commits"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 14d. Vault書込ロック: MAINTENANCE_LOCK_OWNER_PIDがロックファイルの実PIDと一致しなければbypassしない（launchctl setenv等でアンビエントに漏れ残った場合の多層防御） ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  WRITER_LOCK="$WORK/vault-writer.lock"
+  echo "$$" > "$WRITER_LOCK"   # ロックの実際の保持者はこのテストプロセス
+
+  rc=0
+  # MAINTENANCE_LOCK_OWNER_PIDに実際のロック保持者とは異なる値（例:
+  # 過去のmaintenance.sh実行のPIDが環境変数として漏れ残っていた想定）を渡す。
+  MAINTENANCE_LOCK_OWNER_PID="999999" \
+    STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" VAULT_WRITER_LOCK_FILE="$WRITER_LOCK" \
+    GIT_AUTHOR_NAME="backup-vault-test" GIT_AUTHOR_EMAIL="test@example.invalid" \
+    GIT_COMMITTER_NAME="backup-vault-test" GIT_COMMITTER_EMAIL="test@example.invalid" \
+    "$SCRIPT" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+  assert_eq "PID不一致ならbypassされずbusy(exit 0)" "0" "$rc"
+  commits=$(count_commits "$VAULT_DIR")
+  assert_eq "PID不一致ならcommitされない" "0" "$commits"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 15. Vault書込ロック: PIDがstale(死んでいる)なら無視して通常どおりcommitする ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  WRITER_LOCK="$WORK/vault-writer.lock"
+  echo "999999" > "$WRITER_LOCK"   # 存在しないであろうPID
+
+  rc=0
+  run_backup "$VAULT_DIR" "$LOCK" 3600 "$WRITER_LOCK" || rc=$?
+  assert_eq "staleなVault書込ロックは無視されexit 0" "0" "$rc"
+  commits=$(count_commits "$VAULT_DIR")
+  assert_eq "通常どおりcommitされる" "1" "$commits"
+  # is_pid_lock_heldは読み取り専用（stale判定してもファイル自体は消さない）。
+  assert_eq "staleなVault書込ロックファイル自体は(読み取り専用チェックのため)残る" "1" \
+    "$([[ -e "$WRITER_LOCK" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 16. --status-file: 差分がありcommit成功したらcompletedが書かれる ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  STATUS="$WORK/status.txt"
+
+  run_backup "$VAULT_DIR" "$LOCK" 3600 "" "$STATUS"
+  assert_eq "status-fileにcompletedが書かれる" "completed" "$(cat "$STATUS")"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 17. --status-file: 差分が無ければno-changeが書かれる ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  STATUS="$WORK/status.txt"
+
+  run_backup "$VAULT_DIR" "$LOCK" 3600 "" "$STATUS"   # 1回目でcommit済みにしておく
+  run_backup "$VAULT_DIR" "$LOCK" 3600 "" "$STATUS"   # 2回目は差分なし
+  assert_eq "2回目のstatus-fileにno-changeが書かれる" "no-change" "$(cat "$STATUS")"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 18. --status-file: 自スクリプトの多重起動防止ロックで見送った場合はbusyが書かれる ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  echo "$$" > "$LOCK"
+  STATUS="$WORK/status.txt"
+
+  run_backup "$VAULT_DIR" "$LOCK" 3600 "" "$STATUS" || true
+  assert_eq "status-fileにbusyが書かれる" "busy" "$(cat "$STATUS")"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 19. --status-file: Vault書込ロック保持中で見送った場合もbusyが書かれる ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  WRITER_LOCK="$WORK/vault-writer.lock"
+  echo "$$" > "$WRITER_LOCK"
+  STATUS="$WORK/status.txt"
+
+  run_backup "$VAULT_DIR" "$LOCK" 3600 "$WRITER_LOCK" "$STATUS"
+  assert_eq "status-fileにbusyが書かれる" "busy" "$(cat "$STATUS")"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 20. --status-file: FAIL経路(ブランチ不一致)ではerrorが書かれる ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  git -C "$VAULT_DIR" init -q -b feature-branch
+  git -C "$VAULT_DIR" config user.name test
+  git -C "$VAULT_DIR" config user.email test@example.invalid
+  git -C "$VAULT_DIR" add -A
+  git -C "$VAULT_DIR" commit -q -m "initial on feature-branch"
+  echo "note 2" > "$VAULT_DIR/note2.md"
+  LOCK="$WORK/lock"
+  STATUS="$WORK/status.txt"
+
+  rc=0
+  VAULT_BACKUP_BRANCH=main run_backup "$VAULT_DIR" "$LOCK" 3600 "" "$STATUS" || rc=$?
+  assert_eq "ブランチ不一致はexit 1" "1" "$rc"
+  assert_eq "status-fileにerrorが書かれる" "error" "$(cat "$STATUS")"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 21. --status-file省略時は従来どおり何も書かれない(後方互換) ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+  STATUS="$WORK/status-should-not-exist.txt"
+
+  run_backup "$VAULT_DIR" "$LOCK"   # --status-file を渡さない
+  assert_eq "status-fileは作られない" "0" "$([[ -e "$STATUS" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 22. CLI引数: 不明な引数はexit 1(FAIL) ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+
+  rc=0
+  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
+    VAULT_WRITER_LOCK_FILE="$WORK/unused-writer.lock" \
+    GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
+    GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
+    "$SCRIPT" --bogus-flag >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+  assert_eq "不明な引数はexit 1" "1" "$rc"
+  assert_stderr_has "不明な引数のFAILメッセージが出る" "$WORK" "不明な引数です"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 23. CLI引数: --status-file に値が無ければexit 1(FAIL) ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  mkdir -p "$VAULT_DIR"
+  echo "note 1" > "$VAULT_DIR/note1.md"
+  LOCK="$WORK/lock"
+
+  rc=0
+  STALE_LOCK_SECONDS=3600 VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
+    VAULT_WRITER_LOCK_FILE="$WORK/unused-writer.lock" \
+    GIT_AUTHOR_NAME="t" GIT_AUTHOR_EMAIL="t@example.invalid" \
+    GIT_COMMITTER_NAME="t" GIT_COMMITTER_EMAIL="t@example.invalid" \
+    "$SCRIPT" --status-file >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+  assert_eq "値省略はexit 1" "1" "$rc"
+  assert_stderr_has "値必須のFAILメッセージが出る" "$WORK" "--status-file には値が必要"
 
   rm -rf "$WORK"
 }

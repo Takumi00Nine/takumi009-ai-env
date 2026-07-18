@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.takumi009.maintenance</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__AIENV_HOME__/work/takumi009-ai-env/scripts/maintenance.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__AIENV_HOME__</string>
+        <key>PATH</key>
+        <!-- maintenance.sh は git・python3 に加えヘッドレスClaude CLI
+             (maintenance_apply.py 経由の `claude` コマンド) を呼ぶ。claude の
+             実インストール場所はnpm/homebrew等の導入方法で変わるため、既知の
+             候補パスを広めに含めておく（システム標準パスに加え、homebrew
+             （Apple Silicon既定の/opt/homebrew・Intel既定の/usr/local）・
+             claude公式インストーラの既定パス（~/.local/bin）を想定）。
+             実機で `claude` がこの並びに無い場合は、maintenance_apply.pyが
+             読む MAINTENANCE_APPLY_CLAUDE_BIN 環境変数を絶対パスで指定する
+             ことで上書きできるが、launchdはシェルのprofile/exportを継承
+             しない（このplist経由で起動される）ため、通常の`export`では
+             効かない。恒久的に上書きする場合は「生成済みの
+             $HOME/Library/LaunchAgents/com.takumi009.maintenance.plist を
+             直接編集」ではなく、**このリポジトリ内の本ファイル
+             （__AIENV_HOME__プレースホルダを含むソース）側へ
+             MAINTENANCE_APPLY_CLAUDE_BIN キーを追加したうえで
+             scripts/install-maintenance.sh を再実行する**こと（生成済み
+             ファイルを直接編集しても、install-maintenance.shの次回実行時に
+             ソースとの内容差分が検知され上書きされて消える）。
+             即座に反映させたい場合は、ソース側を編集して再実行するのが
+             最も確実（launchctlの再読込まで自動で行われる）。手動で
+             $HOME/Library/LaunchAgents側を直接編集して試す場合も、
+             `launchctl bootout gui/<uid>/com.takumi009.maintenance` の後に
+             `launchctl bootstrap gui/<uid> $HOME/Library/LaunchAgents/
+             com.takumi009.maintenance.plist` を実行しないと定義は読み直され
+             ない（`launchctl kickstart -k` は既存のロード済みジョブを
+             再起動するだけでplist定義自体は再読込しない。ソース側の
+             リポジトリファイルを直接bootstrapすると__AIENV_HOME__が
+             未展開のパスになり動かない）
+             （未検証・実機ロールアウト時に確認が必要＝リーダーへの
+             申告事項）。 -->
+        <string>__AIENV_HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>__AIENV_HOME__/Library/Logs/maintenance.log</string>
+    <key>StandardErrorPath</key>
+    <string>__AIENV_HOME__/Library/Logs/maintenance.log</string>
+</dict>
+</plist>

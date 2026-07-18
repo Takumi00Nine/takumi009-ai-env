@@ -6,13 +6,12 @@
 # ローカルの使い捨てbare repoへ差し替えてテストする。
 #
 # 注意: install-main.sh は末尾で scripts/setup-codex-mcp.sh（実claude/codex CLIを
-# 呼びうる）と、週次drift通知LaunchAgent（com.takumi009.drift-check.plist・メイン専用。
-# H-2）のlaunchctl bootstrapを行う。install-sub.sh は委譲先のinstall-main.sh経由で
-# 前者に加えサブ専用LaunchAgentのlaunchctl bootstrapも行う（drift-check.plistは
-# --sub-delegate により自動skipされる）。どちらもHOME差し替えでは隔離できない
-# 実システムへの副作用になりうるため、非dry-run呼び出しには必ず SKIP_CODEX_MCP=1 と
-# SKIP_LAUNCHCTL=1 の両方を付ける（Codexレビュー指摘・Major。tests/test-install-sub.sh
-# と同じ対策）。
+# 呼びうる）のlaunchctl相当処理を行う（週次drift通知LaunchAgent・
+# com.takumi009.drift-check.plistの設置は2026-07-16簡素化で撤去済み）。install-sub.sh
+# は委譲先のinstall-main.sh経由で前者に加えサブ専用LaunchAgentのlaunchctl bootstrapも
+# 行う。どちらもHOME差し替えでは隔離できない実システムへの副作用になりうるため、
+# 非dry-run呼び出しには必ず SKIP_CODEX_MCP=1 と SKIP_LAUNCHCTL=1 の両方を付ける
+# （Codexレビュー指摘・Major。tests/test-install-sub.sh と同じ対策）。
 #
 # 実行方法: bash tests/test-with-dotfiles.sh
 

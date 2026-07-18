@@ -26,28 +26,39 @@
 出力: ~/.claude/logs/vault-inventory/YYYY-MM-DD.md（人間向け・日本語。2026-07-11
       決定＝「読まれない人間向け資料をVaultに置かない」に伴い、Vault配下
       （旧: Explorations/vault-inventory/）から $HOME/.claude/logs/ 配下へ移設）。
-実行: LaunchAgent (com.takumi009.vault-inventory) が毎月1日・15日の03:00に起動
-      （このリポジトリが配布するplistはRunAtLoad=false。手動kickstartや将来の
-      RunAtLoad有効化での重複実行を想定し）「前回レポートから MIN_INTERVAL_DAYS
-      未満なら何もしない」ガードあり。手動実行は --force で無視できる。
-対処は自動で行わない（要確認項目が残ることはある）が、レポートへの目通し・対処自体は
-リーダー（Claude）がレポート生成後の最初のセッションで自律的に行う運用
-（2026-07-11 決定・Decisions/2026-07-11-vault-maintenance-hands-off.md。本人へ
-個別報告はしない＝監査可能性はレポートファイル・git履歴・Fragments記録で担保）。
-対処完了時はレポートのfrontmatterに `processed: YYYY-MM-DD` を追記する
-（claude/hooks/bootstrap-vault.sh・scripts/check-drift.sh の未処理レポート検知が
-参照するマーカー。本スクリプトはこのキーを出力しないため衝突しない）。
+      `--json` 指定時は上記`.md`に加え、機械可読なJSON（棚卸し件数サマリ＋
+      missing_updated（Preferences限定）のFIX候補一覧＝設計書§3.5）を標準出力へ
+      返す（maintenance.sh Phase1③向け・2026-07-16簡素化）。
+実行: 2026-07-16簡素化（設計書§3.2）で、旧・月2回（1日/15日）の間隔ガード
+      （MIN_INTERVAL_DAYS・--force）は撤去し週次実行に統一した（週次ランナー
+      maintenance.sh・PR2 が呼ぶ。実行頻度の制御自体はLaunchAgent側の間隔に委ねる。
+      旧実装は`git log -p`参照）。
+対処は自動で行わない（要確認項目が残ることはある）。旧来の「レポートへの目通し・
+対処自体はリーダーがセッション内で自律的に行う」運用は2026-07-16簡素化
+（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で撤去し、`.md`レポートは
+週次の棚卸し相談用の人間向け資料としてのみ残す（`processed:`マーカー運用・
+未処理レポート検知は同時に撤去済み＝旧実装は`git log -p`参照）。
 """
+import argparse
 import datetime
+import hashlib
+import json
 import os
 import pathlib
 import re
 import sys
 from collections import Counter
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+# frontmatter解析・wikilink正規表現・aliases正規化・汎用alias禁止リスト読込は
+# 2026-07-16簡素化（cleanup決定#10）でvault_lib.pyへ抽出済み（他4本＝
+# embedding_index.py→撤去済み・knowledge_merge_candidates.py・knowledge_merge.py→
+# 撤去済み・merge_quality_gate.py→撤去済み・recall_bench.pyが`import vault_inventory`
+# していたのはこれらの関数だけを再利用するためだった＝CLI/共有ライブラリ同居の解消）。
+import vault_lib  # noqa: E402
+
 VAULT = pathlib.Path.home() / "Data" / "obsidian"
 OUT_DIR = pathlib.Path.home() / ".claude" / "logs" / "vault-inventory"
-MIN_INTERVAL_DAYS = 10
 
 # 必読5ファイル（bootstrap-vault.sh と同じ並び）
 BOOTSTRAP_FILES = [
@@ -89,8 +100,10 @@ STALE_ALLOWLIST = [
 ]
 
 DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
-LINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
-CODE_RE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # コードフェンス・インラインコード
+# wikilink検出用正規表現はvault_lib.LINK_REへ、コードフェンス/インラインコード検出用
+# 正規表現はvault_lib.CODE_REへ抽出済み（2026-07-16簡素化。merge_checks.py新設時に
+# 共用するため後者も抽出）。
+CODE_RE = vault_lib.CODE_RE
 STALE_PROJECT_DAYS = 30
 
 # aliases 欠落・汎用/短すぎるalias・未読 検出の対象フォルダ（README.mdはindexなので
@@ -149,57 +162,7 @@ def _positive_int_env(name, default):
 DISMISS_WINDOW_DAYS = _positive_int_env("VAULT_DISMISS_WINDOW_DAYS", 30)
 
 
-INLINE_COMMENT_RE = re.compile(r"(?<!\S)#.*$")  # 直前が空白/行頭の#以降をYAML風コメントとみなす
-
-
-def strip_inline_comment(s):
-    """`aliases: [] # 未使用` のような行末コメントを除去する（Codexレビュー指摘）。"""
-    return INLINE_COMMENT_RE.sub("", s).strip()
-
-
-def parse_frontmatter(text):
-    """frontmatterをキー→値の辞書にする。既存の単一行 `key: value` はそのまま文字列で
-    返す（従来どおり）。値が空の行（`key:` のみ）の直後に YAML の複数行リスト
-    （`  - item`）が続く場合はそれをリストとして拾う（aliases 等の検出用に追加）。
-    フロー形式リスト（`key: [a, b]`）もリストにする。行末の `# comment` は除去する。
-    """
-    m = re.match(r"---\n(.*?)\n---\n?", text, re.S)
-    if not m:
-        return {}, text
-    fm = {}
-    lines = m.group(1).splitlines()
-    i = 0
-    while i < len(lines):
-        kv = re.match(r"(\w+):\s*(.*)", lines[i])
-        if not kv:
-            i += 1
-            continue
-        key, val = kv.group(1), strip_inline_comment(kv.group(2).strip())
-        if val:
-            if val.startswith("[") and val.endswith("]"):
-                fm[key] = [x.strip().strip('"').strip("'") for x in val[1:-1].split(",") if x.strip()]
-            else:
-                fm[key] = val.strip('"')
-            i += 1
-            continue
-        # 値が空 -> 複数行リストの可能性を見る（無ければ従来どおりキーごと無視）
-        items = []
-        j = i + 1
-        while j < len(lines):
-            bm = re.match(r"\s+-\s+(.+)", lines[j])
-            if not bm:
-                break
-            item = strip_inline_comment(bm.group(1))
-            if item:
-                items.append(item.strip('"').strip("'"))
-            j += 1
-        if items:
-            fm[key] = items
-            i = j
-        else:
-            i += 1
-    return fm, text[m.end():]
-
+# strip_inline_comment・parse_frontmatterはvault_lib.pyへ抽出済み（2026-07-16簡素化）。
 
 ACTIVE_STATUS_KEYS = ("active", "in_progress", "pending")
 # 先頭（前置の空白は許容）に一致させる。文字列中の任意位置を許すsearch()だと
@@ -229,23 +192,7 @@ def status_is_active(status):
     return False
 
 
-def normalize_aliases(val):
-    """frontmatterの aliases 値（リスト/カンマ区切り文字列/未設定）を alias文字列のリストにする。"""
-    if not val:
-        return []
-    items = val if isinstance(val, list) else re.split(r"[,、]", val)
-    return [x.strip() for x in items if x.strip()]
-
-
-def load_generic_aliases():
-    """generic-aliases.txt を読み、汎用alias禁止リスト（小文字化した集合）を返す。"""
-    words = set()
-    if GENERIC_ALIASES_FILE.exists():
-        for line in GENERIC_ALIASES_FILE.read_text(encoding="utf-8").splitlines():
-            word = line.split("#", 1)[0].strip()
-            if word:
-                words.add(word.lower())
-    return words
+# normalize_aliases・load_generic_aliasesはvault_lib.pyへ抽出済み（2026-07-16簡素化）。
 
 
 def parse_iso(ts):
@@ -444,21 +391,94 @@ def compute_dismissal_rates(recall_rows, reads_rows, today):
     return rows[:DISMISS_TOP_N], total_all, windowed_total, excluded_pre_read
 
 
+# stable_fix_id()は2026-07-16 Codexレビュー指摘対応でvault_lib.pyへ移設した
+# （設計書§3.2「import vault_inventoryは全廃」の対象にmaintenance_apply.pyも
+# 含まれるため、maintenance_apply.py単体がこの関数だけを目的にvault_inventory.py
+# 全体をimportせずに済むようにする＝cleanup決定#10）。本ファイル内の既存呼び出しは
+# そのまま動く（エイリアス）。
+stable_fix_id = vault_lib.stable_fix_id
+
+
+def compute_missing_updated_fix_candidates(missing_updated, notes, today):
+    """FIX機能（設計書§3.5）の唯一の実装対象＝missing_updatedのfix値をPythonが
+    決定的に計算する（Claudeは fix_approve/skip の承認判断のみ・値は生成させない）。
+
+    各relpathについて、frontmatterの生テキストを再走査し:
+      - `date:` 行が2行以上ある（重複キー）→ どちらが正か機械的に決められない
+        ため "frontmatter異常" 扱いとしてfix不可（skip_reason=duplicate_date_key）。
+      - `date:` フィールドが無い/fromisoformatで検証できない→fix不可
+        （skip_reason=no_date_field / invalid_date_format）。
+      - 検証できても today より未来の日付→fix不可（skip_reason=future_date）。
+      - 上記いずれにも該当しなければ fix_date=検証済み日付文字列 でfix可能。
+
+    id（inv-<sha256(relpath)[:12]>）とsource_sha256（現在のノート全文のsha256）
+    も併せて返す。maintenance_apply.py（未実装）がClaudeの応答（id+fix_approve/
+    skip）を照合し、適用直前にsource_sha256を再照合するTOCTOU対策（設計書§2.4
+    「全action適用直前に対象ソースファイルを再読込しSHA-256をPhase1時点と
+    再照合、不一致ならそのactionのみskip」）に使う。
+
+    戻り値: [{"id":..., "relpath":..., "source_sha256":..., "fixable": bool,
+    "fix_date": str|None, "skip_reason": str|None}, ...]
+    """
+    results = []
+    for rel in missing_updated:
+        fm, _body, text = notes[rel]
+        note_id = stable_fix_id(rel)
+        source_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        m = re.match(r"---\n(.*?)\n---\n?", text, re.S)
+        fm_lines = m.group(1).splitlines() if m else []
+        date_line_count = sum(1 for line in fm_lines if re.match(r"^date:\s*", line))
+
+        if date_line_count > 1:
+            results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
+                             "fixable": False, "fix_date": None,
+                             "skip_reason": "duplicate_date_key"})
+            continue
+
+        raw_date = fm.get("date")
+        if not raw_date or not isinstance(raw_date, str):
+            results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
+                             "fixable": False, "fix_date": None,
+                             "skip_reason": "no_date_field"})
+            continue
+
+        try:
+            parsed = datetime.date.fromisoformat(raw_date.strip())
+        except ValueError:
+            results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
+                             "fixable": False, "fix_date": None,
+                             "skip_reason": "invalid_date_format"})
+            continue
+
+        if parsed > today:
+            results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
+                             "fixable": False, "fix_date": None,
+                             "skip_reason": "future_date"})
+            continue
+
+        results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
+                         "fixable": True, "fix_date": parsed.isoformat(),
+                         "skip_reason": None})
+    return results
+
+
 def main():
-    force = "--force" in sys.argv
+    ap = argparse.ArgumentParser(description="外部脳(Obsidian Vault)の定期棚卸し検出ツール。")
+    ap.add_argument("--json", action="store_true",
+                     help="機械可読なJSON出力を標準出力へ返す（maintenance.sh向け・.mdレポートも従来どおり生成する）")
+    args = ap.parse_args()
+
     today = datetime.date.today()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 重複実行防止ガード（手動kickstart連打・将来のRunAtLoad有効化等を想定）
-    reports = sorted(OUT_DIR.glob("20*.md"))
-    if reports and not force:
-        last = datetime.date.fromisoformat(reports[-1].stem[:10])
-        if (today - last).days < MIN_INTERVAL_DAYS:
-            print(f"skip: 前回レポート {last} から {MIN_INTERVAL_DAYS} 日未満")
-            return
+    # 2026-07-16簡素化（設計書§3.2）: 隔週実行前提の間隔ガード（月2回・
+    # MIN_INTERVAL_DAYS）を撤去し週次実行に統一した（旧LaunchAgentの発火日制御の
+    # 名残の分岐をなくす＝本人指示）。maintenance.shが週次で呼ぶ前提のため、
+    # 実行頻度そのものの制御は呼び出し側（LaunchAgent間隔）に委ねる。
 
     notes = {}   # rel_path -> (frontmatter, body, fulltext)
     stems = {}   # ファイル名(拡張子なし) -> [rel_path]
+    unreadable_notes = []   # 読込に失敗した.mdの一覧（壊れたsymlink・`.md`名ディレクトリ等）
     for p in sorted(VAULT.rglob("*")):
         rel = p.relative_to(VAULT).as_posix()
         # Explorations/vault-inventory/ 配下は2026-07-11以前の出力先（移設済み）。
@@ -466,17 +486,58 @@ def main():
         # 巻き込まないよう、引き続き除外する。
         if p.suffix in (".md", ".canvas") and not rel.startswith(".") \
                 and not rel.startswith("Explorations/vault-inventory/"):
-            stems.setdefault(p.stem, []).append(rel)
-            if p.suffix == ".md":
-                text = p.read_text(encoding="utf-8")
-                fm, body = parse_frontmatter(text)
-                notes[rel] = (fm, body, text)
+            if p.suffix != ".md":
+                # .canvasは読込を行わない（従来どおりstemsへ登録するだけ）ため
+                # 対象外＝以下の存在チェック・try/exceptは.md限定。
+                stems.setdefault(p.stem, []).append(rel)
+                continue
+            # 存在チェック＋読込自体をtry/exceptで包む（2026-07-16 tester独立
+            # 検証で発見されたBOOTSTRAP_FILES欠落クラッシュと同型の欠陥を
+            # Codexレビューが本ループでも指摘・リーダー裁定「出荷パイプライン
+            # のクラッシュ級は今直す」＋設計判断「読込失敗は警告表示（静かな
+            # 除外は不採用）」に対応。壊れたsymlink（`.md`拡張子だがrglob
+            # では見えても実体が無い）・`.md`という名前のディレクトリ
+            # （read_text()がIsADirectoryErrorを送出）はis_file()==Falseで
+            # 検知できるが、権限不備・非UTF-8content・走査中の削除競合等
+            # read_text()自体が例外を送出しうる他の経路も併せて塞ぐため、
+            # is_file()チェックとtry/exceptの両方で防御する（Codexレビュー
+            # 指摘Major対応: is_file()自体もOSErrorを送出しうる環境がある
+            # ため、is_file()呼び出しもtry節の内側に含める）。deprecated:true
+            # ノートの既存fail-open（「検出のみ・止めない」）と同じ思想で
+            # 整合させる＝notesへは追加せずunreadable_notesへ記録して
+            # レポートへ警告表示するに留め、CLI全体は継続する。
+            #
+            # stemsへの登録は「実際に読める通常ファイルだった場合のみ」行う
+            # （Codexレビュー指摘Minor対応: 存在チェック前に無条件でstemsへ
+            # 登録していたため、壊れたsymlink/`.md`名ディレクトリへの
+            # wikilinkが§3のリンク切れ検出から漏れ、過少検出になっていた。
+            # §0の「読込に失敗したノート」で別種の異常として可視化される
+            # ため、リンク切れ判定側では「実体が無い」ものとして扱う）。
+            unreadable_reason = None
+            try:
+                is_regular_file = p.is_file()
+            except OSError as e:
+                is_regular_file = False
+                unreadable_reason = f"存在確認に失敗しました: {e}"
+            if is_regular_file:
+                stems.setdefault(p.stem, []).append(rel)
+                try:
+                    text = p.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError) as e:
+                    unreadable_reason = f"読込に失敗しました: {e}"
+                else:
+                    fm, body = vault_lib.parse_frontmatter(text)
+                    notes[rel] = (fm, body, text)
+            elif unreadable_reason is None:
+                unreadable_reason = "ファイルが見つかりません（壊れたsymlink等の可能性）"
+            if unreadable_reason is not None:
+                unreadable_notes.append((rel, unreadable_reason))
 
     missing_updated, date_drift, broken_links, stale_hits = [], [], [], []
     status_rows, stalled, status_future_dated = [], [], []
     missing_aliases, generic_alias_hits = [], []
     review_overdue, review_soon, review_invalid = [], [], []
-    generic_words = load_generic_aliases()
+    generic_words = vault_lib.load_generic_aliases(GENERIC_ALIASES_FILE)
 
     for rel, (fm, body, text) in notes.items():
         top = rel.split("/")[0]
@@ -493,7 +554,7 @@ def main():
                 date_drift.append((rel, ref, max(body_dates)))
 
         # 3. リンク切れ（全フォルダ対象。コード内の書式例は除外）
-        for raw in LINK_RE.findall(CODE_RE.sub("", text)):
+        for raw in vault_lib.LINK_RE.findall(CODE_RE.sub("", text)):
             target = raw.split("|")[0].split("#")[0].strip()
             if not target:
                 continue
@@ -534,7 +595,7 @@ def main():
 
         # 9./10. aliases 欠落・汎用/短すぎるalias（Knowledge/Preferences/Decisions/Projects/Personal・README除く）
         if rel.startswith(ALIAS_CHECK_DIRS) and not rel.endswith("README.md"):
-            aliases = normalize_aliases(fm.get("aliases"))
+            aliases = vault_lib.normalize_aliases(fm.get("aliases"))
             if not aliases:
                 missing_aliases.append(rel)
             for a in aliases:
@@ -565,9 +626,22 @@ def main():
                         review_soon.append((rel, rb, delta))
 
     # 5. 注入サイズ
+    # 必読ファイルは存在チェックしてから読む（2026-07-16 tester独立検証で
+    # 発見・リーダー裁定対応: 以前は無条件でread_text()しており、6ファイル中
+    # いずれか1つでも欠けると未処理のFileNotFoundErrorでCLI全体がクラッシュ
+    # していた＝サブ機・骨格未整備のVault・ファイル名変更直後などで実際に
+    # 起こりうる。claude/hooks/bootstrap-vault.sh側は既に「存在するファイル
+    # だけ必読リストに載せる」よう改修済みだったが、本スクリプトの同名ロジック
+    # には同じ改修が及んでいなかった。クラッシュさせず「検出のみ」として
+    # missing_bootstrap_filesへ記録し、レポート§5にwarningとして載せる
+    # ＝設計判断不要の小差分・bootstrap-vault.sh側と同じ扱いへ揃えるだけ）。
     size_rows, total_bytes, total_lines = [], 0, 0
+    missing_bootstrap_files = []
     for f in BOOTSTRAP_FILES:
         p = VAULT / f
+        if not p.is_file():
+            missing_bootstrap_files.append(f)
+            continue
         n_lines = len(p.read_text(encoding="utf-8").splitlines())
         n_bytes = p.stat().st_size
         total_bytes += n_bytes
@@ -582,7 +656,7 @@ def main():
         promoted_total += len(re.findall(r"status:\s*promoted", text))
         if (today - d).days <= 14:
             frag_files += 1
-            _, body = parse_frontmatter(text)
+            _, body = vault_lib.parse_frontmatter(text)
             frag_entries += len(re.findall(r"^(## |- \*\*)", body, re.M))
 
     # 12. 未読ノート検出＋提示無視率（vault-reads.tsv / vault-recall.tsv）
@@ -682,7 +756,8 @@ def main():
                 + (1 if reads_log_stale else 0) + (1 if recall_log_stale else 0)
                 + (1 if reads_log_broken else 0) + (1 if recall_log_broken else 0)
                 + (1 if reads_log_future else 0) + (1 if recall_log_future else 0)
-                + (1 if size_over_total else 0) + size_over_files
+                + (1 if size_over_total else 0) + size_over_files + len(missing_bootstrap_files)
+                + len(unreadable_notes)
                 + (1 if fragments_stopped else 0)
                 + (1 if reads_no_session else 0) + (1 if recall_no_session else 0))
     L = []
@@ -707,6 +782,10 @@ def main():
         else:
             L.extend(fmt(r) for r in rows)
 
+    section(f"0. 読込に失敗したノート（壊れたsymlink・`.md`名ディレクトリ・非UTF-8等・"
+            f"{len(unreadable_notes)}件・他の全チェックの対象外）",
+            unreadable_notes, lambda r: f"- `{r[0]}` — {r[1]}")
+
     section(f"1. updated が無い方針ノート（Preferences・{len(missing_updated)}件）",
             missing_updated, lambda r: f"- `{r}`")
     section(f"2. 本文の日付が frontmatter より新しい（更新日漏れの疑い・{len(date_drift)}件）",
@@ -726,6 +805,9 @@ def main():
     for f, n_lines, n_bytes, over in size_rows:
         L.append(f"- `{f}` — {n_lines} 行 / {n_bytes:,} bytes"
                  + (f" ⚠️ {SIZE_LIMIT_LINES}行超" if over else ""))
+    for f in missing_bootstrap_files:
+        L.append(f"- `{f}` — ⚠️ ファイルが見つかりません（サブ機・骨格未整備・"
+                 "ファイル名変更直後等の可能性。注入サイズの合計には計上していません）")
 
     section(f"6. 停滞プロジェクト（active/in_progress/pending なのに {STALE_PROJECT_DAYS} 日以上更新なし・{len(stalled)}件）",
             stalled, lambda r: f"- `{r[0]}` — {r[1]}（最終 {r[2]}・{r[3]}日前）")
@@ -880,7 +962,23 @@ def main():
 
     out = OUT_DIR / f"{today.isoformat()}.md"
     out.write_text("\n".join(L), encoding="utf-8")
-    print(f"レポート生成: {out}（要確認 {n_issues} 件）")
+
+    if args.json:
+        # --json時は標準出力をJSON1行のみにする（呼び出し元=maintenance_run_step.py
+        # がそのままjson.loads()する契約。人間向けメッセージは標準エラーへ回す・
+        # fragments_log.pyと同じ流儀）。
+        fix_candidates = compute_missing_updated_fix_candidates(missing_updated, notes, today)
+        payload = {
+            "date": today.isoformat(),
+            "report_path": str(out),
+            "n_issues": n_issues,
+            "n_notes": len(notes),
+            "missing_updated_fix_candidates": fix_candidates,
+        }
+        print(f"レポート生成: {out}（要確認 {n_issues} 件）", file=sys.stderr)
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        print(f"レポート生成: {out}（要確認 {n_issues} 件）")
 
 
 if __name__ == "__main__":
