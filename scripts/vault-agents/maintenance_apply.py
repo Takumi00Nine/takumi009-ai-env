@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """maintenance.sh Phase 2「判断＋適用」の実装（設計書§2・§2.4・PR2）。
 
-Phase 1 の3検出器（fragments_log.py・vault_inventory.py・knowledge_merge_
-candidates.py）の `--json` 出力を集約し、ヘッドレスClaudeへ1回だけ投げて
-JSON Schema制約付きの構造化出力を受け取り、検証のうえVaultへ適用する。
+Phase 1 の2検出器（fragments_log.py・knowledge_merge_candidates.py）の
+`--json` 出力を集約し、ヘッドレスClaudeへ1回だけ投げてJSON Schema制約付きの
+構造化出力を受け取り、検証のうえVaultへ適用する。
+
+**FIX機能（棚卸しmissing_updatedの機械修正・action: fix_approve）は2026-07-18
+本人裁定で丸ごと削除した**（[[Decisions/2026-07-18-external-brain-hardening]]
+2周目）。理由＝FIXは実装調査の結果**Preferences限定でしか動いておらず**、
+「夜間はPreferencesを書かない」境界の唯一の違反経路だった・値（updated欠落
+補完）も効果が限定的（marginal）。missing_updatedは以後vault_inventory.pyの
+棚卸しレポートで**検出のみ**とし、人間が読み時/棚卸し相談で直す（date_drift・
+リンク切れ・alias欠落等の他の棚卸し項目と同じ扱い）。夜間ジョブのactionは
+**promote・merge・skip の3種**に簡素化された（旧: PROMOTE/MERGE/FIXの3種）。
 
 安全設計の骨子（設計書§2・2026-07-16リーダー品質指示「安全設計・失敗系テストは
 一切簡略化不可」）:
@@ -20,6 +29,15 @@ JSON Schema制約付きの構造化出力を受け取り、検証のうえVault�
   - PROMOTE先がPreferencesの場合のみ、書込前に共通Personalリンク検査＋
     ngwordsの機械ゲート（scripts/vault-agents/promote-preferences-gate.sh
     経由）を同期適用し、検出時はそのactionのみskip。
+  - **2026-07-17本人再裁定（[[Decisions/2026-07-16-nightly-batch-direct-
+    write]]同日改定）でPreferencesのみ「無人直書き」から「提案→承認後に
+    作成」へ変更**: ヘッドレスClaudeはPreferences昇格を引き続き"起案"して
+    よい（target_folder enumにPreferencesは残る＝下書き本文はClaudeが書く）
+    が、apply層はゲート通過後もVaultへは一切書き込まず、下書き全文を
+    Vault外（既定 `~/.claude/logs/maintenance/preferences-proposals/`）へ
+    提案として保管するだけにとどめる。この「起案は許可・書込は提案化」の
+    二層構造を崩さないこと（Knowledge/Decisions/Projectsは従来どおり無人
+    直書きのまま・変更なし）。
   - MERGEはmerge_checks.py（§2.5）全PASS必須＋週上限2件。
   - claude起動不可／timeout／schema違反／未知id参照のいずれでも「一切書き
     込まず」異常通知のみ（設計書§2.6）。本体はstatus-fileへ`anomaly: true`を
@@ -62,8 +80,16 @@ import vault_lib  # noqa: E402
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 
 # PROMOTE先の許可フォルダ（設計書§2.3/2.4改訂v2＝本人裁定でPreferencesも許可・
-# 新規ノート作成のみ）。
+# 新規ノート作成のみ）。**この4値はヘッドレスClaudeへ提示するenum（＝起案可の
+# 範囲）であり、実際にVaultへ書き込むかどうかとは別レイヤ**（2026-07-17本人
+# 再裁定）: Knowledge/Decisions/Projectsは従来どおりVaultへ無人直書きするが、
+# Preferencesだけはapply_promote_preferences_proposal()が担当し、ゲート通過後
+# もVaultには一切書かずVault外の提案置き場へ保管するだけにとどめる。
 PROMOTE_TARGET_FOLDERS = ("Knowledge", "Decisions", "Projects", "Preferences")
+
+# Vaultへ実際に新規ノートを直書きしてよいPROMOTE先（上記4値の部分集合）。
+# Preferencesはここに含めない＝「起案は許可・書込は提案化」の境界線。
+PROMOTE_DIRECT_WRITE_FOLDERS = ("Knowledge", "Decisions", "Projects")
 
 # MERGE週上限（設計書§1.2「MERGE（Knowledge非破壊マージ・上限2件）」）。
 DEFAULT_MAX_MERGE_ACTIONS = 2
@@ -72,6 +98,14 @@ DEFAULT_MAX_MERGE_ACTIONS = 2
 DEFAULT_GATE_SCRIPT = SCRIPT_DIR / "promote-preferences-gate.sh"
 DEFAULT_NGWORDS_FILE = SCRIPT_DIR.parent / "ngwords.txt"
 
+# Preferences提案の保管先（2026-07-17本人再裁定・Vault外＝ディレクトリ0700・
+# ファイル0600）。次回セッション起動時にbootstrap-vault.shがこのディレクトリを
+# 直接スキャンして「未確認N件」を通知し、本人承認後にリーダーがVaultへ作成する
+# （[[Decisions/2026-07-16-nightly-batch-direct-write]]・
+# [[Decisions/2026-07-18-external-brain-hardening]]でpendingマーカー層は撤去）。
+DEFAULT_PREFERENCES_PROPOSALS_DIR = (
+    pathlib.Path.home() / ".claude" / "logs" / "maintenance" / "preferences-proposals")
+
 # ヘッドレスClaude呼び出しの既定値（本人追加要望＝モデル指定を設定可能にする。
 # 実機スモークテストが高価な"fable"セッションモデルへ既定で寄っていたため、
 # 週次バッチには不向き＝明示的にsonnetを既定にする＝設計書§2.1関連の実装時要望）。
@@ -79,7 +113,7 @@ DEFAULT_CLAUDE_BIN = os.environ.get("MAINTENANCE_APPLY_CLAUDE_BIN", "claude")
 DEFAULT_MODEL = os.environ.get("MAINTENANCE_APPLY_MODEL", "sonnet")
 DEFAULT_CLAUDE_TIMEOUT = 300.0
 
-VALID_ACTIONS = ("promote", "merge", "fix_approve", "skip")
+VALID_ACTIONS = ("promote", "merge", "skip")
 
 # validate_structured_output()のadditionalProperties:false相当チェック用
 # （2026-07-16 Codex一次レビュー指摘Major対応）。build_output_schema()の
@@ -122,18 +156,17 @@ def slugify_id(raw_id):
 
 def build_system_prompt(max_merge_actions):
     """固定instruction（--system-prompt-fileへ渡す）。素材（fragments/
-    fix_candidates/merge_candidates）は標準入力でJSONとして別途渡す
-    （設計書§2.1「命令と素材は可能な限り分離」）。
+    merge_candidates）は標準入力でJSONとして別途渡す（設計書§2.1「命令と
+    素材は可能な限り分離」）。
     """
     return f"""あなたは外部脳(Obsidian Vault)の週次夜間メンテジョブです。
 唯一のルール:「確定で大丈夫なものだけ機械的に修正し、疑いがあるものは触らず
 放置する」。人間にもリーダーにも判断を運びません。迷ったら何もしない
 （そのidをactionsに含めない、またはaction: skip にする）ことが常に正解です。
 
-標準入力で渡されるJSON（フィールド: fragments・fix_candidates・
-merge_candidates）を読み、指定されたJSON Schemaに厳密に適合する構造化出力
-だけを返してください。それ以外の説明文・前置き・言い訳は一切出力しないで
-ください。
+標準入力で渡されるJSON（フィールド: fragments・merge_candidates）を読み、
+指定されたJSON Schemaに厳密に適合する構造化出力だけを返してください。それ
+以外の説明文・前置き・言い訳は一切出力しないでください。
 
 # actionの種類
 - promote: fragments内の1件を、確定した知見として1つの新規ノートへ昇格する。
@@ -141,10 +174,16 @@ merge_candidates）を読み、指定されたJSON Schemaに厳密に適合す�
   body には frontmatter（date/tags/project/aliases）込みの新規ノート全文を
   あなたが執筆して入れてください。
     - 昇格するか自信が持てない・内容が断片的・後で書き直しが要りそうな場合は
-      昇格せず放置してください（fragmentは消えず来週以降も候補になります）。
-    - target_folder に "Preferences" を選ぶ場合、そのノートは**公開
-      （public）されます**。以下の4条を必ず守ってください（違反が検出された
-      場合、機械ゲートによりそのactionだけ無条件でskipされます）:
+      昇格せず見送ってください。この評価は one-shot です＝今回見送った
+      fragment が翌週また自動的に候補として提示される保証はありません
+      （見送り分は受容されるか、人間が定期の棚卸し相談で拾います）。
+      件数を稼ぐ必要はなく、確信が無ければ見送るのが常に正解です。
+    - target_folder に "Preferences" を選ぶ場合、その下書きはVaultへ
+      直接書き込まれず、**本人の確認・承認を経てから**Vaultへ作成され
+      公開（public）されます（あなたの実行時点ではVaultにもpublicにも
+      一切反映されません）。承認後に本当にpublicになる前提で、以下の
+      4条を必ず守ってください（違反が検出された場合、機械ゲートにより
+      そのactionだけ無条件でskipされ、提案自体が破棄されます）:
         1. 個人情報・経緯・エピソードを書かない（「今どう動くか」だけに削ぐ）。
         2. ユーザーの呼び名（ハンドルネーム）を書かない
            （「ユーザー」「本人」等の中立表現。ID "takumi009" は可）。
@@ -160,15 +199,16 @@ merge_candidates）を読み、指定されたJSON Schemaに厳密に適合す�
     - 両ノートの `updated` 日付を本文中に明記する。
     - コードブロック・出典URL・本文中の日付表記は一切変更しない。
     - aliasesは両ノートの和集合にする。
-    - frontmatterの必須キー（両ノートにあったキー）を統合ノートにも残す。
+    - frontmatterのキー（両ノートにあったキーのうち、正当に変わりうる
+      aliases/updated/date/deprecated/superseded_by/review_byを除く）を
+      統合ノートにも残す。
   本当に内容が重複していて統合が明白な場合のみ選んでください。少しでも
   論点が違う・矛盾している・統合すると片方の主張が消えると感じたら見送って
-  ください（見送りは相互再検討の対象として来週以降も候補になり得ます）。
-- fix_approve: fix_candidates内の1件を承認する。修正後の値は既にPythonが
-  決定的に計算済みで、あなたの出力に値を含める必要はありません
-  （含めても無視されます）。relpath・現在の状況から見て承認して問題なければ
-  承認、少しでも不自然（未来のイベントを示唆する日付・不整合）なら見送って
-  ください。
+  ください（merge候補はfragmentと異なり、見送ってもstate.json上でpending
+  のまま残り続け、明示的にmergeされるまで次回以降もそのまま提示対象です
+  ＝見送っても消えません。ただし何週も繰り返し見送っている場合は、それ
+  自体が「本当は統合すべきでない」判断が定着しているサインとして扱って
+  よく、毎回同じ判断で構いません）。
 - skip: 明示的に見送る場合に使えます（省略して単にactionsに含めなくても
   同じ意味＝両者に差はありません）。
 
@@ -182,7 +222,7 @@ merge_candidates）を読み、指定されたJSON Schemaに厳密に適合す�
 """
 
 
-def build_material(fragments, fix_candidates, merge_candidates):
+def build_material(fragments, merge_candidates):
     """ヘッドレスClaudeへ標準入力で渡す素材JSON（設計書§2.2「命令と素材は
     可能な限り分離」）。相手に実ファイルパスの手がかりを不必要に与えない
     ため、merge_candidatesにはnote_a/note_bのrelpathを含めない（統合ノート
@@ -195,10 +235,6 @@ def build_material(fragments, fix_candidates, merge_candidates):
              "heading_or_bullet": f.get("heading_or_bullet"), "body": f.get("body")}
             for f in fragments
         ],
-        "fix_candidates": [
-            {"id": c["id"], "relpath": c.get("relpath"), "fix_date": c.get("fix_date")}
-            for c in fix_candidates
-        ],
         "merge_candidates": [
             {"id": m["id"], "note_a_text": m.get("note_a_text"), "note_b_text": m.get("note_b_text")}
             for m in merge_candidates
@@ -206,14 +242,14 @@ def build_material(fragments, fix_candidates, merge_candidates):
     }
 
 
-def build_output_schema(frag_ids, fix_ids, merge_ids):
+def build_output_schema(frag_ids, merge_ids):
     """`--json-schema`へ渡すJSON Schema（設計書§2.3「additionalProperties:
     false・action enum・id正規表現・配列最大件数を強制」）。idはenumで既知
     集合に絞る（schema層での防御・多層防御の1枚目。真の権威はPython側の
     validate_structured_output()＝schema層の検証をclaude CLI自身がどこまで
     厳密に強制するかに依存せず、常に独立してPython側で再検証する）。
     """
-    all_ids = sorted(frag_ids | fix_ids | merge_ids)
+    all_ids = sorted(frag_ids | merge_ids)
     return {
         "type": "object",
         "additionalProperties": False,
@@ -310,13 +346,13 @@ def invoke_claude(claude_bin, model, system_prompt_path, schema, material, timeo
     return structured, None, None
 
 
-def validate_structured_output(data, frag_ids, fix_ids, merge_ids):
+def validate_structured_output(data, frag_ids, merge_ids):
     """Claude応答の構造化出力を検証する（設計書§2.3「未知idの操作・schema
     違反・重複id・上限超過は1件でもあれば応答全体を不採用（部分適用しない）」）。
 
     schema自体（--json-schemaでclaude CLIに強制させた形状）を信頼しきらず、
     ここで独立に完全な再検証を行う（fail-closedの徹底＝merge_checks.pyの
-    overlays必須化と同じ設計哲学）。action種別とid種別（frag-/inv-/cand-が
+    overlays必須化と同じ設計哲学）。action種別とid種別（frag-/cand-が
     どの候補集合に属するか）の不一致（例: fragment idにaction: mergeを
     指定）も「未知idの操作」の一種としてここで拒否する（応答全体を不採用に
     する＝individual skipで済ませない）。
@@ -334,7 +370,7 @@ def validate_structured_output(data, frag_ids, fix_ids, merge_ids):
     if not isinstance(actions, list):
         return None, "actionsが配列ではありません"
 
-    all_ids = frag_ids | fix_ids | merge_ids
+    all_ids = frag_ids | merge_ids
     if len(actions) > len(all_ids):
         return None, f"actions件数({len(actions)})が候補件数({len(all_ids)})を超えています"
 
@@ -365,8 +401,6 @@ def validate_structured_output(data, frag_ids, fix_ids, merge_ids):
             return None, f"id種別とactionの不一致（promoteはfragment idのみ許可）: {aid}"
         if kind == "merge" and aid not in merge_ids:
             return None, f"id種別とactionの不一致（mergeはmerge candidate idのみ許可）: {aid}"
-        if kind == "fix_approve" and aid not in fix_ids:
-            return None, f"id種別とactionの不一致（fix_approveはinventory idのみ許可）: {aid}"
         if kind == "promote":
             if a.get("target_folder") not in PROMOTE_TARGET_FOLDERS:
                 return None, f"promoteのtarget_folderが不正です: {aid}"
@@ -408,18 +442,22 @@ def safe_new_note_path(vault_root, target_folder, filename):
     return resolved_folder / filename
 
 
-def exclusive_create(path, text):
+def exclusive_create(path, text, mode=0o644):
     """新規ノートを最終パスへ直接`os.open(O_CREAT|O_EXCL|O_WRONLY)`で排他
     書込する（設計書§2.4改訂v2「temp+renameは上書き防止にならない
     （os.replaceは常に成功する）→新規ノートは最終パスへ直接
     O_CREAT|O_EXCL|O_WRONLYで書く」）。O_NOFOLLOWも付与し、対象パスが既に
     symlinkとして存在する場合も拒否する。
+
+    `mode`はプロセスのumaskで"減る"方向にしか働かないため、より厳格な権限
+    （例: Preferences提案の0o600＝2026-07-17改定）を呼び出し元が要求すれば、
+    作成後に別途chmod()する二段階を挟まずそのまま安全に実現できる。
     """
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        fd = os.open(str(path), flags, 0o644)
+        fd = os.open(str(path), flags, mode)
     except FileExistsError:
         return False, "already_exists"
     except OSError as e:
@@ -429,6 +467,16 @@ def exclusive_create(path, text):
             fd = None
             f.write(text)
     except OSError as e:
+        # O_EXCLで作成済みのファイルへの書込みが失敗した場合（ディスク枯渇等）、
+        # 削除せずに残すと中途半端な内容（0バイト/途中まで）が既存ファイルとして
+        # 残ってしまい、次回実行時にFileExistsError→"already_exists"扱いとなって
+        # 不完全な内容が「既に完了済み」と誤認される（2026-07-17 Codex一次
+        # レビュー指摘Major対応: 冪等リトライ方式＝B案の前提が崩れる）。削除自体の
+        # 失敗はベストエフォート（元の書込みエラーを返すことを優先する）。
+        try:
+            os.unlink(str(path))
+        except OSError:
+            pass
         return False, str(e)
     finally:
         if fd is not None:
@@ -560,7 +608,8 @@ def apply_promoted_marker(text, loc, link_target_no_ext):
     return out + "\n" if text.endswith("\n") else out
 
 
-def apply_promote(vault_root, frag_rec, act, today_iso, gate_script, ngwords_file, dry_run, source_cache):
+def apply_promote(vault_root, frag_rec, act, today_iso, gate_script, ngwords_file, dry_run, source_cache,
+                   preferences_proposals_dir=None):
     aid = frag_rec["id"]
     target_folder = act.get("target_folder")
     body = act.get("body")
@@ -611,15 +660,27 @@ def apply_promote(vault_root, frag_rec, act, today_iso, gate_script, ngwords_fil
         # ディスク読込時にのみ行う）。
         current_source_text = cached
 
-    if target_folder == "Preferences":
-        gate_ok, gate_reason = run_preferences_gate(gate_script, vault_root, body, ngwords_file)
-        if not gate_ok:
-            return {"id": aid, "action": "promote", "applied": False,
-                    "reason": f"preferences_gate_detected: {gate_reason}"}
-
     slug = slugify_id(aid)
     if not slug:
         return {"id": aid, "action": "promote", "applied": False, "reason": "empty_slug"}
+
+    # 「起案は許可・書込は提案化」の分岐点（2026-07-17本人再裁定）: Preferences
+    # だけはここでVault直書き経路から外れ、Vault外の提案保管専用処理へ委譲する
+    # （Fragments側のstatus:promotedマーキングも行わない＝実際にはVaultへ
+    # 何も昇格していないため。TOCTOU再照合済みのsourceを渡す必要が無いので
+    # current_source_text/loc探索より前で早期returnしてよい）。
+    if target_folder == "Preferences":
+        return apply_promote_preferences_proposal(
+            aid, slug, body, gate_script, vault_root, ngwords_file,
+            preferences_proposals_dir or DEFAULT_PREFERENCES_PROPOSALS_DIR, dry_run,
+            source_relpath=source_relpath)
+
+    # ここへ到達するtarget_folderは常にPROMOTE_DIRECT_WRITE_FOLDERSの部分集合の
+    # はず（PROMOTE_TARGET_FOLDERSの4値からPreferencesを既に上で分岐済みの
+    # ため）。多層防御として明示的に再確認する（他の検証箇所と同じ設計哲学）。
+    if target_folder not in PROMOTE_DIRECT_WRITE_FOLDERS:  # pragma: no cover - 到達しないはずの安全網
+        return {"id": aid, "action": "promote", "applied": False, "reason": "invalid_target_folder"}
+
     filename = f"{slug}.md"
 
     existing_folder = find_existing_promoted_file(vault_root, slug)
@@ -643,11 +704,27 @@ def apply_promote(vault_root, frag_rec, act, today_iso, gate_script, ngwords_fil
         link_target_folder = target_folder
         write_path_relpath = f"{target_folder}/{filename}"
 
+    # step2（Fragments側のstatus:promotedマーキング）を見送る系の戻り値を
+    # 組み立てる共通ヘルパ（2026-07-18ハードニングCodexレビュー指摘Major対応:
+    # dry_run以外でstep1が実際に完了している＝Vaultへ新規ノートが実在するのに
+    # step2だけ失敗するケースは、統合ノート作成後に原ノートのstub化が失敗する
+    # MERGEのpartial_merge_stateと同じ「部分適用」であり、has_anomaly=Trueに
+    # すべきだった。従来はapplied=Trueのままanomaly判定から漏れ、Fragments側が
+    # 永久に未マーキングのまま次回--sinceの窓外へ滑り落ちて追跡不能になり
+    # うる欠陥があった。partial_promote_state=Trueを付与し_summarize_results()
+    # 側でanomaly化する）。
+    def _step2_skip_result(step2_reason):
+        applied = step1_status != "dry_run_would_create"
+        result = {"id": aid, "action": "promote", "applied": applied,
+                  "note_path": write_path_relpath, "step1": step1_status, "step2": step2_reason}
+        if applied:
+            result["partial_promote_state"] = True
+            result["reason"] = step2_reason
+        return result
+
     loc = locate_fragment_block(current_source_text, aid, source_relpath)
     if loc is None:
-        return {"id": aid, "action": "promote", "applied": step1_status != "dry_run_would_create",
-                "reason": "note_path", "note_path": write_path_relpath,
-                "step1": step1_status, "step2": "source_block_not_found"}
+        return _step2_skip_result("source_block_not_found")
 
     block_text_now = "\n".join(current_source_text.splitlines()[loc["start"]:loc["end"]])
     if fragments_log.STATUS_RE.search(block_text_now):
@@ -669,13 +746,9 @@ def apply_promote(vault_root, frag_rec, act, today_iso, gate_script, ngwords_fil
         try:
             recheck_text = resolved_source.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
-            return {"id": aid, "action": "promote", "applied": step1_status != "dry_run_would_create",
-                    "note_path": write_path_relpath, "step1": step1_status,
-                    "step2": "source_unreadable_at_final_recheck"}
+            return _step2_skip_result("source_unreadable_at_final_recheck")
         if recheck_text != current_source_text:
-            return {"id": aid, "action": "promote", "applied": step1_status != "dry_run_would_create",
-                    "note_path": write_path_relpath, "step1": step1_status,
-                    "step2": "source_changed_at_final_recheck"}
+            return _step2_skip_result("source_changed_at_final_recheck")
 
         link_target_no_ext = f"{link_target_folder}/{slug}"
         new_source_text = apply_promoted_marker(current_source_text, loc, link_target_no_ext)
@@ -684,78 +757,159 @@ def apply_promote(vault_root, frag_rec, act, today_iso, gate_script, ngwords_fil
         source_cache[source_relpath] = new_source_text  # 次の同一ファイル向けPROMOTEはこれを土台にする
 
     return {"id": aid, "action": "promote", "applied": True, "note_path": write_path_relpath,
-            "step1": step1_status, "step2": step2_status}
+            "target_folder": target_folder, "step1": step1_status, "step2": step2_status}
 
 
 # =============================================================================
-# FIX（棚卸し機械修正・missing_updatedのみ＝設計書§3.5）
+# PROMOTE（Preferences提案・Vault外保管＝2026-07-17本人再裁定）
 # =============================================================================
 
-def apply_fix_updated(text, fix_date):
-    """FIXの値（Phase1で決定的に計算済みのfix_date）をfrontmatterの
-    updated:へ適用する（vault_lib.apply_updated()＝apply_aliases.py由来の
-    共有ヘルパをそのまま再利用。frontmatter以外の本文には一切触れない）。
-    frontmatterが見つからなければNoneを返す。
+
+def _write_proposal_sidecar_meta(proposal_path, aid, source_relpath, generated_at_iso):
+    """提案ファイル`<slug>.md`と同じディレクトリへ`<slug>.meta.json`を排他的に
+    書く（2026-07-17 tester2差し戻し・Major対応「pendingマーカー破損時に
+    未確認提案が消失する」）。
+
+    通知（claude/hooks/bootstrap-vault.sh）はpendingマーカーJSONではなく
+    proposals_dir自体を"source of truth"として起動のたびにディレクトリを
+    直接スキャンする（2026-07-18ハードニングでマーカー層自体を撤去・
+    [[Decisions/2026-07-18-external-brain-hardening]]）。このsidecarファイル
+    さえproposals_dir内に残っていれば、承認作業時にid・出典(source_relpath)・
+    初回生成日時(generated_at)を失わずに追跡できる。
+
+    ベストエフォート（mode 0600・O_EXCL）: 書込みに失敗しても本体
+    `<slug>.md`は既に保存済みなので、そのこと自体で全体のPROMOTE結果を
+    失敗にはしない（sidecarが無い提案ファイルはディレクトリスキャン側が
+    slug/mtimeだけで代替表示するfail-open経路を持つ＝id等が欠けるだけの
+    劣化に留まる）。戻り値はNone（成功）またはエラー理由文字列。
     """
-    m = vault_lib.FRONTMATTER_RE.match(text)
-    if not m:
+    meta_path = proposal_path.with_suffix(".meta.json")
+    payload = json.dumps(
+        {"id": aid, "source_relpath": source_relpath, "generated_at": generated_at_iso},
+        ensure_ascii=False, indent=2)
+    ok, err = exclusive_create(meta_path, payload, mode=0o600)
+    if ok or err == "already_exists":
         return None
-    lines = m.group(1).split("\n")
-    rest = text[m.end():]
-    lines = vault_lib.apply_updated(lines, fix_date)
-    return "---\n" + "\n".join(lines) + "\n---\n" + rest
+    return err
 
 
-def apply_fix(vault_root, fix_rec, dry_run):
-    aid = fix_rec["id"]
-    relpath = fix_rec.get("relpath")
-    path = pathlib.Path(vault_root) / relpath
+def apply_promote_preferences_proposal(aid, slug, body, gate_script, vault_root, ngwords_file,
+                                        proposals_dir, dry_run, source_relpath=None):
+    """PROMOTE先がPreferencesの場合の適用（[[Decisions/2026-07-16-nightly-
+    batch-direct-write]]同日改定・本人再裁定 2026-07-17）。
+
+    Preferencesは「夜間バッチが直接Vaultへ書く」対象から外れ、「提案→本人が
+    確認・承認→リーダーがVaultへ作成」の運用へ変更された。よってこの関数は
+    Vaultへは一切書き込まない（新規ノート作成もFragments側のstatus:promoted
+    マーキングもしない＝実際には何も昇格していないため）。行うのは:
+      1. 既存の書込前ゲート（Personalリンク検査＋ngwords）を最終全文へ同期
+         適用する（従来どおり）。違反した提案は保管せず破棄する（このaction
+         はapplied=Falseで返り、Vaultにも提案置き場にも何も残らない）。
+      2. ゲート通過後、下書き全文をVault外の`proposals_dir/<slug>.md`へ
+         O_CREAT|O_EXCL|O_WRONLYで排他的に保管する（mode 0600）。既に同じ
+         slugの提案ファイルが存在する場合は前回実行で保管済みとみなし
+         上書きせず「既存提案を維持」として扱う（PROMOTE本体の冪等リトライ
+         方式＝B案と同じ考え方をVault外の提案保管にも適用）。同時に
+         `<slug>.meta.json`sidecar（id/source_relpath/generated_at）も
+         排他的に書く（2026-07-17 tester2差し戻し対応・下記参照）。
+      3. 既にVaultの4フォルダいずれかに同じslugのノートが実在する場合
+         （本人が既に承認しリーダーが作成済み、または将来同名衝突）は
+         二重提案しない。
+
+    戻り値の"target_folder"は常に"Preferences"（呼び出し元_summarize_results()
+    がVault実書込のn_promotedから除外するための判定に使う）。"source_relpath"
+    は元fragmentの所在（例: Fragments/2026-07/2026-07-15.md）を承認作業時の
+    追跡用に伝播するだけの付随情報（2026-07-17 Codex一次レビュー指摘対応）で、
+    apply_promote()呼び出し元がFragmentsレコードから渡す。
+    """
+    # 既に承認済みでVaultへ実在する場合は二重提案しない（4フォルダとも見る＝
+    # find_existing_promoted_file()と同じ設計。今回Claudeがtarget_folderに
+    # Preferencesを選んでいても、既にKnowledge等へ承認済みなら再提案不要）。
+    existing_folder = find_existing_promoted_file(vault_root, slug)
+    if existing_folder is not None:
+        return {"id": aid, "action": "promote", "applied": True, "target_folder": "Preferences",
+                "reason": "already_promoted_in_vault", "note_path": f"{existing_folder}/{slug}.md"}
+
+    # proposals_dirがVault配下（誤設定・symlink差し替え等）を指していないかを
+    # 逆方向にも確認する（2026-07-17 Codex一次レビュー指摘Major対応: この
+    # チェックが無いと、--preferences-proposals-dirの設定値だけで「apply層は
+    # Vaultへ一切書かない」という設計上の安全境界が崩れ、ゲート通過後の書込が
+    # 実質的なVault直書きになりかねない）。resolve()は対象が未実在でも
+    # strict=False既定でエラーにならない（他のVault境界検査と同じ考え方）。
+    resolved_vault = pathlib.Path(vault_root).resolve()
     try:
-        resolved = path.resolve()
-        resolved.relative_to(pathlib.Path(vault_root).resolve())
-    except (OSError, ValueError):
-        return {"id": aid, "action": "fix_approve", "applied": False, "reason": "vault_boundary_violation"}
-    try:
-        current_text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return {"id": aid, "action": "fix_approve", "applied": False, "reason": "unreadable_toctou"}
-    current_sha = hashlib.sha256(current_text.encode("utf-8")).hexdigest()
-    if current_sha != fix_rec.get("source_sha256"):
-        return {"id": aid, "action": "fix_approve", "applied": False, "reason": "source_changed_toctou"}
+        resolved_proposals_dir = pathlib.Path(proposals_dir).resolve()
+    except OSError:
+        return {"id": aid, "action": "promote", "applied": False, "target_folder": "Preferences",
+                "reason": "proposals_dir_unresolvable"}
+    if resolved_proposals_dir == resolved_vault or resolved_proposals_dir.is_relative_to(resolved_vault):
+        return {"id": aid, "action": "promote", "applied": False, "target_folder": "Preferences",
+                "reason": "proposals_dir_inside_vault"}
 
-    # sha256一致は「Phase1がこの値を検出した時点の全文と現在の全文が完全一致」を
-    # 意味するため、Phase1が同じ全文から計算したfix_dateはfm["date"]と必ず
-    # 一致し、updatedキーも欠落しているはずである（数学的に導かれる）。それでも
-    # 直接確認しておく（2026-07-16 Codex二次レビュー指摘Major対応: sha256照合
-    # だけに依存せず、実際にfrontmatterを見て「今も本当にupdatedが無く、
-    # dateがfix_dateと一致する」ことを確認する多層防御。中間JSON改ざんで
-    # fix_date単体だけが書き換えられていた場合でもここで検知できる）。
-    fm_now, _ = vault_lib.parse_frontmatter(current_text)
-    if "updated" in fm_now:
-        return {"id": aid, "action": "fix_approve", "applied": False, "reason": "updated_already_present"}
-    if fm_now.get("date") != fix_rec.get("fix_date"):
-        return {"id": aid, "action": "fix_approve", "applied": False, "reason": "fix_date_mismatch"}
+    gate_ok, gate_reason = run_preferences_gate(gate_script, vault_root, body, ngwords_file)
+    if not gate_ok:
+        return {"id": aid, "action": "promote", "applied": False, "target_folder": "Preferences",
+                "reason": f"preferences_gate_detected: {gate_reason}"}
 
-    new_text = apply_fix_updated(current_text, fix_rec.get("fix_date"))
-    if new_text is None:
-        return {"id": aid, "action": "fix_approve", "applied": False, "reason": "no_frontmatter"}
+    proposals_dir = resolved_proposals_dir
+    proposal_path = proposals_dir / f"{slug}.md"
+    extra = {"source_relpath": source_relpath} if source_relpath else {}
 
     if dry_run:
-        return {"id": aid, "action": "fix_approve", "applied": True, "relpath": relpath, "reason": "dry_run"}
+        return {"id": aid, "action": "promote", "applied": True, "target_folder": "Preferences",
+                "reason": "dry_run_would_propose", "proposal_path": str(proposal_path), **extra}
 
-    # 書込み直前にもう一度だけ再読込し、ここまでの処理中に外部で変更されて
-    # いないかを最終確認する（2026-07-16 Codex二次レビュー指摘Major対応
-    # 「TOCTOU再照合後にも競合窓が残る」。FIXは介在処理が軽量なため窓は
-    # 元々小さいが、一貫した安全網として同じパターンを適用する）。
     try:
-        recheck_text = resolved.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return {"id": aid, "action": "fix_approve", "applied": False, "reason": "unreadable_at_final_recheck"}
-    if recheck_text != current_text:
-        return {"id": aid, "action": "fix_approve", "applied": False, "reason": "source_changed_at_final_recheck"}
+        proposals_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(proposals_dir, 0o700)
+    except OSError as e:
+        return {"id": aid, "action": "promote", "applied": False, "target_folder": "Preferences",
+                "reason": f"proposals_dir_error:{type(e).__name__}: {e}"}
 
-    vault_lib.write_note_atomic(resolved, new_text)
-    return {"id": aid, "action": "fix_approve", "applied": True, "relpath": relpath}
+    generated_at_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # mode=0o600を`os.open()`へ直接渡す（作成後にchmod()する二段階だと、
+    # 作成〜chmod完了までの短い窓でプロセスのumask次第の緩い権限のまま実在
+    # しうるため。umaskは0600に対してビットを"落とす"方向にしか働かないので
+    # ここで要求した0600より緩くなることはない）。
+    ok, err = exclusive_create(proposal_path, body, mode=0o600)
+    if not ok:
+        if err == "already_exists":
+            # 冪等: 前回実行で既に同じ提案が保管済み・本人未承認のまま
+            # （PROMOTE本体の冪等リトライ＝B案と同じ考え方）。sidecarが
+            # 前回実行の途中クラッシュ等で欠けている可能性があるため、
+            # ここでも補完を試みる（ベストエフォート）。この経路では
+            # 既存`<slug>.md`のmtime（＝前回実際に生成された時刻に近い値）を
+            # generated_atに使う（2026-07-17 Codex二次レビュー指摘Minor
+            # 対応: 「今回のリトライ時刻」を使うと初回生成日時という意味と
+            # ズレる）。mtime取得自体に失敗した場合のみ今回時刻へ
+            # フォールバックする。書込み結果（成功/失敗）も結果dictへ残す
+            # （従来は捨てていた）。
+            try:
+                backfill_generated_at = datetime.datetime.fromtimestamp(
+                    proposal_path.stat().st_mtime, tz=datetime.timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except OSError:
+                backfill_generated_at = generated_at_iso
+            sidecar_err = _write_proposal_sidecar_meta(proposal_path, aid, source_relpath, backfill_generated_at)
+            result = {"id": aid, "action": "promote", "applied": True, "target_folder": "Preferences",
+                      "reason": "already_proposed", "proposal_path": str(proposal_path), **extra}
+            if sidecar_err:
+                result["sidecar_warning"] = sidecar_err
+            return result
+        return {"id": aid, "action": "promote", "applied": False, "target_folder": "Preferences",
+                "reason": f"proposal_write_failed:{err}"}
+
+    # sidecarの書込み失敗はベストエフォート（本体`<slug>.md`は既に保存済み
+    # のため、この時点でPROMOTE自体を失敗にはしない＝2026-07-17 tester2
+    # 差し戻し対応。sidecar欠落時もbootstrap-vault.shの通知（*.mdファイル数を
+    # 直接カウント）自体には影響しない＝id等の追跡情報が欠けるだけの劣化）。
+    sidecar_err = _write_proposal_sidecar_meta(proposal_path, aid, source_relpath, generated_at_iso)
+    result = {"id": aid, "action": "promote", "applied": True, "target_folder": "Preferences",
+              "proposal_path": str(proposal_path), **extra}
+    if sidecar_err:
+        result["sidecar_warning"] = sidecar_err
+    return result
 
 
 # =============================================================================
@@ -809,10 +963,9 @@ def build_merge_stub_text(orig_text, merged_relpath, today_iso):
     deprecated/superseded_by/updatedのみ上書き、本文はポインタ1行に置換する。
     「原文温存」は本文をライブファイルに残すという意味ではなく、削除せず
     git履歴として残す＝非破壊の意味＝[[Decisions/2026-07-16-nightly-batch-
-    direct-write]]。full再シリアライズ(dictからのYAML再構築)はせず、
-    apply_fix_updated()と同じ行ベース編集にとどめてフォーマット崩れの
-    リスクを避ける）。frontmatterが無いノートはNoneを返す（呼び出し側で
-    skip）。
+    direct-write]]。full再シリアライズ(dictからのYAML再構築)はせず、行ベース
+    編集にとどめてフォーマット崩れのリスクを避ける）。frontmatterが無い
+    ノートはNoneを返す（呼び出し側でskip）。
     """
     m = vault_lib.FRONTMATTER_RE.match(orig_text)
     if not m:
@@ -826,32 +979,98 @@ def build_merge_stub_text(orig_text, merged_relpath, today_iso):
     return "---\n" + "\n".join(fm_lines) + "\n---\n" + stub_body
 
 
+def _safe_release_lock(held):
+    """merge_state.release_lock()を試み、失敗しても例外を送出せずエラー内容を
+    文字列で返す（2026-07-18ハードニングtester3差し戻し・Codexレビュー指摘
+    Minor対応: 従来は`finally`節で無防備にrelease_lock()を呼んでおり、
+    flock解除やfile close自体がOSErrorを送出すると、tryブロック内で確定して
+    いたはずの戻り値（成功/state_write_error等）をfinally節の例外が上書きして
+    しまい、apply_merge()呼び出し元まで例外が伝播していた＝save_state()の
+    OSError未捕捉と同型の取りこぼしになりうる構造だった。呼び出し元
+    mark_candidate_merged()がこの戻り値を見て、既に確定した結果へ反映するか
+    どうかを判断する）。戻り値: None(成功)またはエラー内容の文字列。
+    """
+    try:
+        merge_state.release_lock(held)
+        return None
+    except OSError as e:
+        return str(e)
+
+
 def mark_candidate_merged(state_dir, lock_file, cid, merged_relpath, today_iso):
     """state.json内の候補をmerged終端へ遷移する（merge_state.py・検出器と
     apply層が同じstate.json・同じロックを共有する契約）。ロック取得不能・
     state破損時はfail-open（Vaultへのファイル書込自体は既に完了しているため、
     state.json更新の失敗はここでは致命的としない＝呼び出し側がwarningとして
     記録する）。
+
+    `merge_state.save_state()`が送出しうる`OSError`（ディスク枯渇・権限変化・
+    mkdir失敗等）も同じfail-open方式で`(False, "state_write_error: ...")`として
+    返す（2026-07-18ハードニングtester3差し戻し・Codexレビュー指摘Major対応:
+    従来はここが無防備で、例外がapply_merge()の呼び出し元まで伝播すると
+    apply_actions()の全捕捉安全網に拾われて`applied=False/unexpected_exception`
+    に化けてしまい、統合ノート作成＋原ノート2件のstub化は既に成功しているのに
+    n_mergedへ計上されず、週次MERGE上限のカウントも増えないまま次の候補へ
+    進んでしまう＝上限超過の実害があった）。
+
+    ロック解放自体の失敗（`state_unlock_error`）も同様に扱う（Codexレビュー
+    指摘Minor対応・上記`_safe_release_lock()`参照）。state保存が成功していれば
+    解放失敗のほうを警告として報告する（保存成功自体を握り潰さない）。保存が
+    既に失敗していた場合は元のreason（state_write_error等）を優先する（解放
+    失敗は排他状態が不確実になる副次的な問題であり、主因を上書きしない。
+    ロックファイル自体は正常時にも存在するファイルのため、解放失敗＝
+    ロックファイル残留と断定はしない）。
+
+    ロック解放は明示的なreturn/例外経路に関わらず必ず1回だけ試みる
+    （2026-07-18ハードニングCodexレビュー指摘Major対応: `_safe_release_lock()`
+    導入時にtry/finally構造をやめて各exit pointで個別に呼ぶ形へ書き換えたが、
+    load_state()/save_state()が想定していない例外（例: state.jsonの候補値が
+    dictでない等の未検証な壊れ方でTypeErrorを送出するケース）を投げた場合に
+    どのexit pointにも到達せず、ロックが解放されないまま残留する回帰があった。
+    finally節で必ず解放を試みる元の構造へ戻しつつ、`ok`フラグで「保存まで
+    成功したか」を追跡し、成功時のみfinally内のreturnで解放失敗を
+    `state_unlock_error`として上書き反映する。保存前の失敗（reason確定済み）や
+    未検証の例外はfinallyが何も返さない＝try節の戻り値/伝播中の例外がそのまま
+    優先される）。
+
+    戻り値の`reason`は`lock_unavailable`/`state_error: ...`/
+    `candidate_missing_in_state`/`state_write_error: ...`/
+    `state_unlock_error: ...`のいずれか（Noneは成功時のみ）。
     """
     state_path = pathlib.Path(state_dir) / "state.json"
     held = merge_state.acquire_lock(lock_file)
     if held is None:
         return False, "lock_unavailable"
+
+    ok = False
     try:
         try:
             state = merge_state.load_state(state_path)
         except merge_state.StateError as e:
             return False, f"state_error: {e}"
+
         cand = state.get("candidates", {}).get(cid)
         if cand is None:
             return False, "candidate_missing_in_state"
+
         cand["status"] = "merged"
         cand["merged_at"] = today_iso
         cand["merged_relpath"] = merged_relpath
-        merge_state.save_state(state_path, state)
+        try:
+            merge_state.save_state(state_path, state)
+        except OSError as e:
+            return False, f"state_write_error: {e}"
+
+        ok = True
         return True, None
     finally:
-        merge_state.release_lock(held)
+        # _safe_release_lock()は例外を送出しないため、上のtry/exceptで既に
+        # 確定した戻り値・伝播中の未検証な例外のいずれも損なわない
+        # （okがTrueの場合のみ、下のreturnで「保存成功だが解放失敗」を
+        # state_unlock_errorへ格上げする）。
+        unlock_err = _safe_release_lock(held)
+        if ok and unlock_err:
+            return False, f"state_unlock_error: {unlock_err}"
 
 
 def apply_merge(vault_root, merge_rec, act, today_iso, dry_run, merge_state_dir, merge_lock_file):
@@ -950,8 +1169,9 @@ def apply_merge(vault_root, merge_rec, act, today_iso, dry_run, merge_state_dir,
 # オーケストレーション
 # =============================================================================
 
-def apply_actions(vault_root, actions, fragments_by_id, fix_by_id, merge_by_id, *, today_iso,
-                   max_merge_actions, gate_script, ngwords_file, dry_run, merge_state_dir, merge_lock_file):
+def apply_actions(vault_root, actions, fragments_by_id, merge_by_id, *, today_iso,
+                   max_merge_actions, gate_script, ngwords_file, dry_run, merge_state_dir, merge_lock_file,
+                   preferences_proposals_dir=None):
     results = []
     merge_applied = 0
     # 同一実行内で同じFragments日次ファイルから複数件PROMOTEする場合に
@@ -967,13 +1187,12 @@ def apply_actions(vault_root, actions, fragments_by_id, fix_by_id, merge_by_id, 
         # main()まで伝播してstatus-file/apply-log.json自体が書かれずに
         # プロセスがクラッシュする事故を防ぐ（2026-07-16 Codex一次レビュー
         # 指摘Major対応「MERGE途中のI/O失敗でstatus-fileも残らない」の
-        # 一般化＝PROMOTE/FIXも含め全action種別に同じ安全網を適用する）。
+        # 一般化＝PROMOTEも含め全action種別に同じ安全網を適用する）。
         try:
             if kind == "promote":
                 results.append(apply_promote(vault_root, fragments_by_id[aid], act, today_iso,
-                                              gate_script, ngwords_file, dry_run, source_cache))
-            elif kind == "fix_approve":
-                results.append(apply_fix(vault_root, fix_by_id[aid], dry_run))
+                                              gate_script, ngwords_file, dry_run, source_cache,
+                                              preferences_proposals_dir=preferences_proposals_dir))
             elif kind == "merge":
                 if merge_applied >= max_merge_actions:
                     results.append({"id": aid, "action": "merge", "applied": False,
@@ -992,6 +1211,66 @@ def apply_actions(vault_root, actions, fragments_by_id, fix_by_id, merge_by_id, 
     return results
 
 
+# applied=False結果のうち「Claudeの意図的skip」「機械的だが正当な業務スキップ」
+# （内容判断・TOCTOUレース・週次上限・構造ゲート却下等）はanomalyにしない
+# （2026-07-18ハードニング「skipとI/O失敗を集計・状態で区別」・[[Decisions/
+# 2026-07-18-external-brain-hardening]]対処方針3対応）。それ以外の
+# applied=False結果（create_failed・*_unreadable_toctou・proposals_dir_error等）
+# は真のI/O・インフラ失敗とみなしanomaly化し、last_success_atを前進させない
+# （次回同じ--since窓で同じ候補を再走査できる。MERGE検出器自体は--sinceに
+# 依存しないフルスキャンのため、実害の主な範囲はPROMOTE(fragment)候補）。
+# fail-closed: ホワイトリストに無い未知のreason文字列は安全側でI/O失敗扱いに
+# する（新しいreasonを追加した際にここへの追従を忘れても「anomaly化しすぎる」
+# 方向に倒れ、静かにデータを失わない）。
+#
+# 固定reason（可変部分を含まない）は完全一致集合で管理する（2026-07-18
+# ハードニングCodexレビュー指摘Minor対応: startswith()を全件へ一律適用すると、
+# 将来"empty_body_but_actually_io_error"のような複合reasonが誤って正当skip
+# 扱いされる文字列衝突を構造的に許してしまう）。可変の詳細サフィックスを
+# 持つreason（"preferences_gate_detected: <理由>"）のみprefix集合で扱う。
+# "unexpected_action"（validate_structured_output()で既に排除済みのはずの
+# 到達しないはずの安全網）は意図的にホワイトリスト対象外＝万一到達したら
+# 内部不整合の兆候としてI/O失敗と同じくanomaly化する。"claude_skip"は
+# 常にaction=="skip"としか組み合わされない（apply_actions()参照）ため
+# action判定側で既に除外済み＝ここへの列挙は不要。
+_LEGITIMATE_SKIP_REASONS_EXACT = frozenset({
+    "source_changed_toctou",
+    "note_changed_toctou",
+    "source_changed_at_final_recheck",
+    "note_changed_after_merged_note_created_stubs_not_written",
+    "empty_body",
+    "body_missing_frontmatter",
+    "invalid_candidate_record",
+    "not_merge_eligible",
+    "orig_note_no_frontmatter",
+    "merge_checks_failed",
+    "merge_weekly_cap_exceeded",
+})
+_LEGITIMATE_SKIP_REASON_PREFIXES = (
+    "preferences_gate_detected:",
+)
+
+
+def _is_legitimate_skip_reason(reason):
+    if not isinstance(reason, str):
+        return False
+    if reason in _LEGITIMATE_SKIP_REASONS_EXACT:
+        return True
+    return any(reason.startswith(p) for p in _LEGITIMATE_SKIP_REASON_PREFIXES)
+
+
+def _is_io_failure(result):
+    """applied=Falseの1件が、Claudeの意図的skip/正当な業務スキップではなく
+    真のI/O・インフラ失敗であるかを判定する。action=="skip"（Claudeが明示的に
+    見送った）は常に正当なskipとして除外する。それ以外は
+    `_LEGITIMATE_SKIP_REASONS_EXACT`/`_LEGITIMATE_SKIP_REASON_PREFIXES` に
+    一致しない限りI/O失敗扱いにする（fail-closed。上のコメント参照）。
+    """
+    if result.get("action") == "skip":
+        return False
+    return not _is_legitimate_skip_reason(result.get("reason"))
+
+
 def _summarize_results(results):
     """apply_actions()の戻り値からstatus-file向けの集計を作る純粋関数
     （2026-07-16 Codex三次レビュー指摘Minor対応: main()に直書きしていた
@@ -1004,17 +1283,77 @@ def _summarize_results(results):
     （2026-07-16 Codex二次レビュー指摘Major対応: 従来はn_mergedにも普通に
     加算され、anomaly=falseのまま通知されず、次回以降オーファンな統合ノートが
     静かに残り続けていた）。
+
+    真のI/O失敗（`_is_io_failure()`参照）が1件でもあればanomaly化する
+    （2026-07-18ハードニング対応: 従来はcreate_failed等の書込失敗もClaudeの
+    意図的skip・ゲート却下と無区別にn_skippedへ丸め込まれ、last_success_atが
+    誤って前進しうる欠陥があった）。
+
+    partial_promote_state=True（PROMOTEでVaultへの新規ノート作成＝step1は
+    成功したが、Fragments側のstatus:promotedマーキング＝step2がTOCTOU再検出/
+    I/O失敗で見送られた状態）も同様にanomaly化する（2026-07-18ハードニング
+    Codexレビュー指摘Major対応: 従来はapplied=Trueのままanomaly判定から漏れ、
+    Fragments側が永久に未マーキングのまま次回--sinceの窓外へ滑り落ちて
+    追跡不能になりうる欠陥があった。partial_merge_stateと同じ考え方）。
+
+    n_promotedは実際にVaultへ書き込んだ件数のみを数える（2026-07-17改定:
+    target_folder=="Preferences"のpromote結果はVaultへ何も書き込んでいない
+    ＝Vault外への「提案」に過ぎないため、ここで除外する。Preferences提案の
+    件数はmaintenance.sh Phase3がpreferences_proposals_dir自体を直接glob
+    カウントしてFragmentsサマリへ反映する＝status-fileの数値集計とは別
+    チャネルにして二重管理を避ける。2026-07-18ハードニングでpendingマーカー
+    経由の集計は撤去）。partial_promote_stateの場合もVaultへの新規ノート作成
+    自体は成功しているため、n_promotedからは除外しない（MERGEのn_mergedとは
+    異なり、統合ノート自体の成否ではなく付随するFragments側マーキングの
+    成否が問題のため）。
+
+    state_update_warning（mark_candidate_merged()がstate.json更新または
+    ロック後処理に失敗＝lock_unavailable/state_error/candidate_missing_in_state/
+    state_write_error/state_unlock_errorのいずれか）も同様にanomaly化する
+    （2026-07-18ハードニング・tester3差し戻し対応: Vault側の書込（統合ノート
+    作成＋原ノート2件のスタブ化）自体は完全に成功しているためn_mergedからは
+    除外しない）。reasonによって候補の実際の状態は異なる点に注意（Codexレビュー
+    指摘Minor対応・断定的な決めつけを避ける）:
+      - `state_write_error`: state.json側の更新（"merged"への遷移）が未完了。
+        候補は"pending"のまま。
+      - `candidate_missing_in_state`: そもそも候補自体がstateに存在しない
+        （改ざん・別プロセスとの競合等の疑い）。
+      - `state_unlock_error`: state.json側の更新自体は成功しているが、ロック
+        解放(`_safe_release_lock()`参照)の成否が確認できなかった＝排他制御の
+        整合性が不確実（`release_lock()`はfinallyでcloseを試みるため、解放
+        失敗＝ロックファイル残留と断定はしない）。
+      - `lock_unavailable`/`state_error`: 他プロセスが更新中、またはstate.json
+        自体を正常に解釈できない状態のため、候補の実際のstatusはこの時点では
+        確認できない（不明）。
+    いずれの場合も方針3「Phase2書込失敗はanomaly」の同型漏れとして、
+    partial_promote_state/partial_merge_stateと同じくhas_anomaly=Trueにして
+    last_success_atを前進させず、人間に知らせ棚卸し相談等での目視確認を促す。
     """
-    n_promoted = sum(1 for r in results if r["action"] == "promote" and r["applied"])
+    n_promoted = sum(1 for r in results
+                      if r["action"] == "promote" and r["applied"] and r.get("target_folder") != "Preferences")
     n_merged = sum(1 for r in results if r["action"] == "merge" and r["applied"] and not r.get("partial_merge_state"))
     n_merged_partial = sum(1 for r in results if r["action"] == "merge" and r.get("partial_merge_state"))
-    n_fixed = sum(1 for r in results if r["action"] == "fix_approve" and r["applied"])
+    n_promoted_partial = sum(1 for r in results if r["action"] == "promote" and r.get("partial_promote_state"))
     n_skipped = sum(1 for r in results if not r["applied"])
-    has_anomaly = n_merged_partial > 0
-    reason = "n_merged_partial>0（統合ノートは作成済みだが原ノートのstub化が未完了）" if has_anomaly else None
+    io_failures = [r for r in results if not r["applied"] and _is_io_failure(r)]
+    state_update_warnings = [r for r in results if r["action"] == "merge" and r.get("state_update_warning")]
+    has_anomaly = (n_merged_partial > 0 or n_promoted_partial > 0
+                   or bool(io_failures) or bool(state_update_warnings))
+    reasons = []
+    if n_merged_partial > 0:
+        reasons.append("n_merged_partial>0（統合ノートは作成済みだが原ノートのstub化が未完了）")
+    if n_promoted_partial > 0:
+        reasons.append("n_promoted_partial>0（新規ノートは作成済みだがFragments側のstatus:promotedマーキングが未完了）")
+    if io_failures:
+        sample = ", ".join(f"{r.get('id')}:{r.get('reason')}" for r in io_failures[:3])
+        reasons.append(f"io_failure×{len(io_failures)}（{sample}）")
+    if state_update_warnings:
+        sample = ", ".join(f"{r.get('id')}:{r.get('state_update_warning')}" for r in state_update_warnings[:3])
+        reasons.append(f"state_update_warning×{len(state_update_warnings)}（{sample}）")
+    reason = "; ".join(reasons) if reasons else None
     return {
         "n_promoted": n_promoted, "n_merged": n_merged, "n_merged_partial": n_merged_partial,
-        "n_fixed": n_fixed, "n_skipped": n_skipped, "has_anomaly": has_anomaly, "reason": reason,
+        "n_skipped": n_skipped, "has_anomaly": has_anomaly, "reason": reason,
     }
 
 
@@ -1083,34 +1422,6 @@ def _validate_fragment_record(rid, rec):
     except ValueError:
         return False
     return fragments_log.stable_fragment_id(source_relpath, heading) == rid
-
-
-def _validate_fix_record(rid, rec, today):
-    """Phase1 vault_inventory.py --json の1レコードを再検証する。設計書§3.5
-    「missing_updated（Preferences限定）」の範囲（Preferences直下1階層・
-    README.md除く）を外れる・idが再計算不一致・fix_dateが検証不能/未来日の
-    いずれも不正レコードとして除外する（fixable=Trueは呼び出し側で既に
-    フィルタ済みの前提）。
-    """
-    if not isinstance(rec, dict):
-        return False
-    relpath, source_sha256, fix_date = rec.get("relpath"), rec.get("source_sha256"), rec.get("fix_date")
-    if not all(isinstance(x, str) and x for x in (relpath, source_sha256, fix_date)):
-        return False
-    if not _looks_like_sha256_hex(source_sha256):
-        return False
-    if vault_lib.stable_fix_id(relpath) != rid:
-        return False
-    p = pathlib.PurePosixPath(relpath)
-    if p.as_posix() != relpath or len(p.parts) != 2 or p.parts[0] != "Preferences":
-        return False
-    if not p.parts[1].endswith(".md") or p.parts[1] == "README.md":
-        return False
-    try:
-        parsed = datetime.date.fromisoformat(fix_date)
-    except ValueError:
-        return False
-    return parsed <= today
 
 
 def _validate_merge_record(rid, rec):
@@ -1219,26 +1530,28 @@ def _load_json_file(path, label):
     return data, None, False
 
 
-# maintenance.sh側が要求する7必須キー契約（ok/anomaly/n_promoted/n_merged/
-# n_merged_partial/n_fixed/n_skipped）のうち、個数系5キーの既定値。
+# maintenance.sh側が要求する6必須キー契約（ok/anomaly/n_promoted/n_merged/
+# n_merged_partial/n_skipped）のうち、個数系4キーの既定値。
 # 呼び出し箇所ごとに手でキーを列挙する方式は、必須キーが追加された際に
 # 一部の呼び出し箇所だけ追従漏れするリスクがある（2026-07-16 tester独立
 # 検証F2で実測: n_merged_partial追加時に6箇所中5箇所が追従漏れし、
-# maintenance.sh側の7キー必須検証で毎回anomaly誤判定→静穏週のたびに
+# maintenance.sh側の必須キー検証で毎回anomaly誤判定→静穏週のたびに
 # 偽アラート＋last_success_atが進まず--sinceが巻き戻らない実害が発生した。
 # 個別補完ではなく、単一ヘルパ内で既定値を保証する方式へ一本化する
 # ＝「必須キーは単一箇所で管理」という共有ロジック分離原則の適用）。
+# n_fixedキーは2026-07-18本人裁定「FIXごと削除」で撤去した（[[Decisions/
+# 2026-07-18-external-brain-hardening]]2周目・maintenance.sh側の必須キー
+# 契約も6キーへ追従済み）。
 _STATUS_FILE_COUNT_DEFAULTS = {
     "n_promoted": 0,
     "n_merged": 0,
     "n_merged_partial": 0,
-    "n_fixed": 0,
     "n_skipped": 0,
 }
 
 
 def _write_status_file(path, **fields):
-    # 個数系5キーは呼び出し側が明示指定しなければ既定値(0)で補う。呼び出し
+    # 個数系4キーは呼び出し側が明示指定しなければ既定値(0)で補う。呼び出し
     # 側が明示指定した値は当然そちらを優先する（**fieldsで上書きされる
     # ため、dictのマージ順序＝defaults→fieldsで自然に実現できる）。
     merged = dict(_STATUS_FILE_COUNT_DEFAULTS)
@@ -1253,10 +1566,9 @@ def _write_status_file(path, **fields):
 def build_argparser():
     ap = argparse.ArgumentParser(
         description="maintenance.sh Phase 2（判断＋適用）: Phase1検出結果をヘッドレスClaude"
-                     "へ渡し、検証済みの構造化出力に基づきPROMOTE/MERGE/FIXをVaultへ適用する。")
+                     "へ渡し、検証済みの構造化出力に基づきPROMOTE/MERGEをVaultへ適用する。")
     ap.add_argument("--vault", default=str(pathlib.Path.home() / "Data" / "obsidian"))
     ap.add_argument("--fragments-json", default=None, help="fragments_log.py --jsonの出力ファイル")
-    ap.add_argument("--inventory-json", default=None, help="vault_inventory.py --jsonの出力ファイル")
     ap.add_argument("--merge-json", default=None, help="knowledge_merge_candidates.py --jsonの出力ファイル")
     ap.add_argument("--workdir", required=True, help="今回実行の中間ファイル置き場（実行ごと一意ディレクトリ）")
     ap.add_argument("--status-file", default=None, help="機械可読な実行結果（既定: <workdir>/apply-status.json）")
@@ -1268,6 +1580,8 @@ def build_argparser():
     ap.add_argument("--today", default=None, help="YYYY-MM-DD（テスト用の日付固定。省略時は実行日）")
     ap.add_argument("--gate-script", default=str(DEFAULT_GATE_SCRIPT))
     ap.add_argument("--ngwords-file", default=str(DEFAULT_NGWORDS_FILE))
+    ap.add_argument("--preferences-proposals-dir", default=str(DEFAULT_PREFERENCES_PROPOSALS_DIR),
+                     help="Preferences向けPROMOTE提案のVault外保管先（2026-07-17改定）")
     ap.add_argument("--merge-state-dir", default=str(knowledge_merge_candidates.DEFAULT_OUT_DIR))
     ap.add_argument("--merge-lock-file", default=str(merge_state.DEFAULT_LOCK_FILE))
     return ap
@@ -1288,9 +1602,8 @@ def main(argv=None):
     # `no_candidates`という静かな正常終了に丸め込まない）。
     input_load_failures = 0
     frag_payload, w1, f1 = _load_json_file(args.fragments_json, "fragments")
-    inv_payload, w2, f2 = _load_json_file(args.inventory_json, "inventory")
-    merge_payload, w3, f3 = _load_json_file(args.merge_json, "merge")
-    for w, failed in ((w1, f1), (w2, f2), (w3, f3)):
+    merge_payload, w2, f2 = _load_json_file(args.merge_json, "merge")
+    for w, failed in ((w1, f1), (w2, f2)):
         if w:
             warnings.append(w)
             print(f"FACT: {w}", file=sys.stderr)
@@ -1331,33 +1644,6 @@ def main(argv=None):
         return val
 
     fragments_raw = _as_list(frag_payload, "fragments", "fragments")
-    fix_all = _as_list(inv_payload, "missing_updated_fix_candidates", "inventory")
-    # fixable=Falseの要素はvault_inventory.pyが機械的に「今回は修正不可」と
-    # 判定した正常な検出結果であり、warning化の対象ではない（例:
-    # skip_reason=duplicate_date_key等）。非オブジェクト要素だけを区別して
-    # warning化する（2026-07-16 Codex四次レビュー指摘Major対応: 従来は
-    # `isinstance(c, dict) and c.get("fixable") is True`という単一の内包
-    # 表記フィルタで、非オブジェクト要素とfixable=False要素の両方が無言で
-    # 同じように消えており、前者（構造異常の兆候）が一切観測できなかった）。
-    fix_candidates_raw = []
-    for c in fix_all:
-        if not isinstance(c, dict):
-            warnings.append(f"inventory: 非オブジェクトの要素があるため除外します: {c!r}")
-            input_load_failures += 1
-            continue
-        fixable = c.get("fixable")
-        if fixable is True:
-            fix_candidates_raw.append(c)
-        elif fixable is False:
-            pass  # vault_inventory.pyが機械的に「今回は修正不可」と判定した正常な検出結果
-        else:
-            # fixableキーの欠落・bool以外の型（文字列"true"・数値1・null等）は
-            # vault_inventory.pyの実際の出力契約（fixableは常にbool）と食い違う
-            # 構造異常として扱う（2026-07-16 Codex五次レビュー指摘Major対応:
-            # 従来は`is True`との単純比較のみで、これらがすべて無言で
-            # fixable=False相当（正常な修正不可）と区別できずに消えていた）。
-            warnings.append(f"inventory: fixableがbool型ではありません（型={type(fixable).__name__}）")
-            input_load_failures += 1
     merge_candidates_raw = _as_list(merge_payload, "candidates", "merge")
 
     # Phase1中間JSONのレコード整合性をここで独立に再検証する（2026-07-16
@@ -1367,9 +1653,6 @@ def main(argv=None):
     record_warnings = []
     fragments_by_id = _index_by_id_no_collision(
         fragments_raw, _validate_fragment_record, "fragments_records", record_warnings)
-    fix_by_id = _index_by_id_no_collision(
-        fix_candidates_raw, lambda rid, rec: _validate_fix_record(rid, rec, today_date),
-        "fix_records", record_warnings)
     merge_by_id = _index_by_id_no_collision(
         merge_candidates_raw, _validate_merge_record, "merge_records", record_warnings)
     for w in record_warnings:
@@ -1377,10 +1660,9 @@ def main(argv=None):
     warnings.extend(record_warnings)
 
     fragments = list(fragments_by_id.values())
-    fix_candidates = list(fix_by_id.values())
     merge_candidates = list(merge_by_id.values())
-    frag_ids, fix_ids, merge_ids = set(fragments_by_id), set(fix_by_id), set(merge_by_id)
-    all_ids = frag_ids | fix_ids | merge_ids
+    frag_ids, merge_ids = set(fragments_by_id), set(merge_by_id)
+    all_ids = frag_ids | merge_ids
 
     if not all_ids:
         # レコードが1件も無かった「静かな週」と、(a) Phase1レコードが1件以上
@@ -1390,11 +1672,7 @@ def main(argv=None):
         # 後者を`no_candidates`と同じ静かなexit 0にすると、パイプライン自体の
         # 故障（例: `{"fragments": "broken"}`・トップレベルが配列・個々の
         # 要素が非オブジェクト等）が誰にも気づかれないまま毎週繰り返されうる）。
-        # fix_candidates_raw（fixable=Trueのみ）ではなくfix_all（フィルタ前）を
-        # 見る（2026-07-16 Codex四次レビュー指摘Major対応: 「検出はしたが
-        # 修正不可」という正常系だけでfix_candidates_rawが常に空になる週でも、
-        # fix_all自体は非空でありhad_raw_recordsをTrueにできる必要がある）。
-        had_raw_records = bool(fragments_raw) or bool(fix_all) or bool(merge_candidates_raw)
+        had_raw_records = bool(fragments_raw) or bool(merge_candidates_raw)
         structural_problem = (had_raw_records and bool(record_warnings)) or input_load_failures > 0
         if structural_problem:
             print("ANOMALY: phase1_input_invalid: "
@@ -1402,7 +1680,7 @@ def main(argv=None):
             _write_status_file(status_file, ok=False, anomaly=True, reason="phase1_input_invalid", warnings=warnings)
             return 0
         _write_status_file(status_file, ok=True, anomaly=False, reason="no_candidates", warnings=warnings)
-        print("FACT: 今回はPROMOTE/MERGE/FIXいずれの候補もありません。claudeは起動しません。", file=sys.stderr)
+        print("FACT: 今回はPROMOTE/MERGEいずれの候補もありません。claudeは起動しません。", file=sys.stderr)
         return 0
 
     # material構築〜適用までを丸ごとtry/exceptで囲む（2026-07-16 Codex一次
@@ -1413,8 +1691,8 @@ def main(argv=None):
     # 書き込まず異常通知」という設計書§2.6の精神を、想定済みのanomaly経路
     # だけでなく真に予期しない例外にも一貫して適用する）。
     try:
-        material = build_material(fragments, fix_candidates, merge_candidates)
-        schema = build_output_schema(frag_ids, fix_ids, merge_ids)
+        material = build_material(fragments, merge_candidates)
+        schema = build_output_schema(frag_ids, merge_ids)
         system_prompt_path = workdir / "system-prompt.txt"
         system_prompt_path.write_text(build_system_prompt(args.max_merge_actions), encoding="utf-8")
 
@@ -1426,7 +1704,7 @@ def main(argv=None):
                                 reason=f"{anomaly_kind}: {anomaly_detail}", warnings=warnings)
             return 0  # 設計書§2.6: 一切書き込まず正常終了。異常通知はstatus-file経由でmaintenance.shへ。
 
-        actions, verr = validate_structured_output(structured, frag_ids, fix_ids, merge_ids)
+        actions, verr = validate_structured_output(structured, frag_ids, merge_ids)
         if verr:
             print(f"ANOMALY: schema_violation: {verr}", file=sys.stderr)
             _write_status_file(status_file, ok=False, anomaly=True,
@@ -1434,10 +1712,11 @@ def main(argv=None):
             return 0
 
         results = apply_actions(
-            vault_root, actions, fragments_by_id, fix_by_id, merge_by_id, today_iso=today_iso,
+            vault_root, actions, fragments_by_id, merge_by_id, today_iso=today_iso,
             max_merge_actions=args.max_merge_actions, gate_script=args.gate_script,
             ngwords_file=args.ngwords_file, dry_run=args.dry_run,
-            merge_state_dir=args.merge_state_dir, merge_lock_file=args.merge_lock_file)
+            merge_state_dir=args.merge_state_dir, merge_lock_file=args.merge_lock_file,
+            preferences_proposals_dir=args.preferences_proposals_dir)
     except Exception as e:  # noqa: BLE001 - 意図的な全捕捉（安全網。詳細はコメント参照）
         print(f"ANOMALY: unexpected_exception: {type(e).__name__}: {e}", file=sys.stderr)
         _write_status_file(status_file, ok=False, anomaly=True,
@@ -1463,15 +1742,15 @@ def main(argv=None):
         _write_status_file(status_file, ok=not summary["has_anomaly"], anomaly=summary["has_anomaly"],
                             reason=summary["reason"], n_promoted=summary["n_promoted"],
                             n_merged=summary["n_merged"], n_merged_partial=summary["n_merged_partial"],
-                            n_fixed=summary["n_fixed"], n_skipped=summary["n_skipped"], warnings=warnings)
+                            n_skipped=summary["n_skipped"], warnings=warnings)
     except OSError as e:
         print(f"警告: status-fileの書込みに失敗しました: {e}", file=sys.stderr)
 
     n_promoted, n_merged = summary["n_promoted"], summary["n_merged"]
-    n_merged_partial, n_fixed, n_skipped = summary["n_merged_partial"], summary["n_fixed"], summary["n_skipped"]
+    n_merged_partial, n_skipped = summary["n_merged_partial"], summary["n_skipped"]
 
     print(f"完了: promote={n_promoted} merge={n_merged} merge_partial={n_merged_partial} "
-          f"fix={n_fixed} skip={n_skipped}（詳細: {log_file}）")
+          f"skip={n_skipped}（詳細: {log_file}）")
     return 0
 
 

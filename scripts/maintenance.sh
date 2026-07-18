@@ -20,12 +20,24 @@
 #   ④knowledge_merge_candidates.py --json
 #   ⑤decision_propagation.py --since <前回成功時刻> --out <レポート>
 #   ②〜⑤は1本失敗/timeoutしても他は継続する（エラー隔離）。
-# Phase 2: maintenance_apply.py が②③④の検出結果を集約しヘッドレスClaudeへ
-#   1回投げ、検証済みの構造化出力に基づきPROMOTE/MERGE/FIXをVaultへ適用する。
-# Phase 3: 実施サマリをFragments当日ファイルへ1行追記、last-run.jsonの
-#   last_success_atを完全正常終了時のみ更新、backup-vault.shを再度呼び
-#   即commit、Vault書込ロック解放（EXIT trap自動）、異常時のみmacOS通知、
-#   30日超過の実行ディレクトリを削除。
+# Phase 2: maintenance_apply.py が②④の検出結果を集約しヘッドレスClaudeへ
+#   1回投げ、検証済みの構造化出力に基づきPROMOTE/MERGEをVaultへ適用する
+#   （FIX機能は2026-07-18本人裁定で丸ごと削除済み＝[[Decisions/2026-07-18-
+#   external-brain-hardening]]2周目。理由＝Preferences限定でしか動かず
+#   「夜間はPreferencesを書かない」境界の唯一の違反経路だった・値も効果限定的。
+#   ③vault_inventory.pyのmissing_updated検出は棚卸しレポート表示のみに残り、
+#   maintenance_apply.pyへは渡さない）。
+#   PROMOTEのtarget_folder=="Preferences"のみVaultへは書かず、下書き全文を
+#   Vault外の提案保管先へ保管するだけにとどめる（2026-07-17改定・[[Decisions/
+#   2026-07-16-nightly-batch-direct-write]]同日改定＝Preferencesは「無人
+#   直書き」ではなく「提案→承認後に作成」）。
+# Phase 3: Preferences提案件数（proposals_dir直下*.mdの参考glob件数。通知は
+#   claude/hooks/bootstrap-vault.shが起動のたびに直接スキャンする＝
+#   2026-07-18ハードニングでpendingマーカー層は撤去済み）を含む実施サマリを
+#   Fragments当日ファイルへ1行追記、last-run.jsonのlast_success_at
+#   を完全正常終了時のみ更新、backup-vault.shを再度呼び即commit、Vault書込
+#   ロック解放（EXIT trap自動）、異常時のみmacOS通知、30日超過の実行
+#   ディレクトリを削除。
 #
 # 中間ファイル・status-fileの置き場（設計書§1.3・リーダー裁定2026-07-16）:
 #   ~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/ という実行ごと
@@ -60,6 +72,10 @@ source "$SCRIPT_DIR/lib/macos-notify.sh"
 : "${MAINTENANCE_LOG_ROOT:=$HOME/.claude/logs/maintenance}"
 : "${VAULT_WRITER_LOCK_FILE:=$MAINTENANCE_LOG_ROOT/vault-writer.lock}"
 : "${LAST_RUN_FILE:=$MAINTENANCE_LOG_ROOT/last-run.json}"
+# Preferences提案の保管先（maintenance_apply.pyのDEFAULT_PREFERENCES_PROPOSALS_DIRと
+# 同じ既定値。明示的に環境変数で両者へ結線し、片方だけ変更してもう片方が
+# 追従し忘れるドリフトを避ける＝2026-07-18ハードニング）。
+: "${PREFERENCES_PROPOSALS_DIR:=$HOME/.claude/logs/maintenance/preferences-proposals}"
 # Vault書込ロックのstale判定秒数。週次実行1回分（検出＋ヘッドレスClaude1回＋
 # 適用）が十分収まる余裕を見て既定2時間。前回実行がクラッシュしてロックを
 # 片付けられなかった場合の自動解除しきい値（backup-vault.shのSTALE_LOCK_SECONDS
@@ -357,8 +373,11 @@ esac
 # --- vault-public/Preferences差分（check-drift④相当）が残っていれば
 #     export-public-vault.shを即再試行する ---
 # ai-env repoがdirty（無関係な未commit変更がある）ならbusyスキップし、
-# 無関係な変更を巻き込まない（設計書§1.2改訂v2）。Phase0・Phase3（Preferences
-# 昇格があった夜）の両方から呼べるよう関数化する。
+# 無関係な変更を巻き込まない（設計書§1.2改訂v2）。Phase0からのみ呼ぶ
+# （リーダーの通常編集由来のvault-public/Preferences差分対策）。旧・Phase3
+# 呼び出し（Preferences昇格があった夜の再実行）は2026-07-17改定でPreferences
+# が夜間にVaultへ直接書かれなくなったため撤去された（関数自体はlabel引数を
+# 取る汎用実装のまま残す＝将来また複数箇所から呼ぶ可能性を排除しないため）。
 run_export_retry() {
   local label="$1"
   if [[ ! -d "$AIENV_REPO/.git" ]]; then
@@ -430,12 +449,44 @@ FRAGMENTS_RESULT="$(parse_step_status "$FRAGMENTS_STATUS_FILE")"
 log "②fragments_log.py: $FRAGMENTS_RESULT"
 FRAGMENTS_JSON_ARG=()
 if [[ "$FRAGMENTS_RESULT" == "OK 0" ]]; then
-  FRAGMENTS_JSON_ARG=(--fragments-json "$FRAGMENTS_JSON")
+  # fragments_log.pyは個々のFragmentsファイルの読取失敗をscan_error_countとして
+  # JSONへ返すが、それ自体はexit 0の契約（設計書の「読取専用・fail-open」）の
+  # ため、上のrc判定（$FRAGMENTS_RESULT）だけでは検知できない「静かな取りこぼし」
+  # だった（2周目・全体構成再レビューCodex+Fable5収束後の小修正＝impl4）。
+  # scan_error_count>0ならanomaly化し、last_success_atを進めない（apply側の
+  # state_update_warning等と同クラスの最小の足し＝失敗した窓を翌週再走査させる）。
+  # JSON自体が破損/契約違反（scan_error_countが無い・非負整数でない等）で
+  # 件数を確定できない場合も「0件（正常）」へfail-openで丸めてはいけない
+  # （2026-07-18 2周目Codexレビュー指摘Major対応: 従来は例外時に0を印字して
+  # おり、fragments_log.py側の契約違反や出力破損を静かな正常扱いにしてしまい、
+  # 今回追加した「取りこぼしを翌週再走査させる」目的そのものが成立しなくなる
+  # 経路が残っていた）。件数を確定できない場合もanomaly化してPhase2へは渡さない。
+  if FRAGMENTS_SCAN_ERROR_COUNT="$(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1], encoding='utf-8'))
+v = d['scan_error_count']
+if not (isinstance(v, int) and not isinstance(v, bool) and v >= 0):
+    raise SystemExit(1)
+print(v)
+" "$FRAGMENTS_JSON" 2>/dev/null)" && [[ "$FRAGMENTS_SCAN_ERROR_COUNT" =~ ^[0-9]+$ ]]; then
+    FRAGMENTS_JSON_ARG=(--fragments-json "$FRAGMENTS_JSON")
+    if [[ "$FRAGMENTS_SCAN_ERROR_COUNT" -gt 0 ]]; then
+      add_anomaly "Phase1②: fragments_log.pyが読み取れなかったFragmentsファイルが${FRAGMENTS_SCAN_ERROR_COUNT}件あります（scan_error_count>0・候補は渡しつつ継続しますが、翌週再走査させるためlast_success_atは進めません）"
+    fi
+  else
+    add_anomaly "Phase1②: fragments_log.pyのJSON出力からscan_error_countを取得できませんでした（契約違反/JSON破損の疑い・候補は渡さず継続します）"
+  fi
 else
   add_anomaly "Phase1②: fragments_log.pyが失敗/timeoutしました（${FRAGMENTS_RESULT}・継続します）"
 fi
 
 # --- ③vault_inventory.py --json ---
+# missing_updated（Preferences限定）はもはやmaintenance_apply.pyへ渡さない
+# （FIX機能を2026-07-18本人裁定で丸ごと削除済み＝[[Decisions/2026-07-18-
+# external-brain-hardening]]2周目。以後は`.md`棚卸しレポート§1への表示・
+# n_issues計上のみ＝人間が読み時/棚卸し相談で直す）。それでも棚卸し検出
+# 自体（他の項目＝date_drift・リンク切れ・alias欠落等を含む）は週次で
+# 実行し続け、失敗/timeoutはanomaly化する。
 INVENTORY_STATUS_FILE="$RUN_DIR/step-status-inventory.json"
 INVENTORY_JSON="$RUN_DIR/inventory.json"
 run_wrapped_step "$TIMEOUT_VAULT_INVENTORY" "$INVENTORY_STATUS_FILE" \
@@ -443,10 +494,7 @@ run_wrapped_step "$TIMEOUT_VAULT_INVENTORY" "$INVENTORY_STATUS_FILE" \
   python3 "$SCRIPT_DIR/vault-agents/vault_inventory.py" --json
 INVENTORY_RESULT="$(parse_step_status "$INVENTORY_STATUS_FILE")"
 log "③vault_inventory.py: $INVENTORY_RESULT"
-INVENTORY_JSON_ARG=()
-if [[ "$INVENTORY_RESULT" == "OK 0" ]]; then
-  INVENTORY_JSON_ARG=(--inventory-json "$INVENTORY_JSON")
-else
+if [[ "$INVENTORY_RESULT" != "OK 0" ]]; then
   add_anomaly "Phase1③: vault_inventory.pyが失敗/timeoutしました（${INVENTORY_RESULT}・継続します）"
 fi
 
@@ -481,7 +529,22 @@ log "⑤decision_propagation.py: $DECISION_RESULT"
 DECISION_MISSING_COUNT=0
 case "$DECISION_RESULT" in
   "OK 0") : ;;
-  "OK 1") DECISION_MISSING_COUNT=1 ;;
+  "OK 1")
+    # rc=1は「何らかの波及漏れ疑いがある」ことしか保証しないブール値だが、
+    # decision_propagation.pyのレポート本文には実件数
+    # 「波及漏れの疑い: N ノート」が必ず1行含まれる契約（build_report()参照）
+    # のため、可能ならそこから実件数を拾う（2026-07-18ハードニング対処方針4
+    # 「decision_propagationサマリは可能なら実件数へ」）。best-effort:
+    # レポート書式変更・DECISION_OUT読取不可等でパースできない場合は、
+    # 従来どおり「1件以上ある」ことだけを表す1へフォールバックする（0件と
+    # 誤表示しない安全側デフォルト）。
+    DECISION_MISSING_PARSED="$(grep -m1 -oE '波及漏れの疑い: [0-9]+' "$DECISION_OUT" 2>/dev/null | grep -oE '[0-9]+$')"
+    if [[ "$DECISION_MISSING_PARSED" =~ ^[0-9]+$ && "$DECISION_MISSING_PARSED" -gt 0 ]]; then
+      DECISION_MISSING_COUNT="$DECISION_MISSING_PARSED"
+    else
+      DECISION_MISSING_COUNT=1
+    fi
+    ;;
   *) add_anomaly "Phase1⑤: decision_propagation.pyが失敗/timeoutしました（${DECISION_RESULT}・継続します）" ;;
 esac
 
@@ -499,8 +562,8 @@ run_wrapped_step "$TIMEOUT_MAINTENANCE_APPLY" "$APPLY_WRAPPER_STATUS_FILE" \
   --vault "$VAULT" --workdir "$RUN_DIR" --status-file "$APPLY_STATUS_FILE" \
   --claude-timeout "$MAINTENANCE_APPLY_CLAUDE_TIMEOUT" \
   --max-merge-actions "$MAINTENANCE_APPLY_MAX_MERGE_ACTIONS" \
+  --preferences-proposals-dir "$PREFERENCES_PROPOSALS_DIR" \
   ${FRAGMENTS_JSON_ARG[@]+"${FRAGMENTS_JSON_ARG[@]}"} \
-  ${INVENTORY_JSON_ARG[@]+"${INVENTORY_JSON_ARG[@]}"} \
   ${MERGE_JSON_ARG[@]+"${MERGE_JSON_ARG[@]}"}
 APPLY_WRAPPER_RESULT="$(parse_step_status "$APPLY_WRAPPER_STATUS_FILE")"
 log "Phase2 maintenance_apply.py: $APPLY_WRAPPER_RESULT"
@@ -514,9 +577,9 @@ log "Phase2 maintenance_apply.py: $APPLY_WRAPPER_RESULT"
 # `{"ok": false}`のような不完全なstatus-fileも「正常・件数0」として素通り
 # していた。ok/anomalyの型がbool以外、必須キー欠落、件数が非負整数でない
 # 場合はすべて読取失敗＝anomaly扱いにする）。
-N_PROMOTED=0; N_MERGED=0; N_MERGED_PARTIAL=0; N_FIXED=0; N_SKIPPED=0; APPLY_ANOMALY=1; APPLY_REASON="wrapper_failed"
+N_PROMOTED=0; N_MERGED=0; N_MERGED_PARTIAL=0; N_SKIPPED=0; APPLY_ANOMALY=1; APPLY_REASON="wrapper_failed"
 if [[ "$APPLY_WRAPPER_RESULT" == "OK 0" && -f "$APPLY_STATUS_FILE" ]]; then
-  read -r N_PROMOTED N_MERGED N_MERGED_PARTIAL N_FIXED N_SKIPPED APPLY_ANOMALY APPLY_REASON <<EOF
+  read -r N_PROMOTED N_MERGED N_MERGED_PARTIAL N_SKIPPED APPLY_ANOMALY APPLY_REASON <<EOF
 $(python3 -c "
 import json, sys
 
@@ -525,7 +588,10 @@ def _nonneg_int(v):
 
 try:
     d = json.load(open(sys.argv[1], encoding='utf-8'))
-    required = ['ok', 'anomaly', 'n_promoted', 'n_merged', 'n_merged_partial', 'n_fixed', 'n_skipped']
+    # n_fixedキーは2026-07-18本人裁定「FIXごと削除」でmaintenance_apply.py側の
+    # status-file契約から撤去された＝[[Decisions/2026-07-18-external-brain-
+    # hardening]]2周目。この必須キー契約も6キーへ追従する。
+    required = ['ok', 'anomaly', 'n_promoted', 'n_merged', 'n_merged_partial', 'n_skipped']
     if not isinstance(d, dict) or any(k not in d for k in required):
         raise ValueError('missing_required_key')
     if not isinstance(d['ok'], bool) or not isinstance(d['anomaly'], bool):
@@ -547,12 +613,12 @@ try:
     # いた）。
     if d['ok'] == d['anomaly']:
         raise ValueError('ok_and_anomaly_inconsistent')
-    counts = [d['n_promoted'], d['n_merged'], d['n_merged_partial'], d['n_fixed'], d['n_skipped']]
+    counts = [d['n_promoted'], d['n_merged'], d['n_merged_partial'], d['n_skipped']]
     if not all(_nonneg_int(c) for c in counts):
         raise ValueError('counts_not_nonneg_int')
     print(*counts, 1 if d['anomaly'] else 0, (d.get('reason') or 'none').replace(' ', '_'))
 except Exception as e:
-    print(0, 0, 0, 0, 0, 1, f'apply_status_file_invalid:{type(e).__name__}')
+    print(0, 0, 0, 0, 1, f'apply_status_file_invalid:{type(e).__name__}')
 " "$APPLY_STATUS_FILE")
 EOF
   if [[ "$APPLY_ANOMALY" == "1" ]]; then
@@ -566,7 +632,7 @@ else
   # 2つの異常メッセージが重複しないようにする）。
   add_anomaly "Phase2: maintenance_apply.pyの起動自体に失敗しました（${APPLY_WRAPPER_RESULT}）"
 fi
-log "Phase2結果: promote=$N_PROMOTED merge=$N_MERGED merge_partial=$N_MERGED_PARTIAL fix=$N_FIXED skip=$N_SKIPPED"
+log "Phase2結果: promote=$N_PROMOTED merge=$N_MERGED merge_partial=$N_MERGED_PARTIAL skip=$N_SKIPPED"
 
 # =============================================================================
 # Phase 3: サマリ・last-run.json更新・最終commit・通知・保持整理
@@ -605,36 +671,38 @@ append_fragments_summary() {
   mv "$tmp" "$day_file"
 }
 
-SUMMARY_LINE="定常メンテ(週次): 昇格${N_PROMOTED}件・マージ${N_MERGED}件（部分適用${N_MERGED_PARTIAL}件）・修正${N_FIXED}件・見送り${N_SKIPPED}件・波及漏れ疑い${DECISION_MISSING_COUNT}件（詳細: ${RUN_DIR}）"
+# --- Preferences提案件数（Fragmentsサマリ用・2026-07-18ハードニング）---
+# 2026-07-17改定＝[[Decisions/2026-07-16-nightly-batch-direct-write]]同日改定・
+# 本人再裁定でPreferences昇格は「無人直書き」ではなく「提案→承認後に作成」へ
+# 変更された。maintenance_apply.py（Phase2）はtarget_folder=="Preferences"の
+# PROMOTEをVaultへ書かず、下書き全文をVault外の提案保管先（PREFERENCES_
+# PROPOSALS_DIR）へ保管するだけにとどめる。旧実装（apply-log.json内の
+# note_pathが"Preferences/"で始まる結果を検出してexport-public-vault.shを
+# Phase3で再実行する処理）はここで撤去された（Preferencesが夜間にVaultへ
+# 直接書かれなくなったため、同夜exportの必要性自体が消えた＝Phase0冒頭の
+# export再試行＝run_export_retry "Phase0"はリーダーの通常編集由来の差分対策
+# として引き続き残る・別目的のため混同しない）。
+#
+# pendingマーカー層は2026-07-18ハードニング（[[Decisions/2026-07-18-
+# external-brain-hardening]]）で撤去した（正本＝proposals_dir自体を
+# claude/hooks/bootstrap-vault.shが起動のたびに直接スキャンして通知する
+# 方式へ変更・専用マーカーJSON・破損自己修復ロジック・
+# preferences_pending_marker.pyは削除済み＝部品削減。旧実装はgit log -p参照）。
+# ここでは通知は行わず、Fragmentsサマリ行に載せる参考件数として
+# proposals_dir直下の*.mdファイル数を軽く数えるだけにとどめる（列挙自体が
+# 失敗しても0件扱いのfail-openでよい＝この数値は監査用の参考情報であり、
+# 本人への通知はbootstrap-vault.sh側の独立したスキャンが担保するため）。
+N_PENDING_PREFERENCES_PROPOSALS=0
+if [[ -d "$PREFERENCES_PROPOSALS_DIR" ]]; then
+  N_PENDING_PREFERENCES_PROPOSALS="$(find "$PREFERENCES_PROPOSALS_DIR" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$N_PENDING_PREFERENCES_PROPOSALS" =~ ^[0-9]+$ ]] || N_PENDING_PREFERENCES_PROPOSALS=0
+fi
+
+SUMMARY_LINE="定常メンテ(週次): 昇格${N_PROMOTED}件・マージ${N_MERGED}件（部分適用${N_MERGED_PARTIAL}件）・見送り${N_SKIPPED}件・Preferences未確認提案${N_PENDING_PREFERENCES_PROPOSALS}件（要承認）・波及漏れ疑い${DECISION_MISSING_COUNT}件（詳細: ${RUN_DIR}）"
 if append_fragments_summary "$SUMMARY_LINE"; then
   log "Fragmentsサマリ追記: $SUMMARY_LINE"
 else
   add_anomaly "Phase3: Fragmentsサマリの追記に失敗しました"
-fi
-
-# --- Preferencesへの昇格があった夜はexport-public-vault.shを再実行する ---
-# （設計書改訂v2§1.2「Preferencesへの昇格があった夜はPhase 3でexportを実行」）。
-# apply-log.json内にaction=promote・applied=true・note_pathが"Preferences/"で
-# 始まる結果が1件でもあれば対象（2026-07-16 Codexレビュー指摘Major対応:
-# 当初はPhase3にこの再実行が実装されておらず、新規Preferencesノートの
-# public同期が最大1週間遅延しうる欠陥があった）。
-APPLY_LOG_FILE="$RUN_DIR/apply-log.json"
-HAD_PREFERENCES_PROMOTION="$(python3 -c "
-import json, sys
-try:
-    d = json.load(open(sys.argv[1], encoding='utf-8'))
-except Exception:
-    print(0); raise SystemExit
-found = any(
-    isinstance(r, dict) and r.get('action') == 'promote' and r.get('applied') is True
-    and isinstance(r.get('note_path'), str) and r['note_path'].startswith('Preferences/')
-    for r in d.get('results', []) if isinstance(d, dict)
-)
-print(1 if found else 0)
-" "$APPLY_LOG_FILE" 2>/dev/null || echo 0)"
-if [[ "$HAD_PREFERENCES_PROMOTION" == "1" ]]; then
-  log "Phase3: Preferencesへの昇格を検出したためexport-public-vault.shを再実行します"
-  run_export_retry "Phase3"
 fi
 
 # --- backup-vault.shを再度呼び即commit（Fragmentsサマリ＋Phase2の全変更を捕捉） ---

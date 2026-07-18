@@ -1383,171 +1383,37 @@ echo "=== 38. 2026-07-16簡素化: 隔週間隔ガードを撤去し常に実行
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 39. --json: missing_updated（Preferences限定）のFIX候補が計算される(fixable=true・fix_date=date値) ==="
+echo "=== 38b. §1 missing_updated: FIX機能撤去後もupdated欠落の検出自体（レポート§1表示・n_issues計上）は維持され、--jsonにmissing_updated_fix_candidatesキーはもう含まれない（2026-07-18本人裁定「FIXごと削除」の回帰検知・Codex一次レビュー指摘Minor対応でn_issuesの0→1増分を厳密比較） ==="
 {
+  # FIX機能（action: fix_approve）は2026-07-18本人裁定で丸ごと削除された
+  # （[[Decisions/2026-07-18-external-brain-hardening]]2周目）が、missing_updated
+  # の検出自体（人間が読み時/棚卸し相談で直す対象）は他の棚卸し項目と同じく
+  # 維持される契約であることを直接検証する。make_clean_vault（n_issues=0の
+  # 土台）を使い、対象ノート追加前後でn_issuesが厳密に0→1増分することまで
+  # 確認する（make_base_vaultだけだと既存の他ノートのupdated欠落と混ざり
+  # n_issues>=1が対象ノート追加の有無に関わらず常に成立してしまう）。
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  write_note "$V" "Preferences/fixable-note.md" $'date: 2026-01-01'
+  make_clean_vault "$V"
 
-  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  fixable="$(printf '%s' "$out" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/fixable-note.md'][0]
-print(c['fixable'], c['fix_date'], c['skip_reason'])
-")"
-  assert_eq "fixable=Trueでfix_date=2026-01-01・skip_reasonはNone" "True 2026-01-01 None" "$fixable"
+  BEFORE_JSON="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  n_issues_before="$(printf '%s' "$BEFORE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['n_issues'])")"
+  assert_eq "対象ノート追加前はn_issues=0(クリーンなVault)" "0" "$n_issues_before"
 
-  rm -rf "$VAULT_HOME"
-}
+  # aliasesも付与し、§9(aliases欠落)がついでに算入されて増分が2件になる
+  # （missing_updated単独の増分を見たいのに他の警告種別と混ざる）事態を防ぐ。
+  write_note "$V" "Preferences/fix-removed-note.md" $'date: 2026-01-01\naliases: [fix-removed-note-alias]'
 
-echo "=== 40. --json: date:フィールドが無いnoteはno_date_fieldでfix不可 ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  write_note "$V" "Preferences/no-date-note.md" $'tags: [x]'
+  HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null 2>&1
+  REPORT="$(cat "$(find "$VAULT_HOME/.claude/logs/vault-inventory" -name '20*.md' | head -1)")"
+  assert_contains "レポート§1にupdated欠落ノートが表示される" "$REPORT" "Preferences/fix-removed-note.md"
+  assert_eq "レポート冒頭の要確認件数が0→1へ増分する" "1" "$(extract_n_issues "$REPORT")"
 
-  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  reason="$(printf '%s' "$out" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/no-date-note.md'][0]
-print(c['fixable'], c['skip_reason'])
-")"
-  assert_eq "fixable=False・skip_reason=no_date_field" "False no_date_field" "$reason"
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 41. --json: 不正な日付形式(fromisoformat失敗)はinvalid_date_formatでfix不可 ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  write_note "$V" "Preferences/bad-date-note.md" $'date: not-a-date'
-
-  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  reason="$(printf '%s' "$out" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/bad-date-note.md'][0]
-print(c['fixable'], c['skip_reason'])
-")"
-  assert_eq "fixable=False・skip_reason=invalid_date_format" "False invalid_date_format" "$reason"
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 42. --json: 未来日時のdate:はfuture_dateでfix不可（誤って未来日付をupdatedへ転記しない） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  future="$(d_date 30)"
-  write_note "$V" "Preferences/future-date-note.md" "date: $future"
-
-  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  reason="$(printf '%s' "$out" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/future-date-note.md'][0]
-print(c['fixable'], c['skip_reason'])
-")"
-  assert_eq "fixable=False・skip_reason=future_date" "False future_date" "$reason"
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 43. --json: date:キーが重複しているnoteはduplicate_date_keyでfix不可（frontmatter異常・どちらが正か機械的に決められない） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  mkdir -p "$V/Preferences"
-  printf -- '---\ndate: 2026-01-01\ndate: 2026-02-02\n---\n\n本文\n' > "$V/Preferences/dup-date-note.md"
-
-  out="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  reason="$(printf '%s' "$out" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/dup-date-note.md'][0]
-print(c['fixable'], c['skip_reason'])
-")"
-  assert_eq "fixable=False・skip_reason=duplicate_date_key" "False duplicate_date_key" "$reason"
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 43b. --json: FIX候補にはinv-<sha256[:12]>形式の安定IDとsource_sha256（TOCTOU対策用）が含まれる（設計書§2.2/§2.4・maintenance_apply.py未実装向け） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  write_note "$V" "Preferences/fixable-note.md" $'date: 2026-01-01'
-
-  out1="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  info1="$(printf '%s' "$out1" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/fixable-note.md'][0]
-print(c['id'])
-print(c['source_sha256'])
-")"
-  id1="$(echo "$info1" | sed -n '1p')"
-  sha1="$(echo "$info1" | sed -n '2p')"
-
-  assert_eq "idはinv-プレフィックス+12文字16進" "1" \
-    "$(echo "$id1" | grep -qE '^inv-[0-9a-f]{12}$' && echo 1 || echo 0)"
-  assert_eq "source_sha256は64文字16進(sha256)" "1" \
-    "$(echo "$sha1" | grep -qE '^[0-9a-f]{64}$' && echo 1 || echo 0)"
-
-  # ノートの実際のsha256と一致することを直接検証する（内容ベースIDの根拠）。
-  expected_sha="$(python3 -c "import hashlib; print(hashlib.sha256(open('$V/Preferences/fixable-note.md', 'rb').read()).hexdigest())")"
-  assert_eq "source_sha256はノート全文の実際のsha256と一致する" "$expected_sha" "$sha1"
-
-  # 同じrelpathなら2回実行しても同じidになる（決定的・連番ではない）。
-  out2="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  id2="$(printf '%s' "$out2" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/fixable-note.md'][0]
-print(c['id'])
-")"
-  assert_eq "同一relpathなら再実行しても同じidになる(決定的)" "$id1" "$id2"
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 43c. --json: FIX候補のsource_sha256はノート内容が変わればTOCTOU検知できるよう別の値になる ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  write_note "$V" "Preferences/toctou-note.md" $'date: 2026-01-01'
-
-  out1="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  sha_before="$(printf '%s' "$out1" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/toctou-note.md'][0]
-print(c['source_sha256'])
-")"
-
-  # ノート本文を書き換える（TOCTOU: Phase1検出後にVaultが変化したケースを模擬）。
-  printf -- '---\ndate: 2026-01-01\n---\n\n本文が変わった\n' > "$V/Preferences/toctou-note.md"
-
-  out2="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  sha_after="$(printf '%s' "$out2" | python3 -c "
-import json,sys
-data = json.load(sys.stdin)
-c = [x for x in data['missing_updated_fix_candidates'] if x['relpath'] == 'Preferences/toctou-note.md'][0]
-print(c['source_sha256'])
-")"
-
-  assert_eq "内容が変わればsource_sha256も変わる(TOCTOU再照合で不一致検知できる)" "1" \
-    "$([[ "$sha_before" != "$sha_after" ]] && echo 1 || echo 0)"
+  JSON_OUT="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
+  n_issues_after="$(printf '%s' "$JSON_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['n_issues'])")"
+  assert_eq "--json のn_issuesも0→1へ増分する" "1" "$n_issues_after"
+  assert_not_contains "--json出力にmissing_updated_fix_candidatesキーはもう含まれない(FIX機能撤去済み)" \
+    "$JSON_OUT" "missing_updated_fix_candidates"
 
   rm -rf "$VAULT_HOME"
 }

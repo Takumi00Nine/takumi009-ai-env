@@ -6,8 +6,11 @@
 # O_EXCL・TOCTOU・機械ゲート・全件不採用ルール）と、その失敗系テストは一切
 # 簡略化不可」）: 本ファイルは設計書§6が要求する全パターン
 # （Schema違反→全体不採用／未知id→全体不採用／TOCTOU／冪等リトライ／
-# merge_checks.py全項目の失敗パターン／FIX承認・skip／PROMOTEのO_EXCL排他衝突／
+# merge_checks.py全項目の失敗パターン／skip／PROMOTEのO_EXCL排他衝突／
 # Preferences向けPersonalリンク検出時の単体skip）を狙い撃ちで検証する。
+# FIX機能（棚卸しmissing_updatedの機械修正・action: fix_approve）は2026-07-18
+# 本人裁定で丸ごと削除されたため、対応するテスト（旧17〜19・32・47〜52）は
+# 撤去した（[[Decisions/2026-07-18-external-brain-hardening]]2周目）。
 #
 # 実HOME・実Vault・実claudeコマンドには一切依存しない（毎回tempディレクトリを
 # 使い、claudeは`--claude-bin`でfakeスクリプトへ差し替える＝実環境操作なし）。
@@ -67,6 +70,15 @@ $1
 "
 }
 
+# Preferencesゲート（promote-preferences-gate.sh）を「常にOK」に固定するFAKE
+# スクリプト（実rgコマンドの有無に依存させないため）。Personal link/ngwords
+# 検出そのものの正確性はtest-personal-link-check.shが別途担保する。ここでは
+# ゲート通過後のapply層の挙動（Vault外への提案保管・冪等リトライ・
+# n_promoted集計）だけを狙い撃ちで検証する。
+FAKE_GATE_OK="$WORK_ROOT/fake-gate-ok.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_GATE_OK"
+chmod +x "$FAKE_GATE_OK"
+
 # =============================================================================
 # (a) Python関数の単体テスト
 # =============================================================================
@@ -89,25 +101,67 @@ echo "=== 1. slugify_id: NFC正規化・ASCII fold・小文字化・非[a-z0-9-]
   assert_eq "長さ上限(SLUG_MAX_LEN=80)で切り詰められる" "80" "$out"
 }
 
+echo "=== 1b. build_system_prompt: PROMOTEはone-shot明記・MERGEは実態どおりpending永続を明記（2026-07-18ハードニング対処方針4・Codexレビュー指摘Major対応で文言修正） ==="
+{
+  # PROMOTE(fragment)は--sinceウィンドウ依存で本当にone-shotだが、MERGE候補は
+  # knowledge_merge_candidates.pyのstate.jsonにpendingのまま残り続け、明示的に
+  # mergeされるまで次回以降もそのまま提示対象になる（merge_candidate_state()が
+  # 既存pending候補を無条件で引き継ぐため、その週に再検出されたかどうかは
+  # 無関係＝「再検出」ではなく単純な「未削除の永続」。Claudeのaction:"skip"は
+  # apply_actions()内で結果を記録するだけでstate.jsonのstatusは変更しない
+  # ＝mark_candidate_merged()相当のskip版は現行実装に存在しない・Codex二次
+  # レビュー指摘Minor対応）。当初PROMOTE同様「翌週また候補になる保証はない」
+  # という文言をMERGE側にも機械的に適用したが、実装の実態と矛盾する誤情報に
+  # なるため（Codex一次レビュー指摘Major）、MERGEは「見送っても消えない・
+  # pendingのまま次回以降も提示され続ける」という正確な記述に修正した。
+  out="$(run_py "
+p = ma.build_system_prompt(2)
+print('OLD_PROMOTE_PROMISE' if 'fragmentは消えず来週以降も候補になります' in p else 'no_old_promote_promise')
+print('OLD_MERGE_PROMISE' if '見送りは相互再検討の対象として来週以降も候補になり得ます' in p else 'no_old_merge_promise')
+print('HAS_ONE_SHOT' if 'one-shot' in p else 'no_one_shot')
+print('HAS_MERGE_PENDING_NOTE' if 'pending' in p and '見送っても消えません' in p else 'no_merge_pending_note')
+")"
+  assert_not_contains "PROMOTEの旧『翌週また候補』約束は含まれない" "$out" "OLD_PROMOTE_PROMISE"
+  assert_not_contains "MERGEの旧『来週以降も候補になり得ます』(保証めいた表現)は含まれない" "$out" "OLD_MERGE_PROMISE"
+  assert_contains "PROMOTE側はone-shotである旨が明記される" "$out" "HAS_ONE_SHOT"
+  assert_contains "MERGE側はpending永続（実態どおり）が明記される" "$out" "HAS_MERGE_PENDING_NOTE"
+}
+
 echo "=== 2. build_output_schema: id enum・action enum・maxItemsが候補件数と一致 ==="
 {
   out="$(run_py "
 import json
-s = ma.build_output_schema({'frag-1'}, {'inv-1'}, {'cand-1'})
+s = ma.build_output_schema({'frag-1'}, {'cand-1'})
 print(s['properties']['actions']['maxItems'])
 print(sorted(s['properties']['actions']['items']['properties']['id']['enum']))
 print(s['properties']['actions']['items']['additionalProperties'])
+print(sorted(s['properties']['actions']['items']['properties']['action']['enum']))
 ")"
-  assert_contains "maxItemsが3件" "$out" "3"
-  assert_contains "id enumに3件とも含まれる" "$out" "['cand-1', 'frag-1', 'inv-1']"
+  assert_contains "maxItemsが2件" "$out" "2"
+  assert_contains "id enumに2件とも含まれる" "$out" "['cand-1', 'frag-1']"
   assert_contains "additionalPropertiesがFalse" "$out" "False"
+  # action enumがpromote/merge/skipの3種ちょうどであることを厳密に固定する
+  # （2026-07-18本人裁定「FIXごと削除」＝fix_approveの復活をここで回帰検知
+  # する・Codex一次レビュー指摘Minor対応）。
+  assert_contains "action enumはpromote/merge/skipの3種ちょうど（fix_approve等は含まない）" \
+    "$out" "['merge', 'promote', 'skip']"
+}
+
+echo "=== 2b. validate_structured_output: action:fix_approveは既知の未対応actionとして応答全体を不採用する（2026-07-18本人裁定「FIXごと削除」の回帰検知・Codex一次レビュー指摘Minor対応） ==="
+{
+  out="$(run_py "
+data = {'actions': [{'id': 'frag-1', 'action': 'fix_approve'}]}
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
+print(actions, 'ERR' if err else 'NOERR')
+")"
+  assert_contains "fix_approveは不正なactionとして応答全体が不採用になる" "$out" "None ERR"
 }
 
 echo "=== 3. validate_structured_output: 正常な応答はそのまま通る ==="
 {
   out="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'promote', 'target_folder': 'Knowledge', 'body': '---\nx\n---\n'}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print(err)
 print(len(actions))
 ")"
@@ -122,7 +176,7 @@ data = {'actions': [
   {'id': 'frag-1', 'action': 'promote', 'target_folder': 'Knowledge', 'body': '---\nx\n---\n'},
   {'id': 'frag-UNKNOWN', 'action': 'skip'},
 ]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print(actions)
 print('ERR' if err else 'NOERR')
 ")"
@@ -134,7 +188,7 @@ echo "=== 5. validate_structured_output: 重複idは応答全体を不採用 ===
 {
   out="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'skip'}, {'id': 'frag-1', 'action': 'skip'}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print(actions, 'ERR' if err else 'NOERR')
 ")"
   assert_contains "重複idで不採用" "$out" "None ERR"
@@ -144,7 +198,7 @@ echo "=== 6. validate_structured_output: 件数が候補数を超えたら不採
 {
   out="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'skip'}, {'id': 'frag-1', 'action': 'skip'}, {'id':'x','action':'skip'}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print(actions, 'ERR' if err else 'NOERR')
 ")"
   assert_contains "上限超過で不採用" "$out" "None ERR"
@@ -154,7 +208,7 @@ echo "=== 7. validate_structured_output: id種別とactionの不一致は不採�
 {
   out="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'merge', 'body': '---\nx\n---\n'}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), {'cand-1'})
+actions, err = ma.validate_structured_output(data, {'frag-1'}, {'cand-1'})
 print(actions, 'ERR' if err else 'NOERR')
 ")"
   assert_contains "id種別不一致で不採用" "$out" "None ERR"
@@ -164,14 +218,14 @@ echo "=== 8. validate_structured_output: promoteでtarget_folder不正/body欠�
 {
   out1="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'promote', 'target_folder': 'Personal', 'body': '---\nx\n---\n'}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print('ERR' if err else 'NOERR')
 ")"
   assert_eq "target_folder=Personalは許可外なので不採用" "ERR" "$out1"
 
   out2="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'promote', 'target_folder': 'Knowledge'}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print('ERR' if err else 'NOERR')
 ")"
   assert_eq "body欠落は不採用" "ERR" "$out2"
@@ -181,7 +235,7 @@ echo "=== 9. validate_structured_output: skipはbody/target_folder不要で通�
 {
   out="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'skip', 'reason': 'まだ確信が持てない'}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print(err, len(actions) if actions else 0)
 ")"
   assert_eq "skipは通る" "None 1" "$out"
@@ -308,11 +362,12 @@ print(ok, err)
   assert_eq "元の内容が保持される" "既存" "$(cat "$V/Knowledge/dup.md")"
 }
 
-echo "=== 14. PROMOTE Preferences: Personal wiki linkを検出したらそのactionのみskip ==="
+echo "=== 14. PROMOTE Preferences: Personal wiki linkを検出したら提案自体が破棄される（Vault内外どちらにも何も残らない） ==="
 {
   V="$WORK_ROOT/t14/vault"; mkdir -p "$V/Knowledge" "$V/Preferences" "$V/Personal" "$V/Fragments/2026-07"
   echo "dummy" > "$V/Personal/career-private.md"
   NG="$WORK_ROOT/t14/ngwords.txt"; echo "dummyngword" > "$NG"
+  PROPOSALS_DIR="$WORK_ROOT/t14/proposals"
   cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
 ---
 date: 2026-07-15
@@ -335,20 +390,24 @@ rec = {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
        'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}
 body = '---\ndate: 2026-07-16\n---\n\n[[Personal/career-private]] への言及\n'
 act = {'id': fid, 'action': 'promote', 'target_folder': 'Preferences', 'body': body}
-r = ma.apply_promote(vault, rec, act, '2026-07-16', ma.DEFAULT_GATE_SCRIPT, '$NG', dry_run=False, source_cache={})
-print(r['applied'], r['reason'])
+r = ma.apply_promote(vault, rec, act, '2026-07-16', ma.DEFAULT_GATE_SCRIPT, '$NG', dry_run=False, source_cache={},
+                      preferences_proposals_dir='$PROPOSALS_DIR')
+print(r['applied'], r['target_folder'], r['reason'])
 ")"
   assert_contains "Personalリンク検出でapplied=False" "$out" "False"
+  assert_contains "target_folderはPreferencesのまま記録される" "$out" "Preferences"
   assert_contains "理由にpreferences_gate_detected" "$out" "preferences_gate_detected"
-  assert_file_not_exists "Preferencesには何も作成されない" "$V/Preferences"/*.md
+  assert_file_not_exists "Preferencesには何も作成されない（無人直書きは廃止）" "$V/Preferences"/*.md
+  assert_file_not_exists "Vault外の提案置き場にも何も残らない（違反した提案は破棄）" "$PROPOSALS_DIR"
   SRC="$(cat "$V/Fragments/2026-07/2026-07-15.md")"
   assert_not_contains "Fragments側もマーキングされない（action全体がskip）" "$SRC" "status: promoted"
 }
 
-echo "=== 15. PROMOTE Preferences: NGワードを検出したらそのactionのみskip ==="
+echo "=== 15. PROMOTE Preferences: NGワードを検出したら提案自体が破棄される ==="
 {
   V="$WORK_ROOT/t15/vault"; mkdir -p "$V/Knowledge" "$V/Preferences" "$V/Personal" "$V/Fragments/2026-07"
   NG="$WORK_ROOT/t15/ngwords.txt"; echo "himitsuword" > "$NG"
+  PROPOSALS_DIR="$WORK_ROOT/t15/proposals"
   cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
 ---
 date: 2026-07-15
@@ -371,18 +430,21 @@ rec = {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
        'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}
 body = '---\ndate: 2026-07-16\n---\n\nhimitsuword を含む本文\n'
 act = {'id': fid, 'action': 'promote', 'target_folder': 'Preferences', 'body': body}
-r = ma.apply_promote(vault, rec, act, '2026-07-16', ma.DEFAULT_GATE_SCRIPT, '$NG', dry_run=False, source_cache={})
+r = ma.apply_promote(vault, rec, act, '2026-07-16', ma.DEFAULT_GATE_SCRIPT, '$NG', dry_run=False, source_cache={},
+                      preferences_proposals_dir='$PROPOSALS_DIR')
 print(r['applied'], r['reason'])
 ")"
   assert_contains "NGワード検出でapplied=False" "$out" "False"
   assert_contains "理由にpreferences_gate_detected" "$out" "preferences_gate_detected"
   assert_file_not_exists "Preferencesには何も作成されない" "$V/Preferences"/*.md
+  assert_file_not_exists "Vault外の提案置き場にも何も残らない" "$PROPOSALS_DIR"
 }
 
-echo "=== 16. PROMOTE Preferences: 検出なしの場合は正常に適用される（掟4条を満たすクリーンな本文） ==="
+echo "=== 16. PROMOTE Preferences: 検出なしの場合はVaultへは書かずVault外の提案置き場へ保管される（掟4条を満たすクリーンな本文） ==="
 {
   V="$WORK_ROOT/t16/vault"; mkdir -p "$V/Knowledge" "$V/Preferences" "$V/Personal" "$V/Fragments/2026-07"
   NG="$WORK_ROOT/t16/ngwords.txt"; echo "somethingelse" > "$NG"
+  PROPOSALS_DIR="$WORK_ROOT/t16/proposals"
   cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
 ---
 date: 2026-07-15
@@ -405,58 +467,273 @@ rec = {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
        'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}
 body = '---\ndate: 2026-07-16\n---\n\n運用ルールの本文（Personalリンクもngwordsも含まない）\n'
 act = {'id': fid, 'action': 'promote', 'target_folder': 'Preferences', 'body': body}
-r = ma.apply_promote(vault, rec, act, '2026-07-16', ma.DEFAULT_GATE_SCRIPT, '$NG', dry_run=False, source_cache={})
-print(r['applied'])
+r = ma.apply_promote(vault, rec, act, '2026-07-16', '$FAKE_GATE_OK', '$NG', dry_run=False, source_cache={},
+                      preferences_proposals_dir='$PROPOSALS_DIR')
+print(r['applied'], r['proposal_path'])
+slug = ma.slugify_id(fid)
+print('SLUG', slug)
+print('FID', fid)
 ")"
-  assert_eq "クリーンな本文はapplied=True" "True" "$out"
-  assert_file_exists "Preferencesへ実際に作成される" "$V/Preferences"/*.md
+  assert_contains "クリーンな本文はapplied=True" "$out" "True"
+  SLUG_16="$(echo "$out" | grep '^SLUG' | awk '{print $2}')"
+  FID_16_TMP="$(echo "$out" | grep '^FID' | awk '{print $2}')"
+  assert_file_not_exists "Vaultへは一切書き込まれない（無人直書きは廃止）" "$V/Preferences"/*.md
+  assert_file_exists "Vault外の提案置き場へ保管される" "$PROPOSALS_DIR/$SLUG_16.md"
+  PROPOSAL_CONTENT="$(cat "$PROPOSALS_DIR/$SLUG_16.md")"
+  assert_contains "保管された提案の中身はClaudeの下書きそのもの" "$PROPOSAL_CONTENT" "運用ルールの本文"
+  PERM="$(stat -f '%Lp' "$PROPOSALS_DIR/$SLUG_16.md" 2>/dev/null || stat -c '%a' "$PROPOSALS_DIR/$SLUG_16.md")"
+  assert_eq "提案ファイルは0600" "600" "$PERM"
+  DIR_PERM="$(stat -f '%Lp' "$PROPOSALS_DIR" 2>/dev/null || stat -c '%a' "$PROPOSALS_DIR")"
+  assert_eq "提案ディレクトリは0700" "700" "$DIR_PERM"
+  SRC="$(cat "$V/Fragments/2026-07/2026-07-15.md")"
+  assert_not_contains "Fragments側はマーキングされない（実際には何も昇格していないため）" "$SRC" "status: promoted"
+  # 2026-07-17 tester2差し戻し・Major対応: pendingマーカーが破損しても
+  # 自己修復できるよう、sidecar<slug>.meta.json（id/source_relpath/
+  # generated_at）を同ディレクトリへ排他的に書く。
+  assert_file_exists "sidecarメタファイルも作成される" "$PROPOSALS_DIR/$SLUG_16.meta.json"
+  META_CONTENT="$(cat "$PROPOSALS_DIR/$SLUG_16.meta.json")"
+  assert_contains "sidecarにidが記録される" "$META_CONTENT" "\"id\": \"$FID_16_TMP\""
+  META_PERM="$(stat -f '%Lp' "$PROPOSALS_DIR/$SLUG_16.meta.json" 2>/dev/null || stat -c '%a' "$PROPOSALS_DIR/$SLUG_16.meta.json")"
+  assert_eq "sidecarファイルも0600" "600" "$META_PERM"
 }
 
-echo "=== 17. FIX: 正常系（fix_dateがそのまま適用される・Claude由来の値は無視） ==="
+echo "=== 16a4. PROMOTE Preferences: sidecarにsource_relpathとgenerated_at(ISO8601)が正しく記録される ==="
 {
-  V="$WORK_ROOT/t17/vault"; mkdir -p "$V/Preferences"
-  printf -- '---\ndate: 2026-07-01\ntags: [preference]\nproject: x\n---\n\n本文\n' > "$V/Preferences/foo.md"
+  V="$WORK_ROOT/t16a4/vault"; mkdir -p "$V/Knowledge" "$V/Preferences" "$V/Fragments/2026-07"
+  NG="$WORK_ROOT/t16a4/ngwords.txt"; echo "somethingelse" > "$NG"
+  PROPOSALS_DIR="$WORK_ROOT/t16a4/proposals"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+
+# Fragments 2026-07-15
+
+- **断片I**：sidecar内容テスト用の断片本文です。
+EOF
   out="$(run_py "
 import hashlib, pathlib
 vault = pathlib.Path('$V')
-text = (vault/'Preferences/foo.md').read_text()
-rec = {'id': 'inv-abc', 'relpath': 'Preferences/foo.md',
-       'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'fix_date': '2026-07-01'}
-r = ma.apply_fix(vault, rec, dry_run=False)
-print(r['applied'])
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+rec = {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+       'source_sha256': hashlib.sha256(text.encode()).hexdigest(),
+       'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}
+body = '---\ndate: 2026-07-16\n---\n\n本文\n'
+act = {'id': fid, 'action': 'promote', 'target_folder': 'Preferences', 'body': body}
+r = ma.apply_promote(vault, rec, act, '2026-07-16', '$FAKE_GATE_OK', '$NG', dry_run=False, source_cache={},
+                      preferences_proposals_dir='$PROPOSALS_DIR')
+slug = ma.slugify_id(fid)
+print(slug)
 ")"
-  assert_eq "適用成功" "True" "$out"
-  assert_contains "updated:がfix_dateで挿入される" "$(cat "$V/Preferences/foo.md")" "updated: 2026-07-01"
+  SLUG="$out"
+  META_CONTENT="$(cat "$PROPOSALS_DIR/$SLUG.meta.json")"
+  assert_contains "sidecarにsource_relpathが記録される" "$META_CONTENT" '"source_relpath": "Fragments/2026-07/2026-07-15.md"'
+  assert_contains "sidecarにgenerated_atがISO8601形式で記録される" "$META_CONTENT" '"generated_at": "20'
+  GEN_AT="$(python3 -c "import json; print(json.load(open('$PROPOSALS_DIR/$SLUG.meta.json'))['generated_at'])")"
+  assert_contains "generated_atはZ終端のUTC ISO8601" "$GEN_AT" "Z"
 }
 
-echo "=== 18. FIX: TOCTOU（Phase1後にノートが変わっていたらskip） ==="
+echo "=== 16a5. PROMOTE Preferences: 冪等リトライ時、本体は既存のまま・欠けていたsidecarだけ後追いで補完される ==="
 {
-  V="$WORK_ROOT/t18/vault"; mkdir -p "$V/Preferences"
-  printf -- '---\ndate: 2026-07-01\n---\n\n本文\n' > "$V/Preferences/foo.md"
+  V="$WORK_ROOT/t16a5/vault"; mkdir -p "$V/Knowledge" "$V/Fragments/2026-07"
+  NG="$WORK_ROOT/t16a5/ngwords.txt"; echo "somethingelse" > "$NG"
+  PROPOSALS_DIR="$WORK_ROOT/t16a5/proposals"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+
+# Fragments 2026-07-15
+
+- **断片J**：sidecar後追い補完テスト用の断片本文です。
+EOF
   out="$(run_py "
 import hashlib, pathlib
 vault = pathlib.Path('$V')
-text = (vault/'Preferences/foo.md').read_text()
-stale_sha = hashlib.sha256((text + 'X').encode()).hexdigest()
-rec = {'id': 'inv-abc', 'relpath': 'Preferences/foo.md', 'source_sha256': stale_sha, 'fix_date': '2026-07-01'}
-r = ma.apply_fix(vault, rec, dry_run=False)
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+rec = {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+       'source_sha256': hashlib.sha256(text.encode()).hexdigest(),
+       'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}
+slug = ma.slugify_id(fid)
+proposals_dir = pathlib.Path('$PROPOSALS_DIR')
+proposals_dir.mkdir(parents=True, exist_ok=True)
+# 前回実行が本体作成の直後にクラッシュしsidecarが書けなかった状況を模擬。
+(proposals_dir / f'{slug}.md').write_text('前回実行で保管済みの提案本文')
+act = {'id': fid, 'action': 'promote', 'target_folder': 'Preferences',
+       'body': '---\ndate: 2026-07-16\n---\n\n今週の下書き\n'}
+r = ma.apply_promote(vault, rec, act, '2026-07-16', '$FAKE_GATE_OK', '$NG', dry_run=False, source_cache={},
+                      preferences_proposals_dir='$PROPOSALS_DIR')
 print(r['applied'], r['reason'])
+print(slug)
 ")"
-  assert_eq "TOCTOU不一致でskip" "False source_changed_toctou" "$out"
-  assert_not_contains "updated:は追加されない" "$(cat "$V/Preferences/foo.md")" "updated:"
+  assert_contains "冪等リトライでapplied=True・reason=already_proposed" "$out" "True already_proposed"
+  SLUG="$(echo "$out" | tail -1)"
+  KEPT="$(cat "$PROPOSALS_DIR/$SLUG.md")"
+  assert_contains "本体は上書きされない" "$KEPT" "前回実行で保管済みの提案本文"
+  assert_file_exists "欠けていたsidecarが後追いで補完される" "$PROPOSALS_DIR/$SLUG.meta.json"
 }
 
-echo "=== 19. FIX: relpathがVault境界外(..)ならskip ==="
+echo "=== 16a6. PROMOTE Preferences: 冪等リトライ時のsidecar後追い補完は既存<slug>.mdのmtime（初回生成時刻に近い値）を使い、今回のリトライ時刻は使わない（2026-07-17 Codexレビュー指摘Minor対応） ==="
 {
-  V="$WORK_ROOT/t19/vault"; mkdir -p "$V/Preferences"
+  V="$WORK_ROOT/t16a6/vault"; mkdir -p "$V/Knowledge" "$V/Fragments/2026-07"
+  NG="$WORK_ROOT/t16a6/ngwords.txt"; echo "somethingelse" > "$NG"
+  PROPOSALS_DIR="$WORK_ROOT/t16a6/proposals"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+
+# Fragments 2026-07-15
+
+- **断片K**：sidecar後追いgenerated_atテスト用の断片本文です。
+EOF
   out="$(run_py "
-import pathlib
+import hashlib, os, pathlib
 vault = pathlib.Path('$V')
-rec = {'id': 'inv-abc', 'relpath': '../../../../etc/passwd', 'source_sha256': 'x', 'fix_date': '2026-07-01'}
-r = ma.apply_fix(vault, rec, dry_run=False)
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+rec = {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+       'source_sha256': hashlib.sha256(text.encode()).hexdigest(),
+       'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}
+slug = ma.slugify_id(fid)
+proposals_dir = pathlib.Path('$PROPOSALS_DIR')
+proposals_dir.mkdir(parents=True, exist_ok=True)
+md_path = proposals_dir / f'{slug}.md'
+md_path.write_text('前回実行で保管済みの提案本文')
+# 本体のmtimeを明確に過去（'今回のリトライ時刻'とは絶対に一致しない値）へ
+# 固定する。
+past_epoch = 1000000000  # 2001-09-09T01:46:40Z
+os.utime(md_path, (past_epoch, past_epoch))
+act = {'id': fid, 'action': 'promote', 'target_folder': 'Preferences',
+       'body': '---\ndate: 2026-07-16\n---\n\n今週の下書き\n'}
+r = ma.apply_promote(vault, rec, act, '2026-07-16', '$FAKE_GATE_OK', '$NG', dry_run=False, source_cache={},
+                      preferences_proposals_dir='$PROPOSALS_DIR')
+import json
+meta = json.loads((proposals_dir / f'{slug}.meta.json').read_text())
+print(meta['generated_at'])
+")"
+  assert_eq "後追いsidecarのgenerated_atは本体<slug>.mdのmtime由来(2001-09-09)になる（今回のリトライ時刻ではない）" \
+    "2001-09-09T01:46:40Z" "$out"
+}
+
+echo "=== 16b. PROMOTE Preferences: 冪等リトライ（同じ提案が既に保管済みなら上書きせず維持する） ==="
+{
+  V="$WORK_ROOT/t16b/vault"; mkdir -p "$V/Knowledge" "$V/Preferences" "$V/Fragments/2026-07"
+  NG="$WORK_ROOT/t16b/ngwords.txt"; echo "somethingelse" > "$NG"
+  PROPOSALS_DIR="$WORK_ROOT/t16b/proposals"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+
+# Fragments 2026-07-15
+
+- **断片F2**：冪等リトライテスト用の断片本文です。
+EOF
+  out="$(run_py "
+import hashlib, pathlib
+vault = pathlib.Path('$V')
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+rec = {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+       'source_sha256': hashlib.sha256(text.encode()).hexdigest(),
+       'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}
+slug = ma.slugify_id(fid)
+proposals_dir = pathlib.Path('$PROPOSALS_DIR')
+proposals_dir.mkdir(parents=True, exist_ok=True)
+(proposals_dir / f'{slug}.md').write_text('前回実行で保管済みの提案本文')
+act = {'id': fid, 'action': 'promote', 'target_folder': 'Preferences',
+       'body': '---\ndate: 2026-07-16\n---\n\n今週は別の本文をClaudeが書いた\n'}
+r = ma.apply_promote(vault, rec, act, '2026-07-16', '$FAKE_GATE_OK', '$NG', dry_run=False, source_cache={},
+                      preferences_proposals_dir='$PROPOSALS_DIR')
 print(r['applied'], r['reason'])
 ")"
-  assert_eq "Vault境界外はvault_boundary_violation" "False vault_boundary_violation" "$out"
+  assert_contains "冪等: 既存提案があればapplied=Trueかつreason=already_proposed" "$out" "True already_proposed"
+  SLUG_16B="$(run_py "print(ma.slugify_id(fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', '断片F2')))")"
+  KEPT="$(cat "$PROPOSALS_DIR/$SLUG_16B.md")"
+  assert_contains "既存の提案内容は上書きされない" "$KEPT" "前回実行で保管済みの提案本文"
+}
+
+echo "=== 16c. PROMOTE Preferences: proposals_dirがVault配下を指す設定ではVaultへ書かず拒否する（境界検査の逆方向・2026-07-17 Codexレビュー指摘Major対応） ==="
+{
+  V="$WORK_ROOT/t16c/vault"; mkdir -p "$V/Knowledge" "$V/Preferences" "$V/Fragments/2026-07"
+  NG="$WORK_ROOT/t16c/ngwords.txt"; echo "somethingelse" > "$NG"
+  # proposals_dirを誤ってVault配下（Preferencesの中）へ向けた設定ミスを模擬する。
+  MISCONFIGURED_PROPOSALS_DIR="$V/Preferences/leaked-proposals"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+
+# Fragments 2026-07-15
+
+- **断片F3**：proposals_dir境界検査テスト用の断片本文です。
+EOF
+  out="$(run_py "
+import hashlib, pathlib
+vault = pathlib.Path('$V')
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+rec = {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+       'source_sha256': hashlib.sha256(text.encode()).hexdigest(),
+       'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}
+body = '---\ndate: 2026-07-16\n---\n\n本文\n'
+act = {'id': fid, 'action': 'promote', 'target_folder': 'Preferences', 'body': body}
+r = ma.apply_promote(vault, rec, act, '2026-07-16', '$FAKE_GATE_OK', '$NG', dry_run=False, source_cache={},
+                      preferences_proposals_dir='$MISCONFIGURED_PROPOSALS_DIR')
+print(r['applied'], r['reason'])
+")"
+  assert_eq "Vault配下のproposals_dirは拒否される" "False proposals_dir_inside_vault" "$out"
+  assert_file_not_exists "Vault内へは何も作成されない（設定ミスでもVault実書込にならない）" "$MISCONFIGURED_PROPOSALS_DIR"
+}
+
+echo "=== 16d. exclusive_create: 書込み失敗時はO_EXCL作成済みファイルを削除する（次回リトライが誤ってalready_existsにならないための後始末・2026-07-17 Codexレビュー指摘Major対応） ==="
+{
+  V="$WORK_ROOT/t16d/vault"; mkdir -p "$V/Knowledge"
+  out="$(run_py "
+import os, pathlib, unittest.mock as mock
+target = pathlib.Path('$V/Knowledge/partial.md')
+class BoomWriter:
+    def write(self, *a, **kw):
+        raise OSError('disk full (injected)')
+class FakeFile:
+    # 実os.open()が返した本物のfdを保持し、__exit__で確実にcloseする
+    # （2026-07-17 Codexレビュー指摘Minor対応: os.fdopen()自体をモックすると
+    # 実装側のwith文が持つ本来のclose-on-exit挙動が働かず、モック側で
+    # 明示的に閉じないと本物のfdがテストプロセス内でリークしていた）。
+    def __init__(self, fd):
+        self._fd = fd
+    def __enter__(self):
+        return BoomWriter()
+    def __exit__(self, *a):
+        os.close(self._fd)
+        return False
+def fake_fdopen(fd, *a, **kw):
+    return FakeFile(fd)
+with mock.patch('os.fdopen', side_effect=fake_fdopen):
+    ok, err = ma.exclusive_create(target, 'body text')
+print(ok, err)
+print('exists', target.exists())
+")"
+  assert_contains "書込失敗はapplied扱いにならない" "$out" "False"
+  assert_contains "後始末で削除されファイルは残らない" "$out" "exists False"
 }
 
 # --- MERGE用の共通フィクスチャ生成ヘルパ ---
@@ -695,7 +972,7 @@ EOF
   out="$(run_py "
 import hashlib, pathlib
 vault = pathlib.Path('$V')
-fragments_by_id, fix_by_id, merge_by_id = {}, {}, {}
+fragments_by_id, merge_by_id = {}, {}
 actions = []
 for n in (1, 2, 3):
     ta = (vault/f'Knowledge/a{n}.md').read_text(); tb = (vault/f'Knowledge/b{n}.md').read_text()
@@ -706,7 +983,7 @@ for n in (1, 2, 3):
     body = (f'---\ndate: 2026-07-01\nupdated: 2026-07-16\ntags: [test]\nproject: x\n---\n'
             f'# A{n}\n本文A{n}（原updated: 2026-07-10）\n# B{n}\n本文B{n}（原updated: 2026-07-10）\n')
     actions.append({'id': cid, 'action': 'merge', 'body': body})
-results = ma.apply_actions(vault, actions, fragments_by_id, fix_by_id, merge_by_id, today_iso='2026-07-16',
+results = ma.apply_actions(vault, actions, fragments_by_id, merge_by_id, today_iso='2026-07-16',
                             max_merge_actions=2, gate_script=ma.DEFAULT_GATE_SCRIPT, ngwords_file=ma.DEFAULT_NGWORDS_FILE,
                             dry_run=False, merge_state_dir='$WORK_ROOT/t25/state', merge_lock_file='$WORK_ROOT/t25/lock')
 applied = [r['applied'] for r in results]
@@ -772,7 +1049,7 @@ echo "=== 28. validate_structured_output: action要素の未知キーは応答�
 {
   out="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'skip', 'unexpected_field': 'x'}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print(actions, 'ERR' if err else 'NOERR')
 ")"
   assert_contains "未知キーで不採用" "$out" "None ERR"
@@ -782,7 +1059,7 @@ echo "=== 29. validate_structured_output: トップレベルの未知キーは�
 {
   out="$(run_py "
 data = {'actions': [], 'unexpected_top': 1}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print(actions, 'ERR' if err else 'NOERR')
 ")"
   assert_contains "トップレベル未知キーで不採用" "$out" "None ERR"
@@ -792,7 +1069,7 @@ echo "=== 30. validate_structured_output: reasonが文字列でなければ不�
 {
   out="$(run_py "
 data = {'actions': [{'id': 'frag-1', 'action': 'skip', 'reason': 123}]}
-actions, err = ma.validate_structured_output(data, {'frag-1'}, set(), set())
+actions, err = ma.validate_structured_output(data, {'frag-1'}, set())
 print(actions, 'ERR' if err else 'NOERR')
 ")"
   assert_contains "reason型不正で不採用" "$out" "None ERR"
@@ -810,21 +1087,6 @@ print(len(warnings) > 0)
 ")"
   assert_eq "id再計算不一致のレコードは除外される" "[]
 True" "$out"
-}
-
-echo "=== 32. Phase1レコード再検証: Preferences以外を指すFIXレコードは除外される（設計書§3.5の範囲外） ==="
-{
-  out="$(run_py "
-import vault_inventory, datetime
-warnings = []
-rid = vault_inventory.stable_fix_id('Knowledge/not-preferences.md')
-tampered = {'id': rid, 'relpath': 'Knowledge/not-preferences.md', 'source_sha256': 'a'*64,
-            'fixable': True, 'fix_date': '2026-07-01', 'skip_reason': None}
-by_id = ma._index_by_id_no_collision([tampered],
-    lambda r, rec: ma._validate_fix_record(r, rec, datetime.date(2026, 7, 16)), 'fix_records', warnings)
-print(list(by_id.keys()))
-")"
-  assert_eq "Preferences以外のFIXレコードは除外される" "[]" "$out"
 }
 
 echo "=== 33. Phase1レコード再検証: cidがnote_a/note_bの再計算値と一致しないmergeレコードは除外される ==="
@@ -860,25 +1122,40 @@ True" "$out"
 
 echo "=== 35. apply_actions(): 1件のactionで予期しない例外が起きても他のactionの処理は継続する ==="
 {
-  V="$WORK_ROOT/t35/vault"; mkdir -p "$V/Preferences"
-  printf -- '---\ndate: 2026-07-01\n---\n\n本文\n' > "$V/Preferences/foo.md"
+  V="$WORK_ROOT/t35/vault"; mkdir -p "$V/Knowledge" "$V/Fragments/2026-07"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+
+# Fragments 2026-07-15
+
+- **断片t35**：apply_actions()継続性テスト用の断片本文です。
+EOF
   out="$(run_py "
 import hashlib, pathlib
 vault = pathlib.Path('$V')
-text = (vault/'Preferences/foo.md').read_text()
-fix_by_id = {'inv-abc': {'id': 'inv-abc', 'relpath': 'Preferences/foo.md',
-             'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'fix_date': '2026-07-01'}}
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+fragments_by_id = {fid: {'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+                    'source_sha256': hashlib.sha256(text.encode()).hexdigest(),
+                    'date': '2026-07-15', 'heading_or_bullet': entries[0][0], 'body': entries[0][2]}}
 actions = [
-  {'id': 'inv-missing-from-dict', 'action': 'fix_approve'},  # fix_by_idに無いkeyで例外を誘発
-  {'id': 'inv-abc', 'action': 'fix_approve'},
+  {'id': 'frag-missing-from-dict', 'action': 'promote', 'target_folder': 'Knowledge',
+   'body': '---\ndate: 2026-07-16\ntags: [t]\nproject: x\n---\n\n本文\n'},  # fragments_by_idに無いkeyで例外を誘発
+  {'id': fid, 'action': 'promote', 'target_folder': 'Knowledge',
+   'body': '---\ndate: 2026-07-16\ntags: [t]\nproject: x\n---\n\n本文\n'},
 ]
-results = ma.apply_actions(vault, actions, {}, fix_by_id, {}, today_iso='2026-07-16', max_merge_actions=2,
+results = ma.apply_actions(vault, actions, fragments_by_id, {}, today_iso='2026-07-16', max_merge_actions=2,
                             gate_script=ma.DEFAULT_GATE_SCRIPT, ngwords_file=ma.DEFAULT_NGWORDS_FILE,
                             dry_run=False, merge_state_dir='$WORK_ROOT/t35/state', merge_lock_file='$WORK_ROOT/t35/lock')
 print([(r['applied'], 'unexpected_exception' in (r.get('reason') or '')) for r in results])
 ")"
   assert_eq "1件目は例外を捕捉してapplied=False、2件目は正常に適用される" "[(False, True), (True, False)]" "$out"
-  assert_contains "2件目（正常なFIX）は実際に反映される" "$(cat "$V/Preferences/foo.md")" "updated: 2026-07-01"
+  assert_contains "2件目（正常なPROMOTE）は実際にKnowledgeへ反映される" "$(ls "$V/Knowledge" 2>/dev/null)" ".md"
 }
 
 echo "=== 36. find_existing_promoted_file: symlinkは既存の昇格済みファイルとみなさない ==="
@@ -980,12 +1257,308 @@ results = [
   {'id': 'frag-1', 'action': 'promote', 'applied': True},
   {'id': 'cand-1', 'action': 'merge', 'applied': True, 'partial_merge_state': True},
   {'id': 'cand-2', 'action': 'merge', 'applied': True},
-  {'id': 'inv-1', 'action': 'fix_approve', 'applied': False, 'reason': 'x'},
 ]
 s = ma._summarize_results(results)
-print(s['n_promoted'], s['n_merged'], s['n_merged_partial'], s['n_fixed'], s['n_skipped'], s['has_anomaly'])
+print(s['n_promoted'], s['n_merged'], s['n_merged_partial'], s['n_skipped'], s['has_anomaly'])
 ")"
-  assert_eq "n_merged=1(正常のみ)・n_merged_partial=1・has_anomaly=True" "1 1 1 0 1 True" "$out"
+  assert_eq "n_merged=1(正常のみ)・n_merged_partial=1・has_anomaly=True" "1 1 1 0 True" "$out"
+}
+
+echo "=== 41b. _summarize_results: target_folder==PreferencesのPROMOTE結果はVault実書込ではないためn_promotedから除外される ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'frag-1', 'action': 'promote', 'applied': True, 'target_folder': 'Knowledge'},
+  {'id': 'frag-2', 'action': 'promote', 'applied': True, 'target_folder': 'Preferences', 'proposal_path': '/tmp/x.md'},
+  {'id': 'frag-3', 'action': 'promote', 'applied': False, 'target_folder': 'Preferences', 'reason': 'preferences_gate_detected: x'},
+]
+s = ma._summarize_results(results)
+print(s['n_promoted'], s['n_skipped'])
+")"
+  assert_eq "Preferences提案(applied=True)はn_promotedに数えない・ゲート破棄分はn_skippedに数える" "1 1" "$out"
+}
+
+echo "=== 41c. _summarize_results: 真のI/O失敗(create_failed等)はn_merged_partialが0でもanomaly=Trueになる（2026-07-18ハードニング「skipとI/O失敗を集計・状態で区別」対応） ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'frag-1', 'action': 'promote', 'applied': False, 'reason': 'create_failed:PermissionError'},
+]
+s = ma._summarize_results(results)
+print(s['n_skipped'], s['has_anomaly'], 'create_failed' in (s['reason'] or ''))
+")"
+  assert_eq "create_failedはn_skippedにも数えつつhas_anomaly=Trueにもなる" "1 True True" "$out"
+}
+
+echo "=== 41d. _summarize_results: Claudeの意図的skip(action:skip)・TOCTOUレース・ゲート却下・週上限超過はI/O失敗ではないためanomalyにしない ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'frag-1', 'action': 'skip', 'applied': False, 'reason': 'anything the model wrote'},
+  {'id': 'frag-2', 'action': 'promote', 'applied': False, 'reason': 'source_changed_toctou'},
+  {'id': 'cand-1', 'action': 'merge', 'applied': False, 'reason': 'note_changed_toctou'},
+  {'id': 'cand-2', 'action': 'merge', 'applied': False, 'reason': 'merge_checks_failed'},
+  {'id': 'cand-3', 'action': 'merge', 'applied': False, 'reason': 'merge_weekly_cap_exceeded'},
+]
+s = ma._summarize_results(results)
+print(s['n_skipped'], s['has_anomaly'])
+")"
+  assert_eq "全件が正当なskip扱いでhas_anomaly=Falseのまま" "5 False" "$out"
+}
+
+echo "=== 41e. _summarize_results: unexpected_exceptionによる予期しない例外もI/O失敗としてanomaly化する ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'frag-1', 'action': 'promote', 'applied': False, 'reason': 'unexpected_exception: OSError: disk full'},
+]
+s = ma._summarize_results(results)
+print(s['has_anomaly'])
+")"
+  assert_eq "unexpected_exceptionはanomaly=Trueになる" "True" "$out"
+}
+
+echo "=== 41f. _summarize_results: 未知のreason文字列はfail-closedでI/O失敗（anomaly）扱いになる ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'frag-1', 'action': 'promote', 'applied': False, 'reason': 'totally_new_reason_nobody_whitelisted_yet'},
+]
+s = ma._summarize_results(results)
+print(s['has_anomaly'])
+")"
+  assert_eq "ホワイトリストに無い未知reasonはfail-closedでanomaly=True" "True" "$out"
+}
+
+echo "=== 41g. _summarize_results: reasonが無い(missing key/None)のapplied=False結果もfail-closedでanomaly=Trueになる ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'frag-1', 'action': 'promote', 'applied': False},
+  {'id': 'frag-2', 'action': 'promote', 'applied': False, 'reason': None},
+]
+s = ma._summarize_results(results)
+print(s['has_anomaly'])
+")"
+  assert_eq "reasonキー欠落・None のどちらもI/O失敗扱い(anomaly=True)" "True" "$out"
+}
+
+echo "=== 41h. _summarize_results: ホワイトリストは完全一致方式のため、正当reasonの部分文字列を含む複合reasonは誤って正当skip扱いにならない（2026-07-18ハードニングCodexレビュー指摘Minor対応） ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'frag-1', 'action': 'promote', 'applied': False, 'reason': 'empty_body_but_actually_io_error'},
+]
+s = ma._summarize_results(results)
+print(s['has_anomaly'])
+")"
+  assert_eq "正当なreason'empty_body'の前方一致文字列は完全一致方式のためanomaly=Trueのまま" "True" "$out"
+}
+
+echo "=== 41i. _summarize_results: MERGE成功後のstate_update_warning（state.json更新失敗）もanomaly化される（tester3差し戻し・Major対応: partial_promote_state/partial_merge_stateと同型の取りこぼし） ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'cand-1', 'action': 'merge', 'applied': True, 'merged_relpath': 'Knowledge/x--merged-20260718.md',
+   'state_update_warning': 'lock_unavailable'},
+]
+s = ma._summarize_results(results)
+print(s['n_merged'], s['has_anomaly'], 'state_update_warning' in (s['reason'] or ''))
+")"
+  assert_eq "Vault書込自体は成功済みのためn_mergedに数えつつhas_anomaly=Trueにもなる" "1 True True" "$out"
+}
+
+echo "=== 41j. _summarize_results: state_update_warningが無い正常なMERGEはanomalyにならない（陽性対照） ==="
+{
+  out="$(run_py "
+results = [
+  {'id': 'cand-1', 'action': 'merge', 'applied': True, 'merged_relpath': 'Knowledge/x--merged-20260718.md'},
+]
+s = ma._summarize_results(results)
+print(s['n_merged'], s['has_anomaly'])
+")"
+  assert_eq "state_update_warning無しなら従来どおりanomaly=False" "1 False" "$out"
+}
+
+echo "=== 41k. _summarize_results: state_update_warningの複数種のreason文字列いずれもanomaly化される（純粋関数の合成resultによる分類テスト） ==="
+{
+  for reason in lock_unavailable "state_error: bad json" candidate_missing_in_state "state_write_error: disk full"; do
+    out="$(run_py "
+results = [{'id': 'cand-1', 'action': 'merge', 'applied': True, 'state_update_warning': '$reason'}]
+s = ma._summarize_results(results)
+print(s['has_anomaly'])
+")"
+    assert_eq "reason=$reason はanomaly=True" "True" "$out"
+  done
+}
+
+echo "=== 41k2. mark_candidate_merged: 実際のロック競合・破損state.json・候補欠落・save_state失敗の4異常経路＋正常系を、合成resultではなく実コードパスを通して直接検証する（Codexレビュー指摘Minor/Major対応） ==="
+{
+  # (a) 実際のロック競合: 事前に外部でロックを保持した状態で呼ぶ
+  STATE_DIR_A="$WORK_ROOT/t41k2a/state"; mkdir -p "$STATE_DIR_A"
+  LOCK_FILE_A="$WORK_ROOT/t41k2a/lock"
+  echo '{"schema_version": 1, "candidates": {"cand-x": {"status": "pending"}}, "detections": {}}' > "$STATE_DIR_A/state.json"
+  out_a="$(run_py "
+import merge_state as ms
+held = ms.acquire_lock('$LOCK_FILE_A')
+try:
+    r = ma.mark_candidate_merged('$STATE_DIR_A', '$LOCK_FILE_A', 'cand-x', 'Knowledge/x--merged-20260718.md', '2026-07-18')
+    print(r)
+finally:
+    ms.release_lock(held)
+")"
+  assert_contains "実際のロック保持中はlock_unavailableが返る" "$out_a" "(False, 'lock_unavailable')"
+
+  # (b) 破損state.json（実際にload_state()のStateError経路を通す）
+  STATE_DIR_B="$WORK_ROOT/t41k2b/state"; mkdir -p "$STATE_DIR_B"
+  LOCK_FILE_B="$WORK_ROOT/t41k2b/lock"
+  printf 'not valid json{{{' > "$STATE_DIR_B/state.json"
+  out_b="$(run_py "
+r = ma.mark_candidate_merged('$STATE_DIR_B', '$LOCK_FILE_B', 'cand-x', 'Knowledge/x--merged-20260718.md', '2026-07-18')
+print(r[0], r[1].startswith('state_error'))
+")"
+  assert_eq "破損state.jsonは実際にstate_errorが返る" "False True" "$out_b"
+
+  # (c) 候補がstate.jsonに存在しない（実際にcandidates.get(cid)がNoneになる経路）
+  STATE_DIR_C="$WORK_ROOT/t41k2c/state"; mkdir -p "$STATE_DIR_C"
+  LOCK_FILE_C="$WORK_ROOT/t41k2c/lock"
+  echo '{"schema_version": 1, "candidates": {}, "detections": {}}' > "$STATE_DIR_C/state.json"
+  out_c="$(run_py "
+r = ma.mark_candidate_merged('$STATE_DIR_C', '$LOCK_FILE_C', 'cand-missing', 'Knowledge/x--merged-20260718.md', '2026-07-18')
+print(r)
+")"
+  assert_contains "state.jsonに候補が無ければ実際にcandidate_missing_in_stateが返る" "$out_c" "(False, 'candidate_missing_in_state')"
+
+  # (d) save_state()のOSError（2026-07-18ハードニングtester3差し戻し・Codexレビュー
+  #     指摘Major対応の直接検証）: state.json自体は正常に読めるが、書込み時に
+  #     ディレクトリの書込権限が無いためos.replace()前のtmpファイル作成が失敗する。
+  STATE_DIR_D="$WORK_ROOT/t41k2d/state"; mkdir -p "$STATE_DIR_D"
+  LOCK_FILE_D="$WORK_ROOT/t41k2d/lock"
+  echo '{"schema_version": 1, "candidates": {"cand-x": {"status": "pending"}}, "detections": {}}' > "$STATE_DIR_D/state.json"
+  chmod 0500 "$STATE_DIR_D"
+  out_d="$(run_py "
+r = ma.mark_candidate_merged('$STATE_DIR_D', '$LOCK_FILE_D', 'cand-x', 'Knowledge/x--merged-20260718.md', '2026-07-18')
+print(r[0], r[1].startswith('state_write_error'))
+")"
+  chmod 0700 "$STATE_DIR_D"
+  assert_eq "save_state()のOSErrorは実際にstate_write_errorとして捕捉される(以前は未捕捉で例外が伝播していた)" "False True" "$out_d"
+
+  # (e) 正常系: state.jsonの候補が実際にmergedへ遷移することまで確認する
+  STATE_DIR_E="$WORK_ROOT/t41k2e/state"; mkdir -p "$STATE_DIR_E"
+  LOCK_FILE_E="$WORK_ROOT/t41k2e/lock"
+  echo '{"schema_version": 1, "candidates": {"cand-x": {"status": "pending"}}, "detections": {}}' > "$STATE_DIR_E/state.json"
+  out_e="$(run_py "
+r = ma.mark_candidate_merged('$STATE_DIR_E', '$LOCK_FILE_E', 'cand-x', 'Knowledge/x--merged-20260718.md', '2026-07-18')
+print(r)
+import json, pathlib
+saved = json.loads(pathlib.Path('$STATE_DIR_E/state.json').read_text())
+print(saved['candidates']['cand-x']['status'], saved['candidates']['cand-x']['merged_relpath'])
+")"
+  assert_contains "正常系は実際に(True, None)が返る" "$out_e" "(True, None)"
+  assert_contains "state.jsonの候補が実際にmergedへ遷移しmerged_relpathも記録される" "$out_e" "merged Knowledge/x--merged-20260718.md"
+}
+
+echo "=== 41k3. mark_candidate_merged: ロック解放(release_lock)自体がOSErrorを送出しても、finally節が確定済みの戻り値を上書きせずstate_unlock_errorとして報告する（Codexレビュー指摘Minor対応: save_state()と同型のfinally節取りこぼし） ==="
+{
+  # (a) 保存は成功したが解放だけ失敗 → state_unlock_errorとして報告される（保存成功自体は握り潰さない）
+  STATE_DIR_A="$WORK_ROOT/t41k3a/state"; mkdir -p "$STATE_DIR_A"
+  LOCK_FILE_A="$WORK_ROOT/t41k3a/lock"
+  echo '{"schema_version": 1, "candidates": {"cand-x": {"status": "pending"}}, "detections": {}}' > "$STATE_DIR_A/state.json"
+  out_a="$(run_py "
+import maintenance_apply as ma_mod
+_orig = ma_mod.merge_state.release_lock
+ma_mod.merge_state.release_lock = lambda held: (_ for _ in ()).throw(OSError('flock unlock failed'))
+try:
+    r = ma_mod.mark_candidate_merged('$STATE_DIR_A', '$LOCK_FILE_A', 'cand-x', 'Knowledge/x--merged-20260718.md', '2026-07-18')
+finally:
+    ma_mod.merge_state.release_lock = _orig
+print(r[0], r[1].startswith('state_unlock_error') if r[1] else None)
+import json, pathlib
+saved = json.loads(pathlib.Path('$STATE_DIR_A/state.json').read_text())
+print(saved['candidates']['cand-x']['status'])
+")"
+  assert_eq "保存成功＋解放失敗はstate_unlock_errorとして報告される(例外が伝播しない)" "False True
+merged" "$out_a"
+
+  # (b) 保存自体が失敗しさらに解放も失敗 → 元のstate_write_errorが優先され上書きされない
+  STATE_DIR_B="$WORK_ROOT/t41k3b/state"; mkdir -p "$STATE_DIR_B"
+  LOCK_FILE_B="$WORK_ROOT/t41k3b/lock"
+  echo '{"schema_version": 1, "candidates": {"cand-x": {"status": "pending"}}, "detections": {}}' > "$STATE_DIR_B/state.json"
+  chmod 0500 "$STATE_DIR_B"
+  out_b="$(run_py "
+import maintenance_apply as ma_mod
+_orig = ma_mod.merge_state.release_lock
+ma_mod.merge_state.release_lock = lambda held: (_ for _ in ()).throw(OSError('flock unlock failed'))
+try:
+    r = ma_mod.mark_candidate_merged('$STATE_DIR_B', '$LOCK_FILE_B', 'cand-x', 'Knowledge/x--merged-20260718.md', '2026-07-18')
+finally:
+    ma_mod.merge_state.release_lock = _orig
+print(r[0], r[1].startswith('state_write_error'))
+")"
+  chmod 0700 "$STATE_DIR_B"
+  assert_eq "保存失敗＋解放失敗は元のstate_write_errorが優先される(解放失敗で上書きされない)" "False True" "$out_b"
+}
+
+echo "=== 41k4. mark_candidate_merged: state.json内の候補値が壊れていて想定外の例外(TypeError等)が起きても、finally節でロックは必ず解放される（Codexレビュー指摘Major対応: _safe_release_lock()導入時にtry/finally構造を外し、既知のexit point以外の例外経路でロックが解放されない回帰があった） ==="
+{
+  STATE_DIR="$WORK_ROOT/t41k4/state"; mkdir -p "$STATE_DIR"
+  LOCK_FILE="$WORK_ROOT/t41k4/lock"
+  # candidatesの値が辞書ではなく整数（構造的に壊れたstate.json＝load_state()の
+  # 検証がすり抜ける想定外の壊れ方）: cand["status"]=... の代入がTypeErrorになる。
+  echo '{"schema_version": 1, "candidates": {"cand-x": 12345}, "detections": {}}' > "$STATE_DIR/state.json"
+  out="$(run_py "
+import maintenance_apply as ma_mod
+raised = None
+try:
+    ma_mod.mark_candidate_merged('$STATE_DIR', '$LOCK_FILE', 'cand-x', 'Knowledge/x--merged-20260718.md', '2026-07-18')
+except Exception as e:
+    raised = type(e).__name__
+print('raised', raised)
+# ロックが解放されていれば、直後に再取得できるはず（解放されていなければ
+# acquire_lock()はNoneを返す＝取れない）。
+import merge_state as ms
+held = ms.acquire_lock('$LOCK_FILE')
+print('reacquired', held is not None)
+if held is not None:
+    ms.release_lock(held)
+")"
+  assert_contains "想定外の例外(TypeError)がそのまま呼び出し元へ伝播する(握り潰さない)" "$out" "raised TypeError"
+  assert_contains "例外後もロックは解放されており再取得できる(finally節の解放保証)" "$out" "reacquired True"
+}
+
+echo "=== 41l. apply_merge: mark_candidate_merged()が失敗してもVault側の書込(統合ノート作成+原ノート2件のstub化)自体は完了し、結果にstate_update_warningが記録される（end-to-end確認） ==="
+{
+  V="$WORK_ROOT/t41l/vault"
+  make_merge_pair "$V" "2026-07-10" "2026-07-12"
+  BODY="$(printf -- "$VALID_MERGED_BODY_TEMPLATE" "2026-07-10" "2026-07-12")"
+  out="$(run_py "
+import hashlib, pathlib
+vault = pathlib.Path('$V')
+ta = (vault/'Knowledge/note-a.md').read_text(); tb = (vault/'Knowledge/note-b.md').read_text()
+cid = kmc.stable_pair_id('Knowledge/note-a.md', 'Knowledge/note-b.md')
+rec = {'id': cid, 'note_a': 'Knowledge/note-a.md', 'note_b': 'Knowledge/note-b.md', 'folder': 'Knowledge',
+       'note_a_sha256': hashlib.sha256(ta.encode()).hexdigest(), 'note_b_sha256': hashlib.sha256(tb.encode()).hexdigest()}
+act = {'id': cid, 'action': 'merge', 'body': '''$BODY'''}
+
+# mark_candidate_merged()自体を差し替えて、state.json更新だけが失敗する状況を再現する
+# （lock_unavailableと同じ形の失敗をシミュレート＝Vault側の書込には一切影響しない）。
+import maintenance_apply as ma_mod
+_orig = ma_mod.mark_candidate_merged
+ma_mod.mark_candidate_merged = lambda *a, **k: (False, 'lock_unavailable')
+try:
+    r = ma_mod.apply_merge(vault, rec, act, '2026-07-16', dry_run=False,
+                            merge_state_dir='$WORK_ROOT/t41l/state', merge_lock_file='$WORK_ROOT/t41l/lock')
+finally:
+    ma_mod.mark_candidate_merged = _orig
+print(r['applied'], r.get('state_update_warning'))
+s = ma_mod._summarize_results([r])
+print('SUMMARY', s['n_merged'], s['has_anomaly'])
+")"
+  assert_contains "applied=True・state_update_warning=lock_unavailableが記録される" "$out" "True lock_unavailable"
+  assert_contains "_summarize_results()経由でn_merged=1のままhas_anomaly=Trueになる" "$out" "SUMMARY 1 True"
+  assert_eq "統合ノートは実際にVaultへ作成される(Vault書込自体は成功)" "1" "$(find "$V/Knowledge" -name '*--merged-*.md' | wc -l | tr -d ' ')"
+  assert_contains "note-aは実際にstub化される(deprecated:true)" "$(cat "$V/Knowledge/note-a.md")" "deprecated: true"
+  assert_contains "note-bも実際にstub化される(deprecated:true)" "$(cat "$V/Knowledge/note-b.md")" "deprecated: true"
 }
 
 echo "=== 42. find_existing_promoted_file: 対象フォルダ自体がsymlinkの場合は既存の昇格済みファイルとみなさない ==="
@@ -1039,9 +1612,14 @@ try:
                               ma_mod.DEFAULT_NGWORDS_FILE, dry_run=False, source_cache={})
 finally:
     ma_mod.exclusive_create = _orig_exclusive_create
-print(r['applied'], r.get('step1'), r.get('step2'))
+print(r['applied'], r.get('step1'), r.get('step2'), r.get('partial_promote_state'))
+import maintenance_apply as ma2
+s = ma2._summarize_results([r])
+print('SUMMARY', s['n_promoted'], s['has_anomaly'])
 ")"
-  assert_contains "step1は成功済み(created)・step2は最終再照合で見送り" "$out" "created source_changed_at_final_recheck"
+  assert_contains "step1は成功済み(created)・step2は最終再照合で見送り・partial_promote_state=True（2026-07-18ハードニングCodexレビュー指摘Major対応）" \
+    "$out" "True created source_changed_at_final_recheck True"
+  assert_contains "_summarize_results()経由でn_promotedへ計上されつつhas_anomaly=Trueになる" "$out" "SUMMARY 1 True"
   SRC="$(cat "$V/Fragments/2026-07/2026-07-15.md")"
   assert_not_contains "Fragments側にstatus:promotedは追記されない" "$SRC" "status: promoted"
   assert_contains "外部からの追記内容は残る（上書きされていない証拠）" "$SRC" "外部から追記された行"
@@ -1110,111 +1688,6 @@ echo "=== 46. main(): fragments配列内に非オブジェクト要素が混ざ�
   assert_contains "非オブジェクト要素のみ→全滅扱いでanomaly" "$STATUS" "phase1_input_invalid"
 }
 
-echo "=== 47. main(): inventoryのmissing_updated_fix_candidatesキーが丸ごと欠落していたらanomaly ==="
-{
-  V="$WORK_ROOT/t47b/vault"; mkdir -p "$V/Knowledge"
-  IJSON="$WORK_ROOT/t47b/inventory.json"; echo '{"date": "2026-07-16", "n_issues": 0}' > "$IJSON"
-  W="$WORK_ROOT/t47b/work"
-  run_apply_cli "$V" "$W" --inventory-json "$IJSON" > "$WORK_ROOT/t47b/stdout.txt" 2>&1
-  RC=$?
-  assert_eq "クラッシュせずexit 0" "0" "$RC"
-  STATUS="$(cat "$W/apply-status.json")"
-  assert_contains "キー欠落はanomaly=phase1_input_invalid" "$STATUS" "phase1_input_invalid"
-}
-
-echo "=== 48. main(): missing_updated_fix_candidatesが明示的にnullの場合もanomaly（配列でない値の一種として扱う） ==="
-{
-  V="$WORK_ROOT/t48b/vault"; mkdir -p "$V/Knowledge"
-  IJSON="$WORK_ROOT/t48b/inventory.json"; echo '{"missing_updated_fix_candidates": null}' > "$IJSON"
-  W="$WORK_ROOT/t48b/work"
-  run_apply_cli "$V" "$W" --inventory-json "$IJSON" > "$WORK_ROOT/t48b/stdout.txt" 2>&1
-  STATUS="$(cat "$W/apply-status.json")"
-  assert_contains "null値もanomaly=phase1_input_invalid" "$STATUS" "phase1_input_invalid"
-}
-
-echo "=== 49. main(): missing_updated_fix_candidates内の非オブジェクト要素はクラッシュせず除外される（fixable=Falseの正常な要素と区別） ==="
-{
-  V="$WORK_ROOT/t49b/vault"; mkdir -p "$V/Preferences"
-  IJSON="$WORK_ROOT/t49b/inventory.json"
-  cat > "$IJSON" <<'EOF'
-{"missing_updated_fix_candidates": [
-  42,
-  {"id": "inv-x", "relpath": "Preferences/normal-skip.md", "fixable": false, "skip_reason": "no_date_field"}
-]}
-EOF
-  W="$WORK_ROOT/t49b/work"
-  run_apply_cli "$V" "$W" --inventory-json "$IJSON" > "$WORK_ROOT/t49b/stdout.txt" 2>&1
-  RC=$?
-  assert_eq "クラッシュせずexit 0" "0" "$RC"
-  STATUS="$(cat "$W/apply-status.json")"
-  # fixable=falseの要素だけなら正常な「今回は対象0件」週と区別できない
-  # （非オブジェクト要素1件のみが構造異常のシグナル）が、input_load_failuresの
-  # 計上により正しくanomalyへ倒れることを確認する。
-  assert_contains "非オブジェクト要素混入によりanomaly" "$STATUS" "phase1_input_invalid"
-}
-
-echo "=== 50. main(): fixableがbool型でない要素(欠落/文字列/数値/null)はfixable=falseの正常要素と区別してanomaly ==="
-{
-  for variant in 'missing' 'string' 'number' 'null'; do
-    V="$WORK_ROOT/t49c-$variant/vault"; mkdir -p "$V/Preferences"
-    IJSON="$WORK_ROOT/t49c-$variant/inventory.json"; mkdir -p "$WORK_ROOT/t49c-$variant"
-    case "$variant" in
-      missing) echo '{"missing_updated_fix_candidates": [{"id": "inv-x", "relpath": "Preferences/a.md"}]}' > "$IJSON" ;;
-      string)  echo '{"missing_updated_fix_candidates": [{"id": "inv-x", "relpath": "Preferences/a.md", "fixable": "true"}]}' > "$IJSON" ;;
-      number)  echo '{"missing_updated_fix_candidates": [{"id": "inv-x", "relpath": "Preferences/a.md", "fixable": 1}]}' > "$IJSON" ;;
-      null)    echo '{"missing_updated_fix_candidates": [{"id": "inv-x", "relpath": "Preferences/a.md", "fixable": null}]}' > "$IJSON" ;;
-    esac
-    W="$WORK_ROOT/t49c-$variant/work"
-    run_apply_cli "$V" "$W" --inventory-json "$IJSON" > "$WORK_ROOT/t49c-$variant/stdout.txt" 2>&1
-    RC=$?
-    assert_eq "variant=$variant: クラッシュせずexit 0" "0" "$RC"
-    STATUS="$(cat "$W/apply-status.json")"
-    assert_contains "variant=$variant: fixable非bool型はanomaly" "$STATUS" "phase1_input_invalid"
-  done
-}
-
-echo "=== 51. main(): fixable=falseのみ（正常な修正不可検出）の週はanomalyにならない（誤検知しないことの陽性対照） ==="
-{
-  V="$WORK_ROOT/t49d/vault"; mkdir -p "$V/Preferences"
-  IJSON="$WORK_ROOT/t49d/inventory.json"
-  echo '{"missing_updated_fix_candidates": [{"id": "inv-x", "relpath": "Preferences/a.md", "fixable": false, "skip_reason": "no_date_field"}]}' > "$IJSON"
-  W="$WORK_ROOT/t49d/work"
-  run_apply_cli "$V" "$W" --inventory-json "$IJSON" > "$WORK_ROOT/t49d/stdout.txt" 2>&1
-  STATUS="$(cat "$W/apply-status.json")"
-  assert_contains "fixable=falseのみは正常なno_candidates（anomalyではない）" "$STATUS" '"anomaly": false'
-  assert_contains "reasonはno_candidates" "$STATUS" "no_candidates"
-}
-
-echo "=== 52. FIX: 最終書込み直前の再照合で外部変更を検知しupdated:を書き込まない ==="
-{
-  V="$WORK_ROOT/t50b/vault"; mkdir -p "$V/Preferences"
-  printf -- '---\ndate: 2026-07-01\n---\n\n本文\n' > "$V/Preferences/foo.md"
-  out="$(run_py "
-import hashlib, pathlib
-import maintenance_apply as ma_mod
-vault = pathlib.Path('$V')
-text = (vault/'Preferences/foo.md').read_text()
-fix_rec = {'id': 'inv-abc', 'relpath': 'Preferences/foo.md',
-           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'fix_date': '2026-07-01'}
-
-_orig_apply_fix_updated = ma_mod.apply_fix_updated
-def _racing_apply_fix_updated(current_text, fix_date):
-    # apply_fix_updated()呼び出し中(=最終再照合より前)に外部プロセスがノートを書き換える競合を模擬する。
-    (vault/'Preferences/foo.md').write_text(text + '\n外部から追記された行\n')
-    return _orig_apply_fix_updated(current_text, fix_date)
-ma_mod.apply_fix_updated = _racing_apply_fix_updated
-try:
-    r = ma_mod.apply_fix(vault, fix_rec, dry_run=False)
-finally:
-    ma_mod.apply_fix_updated = _orig_apply_fix_updated
-print(r['applied'], r.get('reason'))
-")"
-  assert_eq "最終再照合で外部変更を検知しapplied=False" "False source_changed_at_final_recheck" "$out"
-  NOW="$(cat "$V/Preferences/foo.md")"
-  assert_not_contains "updated:は書き込まれない" "$NOW" "updated:"
-  assert_contains "外部からの追記内容は残る（上書きされていない証拠）" "$NOW" "外部から追記された行"
-}
-
 echo "=== 53. main(): 候補が0件ならclaudeを起動せずok/no_candidatesで終了 ==="
 {
   V="$WORK_ROOT/t27/vault"; mkdir -p "$V/Knowledge"
@@ -1226,32 +1699,35 @@ echo "=== 53. main(): 候補が0件ならclaudeを起動せずok/no_candidates�
   assert_contains "status.ok=true" "$STATUS" '"ok": true'
   assert_contains "reason=no_candidates" "$STATUS" "no_candidates"
   # tester独立検証F2で実測: _write_status_file()の呼び出し箇所の一部で
-  # n_merged_partialキーが欠落しており、maintenance.sh側の7キー必須検証で
+  # n_merged_partialキーが欠落しており、maintenance.sh側の必須キー検証で
   # 静穏週のたびに偽anomaly判定→last_success_atが進まず--sinceが巻き戻らない
   # 実害があった（2026-07-16）。単一ヘルパでの既定値保証（_write_status_file
-  # 内のdictマージ）に修正したことを、maintenance.sh側と同じ7キー全てが
+  # 内のdictマージ）に修正したことを、maintenance.sh側と同じ必須キー全てが
   # 存在することを直接assertして固定する（キー名の変更・追加漏れを機械的に
-  # 検出できるようにする）。
+  # 検出できるようにする）。n_fixedキーは2026-07-18本人裁定「FIXごと削除」で
+  # 撤去済み（[[Decisions/2026-07-18-external-brain-hardening]]2周目）のため
+  # 必須キーは6つ。
   MISSING_KEYS="$(python3 -c "
 import json, sys
 d = json.load(open(sys.argv[1], encoding='utf-8'))
-required = ['ok', 'anomaly', 'n_promoted', 'n_merged', 'n_merged_partial', 'n_fixed', 'n_skipped']
+required = ['ok', 'anomaly', 'n_promoted', 'n_merged', 'n_merged_partial', 'n_skipped']
 missing = [k for k in required if k not in d]
 print(','.join(missing))
 " "$W/apply-status.json")"
-  assert_eq "候補0件の正常系status.jsonに7必須キー(F2回帰テスト)が全て揃っている(欠落無し)" "" "$MISSING_KEYS"
+  assert_eq "候補0件の正常系status.jsonに6必須キー(F2回帰テスト)が全て揃っている(欠落無し)" "" "$MISSING_KEYS"
 }
 
-echo "=== 53b. _write_status_file(): 個数系キーを省略しても常に7必須キー全てが書かれる（tester独立検証F2対応・単一ヘルパでの根治確認） ==="
+echo "=== 53b. _write_status_file(): 個数系キーを省略しても常に6必須キー全てが書かれる（tester独立検証F2対応・単一ヘルパでの根治確認） ==="
 {
-  # 呼び出し箇所ごとの個別補完ではなく_write_status_file()自体が個数系5キー
-  # （n_promoted/n_merged/n_merged_partial/n_fixed/n_skipped）の既定値(0)を
+  # 呼び出し箇所ごとの個別補完ではなく_write_status_file()自体が個数系4キー
+  # （n_promoted/n_merged/n_merged_partial/n_skipped）の既定値(0)を
   # 保証する設計に修正した（tester独立検証F2＝5呼び出し箇所中複数箇所で
-  # n_merged_partialが欠落しmaintenance.sh側の7キー必須検証で静穏週のたびに
+  # n_merged_partialが欠落しmaintenance.sh側の必須キー検証で静穏週のたびに
   # 偽anomaly判定が起きていた実害への対応）。呼び出し側の個々のcall siteを
   # 網羅するより、ヘルパ自体の契約を直接検証する方が将来の呼び出し追加にも
   # 頑健（新しい呼び出し箇所を追加しても、個数系キーを省略するだけで自動的に
-  # 契約を満たせる）。
+  # 契約を満たせる）。n_fixedキーは2026-07-18本人裁定「FIXごと削除」で撤去
+  # 済み。
   OUT="$WORK_ROOT/t27b/status.json"; mkdir -p "$(dirname "$OUT")"
   python3 -c "
 import sys, json
@@ -1261,7 +1737,7 @@ import maintenance_apply as ma
 # ケース1: 個数系キーを一切渡さない呼び出し（no_candidates相当）。
 ma._write_status_file(sys.argv[1], ok=True, anomaly=False, reason='no_candidates', warnings=[])
 d = json.load(open(sys.argv[1], encoding='utf-8'))
-required = ['ok', 'anomaly', 'n_promoted', 'n_merged', 'n_merged_partial', 'n_fixed', 'n_skipped']
+required = ['ok', 'anomaly', 'n_promoted', 'n_merged', 'n_merged_partial', 'n_skipped']
 missing = [k for k in required if k not in d]
 assert not missing, f'case1 missing keys: {missing}'
 assert d['n_merged_partial'] == 0, f'case1 n_merged_partial should default to 0, got {d[\"n_merged_partial\"]!r}'
@@ -1276,7 +1752,7 @@ assert d2['n_merged_partial'] == 0, 'case2: unspecified count key must still def
 print('OK')
 " "$OUT"
   RC=$?
-  assert_eq "個数系キー省略・部分指定のどちらでも7必須キーが揃い、明示指定は尊重される" "0" "$RC"
+  assert_eq "個数系キー省略・部分指定のどちらでも6必須キーが揃い、明示指定は尊重される" "0" "$RC"
 }
 
 echo "=== 54. main(): 正常系end-to-end（fragments-json入力→PROMOTE適用→status/log確認） ==="
@@ -1323,6 +1799,124 @@ print(json.dumps({'is_error': False, 'permission_denials': [], 'structured_outpu
   STATUS="$(cat "$W/apply-status.json")"
   assert_contains "status: ok・anomaly false・n_promoted=1" "$STATUS" '"n_promoted": 1'
   assert_eq "Knowledgeに新規ノートが1件だけ作成される" "1" "$(find "$V/Knowledge" -name '*.md' | wc -l | tr -d ' ')"
+}
+
+echo "=== 54b. main(): Preferences提案end-to-end（Vaultへは書かず提案置き場のみ・n_promotedに数えない・apply-log.jsonにtarget_folder/proposal_pathが残る） ==="
+{
+  # --gate-scriptを常にOKを返すFAKEへ差し替える（実rgコマンドの有無に
+  # 依存させず、apply_promote_preferences_proposal()自体のオーケストレーション
+  # ＝main()経由の配線を狙い撃ちで検証する。ゲート自体の検出精度は
+  # test-personal-link-check.shが別途担保する）。
+  V="$WORK_ROOT/t28b/vault"; mkdir -p "$V/Knowledge" "$V/Preferences" "$V/Fragments/2026-07"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+
+# Fragments 2026-07-15
+
+- **断片G2**：Preferences提案end-to-endテスト用の断片本文です。
+EOF
+  FJSON="$WORK_ROOT/t28b/fragments.json"
+  python3 -c "
+import sys, hashlib, json, pathlib
+sys.path.insert(0, '$LIB_DIR')
+import fragments_log
+vault = pathlib.Path('$V')
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+payload = {'fragments': [{'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'date': '2026-07-15',
+           'heading_or_bullet': entries[0][0], 'body': entries[0][2]}], 'truncated': []}
+pathlib.Path('$FJSON').write_text(json.dumps(payload))
+print(fid)
+" > "$WORK_ROOT/t28b/fid.txt"
+  FID="$(cat "$WORK_ROOT/t28b/fid.txt")"
+  RESP="$WORK_ROOT/t28b/response.json"
+  python3 -c "
+import json
+print(json.dumps({'is_error': False, 'permission_denials': [], 'structured_output': {'actions': [
+  {'id': '$FID', 'action': 'promote', 'target_folder': 'Preferences',
+   'body': '---\ndate: 2026-07-16\n---\n\n運用ルールの本文\n'}]}}))
+" > "$RESP"
+  PROPOSALS_DIR="$WORK_ROOT/t28b/proposals"
+  W="$WORK_ROOT/t28b/work"
+  FAKE_CLAUDE_MODE=respond FAKE_CLAUDE_RESPONSE_FILE="$RESP" \
+    run_apply_cli "$V" "$W" --fragments-json "$FJSON" --gate-script "$FAKE_GATE_OK" \
+    --preferences-proposals-dir "$PROPOSALS_DIR" > "$WORK_ROOT/t28b/stdout.txt" 2>&1
+  assert_contains "標準出力の完了サマリではpromote=0（Vault実書込ではないため。詳細はapply-log.json）" \
+    "$(cat "$WORK_ROOT/t28b/stdout.txt")" "promote=0"
+  STATUS="$(cat "$W/apply-status.json")"
+  assert_contains "status: n_promoted=0（Preferences提案はVault実書込ではないため計上しない）" "$STATUS" '"n_promoted": 0'
+  assert_file_not_exists "Preferencesには何も作成されない（無人直書きは廃止）" "$V/Preferences"/*.md
+  LOG="$(cat "$W/apply-log.json")"
+  assert_contains "apply-log.jsonにtarget_folder=Preferencesが残る" "$LOG" '"target_folder": "Preferences"'
+  assert_contains "apply-log.jsonにproposal_pathが残る" "$LOG" '"proposal_path"'
+  SLUG_28B="$(python3 -c "
+import sys
+sys.path.insert(0, '$LIB_DIR')
+import maintenance_apply as ma
+print(ma.slugify_id('$FID'))
+")"
+  assert_file_exists "Vault外の提案置き場へ保管される" "$PROPOSALS_DIR/$SLUG_28B.md"
+}
+
+echo "=== 54c. main(): 真のI/O書込失敗(Knowledgeが書込不可)はcreate_failedとして記録されanomaly=Trueになる（2026-07-18ハードニング end-to-end確認） ==="
+{
+  V="$WORK_ROOT/t28c/vault"; mkdir -p "$V/Knowledge" "$V/Fragments/2026-07"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+
+# Fragments 2026-07-15
+
+- **断片I/O**：I/O失敗end-to-endテスト用の断片本文です。
+EOF
+  FJSON="$WORK_ROOT/t28c/fragments.json"
+  python3 -c "
+import sys, hashlib, json, pathlib
+sys.path.insert(0, '$LIB_DIR')
+import fragments_log
+vault = pathlib.Path('$V')
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+payload = {'fragments': [{'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'date': '2026-07-15',
+           'heading_or_bullet': entries[0][0], 'body': entries[0][2]}], 'truncated': []}
+pathlib.Path('$FJSON').write_text(json.dumps(payload))
+print(fid)
+" > "$WORK_ROOT/t28c/fid.txt"
+  FID="$(cat "$WORK_ROOT/t28c/fid.txt")"
+  RESP="$WORK_ROOT/t28c/response.json"
+  python3 -c "
+import json
+print(json.dumps({'is_error': False, 'permission_denials': [], 'structured_output': {'actions': [
+  {'id': '$FID', 'action': 'promote', 'target_folder': 'Knowledge',
+   'body': '---\ndate: 2026-07-16\nupdated: 2026-07-16\ntags: [t]\nproject: x\n---\n\n本文\n'}]}}))
+" > "$RESP"
+  W="$WORK_ROOT/t28c/work"
+  # Knowledge/を書込不可にし、新規ノート作成(os.open O_CREAT)が実際にOSErrorで
+  # 失敗する状況を再現する（find_existing_promoted_file()はfalseのまま・
+  # 純粋な書込I/O失敗のみを狙い撃ちする）。
+  chmod 0500 "$V/Knowledge"
+  rc=0
+  FAKE_CLAUDE_MODE=respond FAKE_CLAUDE_RESPONSE_FILE="$RESP" \
+    run_apply_cli "$V" "$W" --fragments-json "$FJSON" > "$WORK_ROOT/t28c/stdout.txt" 2>&1 || rc=$?
+  chmod 0700 "$V/Knowledge"
+  assert_eq "CLI自体はexit 0で終わる(異常はstatus-file経由)" "0" "$rc"
+  STATUS="$(cat "$W/apply-status.json")"
+  assert_contains "status: anomaly=trueになる(create_failedはI/O失敗としてanomaly化)" "$STATUS" '"anomaly": true'
+  assert_contains "reasonにio_failureが含まれる" "$STATUS" "io_failure"
+  LOG="$(cat "$W/apply-log.json")"
+  assert_contains "apply-log.jsonにcreate_failedの記録が残る" "$LOG" "create_failed"
+  assert_eq "Knowledgeには結局何も作成されない" "0" "$(find "$V/Knowledge" -name '*.md' | wc -l | tr -d ' ')"
 }
 
 echo "=== 55. main(): claude起動不可（spawn_error）は一切書き込まずanomalyで終了 ==="

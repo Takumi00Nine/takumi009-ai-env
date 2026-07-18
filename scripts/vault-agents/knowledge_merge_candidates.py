@@ -849,11 +849,13 @@ def build_report(today, candidates, detections, threshold):
         "相互最近傍のみを評価）。"
         "**このレポートに載る候補はFR10a①②（類似度閾値＋相互最近傍）を機械的に通過した"
         "「レビュー待ち候補」であり、マージが確定したものではない**。③（矛盾・否定表現差・"
-        "日付差・固有名詞差・コードブロック差の敵対的レビュー）はこの後リーダーが"
-        "棚卸し相談等で判断する。"
+        "日付差・固有名詞差・コードブロック差の判断）は週次メンテ（maintenance.sh Phase2）の"
+        "ヘッドレスClaudeが本文全文を読んで行い、確信できる候補のみ週上限2件まで非破壊マージ"
+        "（元ノートはsuperseded_byスタブ化）する。手動でのCLI処理は不要（旧knowledge_merge.py"
+        "は撤去済み）。見送られた候補はこのレポートに残り続け、次回の棚卸し相談で人間が判断する。"
     )
     lines.append("")
-    lines.append("処理手順: [[Preferences/knowledge-merge-procedure]]")
+    lines.append("運用ノート: [[Preferences/knowledge-merge-procedure]]")
     lines.append("")
     lines.append("## Knowledgeマージ・レビュー待ち候補")
     lines.append("")

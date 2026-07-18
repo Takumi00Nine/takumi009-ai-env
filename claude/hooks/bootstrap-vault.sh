@@ -33,6 +33,18 @@ TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 # Vault配下(Explorations/...)から $HOME/.claude/logs/ 配下へ移設。
 # scripts/vault-agents/vault_inventory.py のOUT_DIRと同じ既定値）。
 : "${VAULT_INVENTORY_LOG_DIR:=$HOME/.claude/logs/vault-inventory}"
+# Preferences提案ディレクトリ（2026-07-18ハードニング・[[Decisions/
+# 2026-07-18-external-brain-hardening]]で pending マーカー層を撤去）。
+# scripts/vault-agents/maintenance_apply.pyのDEFAULT_PREFERENCES_PROPOSALS_DIRと
+# 同じ既定値。正本＝このディレクトリ自体（マーカーJSON等の派生物は持たない）。
+: "${PREFERENCES_PROPOSALS_DIR:=$HOME/.claude/logs/maintenance/preferences-proposals}"
+# 死活検知: maintenance.sh(週次)のlast-run.json（Critical対処・2026-07-18
+# ハードニング）。started_atは実行のたびに（busy/error早期終了でも）
+# 無条件更新される契約のため、これが古いままなら「週次メンテ自体が
+# 全く起動していない」ことを受動的に検知できる（maintenance.shのコメント
+# 「自己ロックアウト対策」参照）。
+: "${MAINTENANCE_LAST_RUN_FILE:=$HOME/.claude/logs/maintenance/last-run.json}"
+: "${MAINTENANCE_STALE_DAYS:=8}"
 
 # 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で
 # 「レポート生成→リーダーがセッション内で処理」という間接ループを廃止し、
@@ -73,14 +85,153 @@ compute_health_lines() {
     fi
   fi
 
-  # ② 未処理レポート検知・④ 未解決ALERT監視は撤去（2026-07-16簡素化・
-  # [[Decisions/2026-07-16-nightly-batch-direct-write]]）。ファイル冒頭コメント参照。
+  now_epoch="$(date -u +%s 2>/dev/null)"
+
+  # ② Preferences提案（2026-07-18ハードニング・[[Decisions/2026-07-18-
+  # external-brain-hardening]]で pending マーカー層を撤去）: 提案ディレクトリ
+  # 自体（`<slug>.md`＝maintenance_apply.pyのapply_promote_preferences_
+  # proposal()が排他書込する下書き本文そのもの）を**正本として直接スキャン**し、
+  # `*.md`ファイルの件数を「未確認N件」として毎起動で通知し続ける。承認/却下は
+  # リーダーが`.md`（＋sidecarの`.meta.json`）を削除するだけでよく、通知件数が
+  # 自然に追従する（派生物のマーカーJSON・破損時自己修復ロジックは持たない＝
+  # 部品削減。旧実装はgit log -p参照）。
+  # fail-open: ディレクトリが無い/読めない等はここで例外的に落ちずヘルス行を
+  # 諦めるだけにする（呼び出し側の`compute_health_lines 2>/dev/null`と二重に
+  # fail-openを守る）。
+  if [ -d "$PREFERENCES_PROPOSALS_DIR" ]; then
+    shopt -s nullglob
+    local proposal_files=("$PREFERENCES_PROPOSALS_DIR"/*.md)
+    shopt -u nullglob
+    local n_proposals="${#proposal_files[@]}"
+    if [ "$n_proposals" -gt 0 ]; then
+      # ファイル名（拡張子除く＝slug）を決定的な表示順にするため一旦ソートする
+      # （globの列挙順はファイルシステム依存で保証されないため）。
+      # slug列挙は先頭5件までに抑え、6件目以降は「ほかN件」に畳む
+      # （2026-07-17 tester2差し戻し対応・任意Minor: ヘルス行が際限なく
+      # 長くなるのを防ぐ。方式変更後も同じ制限を踏襲する）。
+      local sorted_slugs=() f base shown_slugs="" remaining=0 i=0
+      while IFS= read -r base; do
+        sorted_slugs+=("${base%.md}")
+      done < <(printf '%s\n' "${proposal_files[@]##*/}" | sort)
+      for i in "${!sorted_slugs[@]}"; do
+        [ "$i" -ge 5 ] && break
+        shown_slugs="${shown_slugs}${shown_slugs:+・}${sorted_slugs[$i]}"
+      done
+      if [ "$n_proposals" -gt 5 ]; then
+        remaining=$((n_proposals - 5))
+        shown_slugs="${shown_slugs}・ほか${remaining}件"
+      fi
+      lines="${lines}- 🆕 夜間バッチで運用ルールの昇格提案があります（未確認${n_proposals}件）: ${shown_slugs}
+"
+    fi
+  fi
+
+  # ④ 死活検知（Critical対処・2026-07-18ハードニング／2周目・全体構成再レビュー
+  # Codex+Fable5収束後の小修正＝impl4）: maintenance.sh(週次)のlast-run.json
+  # started_atが${MAINTENANCE_STALE_DAYS}日以上前のままなら「週次メンテ自体が
+  # 動いていない」疑いとして警告する（started_atはbusy/error早期終了でも
+  # 無条件更新される契約＝maintenance.sh参照。メンテ全停止を受動的に検知する
+  # 最後の砦）。2周目で以下2点を追加（「複雑化させない」原則で既存判定への
+  # 足しに留める）:
+  #   (a) last_success_atのN日停滞検知＝started_atは新しくてもlast_success_at
+  #       が${MAINTENANCE_STALE_DAYS}日以上古ければ「起動はするが成功していない」
+  #       ＝「毎週起動して毎週失敗」の不可視を塞ぐ（Phase1①のfail-fastや
+  #       Phase2の失敗が続いていても、started_atだけ見ていると気付けない）。
+  #   (b) last-run.json不在・JSON破損・両フィールドとも未記録、または
+  #       実在するいずれかのフィールドの値が解析不能／未来日時（空文字列・
+  #       null・不正な文字列を含む＝2周目再レビューでhas()による区別へ
+  #       修正済み）のときは `[ -f ]`等で静かにスキップせず「状態記録が
+  #       無い/壊れています」と警告する＝初回未稼働・状態ファイル消失/破損・
+  #       片方だけの破損の不可視を塞ぐ。
+  # fail-open: jqが無い/JSON破損/フィールド欠落/時刻パース不能のいずれでも
+  # クラッシュはしない（このcompute_health_lines関数自体が呼び出し側で
+  # 2>/dev/nullされる二重の安全網もそのまま維持）。
+  #
+  # tester4差し戻し・Major対応（2周目・全体構成再レビュー独立検証で発見された
+  # A②の穴）: 従来は(b)の判定が「started_epoch・success_epochの両方が空の
+  # ときだけ」発火しており、片方だけ値が壊れている（不正な文字列・未来日時）
+  # ケースを静かに見逃していた。最も痛いのは「last_success_atだけ破損・
+  # started_atは正常」＝(a)が狙う「起動するが成功しない」検知そのものが
+  # 破損データによって無効化される。修正: 各フィールドについて「値は有るのに
+  # 信用できない（解析不能または未来日時）」状態を`*_broken`として個別に
+  # 判定し、いずれか一方でもbrokenなら(b)の警告を出す（「値が無い」＝キー
+  # 自体が未設定という正常な過渡状態＝初回未成功等とは区別する。7l系テストが
+  # 保証する「last_success_at未設定でも警告なし」は壊さない）。
+  #
+  # 再レビュー指摘Major対応: 「キーが無い(has()==false)」と「キーはあるが
+  # 値が偽値（空文字列/null）」を`.field // empty`だけでは区別できない
+  # （どちらも`jq -r`の出力としては空文字列になる。`jq -r '"" // empty'`も
+  # 出力上は空文字列と見分けが付かない）。maintenance.sh自身は常に有効な
+  # ISO8601文字列しか書かない契約のため、後者（キーは実在するが値が空/null）
+  # は書込側の異常（破損）を示す信号であり、「まだ一度も成功していない」という
+  # 正常な過渡状態（＝キー自体が無い）と混同してはいけない。`has()`で
+  # キーの実在を独立に確認し、実在するのに解析できない/未来日時の場合のみ
+  # brokenとする（キーが存在しないなら`*_broken`は立てない＝7l系テストの
+  # 正常無警告契約を保つ）。
+  if [ -n "$now_epoch" ]; then
+    local started_at last_success_at started_epoch success_epoch started_age success_age
+    local started_broken=0 success_broken=0 has_started="" has_success=""
+    started_at=""
+    last_success_at=""
+    if [ -f "$MAINTENANCE_LAST_RUN_FILE" ]; then
+      started_at="$(jq -r '.started_at // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
+      last_success_at="$(jq -r '.last_success_at // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
+      has_started="$(jq -r 'has("started_at")' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
+      has_success="$(jq -r 'has("last_success_at")' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
+    fi
+
+    started_epoch=""
+    if [ "$has_started" = "true" ]; then
+      [ -n "$started_at" ] && started_epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${started_at%Z}" +%s 2>/dev/null)"
+      # キーは実在するのに解析できない（空文字列/null/不正な文字列）、
+      # または未来日時（時計ズレ/破損の疑い）なら壊れているとみなす。
+      # 以降のstale判定には使わせない。
+      if [ -z "$started_epoch" ] || [ "$started_epoch" -gt "$now_epoch" ]; then
+        started_broken=1
+        started_epoch=""
+      fi
+    fi
+    success_epoch=""
+    if [ "$has_success" = "true" ]; then
+      [ -n "$last_success_at" ] && success_epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${last_success_at%Z}" +%s 2>/dev/null)"
+      if [ -z "$success_epoch" ] || [ "$success_epoch" -gt "$now_epoch" ]; then
+        success_broken=1
+        success_epoch=""
+      fi
+    fi
+
+    if { [ -z "$started_at" ] && [ -z "$last_success_at" ]; } \
+       || [ "$started_broken" -eq 1 ] || [ "$success_broken" -eq 1 ]; then
+      # (b) ファイル不在／JSON破損／両フィールドとも記録が無い、または
+      # いずれかのフィールドに値は有るが解析不能/未来日時＝状態記録が
+      # 部分的にでも信用できない。
+      lines="${lines}- ⚠️ 週次メンテの状態記録が無い/壊れています（要確認。last-run.json: $MAINTENANCE_LAST_RUN_FILE）
+"
+    else
+      [ -n "$started_epoch" ] && started_age=$(( (now_epoch - started_epoch) / 86400 ))
+      [ -n "$success_epoch" ] && success_age=$(( (now_epoch - success_epoch) / 86400 ))
+      if [ -n "$started_epoch" ] && [ "$started_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
+        lines="${lines}- ⚠️ 週次メンテが${started_age}日動いていません（要確認。last-run.json: $MAINTENANCE_LAST_RUN_FILE）
+"
+      elif [ -z "$started_epoch" ] && [ -n "$success_epoch" ] && [ "$success_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
+        # started_atが未設定（キー自体が無い）の場合のみ、従来どおり
+        # last_success_atへフォールバックする（started_atの値が壊れている
+        # ケースは上のstarted_broken判定で既に(b)枝へ拾われている）。
+        lines="${lines}- ⚠️ 週次メンテが${success_age}日動いていません（要確認。last-run.json: $MAINTENANCE_LAST_RUN_FILE）
+"
+      elif [ -n "$started_epoch" ] && [ -n "$success_epoch" ] && [ "$success_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
+        # (a) started_atは新しい(=起動はしている)がlast_success_atだけが
+        # 古い＝起動するが成功し続けていない疑い。
+        lines="${lines}- ⚠️ 週次メンテが起動はするが${success_age}日成功していません（要確認。last-run.json: $MAINTENANCE_LAST_RUN_FILE）
+"
+      fi
+    fi
+  fi
 
   # ③ check-drift.sh ⑥相当の簡易死活。reads/recallログそれぞれの「最終有効行」
   # （3列目=ノート相対パスが空でない行）の経過日数が閾値超なら死の疑いを出す。
   # 全行走査はしない（tail の範囲内に有効行が無ければ判定を諦めてfail-openする＝
   # 詳細判定はcheck-drift.sh（週次drift通知）の役目で、ここは毎回軽く見るだけ）。
-  now_epoch="$(date -u +%s 2>/dev/null)"
   if [ -n "$now_epoch" ]; then
     local pair name f ts epoch age
     for pair in "vault-reads.tsv|$VAULT_READS_LOG" "vault-recall.tsv|$VAULT_RECALL_LOG"; do

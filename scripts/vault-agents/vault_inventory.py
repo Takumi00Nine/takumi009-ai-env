@@ -26,9 +26,14 @@
 出力: ~/.claude/logs/vault-inventory/YYYY-MM-DD.md（人間向け・日本語。2026-07-11
       決定＝「読まれない人間向け資料をVaultに置かない」に伴い、Vault配下
       （旧: Explorations/vault-inventory/）から $HOME/.claude/logs/ 配下へ移設）。
-      `--json` 指定時は上記`.md`に加え、機械可読なJSON（棚卸し件数サマリ＋
-      missing_updated（Preferences限定）のFIX候補一覧＝設計書§3.5）を標準出力へ
-      返す（maintenance.sh Phase1③向け・2026-07-16簡素化）。
+      `--json` 指定時は上記`.md`に加え、機械可読なJSON（棚卸し件数サマリ）を
+      標準出力へ返す（2026-07-16簡素化）。missing_updated（Preferences限定の
+      updated欠落）は**検出のみ**（レポート§1・n_issues計上）で、機械的な
+      修正（FIX機能・action: fix_approve）は2026-07-18本人裁定で丸ごと削除
+      した＝[[Decisions/2026-07-18-external-brain-hardening]]（理由＝
+      Preferences限定でしか動かず「夜間はPreferencesを書かない」境界の唯一の
+      違反経路だった・値も効果限定的）。以後は他の棚卸し項目（date_drift・
+      リンク切れ・alias欠落等）と同じく、読み時/棚卸し相談で人間が直す。
 実行: 2026-07-16簡素化（設計書§3.2）で、旧・月2回（1日/15日）の間隔ガード
       （MIN_INTERVAL_DAYS・--force）は撤去し週次実行に統一した（週次ランナー
       maintenance.sh・PR2 が呼ぶ。実行頻度の制御自体はLaunchAgent側の間隔に委ねる。
@@ -41,7 +46,6 @@
 """
 import argparse
 import datetime
-import hashlib
 import json
 import os
 import pathlib
@@ -391,77 +395,6 @@ def compute_dismissal_rates(recall_rows, reads_rows, today):
     return rows[:DISMISS_TOP_N], total_all, windowed_total, excluded_pre_read
 
 
-# stable_fix_id()は2026-07-16 Codexレビュー指摘対応でvault_lib.pyへ移設した
-# （設計書§3.2「import vault_inventoryは全廃」の対象にmaintenance_apply.pyも
-# 含まれるため、maintenance_apply.py単体がこの関数だけを目的にvault_inventory.py
-# 全体をimportせずに済むようにする＝cleanup決定#10）。本ファイル内の既存呼び出しは
-# そのまま動く（エイリアス）。
-stable_fix_id = vault_lib.stable_fix_id
-
-
-def compute_missing_updated_fix_candidates(missing_updated, notes, today):
-    """FIX機能（設計書§3.5）の唯一の実装対象＝missing_updatedのfix値をPythonが
-    決定的に計算する（Claudeは fix_approve/skip の承認判断のみ・値は生成させない）。
-
-    各relpathについて、frontmatterの生テキストを再走査し:
-      - `date:` 行が2行以上ある（重複キー）→ どちらが正か機械的に決められない
-        ため "frontmatter異常" 扱いとしてfix不可（skip_reason=duplicate_date_key）。
-      - `date:` フィールドが無い/fromisoformatで検証できない→fix不可
-        （skip_reason=no_date_field / invalid_date_format）。
-      - 検証できても today より未来の日付→fix不可（skip_reason=future_date）。
-      - 上記いずれにも該当しなければ fix_date=検証済み日付文字列 でfix可能。
-
-    id（inv-<sha256(relpath)[:12]>）とsource_sha256（現在のノート全文のsha256）
-    も併せて返す。maintenance_apply.py（未実装）がClaudeの応答（id+fix_approve/
-    skip）を照合し、適用直前にsource_sha256を再照合するTOCTOU対策（設計書§2.4
-    「全action適用直前に対象ソースファイルを再読込しSHA-256をPhase1時点と
-    再照合、不一致ならそのactionのみskip」）に使う。
-
-    戻り値: [{"id":..., "relpath":..., "source_sha256":..., "fixable": bool,
-    "fix_date": str|None, "skip_reason": str|None}, ...]
-    """
-    results = []
-    for rel in missing_updated:
-        fm, _body, text = notes[rel]
-        note_id = stable_fix_id(rel)
-        source_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        m = re.match(r"---\n(.*?)\n---\n?", text, re.S)
-        fm_lines = m.group(1).splitlines() if m else []
-        date_line_count = sum(1 for line in fm_lines if re.match(r"^date:\s*", line))
-
-        if date_line_count > 1:
-            results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
-                             "fixable": False, "fix_date": None,
-                             "skip_reason": "duplicate_date_key"})
-            continue
-
-        raw_date = fm.get("date")
-        if not raw_date or not isinstance(raw_date, str):
-            results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
-                             "fixable": False, "fix_date": None,
-                             "skip_reason": "no_date_field"})
-            continue
-
-        try:
-            parsed = datetime.date.fromisoformat(raw_date.strip())
-        except ValueError:
-            results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
-                             "fixable": False, "fix_date": None,
-                             "skip_reason": "invalid_date_format"})
-            continue
-
-        if parsed > today:
-            results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
-                             "fixable": False, "fix_date": None,
-                             "skip_reason": "future_date"})
-            continue
-
-        results.append({"id": note_id, "relpath": rel, "source_sha256": source_sha256,
-                         "fixable": True, "fix_date": parsed.isoformat(),
-                         "skip_reason": None})
-    return results
-
-
 def main():
     ap = argparse.ArgumentParser(description="外部脳(Obsidian Vault)の定期棚卸し検出ツール。")
     ap.add_argument("--json", action="store_true",
@@ -770,9 +703,11 @@ def main():
     L.append(f"# 外部脳 棚卸しレポート {today.isoformat()}")
     L.append("")
     L.append(f"自動生成（`work/takumi009-ai-env/scripts/vault-agents/`）。ノート {len(notes)} 件を検査し、"
-             f"**要確認 {n_issues} 件**。生成後の最初のセッションで、リーダー（Claude）が下記項目を確認し"
-             "自律的に対処する（本人の指示は不要）。対処完了時は本レポートのfrontmatterに"
-             " `processed: YYYY-MM-DD` を追記する。運用ノート: [[Knowledge/external-brain-guide#定期チェック（陳腐化・肥大化の検出）]]")
+             f"**要確認 {n_issues} 件**。本レポートは検出のみで自動対処はしない（2026-07-16簡素化で"
+             "「最初のセッションでリーダーが自律対処」運用は撤去済み）。綻び（鮮度・リンク切れ・alias）は"
+             "気づいた時点で読み時に直し、更新日ズレ・波及漏れ疑い等は次回の棚卸し相談で人間と目視する"
+             "＝[[Knowledge/external-brain-maintenance-split]]。運用ノート:"
+             " [[Knowledge/external-brain-guide#定期チェック（陳腐化・肥大化の検出）]]")
 
     def section(title, rows, fmt, empty="✅ 問題なし"):
         L.append("")
@@ -966,14 +901,15 @@ def main():
     if args.json:
         # --json時は標準出力をJSON1行のみにする（呼び出し元=maintenance_run_step.py
         # がそのままjson.loads()する契約。人間向けメッセージは標準エラーへ回す・
-        # fragments_log.pyと同じ流儀）。
-        fix_candidates = compute_missing_updated_fix_candidates(missing_updated, notes, today)
+        # fragments_log.pyと同じ流儀）。missing_updated_fix_candidatesキーは
+        # FIX機能撤去（2026-07-18本人裁定・[[Decisions/2026-07-18-external-
+        # brain-hardening]]）に伴い削除した＝missing_updatedは検出のみで
+        # n_issuesへの計上と`.md`レポート§1への表示にとどまる。
         payload = {
             "date": today.isoformat(),
             "report_path": str(out),
             "n_issues": n_issues,
             "n_notes": len(notes),
-            "missing_updated_fix_candidates": fix_candidates,
         }
         print(f"レポート生成: {out}（要確認 {n_issues} 件）", file=sys.stderr)
         print(json.dumps(payload, ensure_ascii=False))

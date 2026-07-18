@@ -14,8 +14,11 @@
   - apply_updated・write_note_atomic・require_generic_aliases・parse_tsv・
     process_note・find_aliases_block・build_aliases_block・strip_quotes・
     split_flow_list は scripts/vault-agents/apply_aliases.py に定義されていた
-    alias一括適用ロジック。PR2の maintenance_apply.py（FIX機能のmissing_updated
-    適用）がapply_updated/write_note_atomicを再利用するために先出しで共有化した
+    alias一括適用ロジック。PR2の maintenance_apply.py（当初はFIX機能の
+    missing_updated適用のためだったが、FIXは2026-07-18本人裁定で削除済み＝
+    [[Decisions/2026-07-18-external-brain-hardening]]。現在はMERGE時の原ノート
+    スタブ化＝build_merge_stub_text()がupdated:更新にapply_updatedを再利用する）
+    がapply_updated/write_note_atomicを再利用するために先出しで共有化した
     のが最初の動機（設計書§3.5）だが、Codexレビュー指摘・Major対応でスコープを
     拡大した: recall_bench.py（--alias-overlayのオーバーレイ適用）が
     process_note/parse_tsv/require_generic_aliasesも必要としており、これらを
@@ -30,7 +33,6 @@
 各CLIツール固有のビジネスロジック（棚卸しの各チェック項目・非破壊マージ判定 等）は
 これまでどおり元のファイルに残す。
 """
-import hashlib
 import os
 import pathlib
 import re
@@ -137,29 +139,11 @@ def load_generic_aliases(path):
     return words
 
 
-# --- 候補ID方式（旧 vault_inventory.py） ---------------------------------------
-
-def stable_fix_id(relpath):
-    """内容ベースの安定ID（設計書§2.2「連番は使わない」・§2.3のID例
-    `{"id": "inv-...", "action": "fix_approve"}`に対応）。fragments_log.pyの
-    stable_fragment_id()と同じ12文字切り詰め方式（frag-<sha256[:12]>）を踏襲し、
-    プレフィックスだけinv-にする。1つのrelpathにつき1候補（fragmentsのような
-    見出し/箇条書き単位の複数候補は無い）ため、relpath単体をハッシュ材料にする。
-
-    2026-07-16 Codex一次レビュー指摘Minor対応でvault_inventory.pyから本ファイルへ
-    移設: maintenance_apply.py（PR2）がPhase1レコードの再検証（idの再計算
-    一致確認・§3.5の範囲検証）のために本関数を必要とするが、設計書§3.2
-    「他の参照元（knowledge_merge_candidates・recall_bench・maintenance_apply）
-    も vault_lib を参照し、import vault_inventory は全廃」を満たすには、
-    vault_inventory.py（棚卸し検出専用CLI）を直接importさせず、共有ロジックの
-    分離原則（cleanup決定#10）どおり本ファイルに置く必要があった。
-    vault_inventory.py自身もこの関数を再利用する側に回る。
-    """
-    digest = hashlib.sha256(relpath.encode("utf-8")).hexdigest()
-    return f"inv-{digest[:12]}"
-
-
 # --- ノート書込ヘルパ（旧 apply_aliases.py） -----------------------------------
+# 「候補ID方式（旧 vault_inventory.py）」節にあった stable_fix_id() は、FIX機能
+# （棚卸しmissing_updatedの機械修正）が2026-07-18本人裁定で丸ごと削除された
+# ことに伴い不要になったため撤去した（[[Decisions/2026-07-18-external-brain-
+# hardening]]2周目。旧実装はgit log -p参照）。
 
 _UPDATED_LINE_RE = re.compile(r"^updated:\s*.*$")
 _DATE_LINE_RE = re.compile(r"^date:\s*.*$")
