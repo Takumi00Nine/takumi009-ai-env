@@ -5,7 +5,6 @@
       "mcp__codex__codex-reply",
       "WebSearch",
       "WebFetch(domain:*)",
-      "Write(~/Data/**)",
       "Edit(~/Data/**)",
       "Skill(schedule)",
       "Skill(update-config)",
@@ -122,6 +121,9 @@
     ]
   },
   "model": "claude-fable-5[1m]",
+  "env": {
+    "DISABLE_AUTOUPDATER": "1"
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -178,6 +180,12 @@
             "type": "command",
             "command": "cmd=$(jq -r '.tool_input.command // \"\"'); if printf '%s' \"$cmd\" | grep -Eqi '(^|[^[:alnum:]_])brew[[:space:]]+(install|reinstall|upgrade)([[:space:]]|$)'; then set -f; args=$(printf '%s' \"$cmd\" | sed -E 's/.*brew[[:space:]]+(install|reinstall|upgrade)//; s/[;&|].*$//'); blocked=\"\"; for tok in $args; do case \"$tok\" in -*) continue ;; esac; base=$(printf '%s' \"$tok\" | sed -E 's/@.*$//' | tr 'A-Z' 'a-z'); case \"$base\" in openjdk|java|temurin|oracle-jdk|adoptopenjdk|go|golang|ruby|php|python|python3|node|nodejs|deno|perl|lua|erlang|elixir|scala|crystal|kotlin) blocked=\"$tok\"; break ;; esac; done; if [ -n \"$blocked\" ]; then reason=\"言語ランタイム(${blocked})をbrewで直接入れるのはブロックされています。anyenv経由で管理してください：anyenv install <言語env>（例 jenv/rbenv/goenv）→ その*envでバージョン導入（anyenv-runtimeルール）。\"; printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' \"$reason\"; exit 0; fi; fi",
             "statusMessage": "ランタイム導入ガード確認中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/bash-danger-gate.sh",
+            "timeout": 5,
+            "statusMessage": "危険コマンドガード確認中"
           }
         ]
       },
@@ -214,6 +222,9 @@
       }
     ]
   },
+  "enabledPlugins": {
+    "skill-creator@claude-plugins-official": true
+  },
   "extraKnownMarketplaces": {
     "obsidian-skills": {
       "source": {
@@ -223,7 +234,5 @@
     }
   },
   "theme": "dark",
-  "enabledPlugins": {
-    "skill-creator@claude-plugins-official": true
-  }
+  "awaySummaryEnabled": false
 }
