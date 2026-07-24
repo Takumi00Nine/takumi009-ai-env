@@ -1,6 +1,6 @@
 ---
 date: 2026-06-16
-updated: 2026-07-10
+updated: 2026-07-21
 tags: [preference, python, venv]
 project: meta
 related:
@@ -24,5 +24,7 @@ aliases:
 **Why:** グローバルに直接入れると、プロジェクト間で依存が衝突したり、システムPythonを汚染して壊す原因になる。仮想環境ごとに隔離すれば再現性・安全性が保てる。
 
 **How to apply:** Python タスクの最初に venv を用意 → activate → その中で pip / 実行。requirements.txt があるものは venv 内で `pip install -r`。フォルダ名変更で venv が壊れる点は [[Knowledge/venv-breaks-on-folder-rename]] 参照。
+
+**既知の環境課題（2026-07-21 実測）:** この環境の pyenv 管理 Python 3.12 は **`_lzma` モジュール欠落**でビルドされており、`librosa` が import 失敗する（pooch 経由）。システム Python の改変はしない方針＝**音声解析は scipy/soundfile/numpy 構成で代替可**（BPM 既知ならテンポ推定不要・BGM ループ抽出はこの構成で実用十分だった）。根本解決するなら xz 導入後に pyenv で Python を再ビルド。
 
 **機械的な強制:** `~/.claude/settings.json` の PreToolUse(Bash) フックで、**venv未有効状態でのグローバル `pip install`（`pip`/`pip3`/`python -m pip`）を deny でブロック**する設定済み。許可される例外：venv有効時（`VIRTUAL_ENV`/`CONDA_PREFIX`）、同一コマンド内で `source .../activate` 済み、`.venv/bin/pip`等の明示パス、`uv pip`。`pip list` 等の非installや `python -m venv` 作成は対象外。フックの確認・無効化は `/hooks` から。同ファイルには git公開ガードのフックも併設（[[Preferences/git-workflow]]）。

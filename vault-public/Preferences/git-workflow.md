@@ -2,7 +2,7 @@
 date: 2026-06-14
 tags: [preference, git, github, security]
 project: meta
-updated: 2026-07-18
+updated: 2026-07-24
 related:
   - "[[Preferences/readme-bilingual]]"
 aliases:
@@ -82,7 +82,7 @@ commit/push/private作成/force-push・`visibility=private`・visibilityの読�
 **push する前に、未push のローカルコミット（`origin/main..HEAD`）を少数の論理的コミットに集約してから push する。** wip/fixup/export snapshot 等のノイズを潰し、意味の区切りでまとめる。
 
 - **書き換えてよいのは未push 分だけ。push 済みコミット（特に `origin/main`）は書き換えない＝force-push しない。**
-  - **Why**: サブ機がこのリポジトリ（takumi009-ai-env）を `git pull --ff-only` で定期自動追従している（`scripts/update-sub.sh`）。push済み履歴を rewrite すると ff 不可で pull が失敗し、**サブ機の自動更新が止まる**（復旧に各クローンで手動 `git fetch && git reset --hard origin/main` が必要）。公開履歴の書き換えは取り消しにくい。※自分専用の未共有ブランチの整理に force-push を使うのは可。禁止対象は「他が既に追従している push済み履歴」。
+  - **Why**: サブ機はセッション開始のたびに（SessionStartフック`claude/hooks/check-sub-update.sh`が）このリポジトリ（takumi009-ai-env）への未反映コミットを確認し、あれば `scripts/update-sub.sh`（`git pull --ff-only`）の手動実行を案内する運用（2026-07-23〜。それ以前は1日2回の無人自動pullだった）。push済み履歴を rewrite すると ff 不可で pull が失敗し、**サブ機の追従が止まる**（復旧に各クローンで手動 `git fetch && git reset --hard origin/main` が必要）。公開履歴の書き換えは取り消しにくい。※自分専用の未共有ブランチの整理に force-push を使うのは可。禁止対象は「他が既に追従している push済み履歴」。
 - **やり方（この環境は `git rebase -i` 不可）**:
   - 1コミット化: `git reset --soft origin/main && git commit`。
   - 複数コミット化: フェーズ境界ごとに `git reset --hard <境界commit>` → `git reset --soft <前の新commit>` → `git commit` を繰り返す（各中間ツリーが元と一致＝**内容ロスなし**）。
