@@ -133,6 +133,12 @@
             "command": "$HOME/.claude/hooks/bootstrap-vault.sh",
             "timeout": 15,
             "statusMessage": "外部脳ブートストラップ注入中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/check-sub-update.sh",
+            "timeout": 10,
+            "statusMessage": "外部脳リポジトリの未反映更新を確認中"
           }
         ]
       }

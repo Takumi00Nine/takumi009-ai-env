@@ -31,6 +31,18 @@
 # 実装。install-backup.sh・install-vault-agents.sh を別スクリプトに分離しているのと
 # 同じ意図だが、drift-check はinstall-main.sh本体に統合する指示だったため、
 # install-sub.shからの委譲経路だけをこのフラグで区別する）。
+# 同フラグはmachine-roleマーカー（後述）の扱いにも使う: --sub-delegate経由の
+# 場合は委譲元のinstall-sub.shが既に"sub"を書き込む/書き込む予定のため、本
+# スクリプト側では一切マーカーに触れない。
+#
+# machine-roleマーカー（$HOME/.config/takumi009-ai-env/machine-role）:
+# 本スクリプトを --sub-delegate 無しで直接実行した場合（＝実際にメイン機として
+# セットアップする場合）は明示的に"main"を書き込む（2026-07-24 Codex一次レビュー
+# 指摘Major対応: かつてinstall-sub.shを実行しサブ機だった機体を、後から
+# install-main.shを直接実行してメイン機へ移行する運用で、旧"sub"マーカーが
+# 残ったままだとclaude/hooks/check-sub-update.sh・scripts/update-sub.shが
+# サブ機と誤認し続け、update-sub.shの`rsync --delete`でメインVaultの
+# `Preferences/`が上書き削除される事故になり得た）。
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 #       本スクリプトは既存の実ファイルをsymlinkへ置き換えるため、ユーザー本人が
@@ -134,6 +146,33 @@ generate_config_toml() {
   mv "$tmp" "$dest"
   log "generated: $dest <- $src （__AIENV_HOME__ を $HOME へ置換）"
 }
+
+# --- machine-roleマーカー: --sub-delegate無し（＝メイン機としての直接実行）の
+#     場合だけ明示的に"main"を書く。--sub-delegate経由では一切触れない
+#     （委譲元のinstall-sub.shが"sub"を書き込む/書き込む予定のため。詳細は
+#     本ファイル冒頭のコメント参照）。
+#
+# Codex再レビュー指摘・Major対応: 他の全処理より前（symlink化・config.toml生成
+# 等の実処理が始まる前）に真っ先に書く。末尾に置いていた旧実装だと、直接実行の
+# 途中でchecked-out破損等によりfail()して停止した場合、旧"sub"マーカーが
+# 上書きされないまま残ってしまい、Main Vault上でscripts/update-sub.shが
+# 引き続き許可されてしまう欠陥があった（本人が直接install-main.shを実行した
+# 時点で「メイン機として使うつもりだ」という意思は既に確定しているため、
+# 後続処理の成否に関わらず真っ先にマーカーを確定させるのが安全側）。
+# 書込自体（mkdir/mktemp/mv）が失敗した場合はset -eによりここで即座に
+# スクリプト全体が停止する（他のfail-fast処理と同じ扱い＝黙って続行しない）。
+if [ "$IS_SUB_DELEGATE" != "1" ]; then
+  : "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
+  if [ "$DRY_RUN" = "1" ]; then
+    log "[dry-run] would write: $AIENV_MACHINE_ROLE_MARKER (content: main)"
+  else
+    mkdir -p "$(dirname "$AIENV_MACHINE_ROLE_MARKER")"
+    marker_tmp="$(mktemp "$(dirname "$AIENV_MACHINE_ROLE_MARKER")/.$(basename "$AIENV_MACHINE_ROLE_MARKER").aienv-tmp.XXXXXX")"
+    printf 'main\n' > "$marker_tmp"
+    mv "$marker_tmp" "$AIENV_MACHINE_ROLE_MARKER"
+    log "machine-role マーカーを設置しました（main）: $AIENV_MACHINE_ROLE_MARKER"
+  fi
+fi
 
 # --- claude/ ---
 link claude/settings.json               "$HOME/.claude/settings.json"

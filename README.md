@@ -32,7 +32,7 @@ If a case arises on a sub machine where a rule needs fixing, don't fix it there 
 takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json (symlink target)
-│   ├── hooks/                 # bootstrap-vault.sh, delegation-gate-v2.sh, vault-recall.sh, vault-read-log.sh
+│   ├── hooks/                 # bootstrap-vault.sh, check-sub-update.sh, delegation-gate-v2.sh, vault-recall.sh, vault-read-log.sh
 │   └── agents/                # Worker role definitions (7 roles)
 ├── codex/
 │   ├── AGENTS.md               # ~/.codex/AGENTS.md (symlink target)
@@ -46,7 +46,7 @@ takumi009-ai-env/
 │   ├── setup-codex-mcp.sh       # Registers the codex MCP with Claude Code (auto-run by install-main.sh)
 │   ├── backup-vault.sh          # Periodically git commits (+pushes) the Vault
 │   ├── maintenance.sh           # Weekly maintenance runner (backup snapshot + detection + headless-Claude apply + summary; main only)
-│   ├── update-sub.sh            # Periodically refreshes the sub's rules (sub only; installed by install-sub.sh)
+│   ├── update-sub.sh            # Manually-run command that refreshes the sub's rules (sub only; invoked on demand from the check-sub-update.sh SessionStart hook's guidance)
 │   ├── export-public-vault.sh   # Exports the Vault's public folder to vault-public/
 │   ├── check-drift.sh           # Manual audit tool that detects "drift" in symlinks/config.toml/repo/vault-public/private repo visibility
 │   ├── audit.sh                 # One-shot pre-publish audit (NG words/username paths/secrets over full git history, tracked-file drift, completeness); `--quick` skips the (slow) history scan and only checks the current tree
@@ -55,8 +55,7 @@ takumi009-ai-env/
 │   └── templates/               # README templates for the private skeleton folders
 ├── launchagents/
 │   ├── com.takumi009.backup-vault.plist       # Runs the Vault backup hourly (main only)
-│   ├── com.takumi009.maintenance.plist        # Runs the weekly maintenance runner (main only)
-│   └── com.takumi009.update-sub.plist         # Auto-refreshes the rules twice a day (sub only)
+│   └── com.takumi009.maintenance.plist        # Runs the weekly maintenance runner (main only)
 ├── vault-public/                # Snapshot of the Vault's designated public folders (see below)
 ├── Brewfile                     # Dependency formulae installed via `brew bundle` (see below)
 └── tests/                       # Unit tests for the scripts above
@@ -118,7 +117,7 @@ The sub environment is self-contained with just the base package and does not in
 1. If `$HOME/Data/obsidian` doesn't exist, copies the contents of `vault-public/` (public snapshot + private skeleton) to build the Vault skeleton (does not overwrite if it already exists).
 2. Symlinking of `claude/`/`codex/` and codex MCP registration are done by calling `install-main.sh` directly (shared logic).
 3. The Vault-cultivation and backup LaunchAgents are **not installed** (main-only features).
-4. **Automatic rule updates**: installs `com.takumi009.update-sub.plist` (runs `scripts/update-sub.sh` twice a day, at 09:00/13:00). It `git pull --ff-only`s this repository, and if there are changes, automatically regenerates `codex/config.toml`, re-syncs `vault-public/Preferences/` (**touches nothing outside Preferences**, so local `Fragments` etc. on the sub machine are not deleted), and fills in any new skeleton folders. If there are no changes, it exits quietly (since subs aren't meant to be edited, a `git pull` that can't fast-forward normally shouldn't happen, but if it does, it just prints a warning and stops rather than force-overwriting).
+4. **Rule-update check on every session start**: `install-sub.sh` writes a "machine-role marker" file (`$HOME/.config/takumi009-ai-env/machine-role`, containing the text `sub`) — this is the positive proof that a machine is a sub. Conversely, `install-main.sh` writes `main` to the same marker whenever it's run directly (i.e. *not* via the internal `--sub-delegate` path that `install-sub.sh` uses to delegate the shared symlink/config-generation work to it) — this covers the case where a machine that used to be a sub gets later turned into a main by running `install-main.sh` on it directly, overwriting any leftover `sub` marker. When `install-main.sh` is invoked *via* `--sub-delegate`, it never touches the marker at all, leaving that entirely to `install-sub.sh`. `claude/hooks/check-sub-update.sh` (a SessionStart hook) checks this marker on every Claude Code session start; if it isn't exactly `sub` (missing file, wrong content, unreadable, etc.) it does nothing and exits silently (fail-closed). On an actual sub machine it does a time-boxed `git fetch` (fail-open: any failure/timeout/offline situation is silently ignored so it never blocks session startup, though failures are logged to `/tmp/check-sub-update.log`), and if the repository is behind `origin/main`, prints a notice telling you to run `scripts/update-sub.sh` yourself. `scripts/update-sub.sh` itself also checks the same marker at the very start and refuses to run (via `fail()`) if it isn't `sub` — this is the last line of defense against accidentally running it on the main machine, where its `rsync --delete` step would wipe out the main Vault's `Preferences/`. (Until 2026-07-23 the detection here used to be based on the *absence* of Vault private-layer files, and the rule-update itself was driven by an unattended `com.takumi009.update-sub` LaunchAgent that ran twice a day at 09:00/13:00; both were replaced — the LaunchAgent by this session-start check + manual run, and the negative-proof detection by the explicit marker file, after a code review flagged the false-negative risk of the old absence-based check. `install-sub.sh` no longer installs any LaunchAgent for the sub machine at all.) Beyond the marker check, `scripts/update-sub.sh`'s own behavior is unchanged: it `git pull --ff-only`s this repository, and if there are changes, automatically regenerates `codex/config.toml`, re-syncs `vault-public/Preferences/` (**touches nothing outside Preferences**, so local `Fragments` etc. on the sub machine are not deleted), and fills in any new skeleton folders. If there are no changes, it exits quietly (since subs aren't meant to be edited, a `git pull` that can't fast-forward normally shouldn't happen, but if it does, it just prints a warning and stops rather than force-overwriting).
 
 On sub machines, private notes such as `Personal/profile-personal.md` and `Knowledge/mistakes.md` don't exist, but since `bootstrap-vault.sh` (the SessionStart hook) is designed to only list **files that actually exist** as required reading, no "not found" warnings appear.
 
@@ -215,6 +214,7 @@ bash tests/test-check-drift.sh
 bash tests/test-setup-codex-mcp.sh
 bash tests/test-install-main-codex-mcp.sh
 bash tests/test-update-sub.sh
+bash tests/test-check-sub-update.sh
 bash tests/test-audit.sh
 ```
 
@@ -253,7 +253,7 @@ None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the
 takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json （symlink先）
-│   ├── hooks/                 # bootstrap-vault.sh・delegation-gate-v2.sh・vault-recall.sh・vault-read-log.sh
+│   ├── hooks/                 # bootstrap-vault.sh・check-sub-update.sh・delegation-gate-v2.sh・vault-recall.sh・vault-read-log.sh
 │   └── agents/                # ワーカー役割定義（7ロール）
 ├── codex/
 │   ├── AGENTS.md               # ~/.codex/AGENTS.md （symlink先）
@@ -267,7 +267,7 @@ takumi009-ai-env/
 │   ├── setup-codex-mcp.sh       # codex MCPをClaude Codeへ登録するスクリプト（install-main.shが自動実行）
 │   ├── backup-vault.sh          # Vaultを定期的にgit commit（+push）するスクリプト
 │   ├── maintenance.sh           # 週次メンテナンスランナー（バックアップ＋検出＋ヘッドレスClaude適用＋サマリ。メイン専用）
-│   ├── update-sub.sh            # サブのルールを定期的に最新化するスクリプト（サブ専用。install-sub.shが設置）
+│   ├── update-sub.sh            # サブのルールを最新化する手動実行コマンド（サブ専用。check-sub-update.shの案内から本人が実行）
 │   ├── export-public-vault.sh   # Vaultのpublicフォルダを vault-public/ へエクスポートするスクリプト
 │   ├── check-drift.sh           # symlink/config.toml/repo/vault-public/private repo可視性の「ズレ」を検知する手動監査ツール
 │   ├── audit.sh                 # public公開前の総監査ツール（git履歴全体のNGワード/実ユーザー名パス/シークレット・追跡ファイル逸脱・完備性）。`--quick` で履歴スキャン（重い）を省き現在ツリーのみ実行
@@ -276,8 +276,7 @@ takumi009-ai-env/
 │   └── templates/               # private骨格フォルダ用のREADMEテンプレ
 ├── launchagents/
 │   ├── com.takumi009.backup-vault.plist       # Vaultバックアップを毎時実行（メイン専用）
-│   ├── com.takumi009.maintenance.plist        # 週次メンテナンスランナーを実行（メイン専用）
-│   └── com.takumi009.update-sub.plist         # ルールを1日2回自動最新化（サブ専用）
+│   └── com.takumi009.maintenance.plist        # 週次メンテナンスランナーを実行（メイン専用）
 ├── vault-public/                # Vaultのpublic指定フォルダのスナップショット（後述）
 ├── Brewfile                     # `brew bundle` で導入する依存formula（後述）
 └── tests/                       # 上記スクリプト群のユニットテスト
@@ -339,7 +338,7 @@ scripts/install-sub.sh
 1. `$HOME/Data/obsidian` が無ければ `vault-public/` の中身（public スナップショット＋private骨格）をコピーして Vault の骨格を作る（既に存在する場合は上書きしません）。
 2. `claude/`・`codex/` の symlink 化・codex MCP登録は `install-main.sh` をそのまま呼び出して行う（ロジックは共通）。
 3. Vault育成系・バックアップの LaunchAgent は**インストールしません**（メイン専用機能）。
-4. **ルールの自動最新化**: `com.takumi009.update-sub.plist`（`scripts/update-sub.sh` を1日2回＝09:00/13:00に起動）を設置します。このリポジトリを `git pull --ff-only` し、変化があれば `codex/config.toml` の再生成・`vault-public/Preferences/` の再同期（**Preferences以外には一切触れません**＝サブ機ローカルの `Fragments` 等は消えません）・新しい骨格フォルダの補充を自動で行います。変化が無ければ静かに終了します（サブは編集しない運用のため `git pull` が fast-forward できない事態は通常起きませんが、その場合は警告を出すだけで停止し、強制上書きはしません）。
+4. **セッション開始のたびに更新有無を確認**: `install-sub.sh` は「machine-roleマーカー」ファイル（`$HOME/.config/takumi009-ai-env/machine-role`、中身は`sub`）を書き込みます。これは「このマシンがサブである」ことの積極的な証明です。逆に `install-main.sh` は、内部で`install-sub.sh`が使う`--sub-delegate`経路**を経由せず**直接実行された場合は、同じマーカーへ`main`を書き込みます（かつてサブ機だった機体を、後から`install-main.sh`を直接実行してメイン機へ移行する場合に、残っている旧`sub`マーカーを上書きするため）。`--sub-delegate`経由（＝`install-sub.sh`からの委譲）で呼ばれた場合、`install-main.sh`はマーカーに一切触れず、`install-sub.sh`側の書込に完全に委ねます。`claude/hooks/check-sub-update.sh`（SessionStartフック）はセッション起動のたびにこのマーカーを確認し、中身がちょうど`sub`でなければ（ファイル無し・中身違い・読めない等）何もせず静かにexitします（fail-closed）。実際のサブ機では時間上限つきの `git fetch` を実行し（fail-open＝失敗・タイムアウト・オフライン等は静かに無視してセッション起動をブロックしません。ただし失敗は `/tmp/check-sub-update.log` に記録されます）、`origin/main` より遅れていれば `scripts/update-sub.sh` を自分で実行するよう案内します。`scripts/update-sub.sh` 自体も冒頭で同じマーカーを確認し、`sub`でなければ`fail()`で拒否します（メイン機で誤って実行された場合、`rsync --delete`でメインVaultの`Preferences/`が消えてしまうのを防ぐ最後の砦）。（2026-07-23までは、この判定はVaultのprivate層ファイルが「無い」ことを根拠にしており、更新自体も `com.takumi009.update-sub` LaunchAgentによる1日2回＝09:00/13:00の無人自動pullでした。レビューで旧判定方式の誤検知リスク（否定証明）が指摘され、LaunchAgentはセッション起動時の確認＋手動実行に、判定方式は明示的なマーカーファイルに、それぞれ置き換えました。`install-sub.sh` はサブ機向けのLaunchAgentをもう一切設置しません）。マーカー確認を除く `scripts/update-sub.sh` 自体の処理内容は変更していません: このリポジトリを `git pull --ff-only` し、変化があれば `codex/config.toml` の再生成・`vault-public/Preferences/` の再同期（**Preferences以外には一切触れません**＝サブ機ローカルの `Fragments` 等は消えません）・新しい骨格フォルダの補充を自動で行います。変化が無ければ静かに終了します（サブは編集しない運用のため `git pull` が fast-forward できない事態は通常起きませんが、その場合は警告を出すだけで停止し、強制上書きはしません）。
 
 サブ機では `Personal/profile-personal.md`・`Knowledge/mistakes.md` 等の private ノートが存在しませんが、`bootstrap-vault.sh`（SessionStartフック）は**存在するファイルだけ**を必読リストに載せる設計のため、「見つかりません」という警告は出ません。
 
@@ -436,6 +435,7 @@ bash tests/test-check-drift.sh
 bash tests/test-setup-codex-mcp.sh
 bash tests/test-install-main-codex-mcp.sh
 bash tests/test-update-sub.sh
+bash tests/test-check-sub-update.sh
 bash tests/test-audit.sh
 ```
 

@@ -8,10 +8,14 @@
 # 注意: install-main.sh は末尾で scripts/setup-codex-mcp.sh（実claude/codex CLIを
 # 呼びうる）のlaunchctl相当処理を行う（週次drift通知LaunchAgent・
 # com.takumi009.drift-check.plistの設置は2026-07-16簡素化で撤去済み）。install-sub.sh
-# は委譲先のinstall-main.sh経由で前者に加えサブ専用LaunchAgentのlaunchctl bootstrapも
-# 行う。どちらもHOME差し替えでは隔離できない実システムへの副作用になりうるため、
-# 非dry-run呼び出しには必ず SKIP_CODEX_MCP=1 と SKIP_LAUNCHCTL=1 の両方を付ける
-# （Codexレビュー指摘・Major。tests/test-install-sub.sh と同じ対策）。
+# は委譲先のinstall-main.sh経由でこれを間接的に呼ぶ（サブ専用の定期更新
+# LaunchAgent自体は2026-07-23廃止済みで、install-sub.shはLaunchAgentを一切
+# 設置・撤去しない＝claude/hooks/check-sub-update.shのSessionStartフックに
+# 置き換え済み）。HOME差し替えでは隔離できない実システムへの副作用になりうる
+# ため、非dry-run呼び出しには必ず SKIP_CODEX_MCP=1 を付ける（Codexレビュー
+# 指摘・Major。tests/test-install-sub.sh と同じ対策。SKIP_LAUNCHCTL=1 は
+# install-main.sh側が同名の環境変数を別目的で宣言しているための互換目的で
+# 一部呼び出しに残しているが、install-sub.sh自体はこれを参照しない）。
 #
 # 実行方法: bash tests/test-with-dotfiles.sh
 
@@ -140,10 +144,10 @@ echo "=== 5. install-sub.sh --with-dotfiles: install-main.shへ正しく委譲�
   HOME_DIR="$(mktemp -d)"
   make_fake_home "$HOME_DIR"
 
-  # SKIP_LAUNCHCTL=1: install-sub.shは末尾でサブ専用LaunchAgentをlaunchctl bootstrap
-  # するが、gui/$(id -u)はHOME差し替えで隔離できない実launchdセッションのため、
-  # テストでは実システムのlaunchdに触れないようにする（tests/test-install-sub.sh
-  # と同じ対策）。
+  # install-sub.sh自体はLaunchAgentを一切設置・撤去しない（2026-07-23廃止）ため
+  # SKIP_LAUNCHCTL は本来不要だが、委譲先の install-main.sh が同名の環境変数を
+  # 別目的（週次drift通知LaunchAgent向け・現在は未使用）で宣言しているための
+  # 互換目的として付けておく（tests/test-install-sub.sh と同じ方針）。
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" DOTFILES_REPO_URL="$DOTFILES_SRC" DOTFILES_DIR="$HOME_DIR/work/dotfiles" \
     bash "$REPO_ROOT/scripts/install-sub.sh" --with-dotfiles >/dev/null
 

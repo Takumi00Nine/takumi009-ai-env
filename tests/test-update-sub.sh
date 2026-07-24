@@ -4,6 +4,13 @@
 # 実 ~/.codex・実Vault・実GitHubには一切依存しない。ローカルの使い捨てbare repo
 # を「origin」に見立て、cloneしたサブ相当のrepoに対して update-sub.sh を実行する。
 #
+# 2026-07-24: machine-roleマーカー（AIENV_MACHINE_ROLE_MARKER）の中身が「sub」
+# でなければ即fail()で拒否するガードを追加した（リーダー裁定・Codex一次レビュー
+# 指摘Major対応）。run_update()ヘルパーは「サブ機として正しく provisioning 済み」
+# の正常系を再現するため、呼び出しのたびに$homeへマーカーを自動設置する
+# （マーカー無し/中身違いの拒否そのものを検証するテストは後段で個別に直接
+# スクリプトを呼ぶ）。
+#
 # 実行方法: bash tests/test-update-sub.sh
 
 set -euo pipefail
@@ -65,8 +72,16 @@ make_sub_clone() {
   git -C "$sub" config user.email test@example.invalid
 }
 
+# $home配下にmachine-roleマーカー（sub）を設置する。
+make_sub_marker() {
+  local home="$1"
+  mkdir -p "$home/.config/takumi009-ai-env"
+  printf 'sub\n' > "$home/.config/takumi009-ai-env/machine-role"
+}
+
 run_update() {
   local dir="$1" home="$2" vault="$3" lock="$4"
+  make_sub_marker "$home"
   DIR="$dir" HOME="$home" VAULT="$vault" LOCK_FILE="$lock" "$SCRIPT"
 }
 
@@ -313,6 +328,126 @@ echo "=== 8. ロック: staleなPIDは自動解除して続行する ==="
     "$(echo "$out" | grep -q 'stale なロックファイルを検出しました' && echo 1 || echo 0)"
   assert_true "続行して変更なしメッセージまで到達する" \
     "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 9. machine-roleマーカー: マーカーが無ければ即FAILで拒否する（メインでの誤実行防止・2026-07-24追加） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+  # make_sub_marker() を意図的に呼ばず、マーカー未設置(=メイン相当)を再現する。
+
+  rc=0
+  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
+  assert_eq "マーカー無しはexit 1(FAIL)" "1" "$rc"
+  assert_true "サブ機として登録されていない旨のFAILメッセージが出る" \
+    "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
+  assert_true "install-sub.shを先に実行するよう案内する" \
+    "$(echo "$out" | grep -q "install-sub.sh を実行" && echo 1 || echo 0)"
+  assert_true "マーカー無しの時点でgit pull等には一切進まない(rule1.mdが同期されていない)" \
+    "$([[ ! -f "$FAKE_HOME/Data/obsidian/Preferences/rule1.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 9b. machine-roleマーカー: 中身が「sub」以外(例: main)でも即FAILで拒否する ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
+  printf 'main\n' > "$FAKE_HOME/.config/takumi009-ai-env/machine-role"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
+  assert_eq "中身がmainならexit 1(FAIL)" "1" "$rc"
+  assert_true "サブ機として登録されていない旨のFAILメッセージが出る" \
+    "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 9c. machine-roleマーカー: 中身が「sub」(前後空白付き)なら正常に動作する ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
+  printf '  sub  \n' > "$FAKE_HOME/.config/takumi009-ai-env/machine-role"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  assert_true "変更なしメッセージまで正常に到達する" \
+    "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 9d. machine-roleマーカー: 中身が「s u b」(内部に空白を含む)なら「sub」と誤認せずFAILで拒否する(Codex再レビュー指摘Minor対応) ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
+  printf 's u b\n' > "$FAKE_HOME/.config/takumi009-ai-env/machine-role"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
+  assert_eq "内部に空白を含む中身はexit 1(FAIL)" "1" "$rc"
+  assert_true "サブ機として登録されていない旨のFAILメッセージが出る" \
+    "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 9f. machine-roleマーカー: ja_JP.UTF-8ロケール環境でも本来のFAILメッセージが握り潰されない（2026-07-16 scripts/install-backup.shで発見済みの実バグ回帰テスト・2026-07-24 update-sub.shへの横展開で同型バグが再発しないことの固定化） ==="
+{
+  # bash 3.2(macOS既定)+ja_JP.UTF-8ロケール環境で、fail()メッセージ内の裸の
+  # $AIENV_MACHINE_ROLE_MARKER直後に全角の閉じ括弧（）が続くと、変数名の境界を
+  # 誤認識し「unbound variable」でクラッシュし本来のFAILメッセージが一切
+  # 表示されない欠陥が実装中に一度発生した（${AIENV_MACHINE_ROLE_MARKER}と
+  # 波括弧で囲んで修正済み）。元バグはこのロケール下でのみ再現するため、CI等の
+  # 別ロケール環境でも確実にこの回帰を検出できるようLC_ALL/LANGを明示指定する。
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+  # マーカーは意図的に未設置のまま(=拒否パスを踏ませる)。
+
+  rc=0
+  out=$(LC_ALL=ja_JP.UTF-8 LANG=ja_JP.UTF-8 DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
+  assert_eq "マーカー拒否はexit 1(FAIL)のまま" "1" "$rc"
+  assert_true "'unbound variable'クラッシュでは落ちず本来のFAILメッセージが出る" \
+    "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
