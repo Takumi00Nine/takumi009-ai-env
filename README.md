@@ -54,7 +54,7 @@ takumi009-ai-env/
 │   ├── ngwords.txt              # NG-word definitions (private data; **not included in this repository** — see "Setup" below)
 │   └── templates/               # README templates for the private skeleton folders
 ├── launchagents/
-│   ├── com.takumi009.backup-vault.plist       # Runs the Vault backup hourly (main only)
+│   ├── com.takumi009.backup-vault.plist       # Runs the Vault backup every 6 hours (main only)
 │   └── com.takumi009.maintenance.plist        # Runs the weekly maintenance runner (main only)
 ├── vault-public/                # Snapshot of the Vault's designated public folders (see below)
 ├── Brewfile                     # Dependency formulae installed via `brew bundle` (see below)
@@ -185,7 +185,7 @@ cd ~/work/takumi009-ai-env && brew bundle
 
 # 4. Rebuild the environment
 scripts/install-main.sh --with-dotfiles   # symlinks + dotfiles + codex MCP registration
-scripts/install-backup.sh                 # Resume hourly backups
+scripts/install-backup.sh                 # Resume periodic backups
 scripts/install-maintenance.sh            # Resume the weekly maintenance runner
 
 # 5. Log in to each app (manual): Claude Code / Codex / others
@@ -275,7 +275,7 @@ takumi009-ai-env/
 │   ├── ngwords.txt              # NGワード定義（私的データのため**このリポジトリには含まれない**。詳細は「導入手順」参照）
 │   └── templates/               # private骨格フォルダ用のREADMEテンプレ
 ├── launchagents/
-│   ├── com.takumi009.backup-vault.plist       # Vaultバックアップを毎時実行（メイン専用）
+│   ├── com.takumi009.backup-vault.plist       # Vaultバックアップを6時間ごとに実行（メイン専用）
 │   └── com.takumi009.maintenance.plist        # 週次メンテナンスランナーを実行（メイン専用）
 ├── vault-public/                # Vaultのpublic指定フォルダのスナップショット（後述）
 ├── Brewfile                     # `brew bundle` で導入する依存formula（後述）
@@ -406,7 +406,7 @@ cd ~/work/takumi009-ai-env && brew bundle
 
 # 4. 環境の再構築
 scripts/install-main.sh --with-dotfiles   # symlink 化＋dotfiles＋codex MCP 登録
-scripts/install-backup.sh                 # 毎時バックアップ再開
+scripts/install-backup.sh                 # 定期バックアップ再開
 scripts/install-maintenance.sh            # 週次メンテナンスランナー再開
 
 # 5. 各アプリのログイン（手動）: Claude Code / Codex / その他

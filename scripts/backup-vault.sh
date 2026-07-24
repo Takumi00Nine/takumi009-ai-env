@@ -3,7 +3,8 @@
 #
 # 詳細は README.md「Vault バックアップの運用」節を参照。
 #
-# launchagents/com.takumi009.backup-vault.plist から1時間おきに無人実行される
+# launchagents/com.takumi009.backup-vault.plist から6時間おき（2026-07-24に
+# 毎時から変更）に無人実行される
 # 前提のスクリプト（scripts/install-backup.sh が配置する。旧ラベル名
 # com.takumi009.vault-backupは2026-07-16簡素化で改名済み＝設計書§5）。
 #
@@ -70,9 +71,10 @@ done
 # scripts/check-drift.sh ⑦の VAULT_BACKUP_BRANCH と同一名・同一既定値のSSOT
 # （2026-07-14 リーダー指摘対応）。
 : "${VAULT_BACKUP_BRANCH:=main}"
-# stale判定の閾値。LaunchAgentの実行間隔（1時間=3600秒）と同じにしておけば、
-# 「前回実行がクラッシュして片付けられなかったロック」と「今まさに実行中」を
-# 十分な余裕を持って区別できる。
+# stale判定の閾値。バックアップ実行自体は数秒〜数分で終わるため、1時間
+# （3600秒）を超えて残っているロックは「前回実行がクラッシュして片付けられ
+# なかったロック」とみなせる。LaunchAgentの実行間隔（2026-07-24に毎時→6時間
+# =21600秒へ変更）より短い値なら、次回発火時に確実にstale回収される。
 STALE_LOCK_SECONDS="${STALE_LOCK_SECONDS:-3600}"
 # maintenance.sh（週次ランナー・PR2・未実装）がPhase0〜Phase3の間保持するVault
 # 書込ロック。本スクリプトは自分では取得・作成しない（is_pid_lock_heldによる
@@ -105,7 +107,7 @@ acquire_pid_lock "$LOCK_FILE" "$STALE_LOCK_SECONDS" "backup-vault" "$STATUS_FILE
 # maintenance.sh自身がPhase0/Phase3で本スクリプトを（Vault書込ロックを保持した
 # ままの状態で）意図的に呼び出す場合は、このチェックをbypassする
 # （2026-07-16 maintenance.sh実装時に発見・追加: このチェックの本来の目的は
-# 「毎時LaunchAgent発火のbackup-vault.shが、maintenance.sh実行中の複数ステップ
+# 「定期LaunchAgent発火のbackup-vault.shが、maintenance.sh実行中の複数ステップ
 # 書込みと競合しないよう横から割り込ませない」ことであり、maintenance.sh自身が
 # 呼ぶ分（設計書§1.2 Phase0の直前スナップショット・Phase3の最終commit）まで
 # 阻止してしまうと、ロックを取得した本人が自分の意図した呼び出しで永遠に
@@ -115,7 +117,7 @@ acquire_pid_lock "$LOCK_FILE" "$STALE_LOCK_SECONDS" "backup-vault" "$STATUS_FILE
 # 渡された値がロックファイルへ実際に書かれているPIDと一致するかで行う
 # （2026-07-16 Codexレビュー指摘Major対応: 当初は`MAINTENANCE_INTERNAL_CALL=1`
 # という単純な真偽値フラグだった。`launchctl setenv`・plist設定ミス・手動
-# 実行等でこの環境変数がアンビエントに`=1`のまま毎時LaunchAgent側の
+# 実行等でこの環境変数がアンビエントに`=1`のまま定期LaunchAgent側の
 # backup-vault.sh実行に漏れ残っていた場合、無関係な実行までVault書込
 # ロックの排他をbypassしてしまいうる。ロックファイルの実際のPIDと照合する
 # ことで、「本当にこのロックを取得したプロセス自身からの呼び出しか」を

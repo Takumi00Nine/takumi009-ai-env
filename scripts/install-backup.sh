@@ -20,7 +20,7 @@
 # Vaultの初回git化は「Vault分割・呼称の中立化等が完了してから」という
 # 段階的ロールアウトが前提（設計§4-3）のため、インストール＝即バックアップ実行
 # にしてしまうと、その前提確認より先にVaultがgit管理下に入ってしまう恐れがある。
-# 初回実行は次のStartInterval（最大1時間後）を待つか、準備が整ってから
+# 初回実行は次のStartInterval（最大6時間後）を待つか、準備が整ってから
 # `launchctl kickstart -k gui/$(id -u)/com.takumi009.backup-vault` を手動実行する。
 #
 # 使い方:

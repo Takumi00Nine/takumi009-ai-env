@@ -16,7 +16,7 @@
         <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
     <key>StartInterval</key>
-    <integer>3600</integer>
+    <integer>21600</integer>
     <key>RunAtLoad</key>
     <false/>
     <key>StandardOutPath</key>
