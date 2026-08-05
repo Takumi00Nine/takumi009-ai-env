@@ -183,6 +183,12 @@ link claude/hooks/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.
 # このスクリプトはsymlink配置のみを担当）。
 link claude/hooks/vault-recall.sh    "$HOME/.claude/hooks/vault-recall.sh"
 link claude/hooks/vault-read-log.sh  "$HOME/.claude/hooks/vault-read-log.sh"
+# サブ機更新チェック(SessionStart)。settings.json は main/sub 共通でこのフックを
+# 登録するため、リンクも main/sub 共通で配置する（スクリプト側が machine-role
+# マーカーで判定し、メイン機では無出力で即 exit 0＝fail-closed）。
+# 2026-07-28 追加: 2026-07-23 実装時にリンク配置が漏れており、両機で
+# SessionStart に「No such file or directory」の非ブロッキングエラーが出ていた。
+link claude/hooks/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
 
 [ -d "$DIR/claude/agents" ] || fail "リポジトリのディレクトリが見つかりません（checkout破損の可能性）: $DIR/claude/agents"
 for f in "$DIR"/claude/agents/*.md; do
@@ -193,7 +199,8 @@ done
 
 if [ "$DRY_RUN" != "1" ]; then
   chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh" \
-           "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh"
+           "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh" \
+           "$DIR/claude/hooks/check-sub-update.sh"
 fi
 
 # --- codex/ ---

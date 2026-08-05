@@ -2,7 +2,7 @@
 date: 2026-06-14
 tags: [preference, git, github, security]
 project: meta
-updated: 2026-07-24
+updated: 2026-07-28
 related:
   - "[[Preferences/readme-bilingual]]"
 aliases:
@@ -87,7 +87,7 @@ commit/push/private作成/force-push・`visibility=private`・visibilityの読�
   - 1コミット化: `git reset --soft origin/main && git commit`。
   - 複数コミット化: フェーズ境界ごとに `git reset --hard <境界commit>` → `git reset --soft <前の新commit>` → `git commit` を繰り返す（各中間ツリーが元と一致＝**内容ロスなし**）。
   - **集約後、元HEADとのツリー差分がゼロであることを検証**（`git diff --quiet <backup> HEAD`）してから本ブランチを移す。**バックアップブランチ**（例 `backup-before-tidy`）を push まで残す。
-- 集約の**粒度（1つ / 複数）は本人に確認**する。**push 自体は本人専任**（外部脳系リポジトリ＝[[Preferences/coding-delegation]]）。
+- **粒度の既定＝「1 push 1 コミット」（2026-07-28 本人決定・都度の確認は不要）**: push は「1つの改修を加えた」という意味の単位なので、未push分は原則1コミットに集約してから push する（例外を作りたい場合のみ本人に確認）。作業中の細かいコミットは自由に積んでよいが、push 直前に必ず畳む。**push 自体は本人専任**（外部脳系リポジトリ＝[[Preferences/coding-delegation]]）。
 
 **Why:** fixup/wip/export の細かいコミットがそのまま公開履歴に残ると、後から「何が入ったか」を追いにくい。push は不可逆な公開操作なので、その直前に一度きれいにする。ただし整理は"まだ誰も見ていない未push分"に限定し、既に共有された履歴には触れない。
 

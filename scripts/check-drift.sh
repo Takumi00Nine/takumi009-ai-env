@@ -242,6 +242,7 @@ MACHINE_MANAGED_TOML_SECTION_HEADER_REGEXES=(
   '^\\[hooks\\.state(\\.|\\])' # hooks.json の信頼ハッシュキャッシュ（新Macでは初回に一度だけ再確認されるだけ）
   '^\\[projects(\\.|\\])'      # フォルダごとのtrust_level履歴
   '^\\[tui(\\.|\\])'           # オンボーディング通知の既読カウンタ等（実質的な設定ではない）
+  '^\\[shell_environment_policy(\\.|\\])' # Codex.appがファイル末尾の機械管理領域（[projects]/[tui]と同じ並び）に自動追記するセクション。ビルド毎に変わるNODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S を含み、同キー群はテンプレ側[mcp_servers.node_repl.env]に既存。2026-08-03のアプリ書換で出現・2026-08-05実測確認
 )
 # 単一キー行の除去（セクション化されておらず、値がマシン/バージョン固有）。
 # 行頭からの空白許容つきキー名アンカーにする（Codexレビュー指摘・Major：未アンカーの
