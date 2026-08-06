@@ -15,6 +15,11 @@
 # VAULT は環境変数で上書き可（ユニットテスト用。本番は既定値のまま）。
 VAULT="${BOOTSTRAP_VAULT:-$HOME/Data/obsidian}"
 TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
+# machine-roleマーカー（サブ機判定用。既定値・環境変数名は
+# check-sub-update.sh・install-main.sh・install-sub.sh・update-sub.shと共通）。
+# 用途は外部脳ヘルス行④（週次メンテ死活検知）のサブ機スキップのみ
+# （2026-08-06対応。下部compute_health_lines参照）。
+: "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
 
 # 外部脳ヘルス行（2026-07-10 敵対的レビュー2回目 §5-2・8.0の柱②対応）。
 # 「本人が定期的にレポート/ログを見に行かないと死活が分からない」問題への
@@ -127,6 +132,24 @@ compute_health_lines() {
   fi
 
   # ④ 死活検知（Critical対処・2026-07-18ハードニング／2周目・全体構成再レビュー
+  #
+  # サブ機スキップ（2026-08-06追加。本人報告・実害対応）: maintenance.sh（週次
+  # メンテ）とそれを起動するLaunchAgentはメイン機専用機能であり、サブ機には
+  # 設計上存在しない（install-sub.shはmaintenance.sh関連のインストールを一切
+  # 行わない）。そのためサブ機ではlast-run.jsonが常に不在のままとなり、
+  # 以下の判定が「毎セッション必ず」④の警告を出し続けてしまっていた
+  # （本来は正常な状態にもかかわらず）。判定はcheck-sub-update.shの
+  # machine-roleマーカー読取・trimパターンをそのまま流用し一貫させる
+  # （fail-closed＝マーカーが無い/読めない/中身が"sub"以外はすべて
+  # 「メイン機」とみなし従来どおり④を実行する。積極的な証明＝厳密に
+  # "sub"の場合のみスキップする）。①②等の他セクションは元々ディレクトリ
+  # 不在時に静かにスキップするfail-open設計のため対象外（変更しない）。
+  local machine_role_raw machine_role
+  machine_role_raw="$(cat "$AIENV_MACHINE_ROLE_MARKER" 2>/dev/null)"
+  machine_role="${machine_role_raw#"${machine_role_raw%%[![:space:]]*}"}"
+  machine_role="${machine_role%"${machine_role##*[![:space:]]}"}"
+
+  if [ "$machine_role" != "sub" ]; then
   # Codex+Fable5収束後の小修正＝impl4）: maintenance.sh(週次)のlast-run.json
   # started_atが${MAINTENANCE_STALE_DAYS}日以上前のままなら「週次メンテ自体が
   # 動いていない」疑いとして警告する（started_atはbusy/error早期終了でも
@@ -227,6 +250,7 @@ compute_health_lines() {
       fi
     fi
   fi
+  fi  # machine_role != sub（サブ機では④の全判定を無警告でスキップ）
 
   # ③ check-drift.sh ⑥相当の簡易死活。reads/recallログそれぞれの「最終有効行」
   # （3列目=ノート相対パスが空でない行）の経過日数が閾値超なら死の疑いを出す。

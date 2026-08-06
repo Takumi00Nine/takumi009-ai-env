@@ -71,6 +71,9 @@ make_full_vault() {
 # ディレクトリの直接スキャン方式へ変更したため、5番目の引数は
 # pending_file(単一ファイル)からproposals_dir(ディレクトリ)へ変わった。
 # last-run.jsonの死活検知（6番目の引数）も同時に追加した。
+# 7番目の引数はmachine-roleマーカーファイルのパス（既定は存在しないパス＝
+# マーカー無し。中身が厳密に"sub"のときだけ④死活検知をスキップする挙動の
+# テスト用に2026-08-06追加）。
 run_bootstrap() {
   local vault="$1"
   local reads_log="${2:-/nonexistent-dir/vault-reads.tsv}"
@@ -78,12 +81,14 @@ run_bootstrap() {
   local inv_log_dir="${4:-/nonexistent-dir/vault-inventory}"
   local proposals_dir="${5:-/nonexistent-dir/preferences-proposals}"
   local last_run_file="${6:-/nonexistent-dir/last-run.json}"
+  local role_marker="${7:-/nonexistent-dir/machine-role}"
   echo '{"session_id":"test-session-0000"}' \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="$reads_log" VAULT_RECALL_LOG="$recall_log" \
       VAULT_INVENTORY_LOG_DIR="$inv_log_dir" \
       PREFERENCES_PROPOSALS_DIR="$proposals_dir" \
-      MAINTENANCE_LAST_RUN_FILE="$last_run_file" "$SCRIPT" \
+      MAINTENANCE_LAST_RUN_FILE="$last_run_file" \
+      AIENV_MACHINE_ROLE_MARKER="$role_marker" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 
@@ -546,6 +551,73 @@ echo "=== 7l5. 外部脳ヘルス行④(b): last_success_atキーは実在する
     "$ctx_started_empty" "⚠️ 週次メンテの状態記録が無い/壊れています"
 
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR_EMPTY" "$LAST_RUN_DIR_NULL" "$LAST_RUN_DIR_STARTED_EMPTY"
+}
+
+echo "=== 7m. 外部脳ヘルス行④: machine-roleマーカーが\"sub\"かつlast-run.json不在でも④の警告は出ない（サブ機はmaintenance.sh非搭載＝2026-08-06対応、本人報告・実害中の解消） ==="
+{
+  # maintenance.sh(週次メンテ)・LaunchAgentはメイン機専用機能でサブ機には
+  # 存在しないため、④の警告は毎セッション必ず出続けていた（実害）。マーカーが
+  # 厳密に"sub"のときだけ④のみをスキップし、①②等の他セクションには影響しない
+  # ことも合わせて確認する。
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  INV_DIR="$(mktemp -d)"
+  cat > "$INV_DIR/2026-06-01.md" <<'EOF'
+自動生成。ノート 42 件を検査し、**要確認 3 件**。
+EOF
+  PROPOSALS_DIR="$(mktemp -d)"
+  echo "下書き本文" > "$PROPOSALS_DIR/x.md"
+  ROLE_DIR="$(mktemp -d)"
+  ROLE_FILE="$ROLE_DIR/machine-role"
+  printf 'sub\n' > "$ROLE_FILE"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR" "$PROPOSALS_DIR" "/nonexistent-dir/last-run.json" "$ROLE_FILE")"
+  assert_not_contains "marker=sub・last-run.json不在では状態記録の警告が出ない" "$ctx" "週次メンテの状態記録が無い/壊れています"
+  assert_not_contains "marker=sub・last-run.json不在では動いていない系の警告も出ない" "$ctx" "週次メンテが"
+  assert_contains "④以外(①棚卸し)は影響を受けず出る" "$ctx" "棚卸し最新"
+  assert_contains "④以外(②Preferences提案)は影響を受けず出る" "$ctx" "夜間バッチで運用ルールの昇格提案"
+  assert_contains "ヘルス見出し自体は①②があるので出る" "$ctx" "【外部脳ヘルス】"
+
+  rm -rf "$VAULT_DIR" "$INV_DIR" "$PROPOSALS_DIR" "$ROLE_DIR"
+}
+
+echo "=== 7m2. 外部脳ヘルス行④: machine-roleマーカーが\"main\"の場合は従来どおり警告が出る ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  ROLE_DIR="$(mktemp -d)"
+  ROLE_FILE="$ROLE_DIR/machine-role"
+  printf 'main\n' > "$ROLE_FILE"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "/nonexistent-dir/last-run.json" "$ROLE_FILE")"
+  assert_contains "marker=mainでは従来どおりlast-run.json不在の警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
+
+  rm -rf "$VAULT_DIR" "$ROLE_DIR"
+}
+
+echo "=== 7m3. 外部脳ヘルス行④: machine-roleマーカーが無い（ファイル不在）場合は従来どおり警告が出る（fail-closed） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "/nonexistent-dir/last-run.json" "/nonexistent-dir/machine-role")"
+  assert_contains "marker不在では従来どおりlast-run.json不在の警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
+
+  rm -rf "$VAULT_DIR"
+}
+
+echo "=== 7m4. 外部脳ヘルス行④: machine-roleマーカーの中身が「s u b」(内部に空白を含む非厳密一致)の場合は従来どおり警告が出る（fail-closed。前後空白はtrimするが内部の空白まで削っては誤って一致してしまうためtest-check-sub-update.sh 2eと同じ観点を踏襲） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  ROLE_DIR="$(mktemp -d)"
+  ROLE_FILE="$ROLE_DIR/machine-role"
+  printf 's u b\n' > "$ROLE_FILE"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "/nonexistent-dir/last-run.json" "$ROLE_FILE")"
+  assert_contains "marker中身が\"s u b\"(内部空白)では\"sub\"と誤認されず従来どおり警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
+
+  rm -rf "$VAULT_DIR" "$ROLE_DIR"
 }
 
 echo "=== 8. 外部脳ヘルス行: 棚卸し・ログとも無いが、last-run.json不在の死活警告(b)は出る（2周目ハードニングで完全沈黙は撤回） ==="
