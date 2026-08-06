@@ -80,7 +80,7 @@ Generation/updating is done by `scripts/export-public-vault.sh`. NG words and le
 #### 0. Install dependencies (common)
 
 ```sh
-brew bundle          # Reads the Brewfile and installs ripgrep, gitleaks, jq, gh
+brew bundle          # Reads the Brewfile and installs ripgrep, gitleaks, jq, gh, macmon
 ```
 
 Claude Code / Codex themselves are outside brew's management, so install them separately from their official sites.
@@ -301,7 +301,7 @@ takumi009-ai-env/
 #### 0. 依存ツールの導入（共通）
 
 ```sh
-brew bundle          # Brewfile を見て ripgrep・gitleaks・jq・gh を導入
+brew bundle          # Brewfile を見て ripgrep・gitleaks・jq・gh・macmon を導入
 ```
 
 Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイトから別途インストールしてください。

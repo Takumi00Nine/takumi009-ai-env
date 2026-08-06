@@ -11,3 +11,6 @@ brew "jq"        # Claude Code hooks（claude/hooks/*.sh）・settings.json の 
 brew "gh"        # GitHub CLI。private repo 作成・operateの運用（Preferences/git-workflow）で使用。
                  # check-drift.sh の private repo可視性検証（gh repo view）でも使用（未導入でも
                  # driftにはせずWARN表示のみで動作する＝必須ではないが導入を推奨）。
+brew "macmon"    # dotfiles 連携コンポーネント（cmux Dock の System ペイン＝cmux-system-watch.sh）が使用。
+                 # 未導入でも当該ペインが "macmon not found" 表示になるだけで他機能に影響なし
+                 # （dotfiles を使わない場合は不要だが、--with-dotfiles 導入を想定して同梱）。
