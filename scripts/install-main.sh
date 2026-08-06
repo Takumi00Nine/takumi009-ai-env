@@ -183,6 +183,9 @@ link claude/hooks/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.
 # このスクリプトはsymlink配置のみを担当）。
 link claude/hooks/vault-recall.sh    "$HOME/.claude/hooks/vault-recall.sh"
 link claude/hooks/vault-read-log.sh  "$HOME/.claude/hooks/vault-read-log.sh"
+# Nextペイン番号参照の自動解決(UserPromptSubmit)。cmux-next-watch --list の
+# 対応表を注入する（2026-08-06 追加・表示ツール本体は ~/work/tools 側）。
+link claude/hooks/next-pane-resolve.sh "$HOME/.claude/hooks/next-pane-resolve.sh"
 # サブ機更新チェック(SessionStart)。settings.json は main/sub 共通でこのフックを
 # 登録するため、リンクも main/sub 共通で配置する（スクリプト側が machine-role
 # マーカーで判定し、メイン機では無出力で即 exit 0＝fail-closed）。

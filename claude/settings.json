@@ -151,6 +151,12 @@
             "command": "$HOME/.claude/hooks/vault-recall.sh",
             "timeout": 2,
             "statusMessage": "外部脳の関連ノート想起中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/next-pane-resolve.sh",
+            "timeout": 5,
+            "statusMessage": "Nextペイン番号対応表を注入中"
           }
         ]
       }

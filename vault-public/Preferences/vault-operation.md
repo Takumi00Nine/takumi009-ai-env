@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-08-01
+updated: 2026-08-05
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -20,7 +20,7 @@ aliases:
 - Preferences を編集したセッションの締めに `~/work/takumi009-ai-env/scripts/export-public-vault.sh` を実行して public スナップショットを同期（commit まで自動・push は別途明示）。
 ## SSOT の役割分担（ドリフト防止）
 - **Preferences＝今どう動くか／Decisions＝なぜ／Knowledge＝背景。** 判断が出たら Preferences と Decisions を**ペアで**書く。現行値（設定値・間隔・状態）は Projects のみに書き、Knowledge は背景＋「正本＝Projects」のポインタに留める。
-- 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録する（波及チェック。履歴ノートは直さない）。
+- 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録する（波及チェック。履歴ノートは直さない）。修正時は grep ヒット行だけでなく該当ノートを**通し読み**する（旧企画名・旧方針は見出し・冒頭・サマリー等の複数箇所に残る）。
 - 同じルールは SSOT 1つ＋他はリンクのみ。旧方針は `deprecated YYYY-MM-DD` で現行より下に隔離。
 ## 書き方の鉄則
 - 該当が出たら**その場で書く**（「後で書く」はしない）。書き手はリーダーの Claude のみ＝ワーカー/Codex は「Vault記録候補:」で申告しリーダーが代筆（例外＝Codex のみ Blogs/・Explorations/ 直書き可）。
@@ -31,6 +31,8 @@ aliases:
 ## AI主導の想起（キーワード1本化・2026-07-16〜）
 - 想起の検索仕様は**フック1つだけ**（キーワード照合＝aliases・ファイル名。ベクトル検索は埋め込み基盤ごと撤去＝[[Decisions/2026-07-16-remove-vector-search-embedding-infra]]。手動用の別ツール・別閾値・別モードは作らない＝本人決定）。
 - 「Vault にありそう」な質問（〜なんだっけ・私の◯◯は 等）で自動候補が不十分なら、リーダーは**同じフックを手動実行**して追加検索: `jq -n --arg p "<聞き方を変えたクエリ>" '{prompt:$p}' | bash ~/.claude/hooks/vault-recall.sh`（テスト時は `VAULT_RECALL_LOG` を退避先へ）。工夫は「聞き方（クエリの文面）」のみ＝意味を汲んだ言い換え再検索はリーダーが担う。
+## 起動時ヘルス警告は冒頭で報告（2026-08-05 本人決定）
+- SessionStart 注入の外部脳ヘルス行（週次メンテ死活・棚卸し等）に ⚠️ があれば、リーダーは**セッション冒頭の最初の応答で一言報告し対処を提案**する（黙って本題に入らない。検知済み警告の放置が最大の障害原因＝[[Decisions/2026-08-05-bootstrap-health-warning-report]]）。
 ## ノートの綻びは読み時（気づいた時点）で直す（2026-07-18 本人決定）
 - **鮮度**: `review_by` 超過、または `date`/`updated` が数ヶ月前で内容が外部の可変情報（モデル・料金・外部ツール仕様等）なら、鵜呑みにせず一次情報で再確認してから使う・答える。再確認したら `updated`（＋必要なら `review_by`）を引き直す。内部の決定・原則ノートは対象外。
 - **整合性**: リンク切れ（解決しない `[[wiki link]]`＝張り直す or 除去）・alias 系（欠落・汎用/短すぎる alias＝想起に効く語へ直す）。

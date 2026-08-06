@@ -1069,14 +1069,14 @@ echo "=== 30. 停滞プロジェクト検出（§6）: statusは完全一致で�
   write_note "$V" "Projects/inactive-project.md" \
     "$(printf 'date: 2026-01-01\nupdated: %s\nstatus: inactive' "$(d_date -40)")"
   write_note "$V" "Projects/annotated-in-progress-project.md" \
-    "$(printf 'date: 2026-01-01\nupdated: %s\nstatus: in_progress（備考あり）' "$(d_date -40)")"
+    "$(printf 'date: 2026-01-01\nupdated: %s\nstatus: active（備考あり）' "$(d_date -40)")"
   write_note "$V" "Projects/not-active-project.md" \
     "$(printf 'date: 2026-01-01\nupdated: %s\nstatus: not-active' "$(d_date -40)")"
 
   out="$(run_inventory "$VAULT_HOME")"
   assert_contains "status:activeで30日以上前は従来どおり停滞として検出される" "$out" "Projects/really-active-project.md\` — active（"
   assert_not_contains "status:inactiveは'active'を部分文字列に含むが誤って停滞検出されない" "$out" "Projects/inactive-project.md\` — inactive（"
-  assert_contains "注記付きstatus値でも単語境界一致で正しく検出される（完全一致にはしない）" "$out" "Projects/annotated-in-progress-project.md\` — in_progress（備考あり）（"
+  assert_contains "注記付きstatus値でも単語境界一致で正しく検出される（完全一致にはしない）" "$out" "Projects/annotated-in-progress-project.md\` — active（備考あり）（"
   assert_not_contains "'not-active'は先頭が'active'ではないため誤って停滞検出されない（Codexレビュー指摘・search()からmatch()への是正確認）" \
     "$out" "Projects/not-active-project.md\` — not-active（"
 

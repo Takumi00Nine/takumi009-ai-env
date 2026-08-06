@@ -168,7 +168,9 @@ DISMISS_WINDOW_DAYS = _positive_int_env("VAULT_DISMISS_WINDOW_DAYS", 30)
 
 # strip_inline_comment・parse_frontmatterはvault_lib.pyへ抽出済み（2026-07-16簡素化）。
 
-ACTIVE_STATUS_KEYS = ("active", "in_progress", "pending")
+# 2026-08-06 status語彙4値統一（active/paused/completed/closed）に伴い
+# in_progress/pending を撤去。paused は意図的保留＝停滞検知の対象外。
+ACTIVE_STATUS_KEYS = ("active",)
 # 先頭（前置の空白は許容）に一致させる。文字列中の任意位置を許すsearch()だと
 # "not-active"のようなハイフン区切りの値でも"active"に単語境界一致してしまう
 # （Codexレビュー指摘・Major: 当初はsearch()を使っており、このdocstringが謳う
@@ -177,7 +179,7 @@ _ACTIVE_STATUS_RE = re.compile(r"^\s*(?:%s)\b" % "|".join(re.escape(k) for k in 
 
 
 def status_is_active(status):
-    """frontmatterのstatus値がactive/in_progress/pendingのいずれかに該当するかを返す。
+    """frontmatterのstatus値が稼働系（ACTIVE_STATUS_KEYS）に該当するかを返す。
 
     文字列値は先頭トークンを単語境界(\\b)で判定する（match()・文字列中の任意位置に
     一致するsearch()は使わない）。旧実装は`k in fm["status"]`という部分文字列一致
@@ -744,7 +746,7 @@ def main():
         L.append(f"- `{f}` — ⚠️ ファイルが見つかりません（サブ機・骨格未整備・"
                  "ファイル名変更直後等の可能性。注入サイズの合計には計上していません）")
 
-    section(f"6. 停滞プロジェクト（active/in_progress/pending なのに {STALE_PROJECT_DAYS} 日以上更新なし・{len(stalled)}件）",
+    section(f"6. 停滞プロジェクト（active なのに {STALE_PROJECT_DAYS} 日以上更新なし・{len(stalled)}件）",
             stalled, lambda r: f"- `{r[0]}` — {r[1]}（最終 {r[2]}・{r[3]}日前）")
     section(f"6b. statusノートのupdated/dateが未来日（システム時計ズレ/誤入力の疑い・{len(status_future_dated)}件）",
             status_future_dated, lambda r: f"- `{r[0]}` — {r[1]}（{r[2]}は今日から見て未来日）")
