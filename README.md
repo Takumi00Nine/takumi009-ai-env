@@ -32,7 +32,7 @@ If a case arises on a sub machine where a rule needs fixing, don't fix it there 
 takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json (symlink target)
-│   ├── hooks/                 # bootstrap-vault.sh, check-sub-update.sh, delegation-gate-v2.sh, vault-recall.sh, vault-read-log.sh
+│   ├── hooks/                 # bootstrap-vault.sh, check-sub-update.sh, delegation-gate-v2.sh, bash-danger-gate.sh, next-pane-resolve.sh, vault-recall.sh, vault-read-log.sh
 │   └── agents/                # Worker role definitions (7 roles)
 ├── codex/
 │   ├── AGENTS.md               # ~/.codex/AGENTS.md (symlink target)
@@ -253,7 +253,7 @@ None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the
 takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json （symlink先）
-│   ├── hooks/                 # bootstrap-vault.sh・check-sub-update.sh・delegation-gate-v2.sh・vault-recall.sh・vault-read-log.sh
+│   ├── hooks/                 # bootstrap-vault.sh・check-sub-update.sh・delegation-gate-v2.sh・bash-danger-gate.sh・next-pane-resolve.sh・vault-recall.sh・vault-read-log.sh
 │   └── agents/                # ワーカー役割定義（7ロール）
 ├── codex/
 │   ├── AGENTS.md               # ~/.codex/AGENTS.md （symlink先）

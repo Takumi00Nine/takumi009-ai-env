@@ -178,6 +178,10 @@ fi
 link claude/settings.json               "$HOME/.claude/settings.json"
 link claude/hooks/bootstrap-vault.sh    "$HOME/.claude/hooks/bootstrap-vault.sh"
 link claude/hooks/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.sh"
+# 危険コマンド deny ゲート(PreToolUse Bash)。2026-08-06 追加: 2026-07-19 の
+# フック導入時にリポジトリ収録が漏れており、サブ機で settings.json が
+# 存在しないパスを参照して起動時警告が出ていた。
+link claude/hooks/bash-danger-gate.sh "$HOME/.claude/hooks/bash-danger-gate.sh"
 # 外部脳 想起支援(UserPromptSubmit)・利用ログ(PostToolUse Read) の2フック
 # （2026-07-10 追加。settings.json への hooks 登録はリーダーが別途行う＝
 # このスクリプトはsymlink配置のみを担当）。
@@ -202,6 +206,7 @@ done
 
 if [ "$DRY_RUN" != "1" ]; then
   chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh" \
+           "$DIR/claude/hooks/bash-danger-gate.sh" "$DIR/claude/hooks/next-pane-resolve.sh" \
            "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh" \
            "$DIR/claude/hooks/check-sub-update.sh"
 fi
