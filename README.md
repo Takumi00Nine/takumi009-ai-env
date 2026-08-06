@@ -131,7 +131,7 @@ If `$HOME/work/dotfiles` doesn't exist, it `git clone`s it ([Takumi00Nine/dotfil
 
 ### Vault Backup Operations
 
-`scripts/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). It has locking to prevent concurrent runs (mutual exclusion via atomic file creation) and stale detection for `git index.lock`, and is meant to run unattended every hour via `launchagents/com.takumi009.backup-vault.plist` (installed by `scripts/install-backup.sh`).
+`scripts/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). It has locking to prevent concurrent runs (mutual exclusion via atomic file creation) and stale detection for `git index.lock`, and is meant to run unattended every 6 hours via `launchagents/com.takumi009.backup-vault.plist` (installed by `scripts/install-backup.sh`).
 
 The user creates and configures the remote for the Vault's backup destination (a private repo) themselves (the scripts in this repository never create a remote on their own).
 
@@ -352,7 +352,7 @@ scripts/install-main.sh --with-dotfiles   # または install-sub.sh --with-dotf
 
 ### Vault バックアップの運用
 
-`scripts/backup-vault.sh` は `$HOME/Data/obsidian` を対象に、変更があれば `git add -A && git commit`（メッセージ: `backup: YYYY-MM-DD HH:MM`）し、remote `origin` が設定済みの場合のみ push します（未設定なら commit までで警告を出して終了）。多重起動防止のロック（原子的なファイル作成による排他制御）・`git index.lock` のstale検知つきで、`launchagents/com.takumi009.backup-vault.plist`（`scripts/install-backup.sh` が配置）から1時間おきに無人実行される想定です。
+`scripts/backup-vault.sh` は `$HOME/Data/obsidian` を対象に、変更があれば `git add -A && git commit`（メッセージ: `backup: YYYY-MM-DD HH:MM`）し、remote `origin` が設定済みの場合のみ push します（未設定なら commit までで警告を出して終了）。多重起動防止のロック（原子的なファイル作成による排他制御）・`git index.lock` のstale検知つきで、`launchagents/com.takumi009.backup-vault.plist`（`scripts/install-backup.sh` が配置）から6時間ごとに無人実行される想定です。
 
 Vault のバックアップ先（private repo）の作成・remote設定は本人が行います（このリポジトリのスクリプトは remote を勝手に作成しません）。
 
@@ -443,4 +443,3 @@ bash tests/test-audit.sh
 
 ### ライセンス
 [MIT](LICENSE)
-</content>
