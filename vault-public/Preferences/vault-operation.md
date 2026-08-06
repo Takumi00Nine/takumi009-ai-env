@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-08-05
+updated: 2026-08-06
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -22,6 +22,7 @@ aliases:
 - **Preferences＝今どう動くか／Decisions＝なぜ／Knowledge＝背景。** 判断が出たら Preferences と Decisions を**ペアで**書く。現行値（設定値・間隔・状態）は Projects のみに書き、Knowledge は背景＋「正本＝Projects」のポインタに留める。
 - 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録する（波及チェック。履歴ノートは直さない）。修正時は grep ヒット行だけでなく該当ノートを**通し読み**する（旧企画名・旧方針は見出し・冒頭・サマリー等の複数箇所に残る）。
 - 同じルールは SSOT 1つ＋他はリンクのみ。旧方針は `deprecated YYYY-MM-DD` で現行より下に隔離。
+- **Projects の frontmatter 規約**: `status:` は4値のみ＝`active`（稼働）/`paused`（意図的保留・再開条件を next: に書く）/`completed`/`closed`（[[Decisions/2026-08-06-project-status-taxonomy]]。工程情報は status に混ぜない）。**状態が動いたら `next:`（1行・15文字以内の次アクション要約）も更新**（cmux Next ペインの表示元＝[[Decisions/2026-08-05-next-pane-replaces-feed]]。active/paused のノートのみ）。ユーザーが「Nextの N 番」と参照したら `~/work/tools/cmux-next-watch/cmux-next-watch.sh --list` で番号→プロジェクト名を解決する（番号は表示順＝恒久IDではない）。
 ## 書き方の鉄則
 - 該当が出たら**その場で書く**（「後で書く」はしない）。書き手はリーダーの Claude のみ＝ワーカー/Codex は「Vault記録候補:」で申告しリーダーが代筆（例外＝Codex のみ Blogs/・Explorations/ 直書き可）。
 - 長くなりすぎたら分割を検討（目安8,000字前後・厳密な字数管理はしない）。詳細を別ノートへ分離して相互リンク（アーカイブ分離方式。履歴ノート＝Decisions は分割対象外）。推奨スケルトン＝[[Preferences/note-templates]]（強制しない）。

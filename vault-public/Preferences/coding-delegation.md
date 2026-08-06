@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-08-01
+updated: 2026-08-05
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 aliases:
@@ -29,6 +29,7 @@ aliases:
 
 ## 運用ルール
 - **着手時のループ適用判定（2026-07-21 本人指示）**: まとまったタスクの着手前に、リーダーが「ループエンジニアリング型（自動検証で回す）か、人間チェック挟み込み型か」を判定して**本人に確認してから進める**。判定基準＝**ゴールが機械的に計測・数値化できるか**（テスト/リント/型/バイト一致等＝向く ⇔ デザイン等、良し悪しの最終判断が人間の主観にしかない＝向かない）。聞き方の例＝「今回はループエンジニアリングができそうです。この進め方でやりますか？」「今回はループに向かないので、1個1個人間チェックを挟む進め方にしますか？」。基準詳細・ハイブリッド形＝[[Knowledge/loop-engineering]]。
+- **本人を呼ぶときは `cmux notify --title "📣 <用件>"` を明示発行**（2026-08-05〜。AI 側の自動通知は無音・非表示化済み＝📣を出さない限り本人に届かない。正本＝[[Preferences/cmux-notifications]]）。
 - 見せる成果物は cmux ペインに表示してから依頼（`~/work/dotfiles/cmux/show-review.sh <path-or-url>`）。例外＝Vault 内の全ノートと Explorations/ の HTML レポート（本人が Obsidian で見る→テキスト報告のみ。HTML は HTML Reader プラグインで表示＝[[Decisions/2026-07-16-obsidian-html-reader-plugin]]）。ペイン表示は Vault 外ファイル・URL 用。
 - リーダーの直接編集は PreToolUse フック（delegation-gate v2）が制限：許可パス＝Vault・`~/.claude`・tmp のみ。それ以外は委任するか、理由をユーザーへ明示してマーカー touch（[[Decisions/2026-07-05-delegation-gate-v2]]）。
 - ワーカー/チームメイトの起動時は軽量版ブートストラップ（absolute-rules のみ必読・Vault 書込禁止＝申告制・obsidian-mcp 不使用）。フル版はリーダーのみ。Vault 書込はリーダーのみ。
