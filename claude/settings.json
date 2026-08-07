@@ -1,4 +1,7 @@
 {
+  "env": {
+    "DISABLE_AUTOUPDATER": "1"
+  },
   "permissions": {
     "allow": [
       "mcp__codex__codex",
@@ -121,9 +124,7 @@
     ]
   },
   "model": "claude-fable-5[1m]",
-  "env": {
-    "DISABLE_AUTOUPDATER": "1"
-  },
+  "effortLevel": "high",
   "hooks": {
     "SessionStart": [
       {
@@ -245,6 +246,7 @@
       }
     }
   },
+  "awaySummaryEnabled": false,
   "theme": "dark",
-  "awaySummaryEnabled": false
+  "skipWorkflowUsageWarning": true
 }
