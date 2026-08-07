@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-08-01
+updated: 2026-08-07
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -17,6 +17,8 @@ aliases:
 # ワーカー工程ロール運用（7ロール・agents定義＋本ノートSSOT）
 
 ワーカー/チームメイトへの委任は**工程ロール定義**（`~/.claude/agents/*.md`）を名指しで使う。定義本文＝ロールの行動規範（機械的にシステムプロンプトへ付加・tools/model も適用）、本ノート＝リーダー側の運用ルール。
+
+> **2026-08-07 改定（in-process 恒久化＝[[Decisions/2026-08-07-teammate-in-process-permanent]]）**: チームメイトはペインを持たない（エージェントパネル内で動作）。本ノートの「ペイン実査」（`cmux read-screen`・`list-panes`・ペイン消滅確認）は **`TaskOutput`／エージェントパネル（↑↓選択・Enter でトランスクリプト）での実査に読み替える**。名前付き起動・命名規則（パネル・通知・Feed での判別に引き続き有効）・終了の後始末（停止条件④の実査・終了要求レース注意）は従来通り。ペイン運用に戻した場合（`cct --teammate-mode auto`）のみ原文の手順を使う。
 
 ## 7ロール一覧（既定 model: sonnet・**上流3ロール＝claude-opus-5**）
 

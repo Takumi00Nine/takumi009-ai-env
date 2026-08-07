@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-08-05
+updated: 2026-08-07
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 aliases:
@@ -15,7 +15,7 @@ aliases:
 ## 基本構図
 - **Claude 本体（リーダー・オーケストレーター）**: ①最終意思決定 ②外部脳記録 ③ユーザー対話 ④実環境が要る結合検証、＋各工程の采配。実装・調査・テスト等の「作る工程」は自分でやらず、着手前にワーカーへ委任する。
 - **Fable 5 の割り当て方針（2026-07-21 本人決定）**: リーダー＝**Fable 5 固定**（強み＝仕事の振り分け・采配・統合）。**ワーカー/生成物にはできる限り Fable 5 を割り当てない**＝生成はSonnet/Opus/Haiku・画像はCodexなど他モデルに任せる。例外＝本人が明示指定した場合のみ（例: 過去のモデル横断コンペ）。
-- **Claude ワーカー（Agent Teams / Agent ツール・既定 Sonnet 5、上流3ロール＝Opus 5）**: 作る工程の実働。`~/.claude/agents/` の7工程ロール（要件定義/設計/実装/テスト/調査/運用/採用判定）を名指しで委任する（運用の正本＝[[Preferences/worker-role-prompts]]）。**要件定義・設計・採用判定の3ロールは Opus 5**（2026-07-25 本人決定＝[[Decisions/2026-07-25-opus5-upstream-roles]]）。`cmux claude-teams` でペイン可視化。
+- **Claude ワーカー（Agent Teams / Agent ツール・既定 Sonnet 5、上流3ロール＝Opus 5）**: 作る工程の実働。`~/.claude/agents/` の7工程ロール（要件定義/設計/実装/テスト/調査/運用/採用判定）を名指しで委任する（運用の正本＝[[Preferences/worker-role-prompts]]）。**要件定義・設計・採用判定の3ロールは Opus 5**（2026-07-25 本人決定＝[[Decisions/2026-07-25-opus5-upstream-roles]]）。起動は `cct`（`cmux claude-teams`）・チームメイトは **in-process＝エージェントパネル内で動作（ペイン分割なし）**（[[Decisions/2026-08-07-teammate-in-process-permanent]]。分割に戻すときのみ `cct --teammate-mode auto`）。
 - **Codex＝一次レビュアーが主務。実装・調査の委任も可（2026-07-23 改定＝[[Decisions/2026-07-23-codex-delegation-reopened]]・旧「専任」＝[[Decisions/2026-07-05-codex-reviewer-only]]）**。実働の既定は引き続き Claude ワーカーとし、Codex への委任は「上限の余剰・得意分野・本人指定」があるときにリーダーが裁量する。**ビジュアル素材の生成を伴う作業（画像・3Dモデル/Blender・ボクセル等）は最初から Codex（gpt-5.6-sol）へ一気通貫**（プロンプト/スクリプト作成→生成→CLI仕上げ→セルフ検品。制作知見の焼き込みと最終検収は Claude 側の責務＝[[Decisions/2026-07-21-image-tasks-codex-end-to-end]]）。⚠️Codex 制作物の一次レビューは自己レビュー化するため、独立チェックは本人評価サイクルまたは Claude 側レビューで担保する。
 
 ## 工程フロー（各工程で二段レビュー）
