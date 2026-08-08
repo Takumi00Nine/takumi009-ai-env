@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-08-06
+updated: 2026-08-08
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -8,35 +8,31 @@ aliases:
   - "public執筆の掟"
 ---
 # 外部脳 運用チートシート（起動必読・ルーティング表）
-詳細・背景・実例は [[Knowledge/external-brain-guide]]。本ノートは public 公開されるため、リンク先が読めなくても単体でルールとして完結するよう書く。
+詳細・実例＝[[Knowledge/external-brain-guide]]。public 公開＝リンク先が読めなくても単体でルールとして完結するよう書く。
 ## どのフォルダに何を書くか
-- **Fragments/**＝未確定・副産物の入口（append-only・日次 `Fragments/YYYY-MM/YYYY-MM-DD.md`）。後で使える断片は応答前にその場で短く追記し、確定したら下記フォルダへ昇格。
-- **Knowledge/**＝技術知見・調査結果・背景／**Decisions/**＝複数案から選んだ判断と理由（`YYYY-MM-DD-topic.md`）／**Projects/**＝進行中の状態と next_action／**Preferences/**＝今どう動くかの運用ルール（⚠️public）／**Personal/**＝ユーザーの個人情報。**Blogs/**・**Explorations/**＝外部脳の対象外（人間向け成果物・Obsidian で扱うため Vault に同居しているだけ＝[[Decisions/2026-07-15-blogs-explorations-out-of-external-brain]]）。外部脳6フォルダは AI 向け＝トークン効率優先で書く。
-## public 執筆の掟（public＝Preferences/ のみ。他フォルダはすべて private）
-1. 個人情報・経緯・エピソードを書かない（ルールは「今どう動くか」だけに削ぐ。理由・経緯は Decisions へ、個人の事実は Personal へ）。
-2. ユーザーの呼び名（ハンドルネーム）を書かない。「ユーザー」「本人」等の中立表現を使う（ID「takumi009」は可）。
-3. Personal 配下への wiki link・Personal ノート名を書かない（ファイル名自体が私事のヒントになるため。他フォルダへのリンクは可＝public 側で切れるだけ）。
-4. ホーム配下の絶対パスを書かない（`~/` 表記＝Vault 全域の掟。`~` が展開されない設定値は「実行時に展開」等の書き方で名前を残さない）。
-- Preferences を編集したセッションの締めに `~/work/takumi009-ai-env/scripts/export-public-vault.sh` を実行して public スナップショットを同期（commit まで自動・push は別途明示）。
+- **Fragments/**＝未確定・副産物の入口（append-only・日次 `Fragments/YYYY-MM/YYYY-MM-DD.md`）。断片は応答前にその場で短く追記・確定したら昇格。
+- **Knowledge/**＝技術知見・背景／**Decisions/**＝選んだ判断と理由（`YYYY-MM-DD-topic.md`）／**Projects/**＝進行状態と next_action／**Preferences/**＝運用ルール（⚠️public）／**Personal/**＝個人情報。**Blogs/**・**Explorations/**＝外部脳の対象外（人間向け）。6フォルダはAI向け＝トークン効率優先。
+## public 執筆の掟（public＝Preferences/ のみ・他は private）
+1. 個人情報・経緯・エピソードを書かない（理由・経緯は Decisions へ、個人の事実は Personal へ）。
+2. ユーザーの呼び名を書かない。「ユーザー」「本人」等の中立表現を使う（ID「takumi009」は可）。
+3. Personal 配下への wiki link・Personal ノート名を書かない（他フォルダへのリンクは可）。
+4. ホーム配下の絶対パスを書かない（`~/` 表記＝Vault 全域の掟）。
+- Preferences 編集セッションの締めに `~/work/takumi009-ai-env/scripts/export-public-vault.sh` を実行（commit 自動・push は別途明示）。
 ## SSOT の役割分担（ドリフト防止）
-- **Preferences＝今どう動くか／Decisions＝なぜ／Knowledge＝背景。** 判断が出たら Preferences と Decisions を**ペアで**書く。現行値（設定値・間隔・状態）は Projects のみに書き、Knowledge は背景＋「正本＝Projects」のポインタに留める。
-- 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録する（波及チェック。履歴ノートは直さない）。修正時は grep ヒット行だけでなく該当ノートを**通し読み**する（旧企画名・旧方針は見出し・冒頭・サマリー等の複数箇所に残る）。
+- **Preferences＝今どう動くか／Decisions＝なぜ／Knowledge＝背景。** 判断は Preferences と Decisions を**ペアで**書く。現行値（設定値・状態）は Projects のみ。
+- 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録（該当ノートは**通し読み**）。
 - 同じルールは SSOT 1つ＋他はリンクのみ。旧方針は `deprecated YYYY-MM-DD` で現行より下に隔離。
-- **Projects の frontmatter 規約**: `status:` は4値のみ＝`active`（稼働）/`paused`（意図的保留・再開条件を next: に書く）/`completed`/`closed`（[[Decisions/2026-08-06-project-status-taxonomy]]。工程情報は status に混ぜない）。**状態が動いたら `next:`（1行・15文字以内の次アクション要約）も更新**（cmux Next ペインの表示元＝[[Decisions/2026-08-05-next-pane-replaces-feed]]。active/paused のノートのみ）。ユーザーが「Nextの N 番」と参照したら `~/work/tools/cmux-next-watch/cmux-next-watch.sh --list` で番号→プロジェクト名を解決する（番号は表示順＝恒久IDではない）。
+- **Projects の frontmatter**: `status:` は4値のみ＝`active`/`paused`/`completed`/`closed`。**状態が動いたら `next:`（15文字以内の次アクション）も更新**（cmux Next ペイン表示元。「Nextの N 番」解決＝`cmux-next-watch.sh --list`）。
 ## 書き方の鉄則
-- 該当が出たら**その場で書く**（「後で書く」はしない）。書き手はリーダーの Claude のみ＝ワーカー/Codex は「Vault記録候補:」で申告しリーダーが代筆（例外＝Codex のみ Blogs/・Explorations/ 直書き可）。
-- 長くなりすぎたら分割を検討（目安8,000字前後・厳密な字数管理はしない）。詳細を別ノートへ分離して相互リンク（アーカイブ分離方式。履歴ノート＝Decisions は分割対象外）。推奨スケルトン＝[[Preferences/note-templates]]（強制しない）。
-- フロントマター必須（date/tags/project）。本文を編集したら `updated` も必ず更新。wiki link はフォルダ付き `[[Folder/note]]`。同一主題の関連ノート同士は**相互に**リンクを張る（片方向は片側だけ読んで辿り着けない再発見漏れの元）。
-- aliases 必須（README 除く・Personal 含む全フォルダ）＝想起フックの検索キー。ユーザーが実際に打ちそうな語 1〜5 個・汎用語禁止・迷ったら付けない。外部情報系ノートは `review_by: YYYY-MM-DD`（任意）。
-- ファイルは Read/Write/Edit/Grep で直接操作（obsidian-mcp は使わない）。Vault を読み書きしたらユーザーへ明示報告（サイレント禁止）。例外＝定常メンテナンス（Fragments 週次昇格・棚卸し対処）は AI が自律実行し個別報告も不要（監査はレポート・git 履歴で担保。本人へ持ち込むのは実世界の事実・金銭・公開操作・破壊的操作のみ）。
-## AI主導の想起（キーワード1本化・2026-07-16〜）
-- 想起の検索仕様は**フック1つだけ**（キーワード照合＝aliases・ファイル名。ベクトル検索は埋め込み基盤ごと撤去＝[[Decisions/2026-07-16-remove-vector-search-embedding-infra]]。手動用の別ツール・別閾値・別モードは作らない＝本人決定）。
-- 「Vault にありそう」な質問（〜なんだっけ・私の◯◯は 等）で自動候補が不十分なら、リーダーは**同じフックを手動実行**して追加検索: `jq -n --arg p "<聞き方を変えたクエリ>" '{prompt:$p}' | bash ~/.claude/hooks/vault-recall.sh`（テスト時は `VAULT_RECALL_LOG` を退避先へ）。工夫は「聞き方（クエリの文面）」のみ＝意味を汲んだ言い換え再検索はリーダーが担う。
-## 起動時ヘルス警告は冒頭で報告（2026-08-05 本人決定）
-- SessionStart 注入の外部脳ヘルス行（週次メンテ死活・棚卸し等）に ⚠️ があれば、リーダーは**セッション冒頭の最初の応答で一言報告し対処を提案**する（黙って本題に入らない。検知済み警告の放置が最大の障害原因＝[[Decisions/2026-08-05-bootstrap-health-warning-report]]）。
-## ノートの綻びは読み時（気づいた時点）で直す（2026-07-18 本人決定）
-- **鮮度**: `review_by` 超過、または `date`/`updated` が数ヶ月前で内容が外部の可変情報（モデル・料金・外部ツール仕様等）なら、鵜呑みにせず一次情報で再確認してから使う・答える。再確認したら `updated`（＋必要なら `review_by`）を引き直す。内部の決定・原則ノートは対象外。
-- **整合性**: リンク切れ（解決しない `[[wiki link]]`＝張り直す or 除去）・alias 系（欠落・汎用/短すぎる alias＝想起に効く語へ直す）。
-- **撤回・白紙化バナー（2026-08-01 導入）**: プロジェクトのクローズ・方針撤回で効力を失ったノート（Decisions 含む）には、冒頭に「⚠️白紙化済み/撤回済み（日付＋出典リンク）」の引用バナーを付け、**単体で読んでも失効が分かる**ようにする（履歴本文は書き換えない＝メタ情報の付与のみ）。クローズ・撤回を記録した時点で関連ノートへ一括付与し、読み時に未付与を見つけたら付ける。AI は**バナー付きノートを新文脈の材料に使わない**（再採用は本人の明示指示のみ）。
-- **停滞は対象外＝本人の領域**: project の status が止まっているかは本人が棚卸しで判断する。**AI は status を勝手に書き換えない**（気づいても本人に一言添えるまで・本人が「棚卸しする」と言ったら一緒に見る）。
-- 綻び対処の最終防衛線はリーダーの読み時判断（棚卸しレポートは検出のみ＝[[Decisions/2026-07-16-nightly-batch-direct-write]]）。**読んだノートに綻びがあれば直す責任を、読むたびにリーダーが負う**（読まれないノートは放置される＝重要度が低いとみなす受容）。
+- 該当が出たら**その場で書く**。書き手はリーダーの Claude のみ＝ワーカー/Codex は「Vault記録候補:」で申告→リーダー代筆（例外＝Codex のみ Blogs/・Explorations/ 直書き可）。
+- 長くなったら分割（目安8,000字・Decisions は対象外）＝詳細を別ノートへ分離し相互リンク。
+- フロントマター必須（date/tags/project）・本文編集で `updated` 更新。wiki link はフォルダ付き `[[Folder/note]]`・関連ノートは**相互に**リンク。
+- aliases 必須（README 除く）＝想起フックの検索キー。実際に打ちそうな語1〜5個・汎用語禁止・迷ったら付けない。外部情報系は `review_by:`（任意）。
+- Read/Write/Edit/Grep で直接操作（obsidian-mcp 不使用）。Vault 読み書きはユーザーへ明示報告（例外＝定常メンテ＝Fragments 昇格・棚卸し対処は自律・個別報告不要。本人へは実世界の事実・金銭・公開・破壊的操作のみ）。
+## AI主導の想起（キーワード1本化）
+- 検索仕様は**フック1つだけ**（aliases・ファイル名照合。ベクトル検索撤去済み・別ツール/別閾値/別モード禁止）。候補不足なら同じフックをクエリ言い換えで手動再実行（コマンド＝[[Knowledge/external-brain-guide]] §必読ノートの詳細）。工夫は「聞き方」のみ。
+## 起動時ヘルス警告・綻びの扱い
+- SessionStart 注入のヘルス行の ⚠️ は**最初の応答で報告し対処を提案**（黙って本題に入らない）。
+- **綻びは読み時（気づいた時点）で直す**: 鮮度（`review_by` 超過・古い外部可変情報＝一次情報で再確認→`updated` 引き直し。内部の決定ノートは対象外）／リンク切れ（張り直す or 除去）／alias（欠落・汎用/短すぎ＝想起に効く語へ）。
+- **撤回・白紙化バナー**: 失効ノート（Decisions 含む）は冒頭に「⚠️白紙化済み/撤回済み（日付＋出典）」バナー（本文は書き換えない・単体で失効が分かる）。**バナー付きノートを新文脈の材料に使わない**（再採用は本人の明示指示のみ）。
+- **停滞は本人の領域**: project の status は本人が棚卸しで判断＝**AI は勝手に書き換えない**（気づいたら一言添える）。最終防衛線はリーダーの読み時判断（棚卸しレポートは検出のみ）＝**読んだノートの綻びは読むたびに直す**。

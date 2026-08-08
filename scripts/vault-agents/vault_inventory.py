@@ -298,6 +298,38 @@ def read_log(path):
     return rows, skipped, error_rows, last_activity
 
 
+def in_dismissal_window(ts, today, window_days):
+    """tsが「直近window_days日以内」の窓に入るかを判定する。
+
+    compute_dismissal_rates()の提示無視率と、§12のsession_id空行カウント
+    （recall_no_session/reads_no_session）が同じ窓を共有するための共通ロジック
+    （2026-08-08 本人承認）。後者の警告は前者（無視率）の信頼性を注記するために
+    存在するので、対象期間もズレさせない＝全期間累積のままだと、原因調査済みの
+    既知良性事象（フックの稀な二重発火由来の空session_id行）が窓の外に出ても
+    警告として残り続け、恒久的な「要確認」化を招く（新規発生は引き続き窓内で
+    検知されるため可観測性は失わない）。
+
+    上限（古すぎ）だけでなく下限（未来日時＝負のage）も見る。上限しか見ないと
+    未来日時のイベントが常に窓内扱いになり集計を歪める（Codexレビュー指摘・Minor。
+    他の閾値ガードと同様に上下限をセットで設計する＝
+    Knowledge/fail-open-and-observable-guards §1と同型）。未来日時ログ自体の警告は
+    別途 recall_log_future/reads_log_future 等で出す＝ここでは集計対象から静かに
+    外すだけに留める。
+
+    ts=Noneは呼び出し契約上ここには来ない（ts解析に失敗した行はread_log()内で
+    skippedへ回りrowsに入らないため、この関数の引数として渡る時点で必ず解析済み）。
+    「解析不能行を数える側に倒すfail-closed」は、Noneをここで静かにTrue扱いする
+    形では実現できない（呼び出し側の他の日時比較でも同じ前提を置いており、
+    Noneが来た場合はどのみち別の箇所で例外になる＝形だけの防御は無意味と
+    Codexレビューで指摘）。解析不能行の可観測性は既存のskipped/error_rows
+    カウンタ（read_log()の戻り値・レポートに表示済み）が担っており、本関数では
+    契約違反時に例外を無言で握り潰さない（ここで特別扱いせず自然にAttributeError
+    で落とす）ことでfail-closedの精神を保つ。
+    """
+    age_days = (today - ts.date()).days
+    return 0 <= age_days <= window_days
+
+
 def compute_dismissal_rates(recall_rows, reads_rows, today):
     """「提示されたのに読まれない率」（レビューC-2の看板メトリクス）をノート別に出す。
 
@@ -347,18 +379,10 @@ def compute_dismissal_rates(recall_rows, reads_rows, today):
         reads_by_key.setdefault((sid, rel), []).append(ts)
 
     total_all = len(recall_rows)
-    windowed_events = []
-    for ts, sid, rel in recall_rows:
-        age_days = (today - ts.date()).days
-        # 上限（古すぎ）だけでなく下限（未来日時＝負のage）も見る。上限しか
-        # 見ないと未来日時のイベントが常に窓内扱いになり無視率を歪める
-        # （Codexレビュー指摘・Minor。他の閾値ガードと同様に上下限をセットで
-        # 設計する＝Knowledge/fail-open-and-observable-guards §1と同型）。
-        # 未来日時ログ自体の警告は別途 recall_log_future 等で出す＝ここでは
-        # 集計対象から静かに外すだけに留める。
-        if age_days < 0 or age_days > DISMISS_WINDOW_DAYS:
-            continue
-        windowed_events.append((ts, sid, rel))
+    # 窓判定（上下限・fail-closedの扱い）は in_dismissal_window() へ共通化済み
+    # （2026-08-08・§12のsession_id空行カウントと窓を揃えるため）。
+    windowed_events = [(ts, sid, rel) for ts, sid, rel in recall_rows
+                        if in_dismissal_window(ts, today, DISMISS_WINDOW_DAYS)]
     windowed_total = len(windowed_events)
 
     # 参考値: 正規化前の生の提示回数（窓内）
@@ -669,8 +693,18 @@ def main():
     # heartbeat行は「提示」ではないため、session_id空のheartbeatが混ざると
     # 「session_idが空の提示行」注記の件数が実態より過大になり、無視率の
     # 信頼性評価を誤解させうる）。
-    recall_no_session = sum(1 for _, sid, _ in recall_note_rows if not sid)
-    reads_no_session = sum(1 for _, sid, _ in reads_rows if not sid)
+    #
+    # 集計対象は compute_dismissal_rates() と同じ直近DISMISS_WINDOW_DAYS日の窓に
+    # 限定する（2026-08-08 本人承認・in_dismissal_window()参照）。この警告は
+    # 無視率の信頼性を注記するためのものなので対象期間を揃える必要があり、全期間
+    # 累積のままだと原因調査済みの既知良性事象（2026-07-11/23/30のフック稀な
+    # 二重発火由来の空session_id行）が窓を過ぎても恒久的な「要確認」として
+    # 残り続けてしまう。窓を切っても新規発生は引き続き窓内で検知されるため
+    # 可観測性は失わない。
+    recall_no_session = sum(1 for ts, sid, _ in recall_note_rows
+                             if not sid and in_dismissal_window(ts, today, DISMISS_WINDOW_DAYS))
+    reads_no_session = sum(1 for ts, sid, _ in reads_rows
+                            if not sid and in_dismissal_window(ts, today, DISMISS_WINDOW_DAYS))
 
     # ---- レポート生成 ----
     # 要確認件数(n_issues)は本文にレポートされる⚠️付き警告種別を漏れなく積む。
@@ -814,8 +848,9 @@ def main():
                     "（タブ区切り不正・時刻不正）＝ログ破損の疑い。件数が多い場合は"
                     "フックの出力形式を確認する。" if reads_skipped else ""))
     if reads_no_session:
-        L.append(f"⚠️ session_id が空のRead行 {reads_no_session} 件は提示無視率のRead側突合に使えません"
-                 "（＝無視率が実態より高く出ている可能性）。")
+        L.append(f"⚠️ 直近{DISMISS_WINDOW_DAYS}日以内でsession_id が空のRead行 {reads_no_session} 件は"
+                 "提示無視率のRead側突合に使えません（＝無視率が実態より高く出ている可能性。"
+                 "無視率と同じ窓で数えているため、窓外の過去分は含みません）。")
     if reads_log_stale:
         L.append(f"⚠️ vault-reads.tsv: 直近 {LOG_STALE_DAYS} 日以内の有効な記録が無い"
                  f"（最終記録: {reads_log_valid_end.date().isoformat()}）"
@@ -883,8 +918,9 @@ def main():
                  "＝ファイル破損かシステム時計のズレの可能性。以下の判定に用いた日付計算が"
                  "信頼できない場合があります。確認: `tail -5 ~/.claude/logs/vault-recall.tsv`")
     if recall_no_session:
-        L.append(f"⚠️ session_id が空の提示行 {recall_no_session} 件はRead側と突合できないため、"
-                 "「読まれた」に加算していません（＝無視率が実態より高く出ている可能性）。")
+        L.append(f"⚠️ 直近{DISMISS_WINDOW_DAYS}日以内でsession_id が空の提示行 {recall_no_session} 件は"
+                 "Read側と突合できないため、「読まれた」に加算していません（＝無視率が実態より"
+                 "高く出ている可能性。無視率と同じ窓で数えているため、窓外の過去分は含みません）。")
     if not dismissal_rows:
         L.append(f"該当なし（正規化後の提示{DISMISS_MIN_PRESENTED}回以上のノートがまだありません）")
     else:

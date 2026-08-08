@@ -1310,6 +1310,86 @@ echo "=== 36. 要確認件数(n_issues): §12 session_idが空のRead/提示行�
   rm -rf "$VAULT_HOME"
 }
 
+echo "=== 36b. §12 session_idが空のRead/提示行: compute_dismissal_rates()と同じ直近30日窓で数える（窓外は警告・n_issuesから消える・2026-08-08本人承認） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+
+  # まず「窓外(31日前)のsession_id空行」単独で n_issues が増えないことを確認する
+  # （Codex一次レビュー再指摘・Minor対応: 窓内行と窓外行を混在させたケースだけだと、
+  # 件数表示（例: 2件→3件）の完全一致検証では窓外行の混入を検出できるが、n_issues
+  # は「件数>0なら+1」という警告種別単位の加算のため、窓内行が既に非ゼロなら
+  # 窓外行を誤って数えても値が変わらず見分けが付かない＝分離ケースで独立検証する）。
+  # ただし直近ログを1行も残さないとreads/recall
+  # 双方が「直近30日以内の有効な記録が無い」(死活判定・stale)で別途n_issuesが
+  # 増えてしまい、session_id集計の検証にならない。session_id有りの直近行を
+  # 1行添えてログを非staleに保つ（この直近行はログ未成熟＝「要観察」扱いなので
+  # n_issuesには算入されない＝§12未読確定(unread_confirmed)のみがn_issuesに入る
+  # 設計のため影響しない）。
+  write_note "$V" "Knowledge/outside-window-tracked-note.md" $'date: 2026-01-01\naliases:\n  - outside-window-tracked-note-alias'
+  LOGDIR_OUT="$V/../.claude-logs-n-issues-no-session-window-outside"
+  mkdir -p "$LOGDIR_OUT"
+  {
+    printf '%s\tsessFresh\tKnowledge/outside-window-tracked-note.md\n' "$(d_ts -5)"
+    printf '%s\t\tKnowledge/n-issues-no-session-window-outside-dummy.md\n' "$(d_ts -31)"
+  } > "$LOGDIR_OUT/vault-reads.tsv"
+  {
+    printf '%s\tsessFresh\tKnowledge/outside-window-tracked-note.md\tk\n' "$(d_ts -5)"
+    printf '%s\t\tKnowledge/n-issues-no-session-window-outside-dummy.md\tk\n' "$(d_ts -31)"
+  } > "$LOGDIR_OUT/vault-recall.tsv"
+
+  out_outside="$(VAULT_READS_LOG="$LOGDIR_OUT/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR_OUT/vault-recall.tsv" \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
+    cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
+  n_outside="$(extract_n_issues "$out_outside")"
+
+  assert_not_contains "窓外(31日前)のみの場合はRead側のsession_id空行注記自体が出ない" \
+    "$out_outside" "session_id が空のRead行"
+  assert_not_contains "窓外(31日前)のみの場合は提示側のsession_id空行注記自体が出ない" \
+    "$out_outside" "session_id が空の提示行"
+  if [[ "$n_outside" -eq 0 ]]; then
+    pass "窓外(31日前)のみのsession_id空行はn_issuesに算入されない(=0)"
+  else
+    fail_case "窓外のみのケースでn_issuesが0にならない(actual=${n_outside}・期待0)"
+  fi
+
+  # 続けて、窓内(0日・30日)2行＋窓外(31日)1行を混在させ、窓外の1行だけが
+  # カウント・n_issuesから除外されることを確認する（提示無視率の窓判定と揃える
+  # 変更の主眼＝旧実装は全期間対象だったため、この31日行も従来は数えられて
+  # いた）。
+  LOGDIR="$V/../.claude-logs-n-issues-no-session-window"
+  mkdir -p "$LOGDIR"
+  {
+    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\n' "$(d_ts 0)"
+    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\n' "$(d_ts -30)"
+    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\n' "$(d_ts -31)"
+  } > "$LOGDIR/vault-reads.tsv"
+  {
+    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\tk\n' "$(d_ts 0)"
+    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\tk\n' "$(d_ts -30)"
+    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\tk\n' "$(d_ts -31)"
+  } > "$LOGDIR/vault-recall.tsv"
+
+  out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
+    cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
+  n="$(extract_n_issues "$out")"
+
+  assert_contains "当日・30日前の2件のみ窓内としてRead側の注記に数えられる（31日前は含まれない）" \
+    "$out" "session_id が空のRead行 2 件"
+  assert_contains "当日・30日前の2件のみ窓内として提示側の注記に数えられる（31日前は含まれない）" \
+    "$out" "session_id が空の提示行 2 件"
+  assert_contains "注記文言に窓（直近30日以内）が明記される" "$out" "直近30日以内でsession_id が空のRead行"
+  if [[ "$n" -eq 2 ]]; then
+    pass "窓内2種別(Read・提示それぞれ1)のみがn_issuesに算入される(=2・31日前は不算入)"
+  else
+    fail_case "n_issuesが想定と異なる(actual=${n}・期待2)"
+  fi
+
+  rm -rf "$VAULT_HOME"
+}
+
 echo "=== 37. read_log()のerror_rows: claude/hooks/vault-recall.sh log_fact()由来の6列目'INFO'行はERROR件数に算入しない（旧形式のレベル列なし行は従来どおり算入・後方互換） ==="
 {
   VAULT_HOME="$(mktemp -d)"
