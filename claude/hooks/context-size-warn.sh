@@ -6,7 +6,9 @@
 # （実測 2026-08-10・Fragments/2026-08/2026-08-10.md「Fable 週次枠の消費実測」）。
 #
 # 環境変数（settings.json の env か plist で上書き可）:
-#   CTX_WARN_AT      初回警告しきい値（トークン。既定 120000）
+#   CTX_WARN_AT      初回警告しきい値（トークン。既定 200000＝2026-08-10 本人決定。
+#                    120k 起点だと直近14日の62%が警告対象＝過剰。200k は怪物セッション
+#                    狙い撃ち（38%）で、累積コストの二乗特性上、検知価値はほぼ落ちない）
 #   CTX_REWARN_STEP  再警告の増分（既定 50000）
 #   CTX_WARN_MODELS  対象モデルの grep 正規表現（既定 fable ＝リーダーのみ）
 # 失敗時は常に無言で exit 0（フェイルセーフ・本体動作を妨げない）。
@@ -14,7 +16,7 @@
 set -u
 INPUT=$(cat) || exit 0
 
-WARN_AT="${CTX_WARN_AT:-120000}"
+WARN_AT="${CTX_WARN_AT:-200000}"
 REWARN_STEP="${CTX_REWARN_STEP:-50000}"
 WARN_MODELS="${CTX_WARN_MODELS:-fable}"
 STATE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/context-size-warn"
