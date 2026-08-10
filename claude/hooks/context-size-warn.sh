@@ -10,7 +10,11 @@
 #                    120k 起点だと直近14日の62%が警告対象＝過剰。200k は怪物セッション
 #                    狙い撃ち（38%）で、累積コストの二乗特性上、検知価値はほぼ落ちない）
 #   CTX_REWARN_STEP  再警告の増分（既定 50000）
-#   CTX_WARN_MODELS  対象モデルの grep 正規表現（既定 fable ＝リーダーのみ）
+#   CTX_WARN_MODELS  対象モデルの grep 正規表現（既定 . ＝全モデル）
+# リーダー判定はモデルでなく transcript の agentName で行う（2026-08-10 実測:
+# ワーカー/チームメイトのセッションは全行に agentName が付き、リーダーには付かない。
+# UserPromptSubmit はワーカー側でも発火しうるため、これが唯一確実な判別子。
+# モデル不問なのでサブ機の Opus 5 リーダーでも警告が届く）。
 # 失敗時は常に無言で exit 0（フェイルセーフ・本体動作を妨げない）。
 
 set -u
@@ -18,7 +22,7 @@ INPUT=$(cat) || exit 0
 
 WARN_AT="${CTX_WARN_AT:-200000}"
 REWARN_STEP="${CTX_REWARN_STEP:-50000}"
-WARN_MODELS="${CTX_WARN_MODELS:-fable}"
+WARN_MODELS="${CTX_WARN_MODELS:-.}"
 STATE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/context-size-warn"
 
 CTX_HOOK_INPUT="$INPUT" python3 - "$WARN_AT" "$REWARN_STEP" "$WARN_MODELS" "$STATE_DIR" <<'PYEOF' 2>/dev/null || exit 0
@@ -47,6 +51,7 @@ with open(tp, "rb") as f:
 
 ctx = 0
 model = ""
+agent_name = None
 for line in tail.splitlines():
     if '"usage"' not in line:
         continue
@@ -63,6 +68,11 @@ for line in tail.splitlines():
     if c > 0:
         ctx = c
         model = (o.get("message") or {}).get("model") or model
+        agent_name = o.get("agentName")
+
+# agentName があればワーカー/チームメイトのセッション＝リーダーではないので無言
+if agent_name:
+    sys.exit(0)
 
 if ctx < warn_at or not re.search(model_re, model, re.I):
     sys.exit(0)
