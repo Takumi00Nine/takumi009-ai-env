@@ -13,13 +13,20 @@
 #   いればexport-public-vault.shを即再試行。
 # Phase 1: 検出専用（読み取り専用・実行順固定・各ステップは
 #   maintenance_run_step.py経由でtimeout付き起動）:
-#   ①check-drift.sh --json（環境ヘルスの門番＝④を除いたdrift>0または実行
-#     異常/timeoutならfail-fast・Vaultには書かずここで終了）
+#   ①check-drift.sh --json（環境ヘルスの点検。④を除いたdrift>0または実行
+#     異常/timeoutでも中断せず警告として記録し完走する＝2026-08-10 fail-fast
+#     廃止・[[Decisions/2026-08-10-round6-rulings]]決定1。Vault書込み安全の
+#     門番はPhase 0の直前スナップショット（backup-vault.sh成功必須）に一本化
+#     済み。旧fail-fastは18日間の週次メンテ停止（[[Decisions/2026-08-05-
+#     bootstrap-health-warning-report]]）の主因だった＝止めた実績はいずれも
+#     実行安全とは無関係〈config.tomlアプリ自動追記・リーダー作業途中の
+#     未コミット〉。警告・失敗の可視化はPhase3末尾のlast_result記録＋
+#     claude/hooks/bootstrap-vault.shの起動ヘルス行が担う）
 #   ②fragments_log.py --since <前回成功時刻> --json
 #   ③vault_inventory.py --json
 #   ④knowledge_merge_candidates.py --json
 #   ⑤decision_propagation.py --since <前回成功時刻> --out <レポート>
-#   ②〜⑤は1本失敗/timeoutしても他は継続する（エラー隔離）。
+#   ①〜⑤は1本失敗/timeoutしても他は継続する（エラー隔離）。
 # Phase 2: maintenance_apply.py が②④の検出結果を集約しヘッドレスClaudeへ
 #   1回投げ、検証済みの構造化出力に基づきPROMOTE/MERGEをVaultへ適用する
 #   （FIX機能は2026-07-18本人裁定で丸ごと削除済み＝[[Decisions/2026-07-18-
@@ -35,9 +42,11 @@
 #   claude/hooks/bootstrap-vault.shが起動のたびに直接スキャンする＝
 #   2026-07-18ハードニングでpendingマーカー層は撤去済み）を含む実施サマリを
 #   Fragments当日ファイルへ1行追記、last-run.jsonのlast_success_at
-#   を完全正常終了時のみ更新、backup-vault.shを再度呼び即commit、Vault書込
-#   ロック解放（EXIT trap自動）、異常時のみmacOS通知、30日超過の実行
-#   ディレクトリを削除。
+#   を完全正常終了時のみ更新、last_result（success/warn＋警告要旨の短文。
+#   Phase0の直前スナップショット失敗時は"fail"を個別に記録＝2026-08-10
+#   [[Decisions/2026-08-10-round6-rulings]]決定1のセット条件）を常に更新、
+#   backup-vault.shを再度呼び即commit、Vault書込ロック解放（EXIT trap自動）、
+#   異常時のみmacOS通知、30日超過の実行ディレクトリを削除。
 #
 # 中間ファイル・status-fileの置き場（設計書§1.3・リーダー裁定2026-07-16）:
 #   ~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/ という実行ごと
@@ -120,6 +129,17 @@ RUN_FULLY_OK=1
 ANOMALIES=()
 add_anomaly() { ANOMALIES+=("$1"); warn "$1"; RUN_FULLY_OK=0; }
 
+# informationalな注記の蓄積（2026-08-10・工程横断レビュー指摘Major対応）。
+# add_anomaly()と違い、RUN_FULLY_OKは倒さない＝last_result/last_success_atの
+# 判定には一切影響しない「参考情報」専用チャネル。用途＝②のTOML三分類で
+# 検出された未知config.tomlキーのように、「driftでも異常でもないが、
+# RUN_DIRログ（30日TTL）に埋もれさせず翌セッションの起動ヘルス行までは
+# 見えるようにしたい」情報を通す（本人裁定「warnへ昇格させない」）。
+# ログには残すがwarn()（stderr）は使わない＝完全に正常な実行のノイズに
+# しないため（stdoutのlog()のみ）。
+INFO_NOTES=()
+add_info_note() { INFO_NOTES+=("$1"); log "INFO: $1"; }
+
 # --- last-run.json 読み書きヘルパ（原子更新・破損時はfail-openで{}扱い） ---
 # ファイルパス・フィールド名・値はいずれもPythonコード文字列へ直接埋め込まず
 # sys.argv 経由で渡す（2026-07-16 リーダー裁定・scripts/check-drift.shの
@@ -157,6 +177,40 @@ tmp = path.parent / ('.' + path.name + '.tmp-' + str(os.getpid()))
 tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
 os.replace(str(tmp), str(path))
 " "$LAST_RUN_FILE" "$1" "$2"
+}
+
+# last_result（旧D4・[[Decisions/2026-08-10-round6-rulings]]決定1のセット
+# 条件「警告・失敗の可視化」）: success/warn/failの3値＋警告要旨の短文を
+# last-run.jsonへ記録する。claude/hooks/bootstrap-vault.shの起動ヘルス行が
+# 翌セッション冒頭でこれを拾い⚠️表示する（正本＝[[Decisions/2026-08-05-
+# bootstrap-health-warning-report]]）。last_result/last_result_summaryは
+# 常にペアで意味を持つ値（新しいvalueに古いsummaryが対応してしまうと
+# 誤解を招く）のため、write_last_run_field()を2回呼ぶ独立更新にはせず
+# 1回のPython起動で両方を同時に書く＝Codex一次レビュー指摘Major対応
+# （2回に分けると1回目成功・2回目失敗時に新旧値が混在しうる）。
+# write_last_run_field()と同じfail-open方針（書込失敗はwarn()するだけで
+# 処理は止めない＝last_resultは「次回への申し送り」であり、これ自体の
+# 書込失敗で今回の実行結果を左右すべきではないため）。$2（summary）は
+# 空文字列でもよい（success時）。
+write_last_result() {
+  local value="$1" summary="$2"
+  python3 -c "
+import json, os, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+data['last_result'] = sys.argv[2]
+data['last_result_summary'] = sys.argv[3]
+tmp = path.parent / ('.' + path.name + '.tmp-' + str(os.getpid()))
+tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
+os.replace(str(tmp), str(path))
+" "$LAST_RUN_FILE" "$value" "$summary" \
+    || warn "last-run.jsonのlast_result/last_result_summary更新に失敗しました（value=${value}）"
 }
 
 # maintenance_run_step.pyの--status-file出力を読み、"OK <returncode>" または
@@ -206,13 +260,18 @@ DATE_COMPONENT="$(date +%Y-%m-%d)"
 TIME_COMPONENT="$(date +%H%M%S)"
 DATE_DIR="$MAINTENANCE_LOG_ROOT/$DATE_COMPONENT"
 RUN_DIR="$DATE_DIR/${TIME_COMPONENT}-$$"
-mkdir -p "$DATE_DIR" || { echo "[maintenance] FAIL: 日付ディレクトリを作成できません: $DATE_DIR" >&2; exit 1; }
+mkdir -p "$DATE_DIR" || {
+  echo "[maintenance] FAIL: 日付ディレクトリを作成できません: $DATE_DIR" >&2
+  write_last_result "fail" "日付ディレクトリを作成できませんでした（${DATE_DIR}）"
+  exit 1
+}
 # RUN_DIRは`$$`(PID)を含むため通常は衝突しないが、`mkdir -p`は既存ディレクトリを
 # 静かに再利用してしまう（PID再利用等の極めて稀な衝突時にログが混在しうる）。
 # 単純な`mkdir`（`-p`無し）はディレクトリが既に存在すると失敗するため、これを
 # 衝突検知として使う（2026-07-16 Codexレビュー指摘Minor対応）。
 if ! mkdir "$RUN_DIR"; then
   echo "[maintenance] FAIL: 実行ディレクトリの作成に失敗しました（既に存在する可能性があります）: $RUN_DIR" >&2
+  write_last_result "fail" "実行ディレクトリの作成に失敗しました（${RUN_DIR}）"
   exit 1
 fi
 chmod 0700 "$MAINTENANCE_LOG_ROOT" "$DATE_DIR" "$RUN_DIR" 2>/dev/null || true
@@ -253,6 +312,11 @@ if ! write_last_run_field started_at "$STARTED_AT"; then
   # 従来は戻り値を見ておらず、書込失敗が黙って握り潰されたまま
   # 「started_atは記録済み」という前提で処理が進んでいた）。
   echo "[maintenance] FAIL: last-run.jsonのstarted_at更新に失敗しました: $LAST_RUN_FILE" >&2
+  # last_resultも同じファイルへの書込みのため、started_at同様に失敗しうる
+  # （write_last_result自体はfail-openでwarn()するだけ＝二重に中断はしない）。
+  # それでも書ける環境（started_atの書込みだけがたまたま失敗した等）では
+  # 次回起動時のヘルス行に反映させたい。
+  write_last_result "fail" "last-run.jsonのstarted_at更新に失敗しました"
   notify_macos "maintenance.sh 異常終了" "last-run.jsonへの書込みに失敗したため中断しました。詳細: $RUN_DIR"
   exit 1
 fi
@@ -320,7 +384,40 @@ log "=== Phase 0: ロック＋バックアップ ==="
 # 時にプロセスごとexitする契約（scripts/lib/pid-lock.sh参照）。取得できれば
 # EXIT trapで自動解放されるため、以降のどのexit経路でも明示的な解放処理は
 # 不要。
+#
+# acquire_pid_lockはbusy(exit 0)だけでなく、回収ミューテックス競合が20回
+# 試行しても解消しない場合はfail-closedでexit 1する契約（前回実行の
+# クラッシュ痕跡の可能性・scripts/lib/pid-lock.sh参照）。この経路は
+# maintenance.sh側のadd_anomaly/write_last_resultを一切経由せず直接
+# プロセスごとexitするため、素通しだと前回のlast_result（success/warn）が
+# 誤って残ったまま翌セッションのヘルス行に出てしまう（2026-08-10 Codex
+# 一次レビュー2周目指摘Major対応）。acquire_pid_lock自体はライブラリ関数
+# として busy/error を呼び出し元へ判別可能な形で返さない（バックアップ
+# 対象がbackup-vault.shとも共用する汎用ロックのため、maintenance.sh固有の
+# last_result概念をpid-lock.sh側へ持ち込みたくない＝関心の分離）ため、
+# ここだけ限定的なEXIT trapで「acquire_pid_lock呼び出し中に非ゼロ終了した
+# か」を$?で判定して拾う。acquire_pid_lockが成功するとロック解放用の
+# 自分自身のtrapを合成登録する（_pid_lock_register_cleanup参照）ため、
+# ここで`trap - EXIT`のように無条件でtrapを消すとロック解放処理ごと
+# 消してしまう。そのためtrap文字列自体は残したまま、フラグ
+# （MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE）で「今チェックすべき区間か」だけ
+# を切り替える（成功/busyで区間を抜けた後はフラグ0でこの関数は何もしない
+# no-opになるだけで、合成後のtrap文字列自体はそのまま有効であり続ける）。
+_maintenance_lock_acquire_guard() {
+  local rc=$?
+  if [[ "${MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE:-0}" = "1" && "$rc" -ne 0 ]]; then
+    write_last_result "fail" "Vault書込ロックの取得に失敗しました（回収ミューテックス競合が解消しませんでした。詳細: ${VAULT_WRITER_LOCK_FILE}.reclaim）"
+    notify_macos "maintenance.sh 異常終了" "Vault書込ロックの取得に失敗したため中断しました。手動確認: rmdir ${VAULT_WRITER_LOCK_FILE}.reclaim"
+  fi
+}
+MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE=1
+trap _maintenance_lock_acquire_guard EXIT
 acquire_pid_lock "$VAULT_WRITER_LOCK_FILE" "$MAINTENANCE_STALE_LOCK_SECONDS" "maintenance" ""
+# ここへ到達するのはロック取得成功時のみ（busy/errorはacquire_pid_lock内で
+# 既にプロセスごとexit済み）。以後の通常のexit経路（busy-skip等は含まれない
+# ＝本ファイル冒頭の「busy-skipはlast_result対象外」方針どおり）でこの
+# guardが誤発火しないよう区間を抜ける。
+MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE=0
 
 # backup-vault.shへ渡す「このロックを保持しているのは自分自身だ」という
 # 証明。単なる真偽値フラグ(旧MAINTENANCE_INTERNAL_CALL=1)だと、
@@ -348,6 +445,7 @@ log "Phase0直前スナップショット: $BACKUP0_RESULT (status-file=$BACKUP0
 # 実行を穏当にskip」と明記している）。
 if [[ "$BACKUP0_RESULT" != "OK 0" ]]; then
   add_anomaly "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）"
+  write_last_result "fail" "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）"
   notify_macos "maintenance.sh 異常終了" "Phase0のバックアップ起動に失敗したため中断しました。詳細: $RUN_DIR"
   exit 1
 fi
@@ -365,6 +463,7 @@ case "$BACKUP0_STATUS_WORD" in
     ;;
   *)
     add_anomaly "Phase0: 直前スナップショット(backup-vault.sh)が異常終了しました（status=${BACKUP0_STATUS_WORD}）"
+    write_last_result "fail" "Phase0: 直前スナップショット(backup-vault.sh)が異常終了しました（status=${BACKUP0_STATUS_WORD}）"
     notify_macos "maintenance.sh 異常終了" "Phase0のバックアップに失敗したため中断しました。詳細: $RUN_DIR"
     exit 1
     ;;
@@ -399,8 +498,11 @@ run_export_retry() {
   if [[ "$export_result" == "OK 0" && -z "$remaining_diff" ]]; then
     log "$label export再試行: 成功（${export_result}・vault-public差分解消）"
   else
-    # 失敗しても異常通知に含めるのみでPhase1以降は止めない（設計書§1.2改訂v2
-    # 「Phase 1 の fail-fast 判定から④を除外」の趣旨をここでも徹底する）。
+    # 失敗しても異常通知に含めるのみでPhase1以降は止めない（旧設計書§1.2
+    # 改訂v2は「Phase 1 の fail-fast 判定から④を除外」と表現していたが、
+    # 2026-08-10にPhase1①自体のfail-fastを廃止した現在は「④はエラー隔離の
+    # 対象＝失敗を検知しても中断せず警告として記録し先へ進む」という、より
+    # 単純な一般則の一部として扱われている。ここでもその趣旨を徹底する）。
     add_anomaly "$label: export-public-vault.sh再試行に失敗しました（${export_result}・残差分=$([[ -n "$remaining_diff" ]] && echo あり || echo なし)）"
   fi
 }
@@ -413,7 +515,13 @@ run_export_retry "Phase0"
 
 log "=== Phase 1: 検出 ==="
 
-# --- ①check-drift.sh --json（環境ヘルスの門番・fail-fast） ---
+# --- ①check-drift.sh --json（環境ヘルスの点検・警告化） ---
+# 2026-08-10 fail-fast廃止（[[Decisions/2026-08-10-round6-rulings]]決定1）。
+# 旧: ④を除いたdrift>0または実行異常/timeoutでexit 1しPhase1②以降・Phase2を
+# 実行せず中断していた（定期成功0/4の主因）。
+# 新: 結果に関わらず②以降・Phase2へ進む。Vault書込み安全の門番はPhase 0の
+# 直前スナップショット（本ファイル上部のbackup-vault.sh呼び出し・busy/error時は
+# 既にこの行より前でexitしている）に一本化済みのため、ここで止める理由が無い。
 DRIFT_STATUS_FILE="$RUN_DIR/step-status-drift.json"
 run_wrapped_step "$TIMEOUT_CHECK_DRIFT" "$DRIFT_STATUS_FILE" \
   "$RUN_DIR/drift-stdout.log" "$RUN_DIR/drift-stderr.log" \
@@ -424,14 +532,37 @@ log "①check-drift.sh: $DRIFT_RESULT"
 
 if [[ "$DRIFT_RESULT" != "OK 0" ]]; then
   # rc=1(④を除いたdrift>0)・rc>=2(実行エラー)・WRAPPER_FAIL(timeout等)の
-  # いずれもfail-fast対象（設計書§1.2「④を除いたdrift件数>0または実行異常/
-  # timeoutならfail-fast。②以降・Phase2を実行せず異常通知して終了。Vaultには
-  # 書かない」）。
+  # いずれも警告として記録するだけで、②以降・Phase2はそのまま継続する
+  # （add_anomaly()がwarn()出力・ANOMALIES追記・RUN_FULLY_OK=0への降格を
+  # まとめて行う＝本ファイル冒頭のadd_anomaly()定義参照）。
   DRIFT_JSON_LINE="$(tail -n 1 "$RUN_DIR/drift-stdout.log" 2>/dev/null || true)"
-  add_anomaly "Phase1①: check-drift.shがfail-fastしました（${DRIFT_RESULT}）。JSON: $DRIFT_JSON_LINE"
-  RUN_FULLY_OK=0
-  notify_macos "maintenance.sh 異常終了" "環境ヘルスチェック(check-drift)でdrift/実行異常を検知したため中断しました。詳細: $RUN_DIR"
-  exit 1
+  add_anomaly "Phase1①: check-drift.shがdrift/実行異常を検知しました（${DRIFT_RESULT}・警告として記録し継続します）。JSON: $DRIFT_JSON_LINE"
+fi
+
+# --- ①相当: check-drift.sh②(config.toml三分類)の未知キー件数をinformational
+#     として拾う（2026-08-10・工程横断レビュー指摘Major対応） ---
+# 未知キー（テンプレにも既知アプリ管理キー一覧にも無いキー）はcheck-drift.sh
+# 側の設計どおりdriftには数えない＝上のDRIFT_RESULTが"OK 0"（異常なし）でも
+# 起こりうる。driftでないぶんadd_anomaly()の対象にはせず（last_result=warnへ
+# 昇格させない・本人裁定）、add_info_note()でsuccess時のlast_result_summary
+# だけに拾う。これが無いと「WARN表示のみ→drift非計上→last_result=success→
+# 起動ヘルス行に出ない」経路になり、RUN_DIRログ（30日TTL）の奥に埋もれて
+# 誰にも読まれないまま消えていた（工程横断レビューで指摘された可視化導線の
+# 欠落）。DRIFT_RESULTがWRAPPER_FAIL(timeout等)でJSON自体が出力されていない
+# 場合はpython3のjson.loads()が例外を投げ、fail-openで何もしない（既に
+# add_anomaly側でその異常は捕捉済みのため二重に警告する必要が無い）。
+DRIFT_JSON_LAST_LINE="$(tail -n 1 "$RUN_DIR/drift-stdout.log" 2>/dev/null || true)"
+if UNKNOWN_CONFIG_KEYS_COUNT="$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+v = d['unknown_config_keys']
+if not (isinstance(v, int) and not isinstance(v, bool) and v >= 0):
+    raise SystemExit(1)
+print(v)
+" "$DRIFT_JSON_LAST_LINE" 2>/dev/null)" \
+    && [[ "$UNKNOWN_CONFIG_KEYS_COUNT" =~ ^[0-9]+$ ]] \
+    && [[ "$UNKNOWN_CONFIG_KEYS_COUNT" -gt 0 ]]; then
+  add_info_note "Phase1①: check-drift.sh②がconfig.tomlの未知キーを${UNKNOWN_CONFIG_KEYS_COUNT}件検出しました（テンプレにも既知アプリ管理キー一覧にも無い・driftには数えません。詳細: ${RUN_DIR}）"
 fi
 
 # --- ②fragments_log.py --since <前回成功時刻> --json ---
@@ -752,6 +883,51 @@ else
   log "今回は完全正常終了ではないため last_success_at は更新しません（次回も同じ--sinceから再試行）"
 fi
 
+# --- last-run.jsonのlast_result（success/warn）を記録（旧D4・[[Decisions/
+#     2026-08-10-round6-rulings]]決定1のセット条件） ---
+# ここまで到達できた時点でPhase3の最終commitまで含めて完走しているため
+# "fail"にはならない（"fail"はPhase0の直前スナップショット失敗時に
+# write_last_result経由で個別に書く＝本ファイル上部参照。ここは「完走した
+# 週次実行」の中でのsuccess/warnのみを扱う）。RUN_FULLY_OKは上のブロックで
+# last_success_at書込み自体が失敗した場合も0へ倒りうるため、判定はこの
+# ブロックの後で行う。
+LAST_RESULT_VALUE="success"
+if [[ "$RUN_FULLY_OK" -ne 1 ]]; then
+  LAST_RESULT_VALUE="warn"
+fi
+# ANOMALIESとINFO_NOTESを両方summaryへ合流させる（2026-08-10 工程横断
+# レビュー2周目指摘Major対応: 従来はif/elifで分岐しており、warn（ANOMALIES
+# 非空）とinformational（INFO_NOTES非空）が同じ週次実行内で同時に起きると
+# INFO_NOTES側が丸ごと捨てられ、未知config.tomlキーの可視化導線がこの
+# ケースだけ再び失われていた）。ANOMALIESを先に置く＝last_result=warnを
+# 招いた本質的な原因（異常）の方がinformationalな注記より優先度が高く、
+# 200文字切り詰めで後半が落ちるとしても先に見えるべきなのはこちら。
+# successのみ（ANOMALIES空）ならINFO_NOTESだけがそのまま入る。
+# 展開は`${ARRAY[@]+"${ARRAY[@]}"}`のbash 3.2安全イディオムを使う（macOS
+# 標準bash 3.2は空配列に対する`"${ARRAY[@]}"`をset -u下でunbound variable
+# エラーにする既知の欠陥があり、素朴な`"${ANOMALIES[@]}"`はANOMALIESが
+# 空＝success時に本行自体をクラッシュさせる＝実測発見・全テストで検出）。
+SUMMARY_PARTS=(${ANOMALIES[@]+"${ANOMALIES[@]}"} ${INFO_NOTES[@]+"${INFO_NOTES[@]}"})
+# ANOMALIES/INFO_NOTESを"; "区切りで1行に要約する。起動ヘルス行に載せる短文
+# のため200文字で切り詰める（マルチバイト文字境界は気にしない＝個人用
+# ツールの表示用途として許容。中身の全量はRUN_DIR配下のログで確認可能。
+# macOS通知は「本人は見ていない」前提（Phase3「異常時のみmacOS通知」
+# コメント参照）のため全量回収先としては挙げない＝2026-08-10 工程横断
+# レビュー指摘Minor対応: 通知本文には未切詰めの全量が乗るが、それを読む
+# 前提の説明は本人が通知を見ない運用と矛盾するため訂正）。
+#
+# SUMMARY_PARTSが空（完全正常終了・informationalな注記も無い）の場合は
+# printfを呼ばない（printfは実引数0件でもフォーマット文字列を1回実行する
+# POSIX仕様のため、`printf '%s; ' ${SUMMARY_PARTS[@]+"${SUMMARY_PARTS[@]}"}`
+# のように実引数を渡さない形で呼んでも"; "だけが出力されてしまい、
+# last_result_summaryが真の空文字列にならない＝実測発見）。
+LAST_RESULT_SUMMARY=""
+if [[ "${#SUMMARY_PARTS[@]}" -gt 0 ]]; then
+  LAST_RESULT_SUMMARY="$(printf '%s; ' "${SUMMARY_PARTS[@]}")"
+  LAST_RESULT_SUMMARY="${LAST_RESULT_SUMMARY:0:200}"
+fi
+write_last_result "$LAST_RESULT_VALUE" "$LAST_RESULT_SUMMARY"
+
 # --- 異常時のみmacOS通知（正常時は通知しない＝本人「通知は見ていない」指摘） ---
 if [[ "${#ANOMALIES[@]}" -gt 0 ]]; then
   SUMMARY_FOR_NOTIFY="$(printf '%s; ' "${ANOMALIES[@]}")"
@@ -767,10 +943,13 @@ find "$MAINTENANCE_LOG_ROOT" -maxdepth 1 -type d -name '20*' -mtime "+${MAINTENA
 
 log "done."
 # 終了コードはPhase3まで到達できたかどうかだけを表す（0=最後まで走った・
-# Phase1②〜⑤やexport再試行の個別失敗のように「隔離して継続した」異常が
-# あってもここでは0のまま。1=Phase0/Phase1①のfail-fastで早期中断した場合の
-# みで、それらは各早期return箇所で個別にexit 1している）。「何か異常が
-# あったか」はプロセスの終了コードではなく、上記のmacOS通知（異常時のみ）で
-# 判断する設計＝cronジョブ的な「ジョブ自体は完走した」と「中身に注意点が
-# あった」を別チャネルに分ける一般的な作法に合わせる。
+# Phase1①〜⑤やexport再試行の個別失敗のように「隔離して継続した」異常が
+# あってもここでは0のまま。1=Phase0の直前スナップショット(backup-vault.sh)が
+# 起動失敗/異常終了した場合のみで、そこの早期return箇所で個別にexit 1して
+# いる。Phase1①のcheck-drift.shは2026-08-10からfail-fastを廃止したため、
+# ここでexit 1する経路ではなくなった＝[[Decisions/2026-08-10-round6-
+# rulings]]決定1）。「何か異常があったか」はプロセスの終了コードではなく、
+# 上記のmacOS通知（異常時のみ）で判断する設計＝cronジョブ的な「ジョブ自体は
+# 完走した」と「中身に注意点があった」を別チャネルに分ける一般的な作法に
+# 合わせる。
 exit 0

@@ -162,6 +162,18 @@ refresh_fake_launchctl
 export PATH="$FAKE_LAUNCHCTL_BIN:$PATH"
 trap 'rm -rf "$FAKE_LAUNCHCTL_BIN"' EXIT
 
+# 検査②のTOML三分類化（2026-08-10）でcheck-drift.shがpython3標準tomllib
+# （Python 3.11+）に依存するようになったため、「ghが無い環境」を模擬する
+# テスト（下記13番）でPATHを/usr/bin:/binへ絞ると、macOS標準の
+# /usr/bin/python3（Python 3.9系・tomllib無し）を拾ってしまい検査②が
+# 無関係にTOML-PARSE-FAILEDへ倒れる（実測発見）。実PATH上のpython3
+# 実行ファイル（sys.executable）だけを含む隔離bindirを作り、gh不在テストの
+# PATHへ追加で混ぜられるようにする（gh自体はこのbindirには置かないので
+# 「ghが無い」模擬は崩れない）。
+REAL_PYTHON3_BIN="$(mktemp -d)"
+ln -s "$(python3 -c 'import sys; print(sys.executable)')" "$REAL_PYTHON3_BIN/python3"
+trap 'rm -rf "$FAKE_LAUNCHCTL_BIN" "$REAL_PYTHON3_BIN"' EXIT
+
 # maintenance.sh週次ランナーの健全なfixtureを作る（plist配置＋launchd上ロード
 # 済みを模擬＋last-run.jsonにstarted_atを書く）。$1=HOME_DIR $2=started_atに
 # 使うd_ts()と同じ符号規約のオフセット（省略時0＝今日。負値=過去N日・
@@ -190,7 +202,7 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "symlink drift 0件" "$out" "symlink総数: 8件 / drift: 0件"
-  assert_contains "config.toml一致" "$out" "プレースホルダ展開を考慮すれば一致しています"
+  assert_contains "config.toml一致" "$out" "TOML三分類で一致しています"
   assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
   assert_contains "総drift件数0" "$out" "総drift件数: 0"
 
@@ -209,7 +221,7 @@ echo "=== 1b. HOMEに # が含まれる環境でも②config.tomlチェックが
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "HOMEに#が含まれてもconfig.toml一致と判定される" "$out" "プレースホルダ展開を考慮すれば一致しています"
+  assert_contains "HOMEに#が含まれてもconfig.toml一致と判定される" "$out" "TOML三分類で一致しています"
   assert_not_contains "sedの構文エラーが出ない" "$out" "sed:"
 
   rm -rf "$REPO" "$HOME_PARENT"
@@ -261,22 +273,29 @@ echo "=== 4. ①symlinkが別の場所を指している（WRONG-TARGET）を検
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 5. ②config.tomlがテンプレと異なる（手動編集）を検知する ==="
+echo "=== 5. ②テンプレ記載キーの値がテンプレと異なる場合は[DIFF]として検知する（TOML三分類ケース1: テンプレ記載キー） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  echo "extra_manual_line = true" >> "$HOME_DIR/.codex/config.toml"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # service_tier はテンプレでキュレートされているキー（denylist/既知アプリ管理
+  # キー一覧のどちらにも属さない）で、手動編集がここに入れば必ずdrift計上
+  # されなければならない。
+  sed 's/service_tier = "default"/service_tier = "high"/' "$HOME_DIR/.codex/config.toml" > "$HOME_DIR/.codex/config.toml.tmp"
+  mv "$HOME_DIR/.codex/config.toml.tmp" "$HOME_DIR/.codex/config.toml"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "config.toml DIFF検知" "$out" "[DIFF]"
-  assert_not_contains "config.toml一致メッセージは出ない" "$out" "プレースホルダ展開を考慮すれば一致しています"
+  assert_contains "config.toml DIFF検知（テンプレ記載キーの値差分）" "$out" "[DIFF] キー 'service_tier'"
+  assert_not_contains "一致メッセージは出ない" "$out" "TOML三分類で一致しています"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 5b. ②Codexアプリが自動書き換えする機械管理キーのみ異なる場合はdriftにならない ==="
+echo "=== 5b. ②既知アプリ管理キーのみ差分の場合はdriftにならない（TOML三分類ケース2: 既知アプリ管理キー＝除外） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
@@ -285,9 +304,7 @@ echo "=== 5b. ②Codexアプリが自動書き換えする機械管理キーの�
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # Codexアプリが実運用で自動追加/書き換えする類のキー・セクションを模擬して
-  # live側だけに付加する（テンプレには意図的に存在しない）。セクションが
-  # 中間・末尾どちらにあっても連続空行が畳まれてテンプレと一致することも
-  # あわせて確認するため、既存セクションの間にも挿入する。
+  # live側だけに付加する（テンプレには意図的に存在しない）。
   # 実ホームパスを含む行（args・source等）は $HOME_DIR で埋める（クォート無し
   # heredocで変数展開する）。そうしないと逆置換 __AIENV_HOME__ 化が効かず、
   # このテスト自体が意図しない[DIFF]（パス不一致）を起こしてしまう。
@@ -317,14 +334,14 @@ read = true
 EOF
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "機械管理キー除外後は一致と判定される" "$out" "プレースホルダ展開を考慮すれば一致しています（機械管理キー除外後）"
-  assert_not_contains "config.toml DIFFにはならない" "$out" "[DIFF] ${HOME_DIR}/.codex/config.toml"
+  assert_contains "既知アプリ管理キー除外後は一致と判定される" "$out" "TOML三分類で一致しています"
+  assert_not_contains "config.toml DIFFにはならない" "$out" "[DIFF]"
   assert_contains "総drift件数0" "$out" "総drift件数: 0"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 5c. ②機械管理キー一覧に含まれないキュレート対象キーが異なる場合はdriftとして検知する ==="
+echo "=== 5c. ②テンプレ記載キーがlive側から欠落していると[MISSING-KEY]として検知する ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
@@ -332,20 +349,19 @@ echo "=== 5c. ②機械管理キー一覧に含まれないキュレート対象
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
-  # 機械管理キーの除外フィルタが、無関係な人為的設定変更まで握りつぶさないことを確認する
-  # （service_tier はテンプレでキュレートされている設定値であり、除外リストには無い）。
-  sed 's/service_tier = "default"/service_tier = "high"/' "$HOME_DIR/.codex/config.toml" > "$HOME_DIR/.codex/config.toml.tmp"
+  # テンプレには service_tier があるが、live側からその行ごと削除する
+  # （手動での誤削除を想定）。
+  grep -v '^service_tier' "$HOME_DIR/.codex/config.toml" > "$HOME_DIR/.codex/config.toml.tmp"
   mv "$HOME_DIR/.codex/config.toml.tmp" "$HOME_DIR/.codex/config.toml"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "config.toml DIFF検知（機械管理キーではないので握りつぶされない）" "$out" "[DIFF]"
-  assert_not_contains "一致メッセージは出ない" "$out" "プレースホルダ展開を考慮すれば一致しています"
+  assert_contains "MISSING-KEY検知" "$out" "[MISSING-KEY] キー 'service_tier'"
   assert_contains "総drift件数1" "$out" "総drift件数: 1"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 5d. ②セクション名の前方一致誤爆・キー行の空白違いの境界条件（Codexレビュー指摘・Major回帰） ==="
+echo "=== 5d. ②テンプレにも既知アプリ管理キー一覧にも無い未知キーはWARN表示のみでdriftにならない（TOML三分類ケース3: 未知キー） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
@@ -353,23 +369,80 @@ echo "=== 5d. ②セクション名の前方一致誤爆・キー行の空白違
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
-  # (a) "[projects_backup]" のように除外対象セクション名を前方一致するが別物の
-  #     セクションは、境界（"."区切り or "]"終端）を見ていれば誤って除去されない
-  #     ＝テンプレに無いので[DIFF]として残るはず。
-  # (b) "notify=[...]"（"="の前後にスペース無し）のような書き方違いも、
-  #     空白許容つきアンカーであれば正しく除去対象と判定されるはず。
+  # "[projects_backup]" は既知アプリ管理キー一覧の "projects" と前方一致する
+  # 文字列だが、TOML解析後のキーパス比較では別のトップレベルキーとして扱われ、
+  # 「除外」ではなく「未知キー」に分類される（旧denylistの前方一致誤爆問題は
+  # TOML解析へ移行したことで構造的に解消済み・回帰確認）。未知キーはdriftには
+  # 数えずWARN表示のみに留める（denylistが7/27→8/5→8/10と3回壊れたいたちごっこを
+  # 断つための本設計変更の核心）。
   cat >> "$HOME_DIR/.codex/config.toml" <<'EOF'
-
-notify=["turn-ended"]
 
 [projects_backup]
 comment = "本来のprojectsセクションとは無関係の別テーブル"
 EOF
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "notifyの書き方違いは機械管理キーとして除去され[DIFF]の直接原因にはならない（別要因の[projects_backup]でDIFF自体は出る）" "$out" "[DIFF]"
-  assert_not_contains "notify=[...]の行自体はdiff出力に残らない（除去できている証跡）" "$out" "notify=[\"turn-ended\"]"
-  assert_contains "[projects_backup]は前方一致誤爆で握りつぶされずdiff出力に残る" "$out" "projects_backup"
+  assert_contains "未知キーはWARN表示される" "$out" "WARN: 未知キー 'projects_backup.comment'"
+  assert_not_contains "未知キーはdriftにしない（[DIFF]は出ない）" "$out" "[DIFF]"
+  assert_contains "総drift件数0（未知キーはdriftに数えない）" "$out" "総drift件数: 0"
+
+  # --jsonのunknown_config_keysへも件数が反映される（2026-08-10 工程横断
+  # レビュー指摘Major対応: WARN表示のみだとRUN_DIRログに埋もれて誰にも
+  # 読まれないまま消えるため、maintenance.sh側が拾える機械可読な値として
+  # 追加した。exit code契約（drift_excluding_item4>0でexit 1）には含めない
+  # ＝driftではないため無関係のまま）。
+  json_out="$(run_check_json "$REPO" "$HOME_DIR")"
+  json_line="$(last_line "$json_out")"
+  rc=0
+  run_check_json "$REPO" "$HOME_DIR" >/dev/null 2>&1 || rc=$?
+  assert_eq_num "unknown_config_keysが1件反映される" "$(json_field "$json_line" unknown_config_keys)" "1"
+  assert_eq_num "drift_excluding_item4は0のまま（未知キーはexit code契約に影響しない）" "$(json_field "$json_line" drift_excluding_item4)" "0"
+  assert_eq_num "exit codeも0のまま" "$rc" "0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 5e. ②config.tomlがTOMLとして解析できない場合は監視不能として[TOML-PARSE-FAILED]をdrift計上する（パース失敗ケース） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # 壊れたTOML（閉じていない文字列リテラル）を live 側に置く。
+  cat > "$HOME_DIR/.codex/config.toml" <<'EOF'
+service_tier = "default
+this is not valid toml [[[
+EOF
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "TOMLパース失敗を検知する" "$out" "[TOML-PARSE-FAILED]"
+  assert_contains "監視不能である旨を明示する（fail-openで偽の健全表示にしない）" "$out" "監視不能"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 5f. ②repoテンプレ側のconfig.tomlがTOMLとして解析できない場合も監視不能として[TOML-PARSE-FAILED]をdrift計上する（パース失敗ケース・テンプレ側。Codex一次レビュー指摘Minor対応: live側のみのテスト5eだとtemplate側の分岐が未検証だった） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # live側は正常なまま、repo側のテンプレだけを壊れたTOMLへ差し替える。
+  cat > "$REPO/codex/config.toml" <<'EOF'
+service_tier = "default
+this is not valid toml [[[
+EOF
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "テンプレ側のTOMLパース失敗を検知する" "$out" "[TOML-PARSE-FAILED]"
+  assert_contains "テンプレ側であることが分かるメッセージが出る" "$out" "$REPO/codex/config.toml"
+  assert_contains "監視不能である旨を明示する" "$out" "監視不能"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -805,7 +878,7 @@ echo "=== 13. ⑤gh コマンドが無い場合はWARN表示のみでdriftにし
   # 入っている場合に環境依存で結果が変わるため、PATHを固定する
   # （tests/test-setup-codex-mcp.shのCodexレビュー指摘・Minorと同じ対策）。
 
-  out="$(PATH="/usr/bin:/bin" AIENV_PRIVATE_REPO="$PRIVATE_REPO" run_check "$REPO" "$HOME_DIR")"
+  out="$(PATH="$REAL_PYTHON3_BIN:/usr/bin:/bin" AIENV_PRIVATE_REPO="$PRIVATE_REPO" run_check "$REPO" "$HOME_DIR")"
   assert_contains "GH-UNAVAILABLE表示（Vault）" "$out" "[GH-UNAVAILABLE] Vaultバックアップ"
   assert_contains "GH-UNAVAILABLE表示（私的パッチrepo）" "$out" "[GH-UNAVAILABLE] 私的パッチrepo"
   assert_not_contains "[VISIBILITY]は出ない（driftにしない）" "$out" "[VISIBILITY]"

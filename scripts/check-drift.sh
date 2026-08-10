@@ -6,7 +6,11 @@
 #      repo の実体を指しているか
 #   ② ~/.codex/config.toml（生成物）が repo の codex/config.toml テンプレと
 #      「プレースホルダ展開を考慮すれば」一致しているか（実ファイルを
-#      __AIENV_HOME__ へ逆置換してからテンプレと diff する）
+#      __AIENV_HOME__ へ逆置換してから、python3標準tomllibでTOMLとして解析し、
+#      キー単位で三分類する＝テンプレ記載キー=値差分でdrift／既知アプリ管理
+#      キー=除外／未知キー=WARN表示のみでdriftにしない。2026-08-10
+#      diff+denylist方式から移行＝[[Decisions/2026-08-10-round6-rulings]]
+#      決定2。denylistは7/27→8/5→8/10と3回壊れたいたちごっこだった）
 #   ③ repo（このリポジトリ）に未commitの変更が無いか（`git status --porcelain`が
 #      実行自体に失敗した場合は「差分なし」に混同せず監視不能として計上する。
 #      2026-07-14 リーダー指摘対応＝旧実装は `|| true` でコマンド失敗と出力ゼロ件を
@@ -129,20 +133,29 @@
 #     は「stdoutの最終行だけがJSON、それより前は全て人間向けテキスト」という
 #     契約でパースする）。
 #     JSON形式: {"total_drift": N, "item4_drift": M, "drift_excluding_item4":
-#     N-M}（item4 = ④vault-public/Preferences差分。design上この項目だけは
-#     環境故障ではなく公開同期待ちの実体差分のためfail-fast対象から除外する
-#     ＝改訂v2 §1.2）。**除外されるのは「④の内容差分（[MISSING]/[DIFF]）」
-#     のみ**であり、「④の検査自体が実行できない異常（[DIFF-CHECK-FAILED]）」
-#     はitem4_driftに含めず通常のdrift（drift_excluding_item4側）として扱う
-#     （2026-07-16 Codexレビュー指摘Major対応: 改訂v2 §1.2は「④の差分は除外・
-#     実行異常はfail-fast対象」と明記しており、実行異常まで除外すると
-#     「監視不能も異常」という本スクリプト自身の方針に反するため）。
+#     N-M, "unknown_config_keys": K}（item4 = ④vault-public/Preferences差分。
+#     design上この項目だけは環境故障ではなく公開同期待ちの実体差分のため
+#     exit code契約から除外する＝改訂v2 §1.2）。**除外されるのは「④の内容
+#     差分（[MISSING]/[DIFF]）」のみ**であり、「④の検査自体が実行できない
+#     異常（[DIFF-CHECK-FAILED]）」はitem4_driftに含めず通常のdrift
+#     （drift_excluding_item4側）として扱う（2026-07-16 Codexレビュー指摘
+#     Major対応: 改訂v2 §1.2は「④の差分は除外・実行異常は対象」と明記して
+#     おり、実行異常まで除外すると「監視不能も異常」という本スクリプト
+#     自身の方針に反するため）。unknown_config_keysは②のTOML三分類で
+#     「テンプレにも既知アプリ管理キー一覧にも無い」と判定された件数
+#     （2026-08-10追加・工程横断レビュー指摘Major対応。driftには数えず
+#     total_drift/drift_excluding_item4には含めないが、maintenance.sh側が
+#     informationalとしてlast_result_summaryへ拾えるようにするための値。
+#     詳細＝scripts/maintenance.sh側コメント参照）。
 #   終了コード: --json未指定時は**常に0**（既存の「fail-fastしない設計」を
 #     維持＝tests/test-check-drift.sh「exit codeは常に0」の既存契約を壊さない）。
-#     --json指定時のみ、drift_excluding_item4>0でexit 1にする（maintenance.sh
-#     Phase1①の「④を除いたdrift件数>0または実行異常/timeoutならfail-fast」を
-#     終了コードだけでも機械判定できるようにする。呼び出し側はJSON本体でも
-#     二重に確認できる）。
+#     --json指定時のみ、drift_excluding_item4>0でexit 1にする。この
+#     exit code契約自体はcheck-drift.sh単体の仕様として不変（2026-08-10
+#     時点でも維持）。呼び出し元のmaintenance.sh Phase1①は2026-08-10に
+#     fail-fastを廃止し、この終了コード/JSONを「警告として記録し完走する」
+#     ための入力の1つとして読むだけに変わった（[[Decisions/2026-08-10-
+#     round6-rulings]]決定1）。呼び出し側の解釈が変わっただけで、
+#     check-drift.sh自身がここで返す値の意味・exit code契約は変えていない。
 
 set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が止まらないようにする）
 
@@ -162,9 +175,23 @@ for arg in "$@"; do
 done
 
 TOTAL_DRIFT=0
-# ④(vault-public/Preferences差分)専用カウンタ。この項目だけはPhase1①の
-# fail-fast判定から除外する（改訂v2 §1.2）ため、TOTAL_DRIFTとは別に集計する。
+# ④(vault-public/Preferences差分)専用カウンタ。この項目だけはdrift_excluding_
+# item4のexit code契約から除外する（改訂v2 §1.2。旧仕様ではこれがmaintenance.sh
+# Phase1①のfail-fast判定基準だったが、2026-08-10にmaintenance.sh側は
+# fail-fastを廃止し警告記録のみに変更＝[[Decisions/2026-08-10-round6-
+# rulings]]決定1。exit code契約自体・この集計方針は不変）ため、TOTAL_DRIFT
+# とは別に集計する。
 ITEM4_DRIFT=0
+# ②のTOML三分類における未知キー（テンプレにも既知アプリ管理キー一覧にも
+# 無いキー）の件数。driftには数えない設計だが、WARN表示のみだとRUN_DIRの
+# ログ（30日TTL）に埋もれて誰にも読まれないまま消える（工程横断レビュー
+# 指摘Major対応・2026-08-10）。--json出力へunknown_config_keysとして含め、
+# maintenance.sh側でinformationalとしてlast_result_summaryへ拾えるように
+# する（drift/RUN_FULLY_OK/last_resultの判定は変えない＝あくまで可視化
+# 導線の追加）。TOTAL_DRIFT/ITEM4_DRIFTと同じく、検査②のどの分岐（正常/
+# パース失敗/live・テンプレ欠落）でも参照できるようスクリプト冒頭で
+# 初期化しておく。
+UNKNOWN_CONFIG_KEYS=0
 
 log() { echo "[check-drift] $*"; }
 item_drift() { echo "  - $*"; TOTAL_DRIFT=$((TOTAL_DRIFT + 1)); }
@@ -222,73 +249,39 @@ echo "======================================================================"
 echo "② ~/.codex/config.toml（生成物）と repo テンプレのプレースホルダ展開差分"
 echo "======================================================================"
 
-# Codex アプリが自動書き換えする機械管理キー（2026-07-08 実測で確認済み）。
-# repo テンプレ（codex/config.toml）はこれらを意図的に含まない「キュレート版」
-# なので、素朴な比較だと再インストール不要なのに毎回driftを報告してしまう。
-# 比較前に live・テンプレ双方から同じものを取り除いてから比較する
-# （2026-07-08 設計判断：検査②の慢性drift対応）。
+# キー単位のTOML三分類（2026-08-10 denylist方式から移行・
+# [[Decisions/2026-08-10-round6-rulings]] 決定2）。
+# 旧: diff+ignore正規表現denylist方式。Codexアプリのビルド更新のたび新キーが
+# 増えて壊れるいたちごっこだった（7/27破損→8/5 denylist追加で修正→8/10別キーで
+# 再発＝3回実証。旧denylist本体は git log -p 参照）。
+# 新: python3標準tomllib（Python 3.12実測確認済み）でlive・テンプレ双方をTOMLと
+# して解析し、ドット区切りのキーパス単位で3分類する:
+#   (a) テンプレに記載のキー   … 値差分・欠落を通常どおりdrift計上する
+#   (b) テンプレに無いが下記の既知アプリ管理キー一覧に一致するキー … 除外（drift
+#       にしない。将来また未知の新キーが増えても壊れないよう、一覧はベスト
+#       エフォートの初期値であり網羅を目指さない設計）
+#   (c) どちらでもない未知キー … WARN表示のみ（drift件数には数えない。旧denylist
+#       のいたちごっこを構造的に断つための本設計変更の核心＝アプリの新キー
+#       追加を検知はするが、それだけでは中断しない）
+# TOMLとして解析できない場合（live・テンプレいずれか）は「監視不能」を明示し
+# drift計上する（fail-openで偽の健全表示にしない＝既存③GIT-STATUS-CHECK-FAILED・
+# ⑤GH-CHECK-FAILEDと同型の設計思想）。
 #
-# セクション丸ごと除去（ヘッダ行から次のセクションヘッダ直前まで）。
-# 単純な前方一致（例: "[projects"）だと将来 [projects_backup] のような別の
-# セクションまで誤って巻き込みかねないため、TOML table 名の境界
-# （直後が "." のサブテーブル区切り、または "]" の終端）まで見て判定する
-# （Codexレビュー指摘・Major）。bash側は可読性重視でliteralな正規表現文字列を
-# 書き、awkの `-v` 代入は文字列リテラルとしてバックスラッシュを1段階解釈する
-# ため、実際にawk側へ渡したい `\[` `\.` `\]` は `\\[` `\\.` `\\]` と2重に
-# エスケープしている（実測で確認済み・単純escapeだと `\[` → `[` に潰れて
-# 通常の正規表現扱いになり境界チェックが効かなくなる）。
-MACHINE_MANAGED_TOML_SECTION_HEADER_REGEXES=(
-  '^\\[marketplaces(\\.|\\])'  # プラグインのキャッシュパス・last_updated。次回起動時にCodexが再スキャンする
-  '^\\[hooks\\.state(\\.|\\])' # hooks.json の信頼ハッシュキャッシュ（新Macでは初回に一度だけ再確認されるだけ）
-  '^\\[projects(\\.|\\])'      # フォルダごとのtrust_level履歴
-  '^\\[tui(\\.|\\])'           # オンボーディング通知の既読カウンタ等（実質的な設定ではない）
-  '^\\[shell_environment_policy(\\.|\\])' # Codex.appがファイル末尾の機械管理領域（[projects]/[tui]と同じ並び）に自動追記するセクション。ビルド毎に変わるNODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S を含み、同キー群はテンプレ側[mcp_servers.node_repl.env]に既存。2026-08-03のアプリ書換で出現・2026-08-05実測確認
+# 既知アプリ管理キー一覧（旧denylistの初期リスト化）。テーブルプレフィックス
+# （配下の全キーを除外）とリーフキー名（テーブルの深さを問わずキー名一致で
+# 除外）の2種類。
+KNOWN_APP_MANAGED_TOML_TABLE_PREFIXES=(
+  "marketplaces"            # プラグインのキャッシュパス・last_updated。次回起動時にCodexが再スキャンする
+  "hooks.state"              # hooks.json の信頼ハッシュキャッシュ（新Macでは初回に一度だけ再確認されるだけ）
+  "projects"                 # フォルダごとのtrust_level履歴
+  "tui"                      # オンボーディング通知の既読カウンタ等（実質的な設定ではない）
+  "shell_environment_policy" # Codex.appがファイル末尾の機械管理領域に自動追記するセクション。ビルド毎に変わるNODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S等を含む。2026-08-03のアプリ書換で出現・2026-08-05実測確認
 )
-# 単一キー行の除去（セクション化されておらず、値がマシン/バージョン固有）。
-# 行頭からの空白許容つきキー名アンカーにする（Codexレビュー指摘・Major：未アンカーの
-# `NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S` 等は他行への意図しない部分一致を招き、
-# 逆に `^notify = ` は空白の書き方が違う実ファイル（例: `notify=[...]`）を消し漏らす）。
-MACHINE_MANAGED_TOML_KEY_PATTERNS=(
-  '^[[:space:]]*notify[[:space:]]*='                                # Codexアプリがインストール時のパスで自動再設定する。ユーザーがテンプレ上でコメントアウトして無効化していても実ファイルには復活しうる
-  '^[[:space:]]*NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S[[:space:]]*='  # Codex.appの内部ビルドに紐づくハッシュ（アップデートのたび変わる）
-  '^[[:space:]]*BROWSER_USE_CODEX_APP_VERSION[[:space:]]*='            # Codex.appのバージョン文字列（アップデートのたび変わる）
+KNOWN_APP_MANAGED_TOML_LEAF_KEYS=(
+  "notify"                                    # Codexアプリがインストール時のパスで自動再設定する。ユーザーがテンプレ上でコメントアウトして無効化していても実ファイルには復活しうる
+  "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S"  # Codex.appの内部ビルドに紐づくハッシュ（アップデートのたび変わる）
+  "BROWSER_USE_CODEX_APP_VERSION"             # Codex.appのバージョン文字列（アップデートのたび変わる）
 )
-
-# 標準入力のTOMLから機械管理キーを取り除き、標準出力へ出す。
-# 空行の除去はしない。代わりに比較側で `diff -B`（空行だけの差分は無視）を
-# 使い、セクション除去に伴う空行数のズレを吸収する。
-#
-# 既知の限界（Codexレビュー指摘・Major、2026-07-08時点で解消せず受容）:
-# `diff -B` は行単位の判定のため、TOMLの複数行文字列（"""..."""）の内部に
-# ある意味のある空行の増減も「空行だけの差分」として無視してしまいうる。
-# 正しく避けるには複数行文字列の内外をawk側で状態管理する必要があるが、
-# ~/.codex/config.toml はCodexアプリが生成する単純なkey=value/配列/
-# テーブルの集合で複数行文字列は使われていない（本ファイル執筆時点で
-# 現物を確認済み）ため、このdrift検知ツール（個人用・手動確認用）としては
-# 過剰実装と判断し見送る。将来テンプレ側で複数行文字列を使うことになったら
-# 要再検討。
-strip_machine_managed_toml() {
-  local section_regexes_joined
-  section_regexes_joined="$(printf '%s\x1f' "${MACHINE_MANAGED_TOML_SECTION_HEADER_REGEXES[@]}")"
-  local key_pattern_joined
-  key_pattern_joined="$(IFS='|'; echo "${MACHINE_MANAGED_TOML_KEY_PATTERNS[*]}")"
-
-  awk -v regexes="$section_regexes_joined" '
-    BEGIN { n = split(regexes, arr, "\x1f") }
-    {
-      line = $0
-      trimmed = line
-      sub(/^[ \t]+/, "", trimmed)
-      if (trimmed ~ /^\[/) {
-        skip = 0
-        for (i = 1; i <= n; i++) {
-          if (arr[i] != "" && trimmed ~ arr[i]) { skip = 1; break }
-        }
-      }
-      if (!skip) print line
-    }
-  ' | grep -vE "$key_pattern_joined"
-}
 
 CONFIG_TOML_LIVE="$HOME/.codex/config.toml"
 CONFIG_TOML_TEMPLATE="$DIR/codex/config.toml"
@@ -302,16 +295,130 @@ else
   # 正規表現メタ文字に加え、sed区切り文字として使っている # 自体もエスケープする
   # （Codexレビュー指摘・Minor：$HOME に # が含まれる環境で sed コマンドが壊れる）。
   escaped_home=$(printf '%s' "$HOME" | sed -e 's/[.[\*^$()+?{}|\\]/\\&/g' -e 's/#/\\#/g')
-  live_normalized="$(sed "s#${escaped_home}#__AIENV_HOME__#g" "$CONFIG_TOML_LIVE" | strip_machine_managed_toml)"
-  template_content="$(strip_machine_managed_toml < "$CONFIG_TOML_TEMPLATE")"
-  # -B（空行だけの差分は無視）で比較する。セクション除去箇所の前後に残る
-  # 空行の本数がテンプレ側とたまたま合わなくても、それだけでは drift 扱いに
-  # しないため（内容の差分は通常どおり検知する）。
-  if diff -q -B <(printf '%s\n' "$live_normalized") <(printf '%s\n' "$template_content") >/dev/null 2>&1; then
-    log "  -> ✅ プレースホルダ展開を考慮すれば一致しています（機械管理キー除外後）"
+  LIVE_NORMALIZED_TMP="$(mktemp "${TMPDIR:-/tmp}/check-drift-config-toml-live.XXXXXX" 2>/dev/null || true)"
+  if [ -z "$LIVE_NORMALIZED_TMP" ]; then
+    item_drift "[TOML-PARSE-FAILED] 検査②用の一時ファイルを作成できませんでした＝監視不能"
   else
-    item_drift "[DIFF] $CONFIG_TOML_LIVE がテンプレと異なります（手動編集された、またはテンプレ更新後に未再生成の可能性。機械管理キーは除外済み）"
-    diff -B <(printf '%s\n' "$live_normalized") <(printf '%s\n' "$template_content") | head -20 | sed 's/^/    /'
+    sed "s#${escaped_home}#__AIENV_HOME__#g" "$CONFIG_TOML_LIVE" > "$LIVE_NORMALIZED_TMP"
+    table_prefixes_joined="$(printf '%s\x1f' "${KNOWN_APP_MANAGED_TOML_TABLE_PREFIXES[@]}")"
+    leaf_keys_joined="$(printf '%s\x1f' "${KNOWN_APP_MANAGED_TOML_LEAF_KEYS[@]}")"
+    # sys.argv経由でパスを渡す（Codexレビュー指摘Major横展開＝シェル変数の
+    # コード直接埋め込みは値に'が含まれるだけで構文が壊れる。本ファイル
+    # ⑥のstarted_at読み取りと同じ流儀）。分類結果はタブ区切り1行1件でstdoutへ
+    # 出す（値はrepr()経由なので改行・タブ自体はエスケープされ、この
+    # タブ区切りパースを壊さない）。
+    TOML_CLASSIFY_OUT="$(python3 -c "
+import sys, tomllib
+
+def flatten(d, prefix=''):
+    out = {}
+    for k, v in d.items():
+        path = f'{prefix}.{k}' if prefix else k
+        if isinstance(v, dict):
+            if v:
+                out.update(flatten(v, path))
+            else:
+                out[path] = v
+        else:
+            out[path] = v
+    return out
+
+def load(path):
+    with open(path, 'rb') as f:
+        return tomllib.load(f)
+
+table_prefixes = [p for p in sys.argv[3].split(chr(0x1f)) if p]
+leaf_keys = set(k for k in sys.argv[4].split(chr(0x1f)) if k)
+
+def is_app_managed(key):
+    # 注意: このコメント文中ではバッククォート・二重引用符のどちらも一切
+    # 使わない（bashのpython3 -c ...二重引用符文字列の内側にあるため、
+    # どちらの文字も本来閉じるべき境界の途中に現れるとbashの構文解釈が
+    # 壊れる＝本ファイル自身の他所のコメントで既知の落とし穴として明記
+    # 済み。実測でこのdocstring執筆時にも同種のバグ＝バッククォートの
+    # 混入を一度踏んで気付いた。Codex一次レビュー2周目指摘Minor対応で
+    # 二重引用符も除去）。
+    #
+    # leaf_keys側はテーブルの深さを問わずキー名一致で判定する（旧denylistの
+    # MACHINE_MANAGED_TOML_KEY_PATTERNSが行頭正規表現でセクションを問わず
+    # マッチしていたのと同じ挙動をあえて踏襲＝回帰ではない）。既知の限界
+    # （2026-08-10時点で解消せず受容）: このためtable_prefixes配下ではない
+    # 無関係なテーブルに偶然notifyやNODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S
+    # 等と同名のキーがあっても誤って除外されうる。また table_prefixes側は
+    # ドット連結文字列の前方一致のため、TOML仕様上有効な引用ドットキー
+    # （例: projects.foo という文字列そのものを1個のキー名とする書き方）が
+    # テーブル[projects.foo]配下のキーと文字列表現上区別できない。実運用
+    # では~/.codex/config.tomlはCodexアプリの生成物のみを対象にしており、
+    # これらの構造は実際には出現しない（2026-08-10時点で実測確認済み）
+    # ため、個人用drift検知ツールとしては過剰実装と判断し見送る（③の
+    # diff -B同様の既存の受容パターン）。
+    leaf = key.rsplit('.', 1)[-1]
+    if leaf in leaf_keys:
+        return True
+    return any(key == p or key.startswith(p + '.') for p in table_prefixes)
+
+try:
+    live = flatten(load(sys.argv[1]))
+except Exception as e:
+    print(f'PARSE_FAILED\tlive\t{type(e).__name__}: {e}')
+    sys.exit(0)
+
+try:
+    template = flatten(load(sys.argv[2]))
+except Exception as e:
+    print(f'PARSE_FAILED\ttemplate\t{type(e).__name__}: {e}')
+    sys.exit(0)
+
+for key in sorted(set(live) | set(template)):
+    if key in template:
+        if key not in live:
+            print(f'DRIFT\tMISSING-KEY\t{key}\t{template[key]!r}')
+        elif live[key] != template[key]:
+            print(f'DRIFT\tDIFF\t{key}\t{template[key]!r}\t{live[key]!r}')
+    elif not is_app_managed(key):
+        print(f'WARN\t{key}\t{live[key]!r}')
+" "$LIVE_NORMALIZED_TMP" "$CONFIG_TOML_TEMPLATE" "$table_prefixes_joined" "$leaf_keys_joined" 2>&1)"
+    TOML_CLASSIFY_RC=$?
+    rm -f "$LIVE_NORMALIZED_TMP"
+    if [ "$TOML_CLASSIFY_RC" -ne 0 ]; then
+      item_drift "[TOML-PARSE-FAILED] 検査②の実行自体に失敗しました（python3 exit=${TOML_CLASSIFY_RC}）＝監視不能。詳細: ${TOML_CLASSIFY_OUT}"
+    else
+      drift_before=$TOTAL_DRIFT
+      warn_count=0
+      while IFS=$'\t' read -r kind a b c d; do
+        [ -z "$kind" ] && continue
+        case "$kind" in
+          PARSE_FAILED)
+            case "$a" in
+              live) parse_failed_path="$CONFIG_TOML_LIVE" ;;
+              template) parse_failed_path="$CONFIG_TOML_TEMPLATE" ;;
+              *) parse_failed_path="(${a})" ;;
+            esac
+            item_drift "[TOML-PARSE-FAILED] ${parse_failed_path} をTOMLとして解析できませんでした（${b}）＝監視不能"
+            ;;
+          DRIFT)
+            case "$a" in
+              MISSING-KEY)
+                item_drift "[MISSING-KEY] キー '${b}' が ${CONFIG_TOML_LIVE} にありません（テンプレ値: ${c}）"
+                ;;
+              DIFF)
+                item_drift "[DIFF] キー '${b}' の値がテンプレと異なります（テンプレ: ${c} / 実ファイル: ${d}）"
+                ;;
+            esac
+            ;;
+          WARN)
+            warn_count=$((warn_count + 1))
+            UNKNOWN_CONFIG_KEYS=$((UNKNOWN_CONFIG_KEYS + 1))
+            log "  -> ⚠️ WARN: 未知キー '${a}'（値: ${b}）はテンプレにも既知アプリ管理キー一覧にもありません。アプリ更新等で追加された可能性・driftには数えません"
+            ;;
+        esac
+      done <<EOF
+$TOML_CLASSIFY_OUT
+EOF
+      if [ "$TOTAL_DRIFT" -eq "$drift_before" ]; then
+        log "  -> ✅ TOML三分類で一致しています（テンプレ記載キーはすべて一致・既知アプリ管理キー/未知キー${warn_count}件は除外）"
+      fi
+    fi
   fi
 fi
 
@@ -369,11 +476,11 @@ else
   else
     # DIFF-CHECK-FAILEDは「④の内容差分」ではなく「④の検査自体が実行できない」
     # という実行異常であり、改訂v2 §1.2は「④の差分は除外するが実行異常は
-    # fail-fast対象」と明記している（2026-07-16 Codexレビュー指摘Major対応:
-    # 当初item4_drift()にしていたため、diff -rqが失敗するだけでfail-fastを
-    # すり抜けられてしまっていた＝本スクリプト自身の「監視不能も異常」という
-    # 方針とも矛盾していた）。通常のitem_drift()（drift_excluding_item4に
-    # 算入される）を使う。
+    # exit code契約の対象」と明記している（2026-07-16 Codexレビュー指摘Major
+    # 対応: 当初item4_drift()にしていたため、diff -rqが失敗するだけで
+    # drift_excluding_item4>0のexit code契約をすり抜けられてしまっていた
+    # ＝本スクリプト自身の「監視不能も異常」という方針とも矛盾していた）。
+    # 通常のitem_drift()（drift_excluding_item4に算入される）を使う。
     item_drift "[DIFF-CHECK-FAILED] diff -rq ${VAULT_PREFS} ${VP_PREFS} の実行に失敗しました（exit ${diff_rc}。ファイル読み取り不能等の可能性）＝差分の有無を判定できません。確認: diff -rq ${VAULT_PREFS} ${VP_PREFS}"
     printf '%s\n' "$diff_out" | sed 's/^/    /'
   fi
@@ -1078,8 +1185,8 @@ if [ "$JSON_MODE" = "1" ]; then
   # 呼び出し側（maintenance.sh Phase1①）は「stdoutの最終行だけがJSON」という
   # 契約でパースする（ファイル冒頭の使い方コメント参照）。ここまでの人間向け
   # 出力は変更していないため、このJSON行が常にstdoutの最終行になる。
-  printf '{"total_drift": %d, "item4_drift": %d, "drift_excluding_item4": %d}\n' \
-    "$TOTAL_DRIFT" "$ITEM4_DRIFT" "$DRIFT_EXCLUDING_ITEM4"
+  printf '{"total_drift": %d, "item4_drift": %d, "drift_excluding_item4": %d, "unknown_config_keys": %d}\n' \
+    "$TOTAL_DRIFT" "$ITEM4_DRIFT" "$DRIFT_EXCLUDING_ITEM4" "$UNKNOWN_CONFIG_KEYS"
   if [ "$DRIFT_EXCLUDING_ITEM4" -gt 0 ]; then
     exit 1
   fi

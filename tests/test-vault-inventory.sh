@@ -300,6 +300,74 @@ echo "=== 6. 未読ノート検出（§12）: ログが90日以上 → 確定判
   rm -rf "$VAULT_HOME"
 }
 
+echo "=== 6b. retired:trueノートは§9(aliases欠落)・§10(汎用alias)・§12(未読検出・提示回数上位・提示無視率)の検査対象から除外される（[[Decisions/2026-08-10-round6-rulings]]決定3・想起退役則。Codex一次レビュー指摘Major対応: 当初は§12の提示回数上位/無視率ワーストが未読一覧と別集計であることを見落としており、決定文の実例＝生提示263回・Read 0の退役ノートが提示枠を占有し続ける問題そのものを再現できていなかった） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_base_vault "$V"
+  # ログ成熟(90日以上)の基準にするだけの専用ノート（他アサーションと無関係
+  # にするため、以下のretired/control群とは別に用意する。Codex一次レビュー
+  # 指摘対応: 従来はcontrol-no-alias.md自身をログ基準に使っており、
+  # 「aliases欠落の対照群」のはずが実際にはaliasesを持つ矛盾した
+  # フィクスチャになっていた）。
+  write_note "$V" "Knowledge/log-anchor.md" $'date: 2026-01-01\naliases:\n  - log-anchor-alias'
+
+  # §9: aliasesが無い retired ノート。
+  write_note "$V" "Knowledge/retired-no-alias.md" $'date: 2026-01-01\nretired: true'
+  # §10: 汎用語(禁止リスト該当="Claude")のaliasを持つ retired ノート。
+  write_note "$V" "Knowledge/retired-generic-alias.md" \
+    $'date: 2026-01-01\nretired: true\naliases: [Claude]'
+  # §12(提示回数上位・提示無視率): 決定文の実例そのもの＝提示されるだけで
+  # 一度もReadされない retired ノート。
+  write_note "$V" "Knowledge/retired-recalled.md" \
+    $'date: 2026-01-01\nretired: true\naliases: [retired-recalled-alias]'
+
+  # 対照群: retiredではない同型ノート（除外がretired限定であることの確認）。
+  write_note "$V" "Knowledge/control-no-alias.md" $'date: 2026-01-01'
+  write_note "$V" "Knowledge/control-generic-alias.md" \
+    $'date: 2026-01-01\naliases: [Claude]'
+  write_note "$V" "Knowledge/control-recalled.md" \
+    $'date: 2026-01-01\naliases: [control-recalled-alias]'
+
+  LOGDIR="$V/../.claude-logs-retired"
+  mkdir -p "$LOGDIR"
+  # §12を確定判定(log_mature)へ切り替えるため、log-anchor.mdへの記録だけを
+  # 100日前に置く（retired-no-alias.md/control-no-alias.md自身は一度も
+  # 読まれない状態のまま=未読確定リストの検証対象として残す）。
+  printf '%s\tsess1\tKnowledge/log-anchor.md\n' "$(d_ts -100)" > "$LOGDIR/vault-reads.tsv"
+  # retired-recalled.md/control-recalled.mdをそれぞれ3回提示（別セッション・
+  # 直近30日窓内）し、一度もReadしない＝「提示されるだけで一度もReadされない」
+  # 状態を再現する（test 6の recalled-often.md と同じ手法）。
+  {
+    printf '%s\tsessA\tKnowledge/retired-recalled.md\tmatched-key\n' "$(d_ts -20)"
+    printf '%s\tsessB\tKnowledge/retired-recalled.md\tmatched-key\n' "$(d_ts -15)"
+    printf '%s\tsessC\tKnowledge/retired-recalled.md\tmatched-key\n' "$(d_ts -10)"
+    printf '%s\tsessD\tKnowledge/control-recalled.md\tmatched-key\n' "$(d_ts -20)"
+    printf '%s\tsessE\tKnowledge/control-recalled.md\tmatched-key\n' "$(d_ts -15)"
+    printf '%s\tsessF\tKnowledge/control-recalled.md\tmatched-key\n' "$(d_ts -10)"
+  } > "$LOGDIR/vault-recall.tsv"
+
+  out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
+    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
+    cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
+
+  assert_not_contains "retired:trueノートはaliases欠落があっても§9に出ない" "$out" "Knowledge/retired-no-alias.md"
+  assert_not_contains "retired:trueノートは汎用aliasがあっても§10に出ない" "$out" "retired-generic-alias.md\` — alias"
+  assert_not_contains "retired:trueノートは一度も読まれていなくても§12(未読確定リスト)に出ない" "$out" "Knowledge/retired-no-alias.md\`（"
+  assert_not_contains "retired:trueノートは提示回数上位おまけに出ない（決定文の実例そのもの）" "$out" "Knowledge/retired-recalled.md\` — 3回"
+  assert_not_contains "retired:trueノートは提示無視率ワーストにも出ない" "$out" "Knowledge/retired-recalled.md\` — 提示3回中"
+
+  assert_contains "retiredではない対照群はaliases欠落が§9に出る（除外がretired限定である確認）" "$out" "Knowledge/control-no-alias.md"
+  assert_contains "retiredではない対照群は汎用aliasが§10に出る（除外がretired限定である確認）" "$out" "control-generic-alias.md\` — alias \`Claude\`（汎用語(禁止リスト)）"
+  assert_contains "retiredではない対照群は未読確定リストに出る（除外がretired限定である確認）" \
+    "$out" "Knowledge/control-no-alias.md\`（ログ開始以来記録なし）"
+  assert_contains "retiredではない対照群は提示回数上位おまけに出る（除外がretired限定である確認）" "$out" "Knowledge/control-recalled.md\` — 3回"
+  assert_contains "retiredではない対照群は提示無視率ワーストにも出る（除外がretired限定である確認）" \
+    "$out" "Knowledge/control-recalled.md\` — 提示3回中 読まれた率0%"
+
+  rm -rf "$VAULT_HOME"
+}
+
 echo "=== 7. §12: 混在タイムゾーン（naive/aware）・破損ログ行でもクラッシュせず検出する ==="
 {
   VAULT_HOME="$(mktemp -d)"
@@ -1124,7 +1192,7 @@ echo "=== 32. 要確認件数(n_issues): §5個別ファイルのサイズ超過
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
     pass "profile.mdの40行超で要確認件数が0→1に増える（修正前は§5がn_issuesから漏れていた）"
   else
-    fail_case "要確認件数が想定通り増えない(before=$before_n after=$after_n・期待 0→1)"
+    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
   fi
 
   rm -rf "$VAULT_HOME"
@@ -1160,7 +1228,7 @@ echo "=== 33. 要確認件数(n_issues): §5合計サイズ超過（各ファイ
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
     pass "合計サイズ超過のみ(個別超過なし)で要確認件数が0→1に増える"
   else
-    fail_case "要確認件数が想定通り増えない(before=$before_n after=$after_n・期待 0→1)"
+    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
   fi
 
   rm -rf "$VAULT_HOME"
@@ -1191,7 +1259,7 @@ echo "=== 33b. 要確認件数(n_issues): §5合計サイズ超過はbytes側(20
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
     pass "bytes側のみの合計超過で要確認件数が0→1に増える"
   else
-    fail_case "要確認件数が想定通り増えない(before=$before_n after=$after_n・期待 0→1)"
+    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
   fi
 
   rm -rf "$VAULT_HOME"
@@ -1227,7 +1295,7 @@ echo "=== 33c. 要確認件数(n_issues): §5個別超過と合計超過が同�
   if [[ "$before_n" -eq 0 && "$after_n" -eq 4 ]]; then
     pass "個別超過3件＋合計超過1件が同時に加算され要確認件数が0→4になる（or統合されていないことを確認）"
   else
-    fail_case "要確認件数が想定通り増えない(before=$before_n after=$after_n・期待 0→4)"
+    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→4)"
   fi
 
   rm -rf "$VAULT_HOME"
@@ -1247,7 +1315,7 @@ echo "=== 34. 要確認件数(n_issues): §8 Fragments capture停止疑いが算
   if [[ "$after_n" -eq 1 ]]; then
     pass "Fragments capture停止のみで要確認件数が1件になる（修正前は§8がn_issuesから漏れていた）"
   else
-    fail_case "要確認件数が想定通りにならない(after=$after_n・期待 1)"
+    fail_case "要確認件数が想定通りにならない(after=${after_n}・期待 1)"
   fi
 
   rm -rf "$VAULT_HOME"
@@ -1273,7 +1341,7 @@ review_by: $(d_date 7)"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
     pass "review_soon 1件で要確認件数が0→1に増える（修正前はreview_overdueのみ算入・review_soonが漏れていた）"
   else
-    fail_case "要確認件数が想定通り増えない(before=$before_n after=$after_n・期待 0→1)"
+    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
   fi
 
   rm -rf "$VAULT_HOME"
@@ -1304,7 +1372,7 @@ echo "=== 36. 要確認件数(n_issues): §12 session_idが空のRead/提示行�
   if [[ "$before_n" -eq 0 && "$after_n" -eq 2 ]]; then
     pass "session_idが空のRead行・提示行それぞれ1件で要確認件数が0→2に増える（修正前はいずれもn_issuesから漏れていた）"
   else
-    fail_case "要確認件数が想定通り増えない(before=$before_n after=$after_n・期待 0→2)"
+    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→2)"
   fi
 
   rm -rf "$VAULT_HOME"

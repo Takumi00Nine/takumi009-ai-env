@@ -223,31 +223,70 @@ compute_health_lines() {
       fi
     fi
 
+    # 注意（2026-08-10 実測発見・工程横断レビュー対応中に判明）: このmacOS
+    # 標準bash（3.2.57・/bin/bash）は、二重引用符文字列の中で `$VARNAME`
+    # （波括弧無し）の直後に全角文字（例: `）`）が続くと、変数名の切れ目を
+    # 誤認識し値が化ける実害がある（`$VAR）` → 空/文字化けした展開。
+    # `${VAR}）`のように波括弧で明示的に閉じれば発生しない）。本関数の
+    # $MAINTENANCE_LAST_RUN_FILE を含む行は必ず`${MAINTENANCE_LAST_RUN_FILE}）`
+    # の形（波括弧付き）で書くこと。既存の各行も本対応でこの形へ揃えた。
     if { [ -z "$started_at" ] && [ -z "$last_success_at" ]; } \
        || [ "$started_broken" -eq 1 ] || [ "$success_broken" -eq 1 ]; then
       # (b) ファイル不在／JSON破損／両フィールドとも記録が無い、または
       # いずれかのフィールドに値は有るが解析不能/未来日時＝状態記録が
       # 部分的にでも信用できない。
-      lines="${lines}- ⚠️ 週次メンテの状態記録が無い/壊れています（要確認。last-run.json: $MAINTENANCE_LAST_RUN_FILE）
+      lines="${lines}- ⚠️ 週次メンテの状態記録が無い/壊れています（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
 "
     else
       [ -n "$started_epoch" ] && started_age=$(( (now_epoch - started_epoch) / 86400 ))
       [ -n "$success_epoch" ] && success_age=$(( (now_epoch - success_epoch) / 86400 ))
       if [ -n "$started_epoch" ] && [ "$started_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
-        lines="${lines}- ⚠️ 週次メンテが${started_age}日動いていません（要確認。last-run.json: $MAINTENANCE_LAST_RUN_FILE）
+        lines="${lines}- ⚠️ 週次メンテが${started_age}日動いていません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
 "
       elif [ -z "$started_epoch" ] && [ -n "$success_epoch" ] && [ "$success_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
         # started_atが未設定（キー自体が無い）の場合のみ、従来どおり
         # last_success_atへフォールバックする（started_atの値が壊れている
         # ケースは上のstarted_broken判定で既に(b)枝へ拾われている）。
-        lines="${lines}- ⚠️ 週次メンテが${success_age}日動いていません（要確認。last-run.json: $MAINTENANCE_LAST_RUN_FILE）
+        lines="${lines}- ⚠️ 週次メンテが${success_age}日動いていません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
 "
       elif [ -n "$started_epoch" ] && [ -n "$success_epoch" ] && [ "$success_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
         # (a) started_atは新しい(=起動はしている)がlast_success_atだけが
         # 古い＝起動するが成功し続けていない疑い。
-        lines="${lines}- ⚠️ 週次メンテが起動はするが${success_age}日成功していません（要確認。last-run.json: $MAINTENANCE_LAST_RUN_FILE）
+        lines="${lines}- ⚠️ 週次メンテが起動はするが${success_age}日成功していません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
 "
       fi
+    fi
+  fi
+
+  # last_result（旧D4・[[Decisions/2026-08-10-round6-rulings]]決定1のセット
+  # 条件「警告・失敗の可視化」）: 前回の週次メンテ実行結果がwarn/failなら
+  # ⚠️1行を追加する。上のstarted_at/last_success_at経過日数ベースの死活
+  # 監視とは別軸＝「動いてはいるが直近1回で警告/失敗があった」を、
+  # started_at自体は新しいままの間も翌セッション冒頭で必ず拾えるように
+  # する（正本＝[[Decisions/2026-08-05-bootstrap-health-warning-report]]
+  # 「検知は機能していたが誰も拾わず放置された」への対処＝既存ヘルス行の
+  # 方式に合わせる）。last_resultはmaintenance.sh側でsuccess/warn/failの
+  # 3値のみを書く契約（scripts/maintenance.sh参照）。それ以外の値・キー
+  # 欠落・ファイル不在・jq不在はfail-openで無視する（この行が出ないだけで、
+  # 上記①〜④の判定には影響しない）。
+  #
+  # success＋last_result_summary非空はℹ️（情報提供のみ・⚠️とは区別）で表示
+  # する（2026-08-10 工程横断レビュー指摘Major対応）。用途＝②のTOML三分類で
+  # 検出された未知config.tomlキーのように、driftでも異常でもないが
+  # RUN_DIRログ（30日TTL）に埋もれさせず翌セッションまでは見えるように
+  # したい情報（scripts/maintenance.shのadd_info_note()参照）。last_result
+  # 自体をwarnへ昇格させない（本人裁定）ため、⚠️と混同されないよう記号・
+  # 文言を明確に分ける。
+  if [ -f "$MAINTENANCE_LAST_RUN_FILE" ]; then
+    local last_result last_result_summary
+    last_result="$(jq -r '.last_result // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
+    last_result_summary="$(jq -r '.last_result_summary // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
+    if [ "$last_result" = "warn" ] || [ "$last_result" = "fail" ]; then
+      lines="${lines}- ⚠️ 前回の週次メンテ結果: ${last_result}${last_result_summary:+（${last_result_summary}）}（last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
+"
+    elif [ "$last_result" = "success" ] && [ -n "$last_result_summary" ]; then
+      lines="${lines}- ℹ️ 前回の週次メンテ結果: success（${last_result_summary}）（last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
+"
     fi
   fi
   fi  # machine_role != sub（サブ機では④の全判定を無警告でスキップ）

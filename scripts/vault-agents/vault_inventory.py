@@ -198,6 +198,24 @@ def status_is_active(status):
     return False
 
 
+def is_retired(fm):
+    """frontmatterの`retired: true`（想起退役・[[Decisions/2026-08-10-round6-
+    rulings]]決定3）を判定する。§9(aliases欠落)・§10(汎用/短すぎるalias)・
+    §12(未読検出)の検査対象から除外するために使う（本文・ノート自体は温存し、
+    棚卸しの検査対象からだけ外す＝運用則のSSOT＝[[Preferences/vault-operation]]）。
+    YAMLの`retired: true`はPyYAMLでbool Trueとして読める想定だが、手動編集で
+    文字列"true"になっていても拾えるよう緩く判定する（fail-openで退役ノートを
+    誤って検査対象に残す方向へは倒さない。他方`retired: false`・値なし・
+    キー自体が無い場合はFalse＝従来どおり検査対象のまま）。
+    """
+    v = fm.get("retired")
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() == "true"
+    return False
+
+
 # normalize_aliases・load_generic_aliasesはvault_lib.pyへ抽出済み（2026-07-16簡素化）。
 
 
@@ -552,8 +570,10 @@ def main():
             if active and age is not None and age > STALE_PROJECT_DAYS:
                 stalled.append((rel, fm["status"], ref, age))
 
-        # 9./10. aliases 欠落・汎用/短すぎるalias（Knowledge/Preferences/Decisions/Projects/Personal・README除く）
-        if rel.startswith(ALIAS_CHECK_DIRS) and not rel.endswith("README.md"):
+        # 9./10. aliases 欠落・汎用/短すぎるalias（Knowledge/Preferences/Decisions/Projects/Personal・
+        # README除く・retired:trueノートも除外＝想起退役時にaliasesを意図的に
+        # 除去する運用[[Decisions/2026-08-10-round6-rulings]]決定3のため）
+        if rel.startswith(ALIAS_CHECK_DIRS) and not rel.endswith("README.md") and not is_retired(fm):
             aliases = vault_lib.normalize_aliases(fm.get("aliases"))
             if not aliases:
                 missing_aliases.append(rel)
@@ -637,8 +657,11 @@ def main():
     # log_start/log_end/成熟判定は「今も存在する検査対象ノート」への reads 記録だけで
     # 見る。rename/delete/move済みの古いパスへの記録がlog_startを押し下げ、実際には
     # 観測期間が足りないのに成熟判定してしまう無言fail-openを防ぐ（Codexレビュー指摘）。
+    # retired:trueノートは§12の検査対象外（[[Decisions/2026-08-10-round6-
+    # rulings]]決定3）のため、そのreads記録もここでの成熟判定から除く。
     tracked_reads_rows = [(ts, rel) for ts, _sid, rel in reads_rows
-                           if rel.startswith(ALIAS_CHECK_DIRS) and not rel.endswith("README.md") and rel in notes]
+                           if rel.startswith(ALIAS_CHECK_DIRS) and not rel.endswith("README.md")
+                           and rel in notes and not is_retired(notes[rel][0])]
     log_start = min((ts for ts, _ in tracked_reads_rows), default=None)
     log_age_days = (today - log_start.date()).days if log_start else None
     log_mature = log_age_days is not None and log_age_days >= UNREAD_THRESHOLD_DAYS
@@ -668,7 +691,12 @@ def main():
 
     unread_confirmed, unread_watch = [], []
     if log_start is not None:
-        for rel in sorted(r for r in notes if r.startswith(ALIAS_CHECK_DIRS) and not r.endswith("README.md")):
+        # retired:trueノートは§12の検査対象外（[[Decisions/2026-08-10-
+        # round6-rulings]]決定3。撤去済みシステムの解説ノートが「未読」として
+        # 提示枠を占有し続ける問題への対処＝適用済み実例: Knowledge/ollama-
+        # embed-pitfalls）。
+        for rel in sorted(r for r in notes if r.startswith(ALIAS_CHECK_DIRS) and not r.endswith("README.md")
+                           and not is_retired(notes[r][0])):
             ts = last_seen.get(rel)
             age = (today - ts.date()).days if ts else None
             if age is not None and age < UNREAD_THRESHOLD_DAYS:
@@ -678,8 +706,14 @@ def main():
 
     # 提示回数上位・提示無視率ワースト集計はheartbeat行（実ノートではない）を
     # 除外する（HEARTBEAT_MARKER定義のコメント参照）。recall_rows自体（死活判定に
-    # 使う）はheartbeatを含んだまま残す。
-    recall_note_rows = [r for r in recall_rows if r[2] != HEARTBEAT_MARKER]
+    # 使う）はheartbeatを含んだまま残す。retired:trueノートの提示行も同じ場所で
+    # 除外する（[[Decisions/2026-08-10-round6-rulings]]決定3。§12は「未読ノート
+    # 検出＋提示無視率」の1セクションで、退役ノートが提示枠を占有し続けた実例
+    # ＝Knowledge/ollama-embed-pitfalls（撤去後も生提示263回・Read 0＝提示枠5件の
+    # 占有源1位）自体が提示回数上位/無視率ワーストの症状だったため、未読一覧
+    # だけでなくこちらも対象にする＝Codex一次レビュー指摘Major対応）。
+    retired_rels = {rel for rel, (fm, _b, _t) in notes.items() if is_retired(fm)}
+    recall_note_rows = [r for r in recall_rows if r[2] != HEARTBEAT_MARKER and r[2] not in retired_rels]
     recall_top = Counter(rel for _, _sid, rel in recall_note_rows).most_common(RECALL_TOP_N)
     dismissal_rows, dismissal_total_all, dismissal_windowed, dismissal_excluded_pre_read = \
         compute_dismissal_rates(recall_note_rows, reads_rows, today)

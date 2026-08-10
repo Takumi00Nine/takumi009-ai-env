@@ -368,6 +368,12 @@ echo "=== 7h. 外部脳ヘルス行④: last-run.jsonのstarted_atが8日以上�
 
   ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "10日動いていない旨の死活警告が出る" "$ctx" "⚠️ 週次メンテが10日動いていません"
+  # last-run.jsonのフルパスが末尾に文字化けせず出る（2026-08-10実測発見:
+  # macOS標準bash 3.2は`$VAR）`（波括弧無し・直後に全角文字）で変数展開が
+  # 化ける実害があり、本行はその回帰確認。詳細はclaude/hooks/bootstrap-
+  # vault.sh側の同トピックのコメント参照）。
+  assert_contains "last-run.jsonのフルパスが文字化けせず出る（bash 3.2の\$VAR）文字化けバグの回帰確認）" \
+    "$ctx" "last-run.json: ${LAST_RUN_FILE}）"
 
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
 }
@@ -618,6 +624,88 @@ echo "=== 7m4. 外部脳ヘルス行④: machine-roleマーカーの中身が「
   assert_contains "marker中身が\"s u b\"(内部空白)では\"sub\"と誤認されず従来どおり警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
 
   rm -rf "$VAULT_DIR" "$ROLE_DIR"
+}
+
+echo "=== 7n. 外部脳ヘルス行: last_result=warnなら警告要旨つきで⚠️1行が出る（旧D4・2026-08-10・[[Decisions/2026-08-10-round6-rulings]]決定1のセット条件） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  LAST_RUN_DIR="$(mktemp -d)"
+  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
+  # started_atは直近(死活警告が別途出て本テストの主眼と混同しないように)。
+  printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "warn", "last_result_summary": "Phase1check-drift.shがdriftを検知しました"}' \
+    "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  assert_contains "前回結果warnの⚠️行が出る" "$ctx" "⚠️ 前回の週次メンテ結果: warn"
+  assert_contains "警告要旨(last_result_summary)が併記される" "$ctx" "check-drift.shがdriftを検知しました"
+  assert_not_contains "死活経過日数の警告(④の他分岐)は誤って出ない" "$ctx" "週次メンテが"
+
+  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
+}
+
+echo "=== 7n2. 外部脳ヘルス行: last_result=failなら⚠️1行が出る ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  LAST_RUN_DIR="$(mktemp -d)"
+  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
+  printf '{"started_at": "%s", "last_result": "fail", "last_result_summary": "backup-vault.sh failed"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  assert_contains "前回結果failの⚠️行が出る" "$ctx" "⚠️ 前回の週次メンテ結果: fail"
+  assert_contains "警告要旨が併記される" "$ctx" "backup-vault.sh failed"
+
+  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
+}
+
+echo "=== 7n3. 外部脳ヘルス行: last_result=successなら⚠️行は出ない ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  LAST_RUN_DIR="$(mktemp -d)"
+  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
+  printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "success", "last_result_summary": ""}' \
+    "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  assert_not_contains "successでは前回結果の⚠️行は出ない" "$ctx" "前回の週次メンテ結果"
+
+  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
+}
+
+echo "=== 7n4. 外部脳ヘルス行: last_resultキー自体が無い（旧last-run.json・移行前）でもクラッシュせず⚠️行は出ない(fail-open) ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  LAST_RUN_DIR="$(mktemp -d)"
+  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
+  printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  assert_not_contains "last_resultキー欠落では前回結果の⚠️行は出ない(fail-open)" "$ctx" "前回の週次メンテ結果"
+  assert_contains "本文自体は壊れず末尾まで出る" "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
+
+  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
+}
+
+echo "=== 7n5. 外部脳ヘルス行: last_result=successかつlast_result_summaryが非空ならℹ️1行が出る（⚠️ではない・工程横断レビュー指摘Major対応・2026-08-10。用途例＝check-drift②の未知config.tomlキー検出） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  LAST_RUN_DIR="$(mktemp -d)"
+  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
+  printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "success", "last_result_summary": "Phase1check-drift.sh2が未知キーを3件検出しました"}' \
+    "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
+
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  assert_contains "ℹ️1行が出る" "$ctx" "ℹ️ 前回の週次メンテ結果: success"
+  assert_contains "summaryの中身が併記される" "$ctx" "未知キーを3件検出しました"
+  assert_not_contains "⚠️（warn/fail用の記号）は使われない" "$ctx" "⚠️ 前回の週次メンテ結果"
+  assert_contains "last-run.jsonのフルパスが文字化けせず出る（bash 3.2の\$VAR）文字化けバグの回帰確認）" \
+    "$ctx" "last-run.json: ${LAST_RUN_FILE}）"
+
+  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
 }
 
 echo "=== 8. 外部脳ヘルス行: 棚卸し・ログとも無いが、last-run.json不在の死活警告(b)は出る（2周目ハードニングで完全沈黙は撤回） ==="

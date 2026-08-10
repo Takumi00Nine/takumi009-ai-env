@@ -75,7 +75,17 @@ setup_fake_repo() {
 #!/usr/bin/env bash
 echo "[fake-check-drift] human readable line"
 if [[ -n "${FAKE_DRIFT_SLEEP:-}" ]]; then sleep "$FAKE_DRIFT_SLEEP"; fi
-echo "${FAKE_DRIFT_JSON:-{\"total_drift\": 0, \"item4_drift\": 0, \"drift_excluding_item4\": 0}}"
+# デフォルトJSONは変数に切り出してから${FAKE_DRIFT_JSON:-...}へ渡す（2026-08-10
+# 工程横断レビュー対応中に発見・修正: `${VAR:-{"a": 0}}`のようにデフォルト値
+# 本体へ直接リテラルの{}を書くと、bashのパラメータ展開パーサは`:-`後で最初に
+# 現れる非エスケープの`}`を展開の終端とみなす＝デフォルトJSON内の最初の`}`で
+# 展開が終わってしまい、直後の`}`が展開の外側の生のリテラル文字として残る。
+# FAKE_DRIFT_JSONを明示的に指定した呼び出し（本ファイル多数のテストが使用）
+# では、そのJSON文字列の直後に常に余分な`}`が1つ付与されてしまい、json.loads()
+# で構文エラーになる（実測発見。それまでのテストはこの出力をjson.loads()せず
+# 部分文字列一致でしか見ていなかったため症状が顕在化していなかった）。
+FAKE_DRIFT_DEFAULT_JSON='{"total_drift": 0, "item4_drift": 0, "drift_excluding_item4": 0, "unknown_config_keys": 0}'
+echo "${FAKE_DRIFT_JSON:-$FAKE_DRIFT_DEFAULT_JSON}"
 exit "${FAKE_DRIFT_EXIT:-0}"
 FAKEEOF
   chmod +x "$repo/scripts/check-drift.sh"
@@ -254,7 +264,9 @@ echo "=== 1. 正常系: 全Phase成功・anomalyなし・last_success_at更新�
   assert_file_exists "latest symlinkの実体が存在する" "$RUN_DIR/apply-status.json"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
   assert_contains "started_atが記録される" "$LAST_RUN" "started_at"
-  assert_contains "last_success_atが記録される（完全正常終了）" "$LAST_RUN" "last_success_at"
+  assert_contains "last_success_atが記録される（完全正常終了）" "$LAST_RUN" "last_success_at\":"
+  assert_contains "last_result=successが記録される（旧D4・2026-08-10）" "$LAST_RUN" "\"last_result\": \"success\""
+  assert_contains "last_result_summaryは空文字列" "$LAST_RUN" "\"last_result_summary\": \"\""
   assert_file_not_exists "異常時のみ通知＝正常時は通知されない" "$OSASCRIPT_LOG"
   FRAG_FILE="$(find "$VAULT/Fragments" -name '20*.md' | head -1)"
   assert_file_exists "Fragments当日ファイルが作成される" "$FRAG_FILE"
@@ -282,7 +294,9 @@ echo "=== 2. Phase0: backup-vault.shがerrorならPhase1以降へ進まず異常
   assert_file_not_exists "last-run.jsonにlast_success_atは記録されない（started_atのみ）" "$LOG_ROOT/last-run.json.nonexistent-marker"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json" 2>/dev/null || echo '{}')"
   assert_contains "started_atは記録される（自己ロックアウト対策）" "$LAST_RUN" "started_at"
-  assert_not_contains "last_success_atは記録されない" "$LAST_RUN" "last_success_at"
+  assert_not_contains "last_success_atは記録されない" "$LAST_RUN" "last_success_at\":"
+  assert_contains "last_result=failが記録される（Phase0の直前スナップショット失敗・旧D4・2026-08-10）" "$LAST_RUN" "\"last_result\": \"fail\""
+  assert_contains "last_result_summaryに直前スナップショット異常の要旨が入る" "$LAST_RUN" "直前スナップショット"
 }
 
 echo "=== 3. Phase0: export再試行 - ai-env repoがdirtyならbusyスキップしPhase1へ進む ==="
@@ -315,10 +329,10 @@ echo "=== 4. Phase0: export再試行が失敗してもPhase1以降は続行し�
   # （fragments_log.py/decision_propagation.pyの--sinceが次回も正しく
   # 巻き戻れるようにする保守的な方針＝「完全正常終了時のみ」を文字どおり
   # 満たす）。
-  assert_not_contains "last_success_atは更新されない（export失敗もRUN_FULLY_OKを崩す）" "$LAST_RUN" "last_success_at"
+  assert_not_contains "last_success_atは更新されない（export失敗もRUN_FULLY_OKを崩す）" "$LAST_RUN" "last_success_at\":"
 }
 
-echo "=== 5. Phase1①: check-drift.shが実drift検出(rc=1)ならfail-fastしPhase2は起動されない ==="
+echo "=== 5. Phase1①: check-drift.shが実drift検出(rc=1)でも警告として記録し完走する（fail-fast廃止・2026-08-10・[[Decisions/2026-08-10-round6-rulings]]決定1） ==="
 {
   T="$WORK_ROOT/t5"; mkdir -p "$T"
   setup_test_env "$T"
@@ -326,34 +340,109 @@ echo "=== 5. Phase1①: check-drift.shが実drift検出(rc=1)ならfail-fastしP
   rc=0
   FAKE_DRIFT_EXIT=1 FAKE_DRIFT_JSON='{"total_drift": 3, "item4_drift": 0, "drift_excluding_item4": 3}' \
     run_maintenance || rc=$?
-  assert_eq "exit 1" "1" "$rc"
-  assert_file_not_exists "maintenance_apply.pyは起動されない（Phase2未到達）" "$APPLY_ARGV_LOG"
-  assert_file_exists "異常通知される" "$OSASCRIPT_LOG"
+  assert_eq "exit 0（fail-fastしない）" "0" "$rc"
+  assert_file_exists "maintenance_apply.pyは起動される（Phase2まで完走）" "$APPLY_ARGV_LOG"
+  assert_file_exists "異常通知される（警告として記録）" "$OSASCRIPT_LOG"
+  assert_contains "通知内容にcheck-driftが含まれる" "$(cat "$OSASCRIPT_LOG")" "check-drift"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
-  assert_not_contains "last_success_atは更新されない" "$LAST_RUN" "last_success_at"
+  assert_not_contains "last_success_atは更新されない（警告も1件の異常として計上）" "$LAST_RUN" "last_success_at\":"
+  assert_contains "last_result=warnが記録される（完走はしたが異常あり・旧D4・2026-08-10）" "$LAST_RUN" "\"last_result\": \"warn\""
+  assert_contains "last_result_summaryにcheck-driftの警告要旨が入る" "$LAST_RUN" "check-drift"
 }
 
-echo "=== 6. Phase1①: check-drift.shの実行異常(rc>=2)もfail-fastする ==="
+echo "=== 6. Phase1①: check-drift.shの実行異常(rc>=2)も警告として記録し完走する（fail-fast廃止） ==="
 {
   T="$WORK_ROOT/t6"; mkdir -p "$T"
   setup_test_env "$T"
   LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
   rc=0
   FAKE_DRIFT_EXIT=2 run_maintenance || rc=$?
-  assert_eq "exit 1" "1" "$rc"
-  assert_file_not_exists "Phase2は起動されない" "$APPLY_ARGV_LOG"
+  assert_eq "exit 0（fail-fastしない）" "0" "$rc"
+  assert_file_exists "Phase2は起動される" "$APPLY_ARGV_LOG"
+  assert_file_exists "異常通知される" "$OSASCRIPT_LOG"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
+  assert_contains "last_result=warnが記録される（実行異常時も同様・旧D4）" "$LAST_RUN" "\"last_result\": \"warn\""
 }
 
-echo "=== 7. Phase1①: check-drift.shのtimeoutもfail-fastする ==="
+echo "=== 7. Phase1①: check-drift.shのtimeoutも警告として記録し完走する（fail-fast廃止） ==="
 {
   T="$WORK_ROOT/t7"; mkdir -p "$T"
   setup_test_env "$T"
   LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
   rc=0
   FAKE_DRIFT_SLEEP=5 run_maintenance || rc=$?
-  assert_eq "exit 1" "1" "$rc"
-  assert_file_not_exists "Phase2は起動されない" "$APPLY_ARGV_LOG"
+  assert_eq "exit 0（fail-fastしない）" "0" "$rc"
+  assert_file_exists "Phase2は起動される" "$APPLY_ARGV_LOG"
   assert_contains "timeoutとして記録される" "$(cat "$LAST_STDOUT" "$LAST_STDERR" 2>/dev/null)" "timeout"
+  assert_file_exists "異常通知される" "$OSASCRIPT_LOG"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
+  assert_contains "last_result=warnが記録される（timeout時も同様・旧D4）" "$LAST_RUN" "\"last_result\": \"warn\""
+}
+
+echo "=== 7c. Phase1①: check-drift.sh②が未知config.tomlキーを検出（unknown_config_keys>0・drift自体は0件）してもlast_result=successのまま維持し、summaryにinformationalとして記録する（工程横断レビュー指摘Major対応・2026-08-10） ==="
+{
+  T="$WORK_ROOT/t7c"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  # drift_excluding_item4=0（fail-fast/警告化のトリガーにはならない）だが
+  # unknown_config_keysが3件ある状態を模擬する。
+  FAKE_DRIFT_JSON='{"total_drift": 0, "item4_drift": 0, "drift_excluding_item4": 0, "unknown_config_keys": 3}' \
+    run_maintenance || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  assert_file_not_exists "異常通知はされない（未知キーはwarnへ昇格させない・本人裁定）" "$OSASCRIPT_LOG"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
+  assert_contains "last_result=successのまま（昇格しない）" "$LAST_RUN" "\"last_result\": \"success\""
+  assert_contains "last_success_atは更新される（完全正常終了のまま）" "$LAST_RUN" "last_success_at\":"
+  assert_contains "last_result_summaryに未知キー3件のinformationalが記録される" "$LAST_RUN" "未知キーを3件検出"
+}
+
+echo "=== 7d. Phase1①: check-drift.sh②に未知config.tomlキーが無い(unknown_config_keys=0)場合はsummaryに何も追記されない ==="
+{
+  T="$WORK_ROOT/t7d"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  FAKE_DRIFT_JSON='{"total_drift": 0, "item4_drift": 0, "drift_excluding_item4": 0, "unknown_config_keys": 0}' \
+    run_maintenance || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
+  assert_contains "last_result=success" "$LAST_RUN" "\"last_result\": \"success\""
+  assert_contains "last_result_summaryは空文字列のまま" "$LAST_RUN" "\"last_result_summary\": \"\""
+  assert_not_contains "未知キーのinformationalは出ない" "$LAST_RUN" "未知キー"
+}
+
+echo "=== 7e. Phase1①: check-drift.sh②のJSONにunknown_config_keysキー自体が無い（旧バージョン混在等）場合もクラッシュせずfail-openで無視する ==="
+{
+  T="$WORK_ROOT/t7e"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  FAKE_DRIFT_JSON='{"total_drift": 0, "item4_drift": 0, "drift_excluding_item4": 0}' \
+    run_maintenance || rc=$?
+  assert_eq "exit 0（キー欠落でもクラッシュしない）" "0" "$rc"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
+  assert_contains "last_result=success" "$LAST_RUN" "\"last_result\": \"success\""
+  assert_contains "last_result_summaryは空文字列のまま" "$LAST_RUN" "\"last_result_summary\": \"\""
+}
+
+echo "=== 7f. Phase1①: 別種のanomaly(Phase0 export再試行失敗)と未知config.tomlキー(informational)が同じ週次実行で同時に起きても、last_result=warnとなりsummaryに両方が残る（Codex一次レビュー2周目指摘Major対応: if/elifで分岐していたためINFO_NOTES側が丸ごと捨てられ、可視化導線がこのケースだけ再発していた。異常源はcheck-drift自身以外＝export再試行失敗を使う: check-drift由来のanomalyメッセージは生JSON全文を含み単体で200文字summaryをほぼ使い切るため、combineの構造自体を検証する狙い撃ちには不向き） ==="
+{
+  T="$WORK_ROOT/t7f"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  # drift自体はOK 0（check-drift由来のanomalyは起きない）だが、Phase0の
+  # export再試行失敗で別のanomalyが1件立つ。同時にunknown_config_keys>0で
+  # informationalも1件立つ＝異なる発生源のanomalyとinfo note共存パターン。
+  FAKE_EXPORT_EXIT=1 \
+    FAKE_DRIFT_JSON='{"total_drift": 0, "item4_drift": 0, "drift_excluding_item4": 0, "unknown_config_keys": 2}' \
+    run_maintenance || rc=$?
+  assert_eq "exit 0（fail-fastしない）" "0" "$rc"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
+  assert_contains "last_result=warn（anomalyがある以上success/infoへは降格しない）" "$LAST_RUN" "\"last_result\": \"warn\""
+  assert_contains "summaryにexport再試行失敗の異常要旨が残る" "$LAST_RUN" "export"
+  assert_contains "summaryに未知キー2件のinformationalも残る（従来はここが欠落していた）" "$LAST_RUN" "未知キーを2件検出"
 }
 
 echo "=== 8. Phase1②: fragments_log.py失敗時はPhase2へ--fragments-jsonを渡さず継続する ==="
@@ -368,7 +457,7 @@ echo "=== 8. Phase1②: fragments_log.py失敗時はPhase2へ--fragments-jsonを
   assert_not_contains "--fragments-jsonは渡されない" "$(cat "$APPLY_ARGV_LOG")" "--fragments-json"
   assert_file_exists "異常が記録され通知される" "$OSASCRIPT_LOG"
   assert_not_contains "last_success_atは更新されない（隔離継続した異常もRUN_FULLY_OKを崩す）" \
-    "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+    "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
 }
 
 echo "=== 8b. Phase1②: fragments_log.pyがexit 0でもscan_error_count>0（Fragmentsファイル読取失敗）ならanomaly化しlast_success_atを進めない（2周目・全体構成再レビュー後の小修正） ==="
@@ -386,7 +475,7 @@ echo "=== 8b. Phase1②: fragments_log.pyがexit 0でもscan_error_count>0（Fra
   assert_file_exists "異常が記録され通知される" "$OSASCRIPT_LOG"
   assert_contains "通知内容にscan_error_countの件数が含まれる" "$(cat "$OSASCRIPT_LOG")" "読み取れなかったFragmentsファイルが2件"
   assert_not_contains "last_success_atは更新されない（翌週同じ窓を再走査させるため）" \
-    "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+    "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
 }
 
 echo "=== 8c. Phase1②: fragments_log.pyがscan_error_count=0（正常）なら従来どおりanomaly化しない ==="
@@ -400,7 +489,7 @@ echo "=== 8c. Phase1②: fragments_log.pyがscan_error_count=0（正常）なら
   assert_eq "exit 0" "0" "$rc"
   assert_file_not_exists "異常が無いため通知は送られない" "$OSASCRIPT_LOG"
   assert_contains "last_success_atは更新される（完全正常終了）" \
-    "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+    "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
 }
 
 echo "=== 8d. Phase1②: fragments_log.pyがexit 0でも出力が壊れたJSON（契約違反）ならscan_error_countを確定できないためanomaly化し--fragments-jsonも渡さない（0件へfail-openで丸めない・Codex一次レビュー指摘Major対応） ==="
@@ -416,7 +505,7 @@ echo "=== 8d. Phase1②: fragments_log.pyがexit 0でも出力が壊れたJSON�
     "$(cat "$APPLY_ARGV_LOG")" "--fragments-json"
   assert_file_exists "異常が記録され通知される" "$OSASCRIPT_LOG"
   assert_contains "通知内容に契約違反/JSON破損の疑いが含まれる" "$(cat "$OSASCRIPT_LOG")" "scan_error_countを取得できませんでした"
-  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
 }
 
 echo "=== 8e. Phase1②: fragments_log.pyのJSONにscan_error_countキー自体が無い（契約違反）場合も0件と誤認せずanomaly化する ==="
@@ -431,7 +520,7 @@ echo "=== 8e. Phase1②: fragments_log.pyのJSONにscan_error_countキー自体�
   assert_not_contains "キー欠落のため--fragments-jsonは渡されない" \
     "$(cat "$APPLY_ARGV_LOG")" "--fragments-json"
   assert_file_exists "異常が記録され通知される" "$OSASCRIPT_LOG"
-  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
 }
 
 echo "=== 8f. Phase1②: scan_error_countが非負整数でない（bool/文字列/負数）契約違反も0件と誤認せずanomaly化する ==="
@@ -447,7 +536,7 @@ echo "=== 8f. Phase1②: scan_error_countが非負整数でない（bool/文字�
     assert_not_contains "値=${badval}は非負整数でないため--fragments-jsonは渡されない" \
       "$(cat "$APPLY_ARGV_LOG")" "--fragments-json"
     assert_not_contains "値=${badval}ではlast_success_atは更新されない" \
-      "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+      "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
   done
 }
 
@@ -466,7 +555,7 @@ echo "=== 9. Phase1③: vault_inventory.py失敗時もanomaly化しつつ処理�
   assert_eq "exit 0" "0" "$rc"
   assert_file_exists "異常が記録され通知される" "$OSASCRIPT_LOG"
   assert_not_contains "--inventory-jsonはそもそもPhase2へ渡されない（配線撤去済み）" "$(cat "$APPLY_ARGV_LOG")" "--inventory-json"
-  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
 }
 
 echo "=== 10. Phase1④: knowledge_merge_candidates.py失敗時はPhase2へ--merge-jsonを渡さず継続する ==="
@@ -478,7 +567,7 @@ echo "=== 10. Phase1④: knowledge_merge_candidates.py失敗時はPhase2へ--mer
   FAKE_KNOWLEDGE_MERGE_CANDIDATES_EXIT=1 run_maintenance || rc=$?
   assert_eq "exit 0" "0" "$rc"
   assert_not_contains "--merge-jsonは渡されない" "$(cat "$APPLY_ARGV_LOG")" "--merge-json"
-  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
 }
 
 echo "=== 11. Phase1⑤: decision_propagation.pyのrc=1(波及漏れ検出)は正常扱い ==="
@@ -524,7 +613,7 @@ echo "=== 12. Phase1⑤: decision_propagation.pyのrc>=2は失敗として記録
   assert_eq "exit 0（エラー隔離）" "0" "$rc"
   assert_file_exists "Phase2は実行される" "$APPLY_ARGV_LOG"
   assert_file_exists "異常が記録され通知される" "$OSASCRIPT_LOG"
-  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at"
+  assert_not_contains "last_success_atは更新されない" "$(cat "$LOG_ROOT/last-run.json")" "last_success_at\":"
 }
 
 echo "=== 13. Phase2: maintenance_apply.pyがanomaly=trueを報告したらlast_success_atを更新せず通知する ==="
@@ -539,7 +628,7 @@ echo "=== 13. Phase2: maintenance_apply.pyがanomaly=trueを報告したらlast_
   assert_file_exists "異常が記録され通知される" "$OSASCRIPT_LOG"
   assert_contains "通知内容にreasonが含まれる" "$(cat "$OSASCRIPT_LOG")" "schema_violation"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
-  assert_not_contains "last_success_atは更新されない" "$LAST_RUN" "last_success_at"
+  assert_not_contains "last_success_atは更新されない" "$LAST_RUN" "last_success_at\":"
 }
 
 echo "=== 14. Phase2: maintenance_apply.py自体がtimeoutしたら異常として記録される ==="
@@ -552,7 +641,7 @@ echo "=== 14. Phase2: maintenance_apply.py自体がtimeoutしたら異常とし�
   assert_eq "exit 0" "0" "$rc"
   assert_file_exists "異常が記録され通知される" "$OSASCRIPT_LOG"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
-  assert_not_contains "last_success_atは更新されない" "$LAST_RUN" "last_success_at"
+  assert_not_contains "last_success_atは更新されない" "$LAST_RUN" "last_success_at\":"
 }
 
 echo "=== 15. Phase3: サマリ行に各件数(promote/merge/merge_partial/skip)が反映される ==="
@@ -689,6 +778,27 @@ echo "=== 20. Vault書込ロック: 生存中のロックが既にあれば今�
   assert_file_not_exists "Phase1は実行されない（Phase2未起動で確認）" "$APPLY_ARGV_LOG"
 }
 
+echo "=== 20b. Vault書込ロック: acquire_pid_lockの回収ミューテックス競合が解消しない(fail-closed exit 1)場合もlast_result=failが記録され通知される（Codex一次レビュー2周目指摘Major対応: acquire_pid_lockはmaintenance.shのadd_anomaly/write_last_resultを経由せず直接exitするため、素通しだと前回のlast_resultが誤って残ったままヘルス行に出ていた） ==="
+{
+  T="$WORK_ROOT/t20b"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  mkdir -p "$LOG_ROOT"
+  # tests/test-backup-vault.sh 13b と同じ再現方法: stale確定のPID(生存し得ない
+  # 巨大PID)を書いたロックファイル＋回収ミューテックスディレクトリを事前に
+  # 握ったままにしておくと、acquire_pid_lockは20回試行しても回収ミューテックス
+  # を取得できずfail-closedでexit 1する（scripts/lib/pid-lock.sh参照）。
+  echo "999999" > "$LOG_ROOT/vault-writer.lock"
+  mkdir -p "$LOG_ROOT/vault-writer.lock.reclaim"
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "回収ミューテックス競合が解消しない場合はexit 1（fail-closed）" "1" "$rc"
+  assert_file_not_exists "Phase1は実行されない（Phase2未起動で確認）" "$APPLY_ARGV_LOG"
+  assert_file_exists "異常通知される" "$OSASCRIPT_LOG"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json" 2>/dev/null || echo '{}')"
+  assert_contains "last_result=failが記録される" "$LAST_RUN" "\"last_result\": \"fail\""
+}
+
 echo "=== 21. backup-vault.shはmaintenance.sh自身の呼び出し(Phase0/Phase3)ではVault書込ロックにbypassされ通常どおりcommitする ==="
 {
   T="$WORK_ROOT/t21"; mkdir -p "$T"
@@ -736,7 +846,7 @@ echo "=== 23. Phase0: backup-vault.sh自身のCLI多重起動防止ロックがb
   assert_file_not_exists "Phase1以降は実行されない" "$APPLY_ARGV_LOG"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
   assert_contains "started_atは記録される（自己ロックアウト対策）" "$LAST_RUN" "started_at"
-  assert_not_contains "last_success_atは記録されない" "$LAST_RUN" "last_success_at"
+  assert_not_contains "last_success_atは記録されない" "$LAST_RUN" "last_success_at\":"
 }
 
 echo "=== 24. Phase3: 提案ディレクトリが空ならFragmentsサマリのPreferences未確認提案は0件・マーカーファイルは生成しない（2026-07-18ハードニング・pendingマーカー層撤去） ==="
@@ -807,6 +917,32 @@ echo "=== 26. 実行ディレクトリの衝突検知: DATE_DIR配下にRUN_DIR�
   run_maintenance || rc=$?
   chmod 0700 "$LOG_ROOT/$DATE_COMPONENT" 2>/dev/null || true
   assert_eq "RUN_DIR作成に失敗したらexit 1（fail-closed・クラッシュしない）" "1" "$rc"
+  # LAST_RUN_FILE(last-run.json)自体はDATE_DIR配下ではなくLOG_ROOT直下のため
+  # 書込み可能なまま＝last_result="fail"がこの早期exitでも記録される
+  # （Codex一次レビュー指摘Major対応: 従来は直前スナップショット失敗の2箇所
+  # にしかlast_result書込みが無かった）。
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json" 2>/dev/null || echo '{}')"
+  assert_contains "RUN_DIR作成失敗でもlast_result=failが記録される" "$LAST_RUN" "\"last_result\": \"fail\""
+}
+
+echo "=== 26b. DATE_DIR自体の作成に失敗した場合もfail-closedで中断しlast_result=failが記録される（test26はRUN_DIR作成失敗、本テストはその1段階前のDATE_DIR作成失敗を狙い撃ちで再現・Codex一次レビュー2周目指摘Minor対応） ==="
+{
+  T="$WORK_ROOT/t26b"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # DATE_DIR（$LOG_ROOT/<当日日付>）のパスへ、ディレクトリではなく通常
+  # ファイルを事前に置くことで、`mkdir -p "$DATE_DIR"`自体を
+  # 「既にファイルが存在する」で確実に失敗させる（test26のchmod 0500方式は
+  # RUN_DIR作成側=1段階後の失敗を再現するのに対し、本テストはDATE_DIR
+  # 作成自体の失敗という異なるコードパスを狙う）。
+  DATE_COMPONENT="$(date +%Y-%m-%d)"
+  mkdir -p "$LOG_ROOT"
+  : > "$LOG_ROOT/$DATE_COMPONENT"
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "DATE_DIR作成に失敗したらexit 1（fail-closed・クラッシュしない）" "1" "$rc"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json" 2>/dev/null || echo '{}')"
+  assert_contains "DATE_DIR作成失敗でもlast_result=failが記録される" "$LAST_RUN" "\"last_result\": \"fail\""
 }
 
 echo "=== 27. Phase2: apply-status.jsonのok/anomalyが矛盾する組合せ(ok=false かつ anomaly=false)は成功扱いにしない ==="
@@ -820,7 +956,7 @@ echo "=== 27. Phase2: apply-status.jsonのok/anomalyが矛盾する組合せ(ok=
   assert_eq "exit 0" "0" "$rc"
   assert_file_exists "矛盾したstatus-fileはanomaly扱いで通知される" "$OSASCRIPT_LOG"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
-  assert_not_contains "last_success_atは更新されない" "$LAST_RUN" "last_success_at"
+  assert_not_contains "last_success_atは更新されない" "$LAST_RUN" "last_success_at\":"
 }
 
 echo "=== 28. --sinceの算出: 末尾に無関係な文字列が付いた壊れた値は7日前へフォールバックする ==="
@@ -857,6 +993,11 @@ echo "=== 29. last-run.jsonのstarted_at書込みに失敗したらfail-fastで�
   chmod 0700 "$UNWRITABLE_DIR" 2>/dev/null || true
   assert_eq "started_at書込み失敗はexit 1（fail-fast）" "1" "$rc"
   assert_file_not_exists "Phase0以降は実行されない" "$APPLY_ARGV_LOG"
+  # last_resultも同じ書込み不可能なLAST_RUN_FILEへの書込みのため失敗するが、
+  # write_last_result()自体はfail-openでwarn()するだけ＝二重にexit 1したり
+  # クラッシュしたりしない（Codex一次レビュー指摘Major対応の追加テスト）。
+  assert_contains "last_result書込み失敗はwarn()で記録されクラッシュしない" \
+    "$(cat "$LAST_STDERR")" "last_result"
 }
 
 echo "=== 30. LAST_RUN_FILEのパスにシングルクォートが含まれても壊れず正常終了する（2026-07-16 リーダー裁定・check-drift.shで検出された同型injection経路のmaintenance.sh側横展開修正の回帰テスト） ==="
@@ -882,7 +1023,7 @@ echo "=== 30. LAST_RUN_FILEのパスにシングルクォートが含まれて�
   assert_file_exists "last-run.jsonがシングルクォートを含むパスに生成される" "$QUOTE_LAST_RUN_FILE"
   LAST_RUN="$(cat "$QUOTE_LAST_RUN_FILE" 2>/dev/null || echo "")"
   assert_contains "started_atが正しく記録される(python3構文破壊なし)" "$LAST_RUN" "started_at"
-  assert_contains "last_success_atが正しく記録される(完全正常終了)" "$LAST_RUN" "last_success_at"
+  assert_contains "last_success_atが正しく記録される(完全正常終了)" "$LAST_RUN" "last_success_at\":"
 }
 
 echo "=== 30b. MAINTENANCE_LOG_ROOTのパスにシングルクォートが含まれても壊れず正常終了する（parse_step_status/apply-status.jsonの回帰テスト・Codexレビュー指摘Minor対応。2026-07-18ハードニングでpendingマーカー関連の検証部分は撤去） ==="
@@ -905,7 +1046,7 @@ echo "=== 30b. MAINTENANCE_LOG_ROOTのパスにシングルクォートが含ま
   assert_eq "シングルクォートを含むMAINTENANCE_LOG_ROOTでも正常終了する(exit 0)" "0" "$rc"
   QUOTE_LAST_RUN="$(cat "$QUOTE_LOG_ROOT/last-run.json" 2>/dev/null || echo "")"
   assert_contains "last_success_atが正しく記録される(apply-status.json解析が構文破壊せず完走)" \
-    "$QUOTE_LAST_RUN" "last_success_at"
+    "$QUOTE_LAST_RUN" "last_success_at\":"
 }
 
 echo "=== 31. 統合テスト: 実物のfragments_log.py/vault_inventory.py/knowledge_merge_candidates.py/maintenance_apply.pyを使った「候補0件の静かな週」でanomaly=false・通知なし・last_success_atが前進する（tester独立検証F2対応） ==="
@@ -975,7 +1116,7 @@ print(','.join(k for k in required if k not in d))
 
   assert_file_not_exists "anomaly無しのため通知は送られない" "$OSASCRIPT_LOG"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
-  assert_contains "last_success_atが前進する(完全正常終了)" "$LAST_RUN" "last_success_at"
+  assert_contains "last_success_atが前進する(完全正常終了)" "$LAST_RUN" "last_success_at\":"
 }
 
 echo
