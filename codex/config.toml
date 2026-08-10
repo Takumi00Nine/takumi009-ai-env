@@ -28,6 +28,12 @@ approval_policy = "never"
 model = "gpt-5.6-sol"
 model_reasoning_effort = "medium"
 
+# 2026-08-08 本人指示: workspace-write サンドボックスでもネットワーク許可を常時有効化。
+# 理由＝Web裏取り（absolute-rules 4）を Codex 委任でも常に可能にする。
+# 実測確認済み（curl HTTP/2 200）。Vault: Knowledge/claude-codex-strengths-and-orchestration
+[sandbox_workspace_write]
+network_access = true
+
 [plugins."documents@openai-primary-runtime"]
 enabled = true
 

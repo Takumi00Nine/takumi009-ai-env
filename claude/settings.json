@@ -124,7 +124,6 @@
     ]
   },
   "model": "claude-fable-5[1m]",
-  "effortLevel": "high",
   "hooks": {
     "SessionStart": [
       {
@@ -158,6 +157,12 @@
             "command": "$HOME/.claude/hooks/next-pane-resolve.sh",
             "timeout": 5,
             "statusMessage": "Nextペイン番号対応表を注入中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/context-size-warn.sh",
+            "timeout": 5,
+            "statusMessage": "セッション肥大化チェック中"
           }
         ]
       }
@@ -246,7 +251,8 @@
       }
     }
   },
+  "effortLevel": "high",
   "awaySummaryEnabled": false,
-  "theme": "dark",
-  "skipWorkflowUsageWarning": true
+  "skipWorkflowUsageWarning": true,
+  "theme": "dark"
 }
