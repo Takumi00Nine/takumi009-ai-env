@@ -7,19 +7,22 @@
 # Knowledge/mistakes の一般則「テキストで効かない再発はツール境界でフック化する」を適用。
 # 経緯: Decisions/2026-07-05-delegation-gate-v2 / 運用: Preferences/coding-delegation
 #
-# 通過条件（いずれか）:
-#   1) サブエージェント/ワーカー内の編集（agent_id/agent_type あり）＝ワーカーの仕事は正当
-#   2) チームメイトセッション（他チームの config.json に自 session_id が載る）
-#   3) 許可パス（Vault / ~/.claude / tmp / 例外プロジェクト）
-#   4) 自チームにリーダー以外のメンバーが存在（＝委任実績あり。以後のレビュー反映等は素通し）
-#   5) 直接作業宣言マーカー（直接編集の理由をユーザーに明示してから touch）
+# 判定順序（1→2→2.5→3→4→4b→5。2.5 のみ通過条件ではなく専用の deny 分岐）:
+#   1) サブエージェント/ワーカー内の編集（agent_id/agent_type あり）＝ワーカーの仕事は正当 → 通過
+#   2) チームメイトセッション（他チームの config.json に自 session_id が載る） → 通過
+#   2.5) 外部脳（Vault）は 1)/2) を通過しなかった場合（＝リーダー）、専用マーカーが無い限り常に deny
+#        （2026-08-12〜。汎用マーカー 5)・委任実績 4)/4b) では開かない）
+#   3) 許可パス（~/.claude / tmp / 例外プロジェクト） → 通過
+#   4) 自チームにリーダー以外のメンバーが存在（＝委任実績あり。以後のレビュー反映等は素通し） → 通過
+#   5) 直接作業宣言マーカー（直接編集の理由をユーザーに明示してから touch） → 通過
 #
 # 判定不能時は素通し（このゲートの目的は「委任の自問」であり防御ではない）。
 
 TEAMS_DIR="${GATE_TEAMS_DIR:-$HOME/.claude/teams}"
 MARKER_DIR="${GATE_MARKER_DIR:-/tmp}"
 ALLOW_PREFIXES=(
-  "$HOME/Data/obsidian"       # 外部脳: 編集者はリーダーのみ（vault-operation）
+  # 外部脳($HOME/Data/obsidian)は 2026-08-12 本人指示で許可パスから除外
+  # （執筆は vault-scribe 必須＝下の 2.5 で専用 deny）
   "$HOME/.claude"             # 自環境の設定・フック
   "$HOME/.claude.json"        # Claude Code 本体設定（~/.claude/ の外にあるが同じ設定ドメイン。2026-07-05 追加）
   "/tmp"                      # scratchpad・一時ファイル
@@ -56,6 +59,24 @@ if [ -d "$TEAMS_DIR" ]; then
     grep -q "$sid" "$cfg" 2>/dev/null && exit 0
   done
 fi
+
+# 2.5) 外部脳（Vault）の AI向け6フォルダはリーダー直筆禁止（2026-08-12 本人指示＝「scribe不在時・
+# 軽い1件は直筆可」の例外を撤廃／2026-08-13 本人指示＝適用範囲を AI向け6フォルダに限定。
+# 人間向け領域＝Blogs/・Explorations/・機械生成物フォルダ等の6フォルダ以外は直接編集可）。
+# 執筆は常駐チームメイト vault-scribe へ委任する
+# （Decisions/2026-08-10-vault-scribe / Decisions/2026-08-12-vault-scribe-mandatory）。
+# ワーカー/チームメイトは上の 1)/2) で既に通過済み＝ここに到達するのはリーダーのみ。
+# 逃げ道は Vault 専用マーカーのみ（汎用マーカー 5)・委任実績 4)/4b) では開かない）。
+VAULT_PREFIX="$HOME/Data/obsidian"
+case "$fpath" in
+  "$VAULT_PREFIX"/Fragments/*|"$VAULT_PREFIX"/Knowledge/*|"$VAULT_PREFIX"/Decisions/*|"$VAULT_PREFIX"/Projects/*|"$VAULT_PREFIX"/Preferences/*|"$VAULT_PREFIX"/Personal/*)
+    vault_marker="$MARKER_DIR/claude-vault-direct-ok-$sid"
+    [ -f "$vault_marker" ] && exit 0
+    reason="delegation-gate: 外部脳（Vault）の AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への執筆は常駐チームメイト vault-scribe へ委任してください（Preferences/vault-operation。2026-08-12 本人指示で「軽い1件はリーダー直筆可」の例外は撤廃・2026-08-13 本人指示で対象は AI向け6フォルダに限定）。リーダーは内容を確定して scribe へ渡す係です。scribe 不在なら起動してから振る。scribe が使えない緊急時のみ、理由をユーザーへの応答で明示した上で次を実行してから再試行: touch $vault_marker"
+    jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
+    exit 0
+    ;;
+esac
 
 # 3) 許可パス
 for p in "${ALLOW_PREFIXES[@]}"; do

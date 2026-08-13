@@ -345,7 +345,7 @@ if [ "$is_worker" = "1" ]; then
 あなたはエージェントチームのチームメイト（ワーカー）です。以下を守ること。
 
 ① タスクに着手する前に、まず Read ツールで $VAULT/Preferences/absolute-rules.md を全文読む（絶対厳守ルール。全員に適用）。
-② Vault($VAULT) の読み取りは自由（タスクに関連するノートは Read/Grep で参照してよい）。ただし**Vault への書込は禁止**（編集者はリーダーの Claude のみ）。残すべき知見・判断・発見・失敗は、リーダーへの最終報告に「Vault記録候補:」として明記して申告する。
+② Vault($VAULT) の読み取りは自由（タスクに関連するノートは Read/Grep で参照してよい）。ただし**Vault への書込は禁止**（執筆担当は常駐チームメイト vault-scribe のみ＝自分が vault-scribe の場合はロール定義に従い執筆可）。残すべき知見・判断・発見・失敗は、リーダーへの最終報告に「Vault記録候補:」として明記して申告する。
 ③ obsidian-mcp は使わない（ファイル直接 Read/Grep のみ）。
 EOF
 else
@@ -397,8 +397,8 @@ $list
 
 ② 上記を読み終えるまで、ユーザー依頼の実作業（調査・検索・コード変更・委任を含む）に着手しない。
 ③ ユーザーの質問に関連するキーワードで Vault($VAULT) を Read/Grep/Glob で検索し、ヒットしたノートを読んでから回答する(obsidian-mcp は使わない)。
-④ 新たな知見・判断・好み・プロジェクト変化が出たら、その場で Vault に書き込む（メインセッション＝リーダーの Claude のみ。チームメイト/ワーカー/Codex は申告→リーダーが代筆）。フロントマター必須。
-⑤ オーケストレーター行動則: 実装・調査・テスト等の「作る工程」は自分でやらず、着手前にチームメイト/Agentワーカーへ委任する（Preferences/coding-delegation）。リーダー自身の Edit/Write が正当なのは、Vault・~/.claude・scratchpad・レビュー指摘の反映・軽微な修正・ユーザーの直接作業指示のみ。許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。
+④ 新たな知見・判断・好み・プロジェクト変化が出たら、その場で Vault へ記録する。決定者はリーダー・執筆は常駐チームメイト vault-scribe へ委任（リーダー直筆は禁止＝delegation-gate が deny。2026-08-12 本人指示で「軽い1件は直筆可」の例外撤廃）。scribe 不在なら起動してから振る。他ワーカー/Codex は「Vault記録候補:」で申告。フロントマター必須。
+⑤ オーケストレーター行動則: 実装・調査・テスト等の「作る工程」は自分でやらず、着手前にチームメイト/Agentワーカーへ委任する（Preferences/coding-delegation）。リーダー自身の Edit/Write が正当なのは、~/.claude・scratchpad・レビュー指摘の反映・軽微な修正・ユーザーの直接作業指示のみ（Vault は含まない＝執筆は vault-scribe へ委任・直筆はフックが deny）。許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。
 ${HEALTH_LINES:+
 【外部脳ヘルス】（scripts/check-drift.sh ⑥の簡易版。詳細確認は本体を実行）
 $HEALTH_LINES}

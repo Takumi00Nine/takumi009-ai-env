@@ -341,6 +341,63 @@ EOF
   rm -rf "$REPO" "$HOME_DIR"
 }
 
+echo "=== 5b2. ②テンプレ記載キーでもis_app_managedに該当すれば優先して除外する（2026-08-14 NODE_REPL_TRUSTED_CODE_PATHS対応の回帰確認） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  # テンプレにも既知アプリ管理キー一覧該当のキーを記載する（実際の
+  # NODE_REPL_TRUSTED_CODE_PATHSと同じ状況を再現＝テンプレにも記載があり
+  # installの基底値提供に使われるが、監視からは除外したいキー）。
+  cat >> "$REPO/codex/config.toml" <<'EOF'
+NODE_REPL_TRUSTED_CODE_PATHS = "__AIENV_HOME__/.codex"
+EOF
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # アプリが自パスを追記した状態を模擬する（テンプレ値との差分）。
+  sed "s#NODE_REPL_TRUSTED_CODE_PATHS = \"${HOME_DIR}/.codex\"#NODE_REPL_TRUSTED_CODE_PATHS = \"${HOME_DIR}/.codex:/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules\"#" "$HOME_DIR/.codex/config.toml" > "$HOME_DIR/.codex/config.toml.tmp"
+  mv "$HOME_DIR/.codex/config.toml.tmp" "$HOME_DIR/.codex/config.toml"
+  # sedの置換対象が将来のテンプレ書式変更等で見つからず無変化のまま素通りすると、
+  # テンプレとliveが最初から同値なだけの偽陽性テストになりうる（Codex一次
+  # レビュー指摘・Nit対応）。fixtureが意図どおり分岐したことを直接確認する。
+  live_content="$(cat "$HOME_DIR/.codex/config.toml")"
+  assert_contains "fixture: liveがアプリ追記済みの値になっている" "$live_content" "cua_node/lib/node_modules"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "テンプレ記載+アプリ管理キーは値差分があっても一致と判定される" "$out" "TOML三分類で一致しています"
+  assert_not_contains "DIFFにはならない" "$out" "[DIFF]"
+  assert_not_contains "MISSING-KEYにもならない" "$out" "[MISSING-KEY]"
+  assert_not_contains "未知キーWARNにもならない" "$out" "WARN: 未知キー"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 5b3. ②テンプレ記載+アプリ管理キーがlive側から完全に欠落していてもMISSING-KEY扱いにせず除外する（Codex一次レビュー指摘・Minor対応: 5b2は値変更のみでMISSING-KEY経路を検証できていなかった） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  cat >> "$REPO/codex/config.toml" <<'EOF'
+NODE_REPL_TRUSTED_CODE_PATHS = "__AIENV_HOME__/.codex"
+EOF
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # live側からキーの行ごと削除する（テンプレには記載があるが実ファイルには
+  # 無い状態＝通常のテンプレ記載キーならMISSING-KEY相当になるケース）。
+  grep -v '^NODE_REPL_TRUSTED_CODE_PATHS' "$HOME_DIR/.codex/config.toml" > "$HOME_DIR/.codex/config.toml.tmp"
+  mv "$HOME_DIR/.codex/config.toml.tmp" "$HOME_DIR/.codex/config.toml"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "アプリ管理キーはlive側から欠落していても一致と判定される" "$out" "TOML三分類で一致しています"
+  assert_not_contains "MISSING-KEYにはならない" "$out" "[MISSING-KEY]"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
 echo "=== 5c. ②テンプレ記載キーがlive側から欠落していると[MISSING-KEY]として検知する ==="
 {
   REPO="$(mktemp -d)"

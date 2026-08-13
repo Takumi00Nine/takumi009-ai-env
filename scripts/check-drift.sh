@@ -7,10 +7,11 @@
 #   ② ~/.codex/config.toml（生成物）が repo の codex/config.toml テンプレと
 #      「プレースホルダ展開を考慮すれば」一致しているか（実ファイルを
 #      __AIENV_HOME__ へ逆置換してから、python3標準tomllibでTOMLとして解析し、
-#      キー単位で三分類する＝テンプレ記載キー=値差分でdrift／既知アプリ管理
-#      キー=除外／未知キー=WARN表示のみでdriftにしない。2026-08-10
-#      diff+denylist方式から移行＝[[Decisions/2026-08-10-round6-rulings]]
-#      決定2。denylistは7/27→8/5→8/10と3回壊れたいたちごっこだった）
+#      キー単位で三分類する＝既知アプリ管理キー=テンプレ記載の有無にかかわらず
+#      除外／それ以外のテンプレ記載キー=値差分でdrift／未知キー=WARN表示のみで
+#      driftにしない。2026-08-10 diff+denylist方式から移行＝
+#      [[Decisions/2026-08-10-round6-rulings]] 決定2。denylistは7/27→8/5→8/10と
+#      3回壊れたいたちごっこだった）
 #   ③ repo（このリポジトリ）に未commitの変更が無いか（`git status --porcelain`が
 #      実行自体に失敗した場合は「差分なし」に混同せず監視不能として計上する。
 #      2026-07-14 リーダー指摘対応＝旧実装は `|| true` でコマンド失敗と出力ゼロ件を
@@ -256,10 +257,13 @@ echo "======================================================================"
 # 再発＝3回実証。旧denylist本体は git log -p 参照）。
 # 新: python3標準tomllib（Python 3.12実測確認済み）でlive・テンプレ双方をTOMLと
 # して解析し、ドット区切りのキーパス単位で3分類する:
-#   (a) テンプレに記載のキー   … 値差分・欠落を通常どおりdrift計上する
-#   (b) テンプレに無いが下記の既知アプリ管理キー一覧に一致するキー … 除外（drift
-#       にしない。将来また未知の新キーが増えても壊れないよう、一覧はベスト
+#   (a) 下記の既知アプリ管理キー一覧に一致するキー … 除外（driftにしない。
+#       テンプレ記載の有無より優先して判定する＝テンプレにも記載があり
+#       installの基底値提供に使うキーでも、アプリ管理キー一覧に載せれば
+#       監視から外せる＝2026-08-14 NODE_REPL_TRUSTED_CODE_PATHS対応で優先順位を
+#       明確化。将来また未知の新キーが増えても壊れないよう、一覧はベスト
 #       エフォートの初期値であり網羅を目指さない設計）
+#   (b) (a)に該当せずテンプレに記載のキー … 値差分・欠落を通常どおりdrift計上する
 #   (c) どちらでもない未知キー … WARN表示のみ（drift件数には数えない。旧denylist
 #       のいたちごっこを構造的に断つための本設計変更の核心＝アプリの新キー
 #       追加を検知はするが、それだけでは中断しない）
@@ -281,6 +285,7 @@ KNOWN_APP_MANAGED_TOML_LEAF_KEYS=(
   "notify"                                    # Codexアプリがインストール時のパスで自動再設定する。ユーザーがテンプレ上でコメントアウトして無効化していても実ファイルには復活しうる
   "NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S"  # Codex.appの内部ビルドに紐づくハッシュ（アップデートのたび変わる）
   "BROWSER_USE_CODEX_APP_VERSION"             # Codex.appのバージョン文字列（アップデートのたび変わる）
+  "NODE_REPL_TRUSTED_CODE_PATHS"              # ChatGPT.appが自パス(cua_node/lib/node_modules)を追記する実績あり（2026-08-14実測・本人裁定）。テンプレにも記載があるが下記のとおりアプリ管理判定を優先するため、install時の基底値提供とdrift監視除外を両立できる
 )
 
 CONFIG_TOML_LIVE="$HOME/.codex/config.toml"
@@ -370,12 +375,20 @@ except Exception as e:
     sys.exit(0)
 
 for key in sorted(set(live) | set(template)):
+    # is_app_managed()をテンプレ記載判定より先に評価する（2026-08-14 本人裁定
+    # 対応。従来はテンプレ記載キーが常にis_app_managed判定より優先されており、
+    # アプリ管理キー一覧に加えるだけではテンプレにも記載のあるキー
+    # （NODE_REPL_TRUSTED_CODE_PATHS）を除外できなかった。テンプレ記載キーでも
+    # アプリ管理リストが優先されることで、installが書き込む基底値の提供
+    # （テンプレ自体は変更しない）とdrift監視からの除外を両立する）。
+    if is_app_managed(key):
+        continue
     if key in template:
         if key not in live:
             print(f'DRIFT\tMISSING-KEY\t{key}\t{template[key]!r}')
         elif live[key] != template[key]:
             print(f'DRIFT\tDIFF\t{key}\t{template[key]!r}\t{live[key]!r}')
-    elif not is_app_managed(key):
+    else:
         print(f'WARN\t{key}\t{live[key]!r}')
 " "$LIVE_NORMALIZED_TMP" "$CONFIG_TOML_TEMPLATE" "$table_prefixes_joined" "$leaf_keys_joined" 2>&1)"
     TOML_CLASSIFY_RC=$?
