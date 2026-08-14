@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-08-07
+updated: 2026-08-14
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -59,6 +59,7 @@ aliases:
 - **ペイン実査の ref の調べ方**: `cmux list-panes` → `cmux list-pane-surfaces --pane pane:<n>` でチームメイト名の surface を特定 → `cmux read-screen --surface surface:<n> --lines <行数>`。**チームメイト名の直接指定は不可**（ref/UUID/index のみ受理＝2026-07-13 実測）。
 - **基本**: `idle_notification`（手が空いた通知）を受信→④をペイン実査で確認→shutdown_request を送る（通知前・作業中に送らない＝終了要求レースを避ける）。送信後はポーリングせず `shutdown_approved`/`teammate_terminated` 通知の受信を待ち、受信後にペイン消滅を1回だけ実査して完了。
 - **保留からの再開**: 通知受信時点で①〜④が揃わず残置した場合（差し戻しの可能性・レビュー未完・継続対話の予定）は、**その保留理由が消えた時点（差し戻し無し確定・レビューOK・対話終了）を新たな停止トリガー**として、速やかに④の実査→shutdown_request を実行する。`idle_notification` は再送されないため、通知の再受信を待たない。
+- **停止後の修正**: 停止・消去済みの個体が作った成果物に修正が必要になったら、**同じロールのチームメイトを再起動して委任**する（リーダーの直接修正は不可＝[[Decisions/2026-08-14-deliverable-revision-by-creator]]）。
 - **フォールバック**: 通知が一定期間（目安2〜3分）届かない場合、および SendMessage 非搭載ロール（claude-code-guide 等＝通知が構造的に届かない）も、④の実査で作業終了を確認してから `TaskStop`（task_id にチームメイト名）で手動停止→ペイン1回確認。作業中なら待って再実査（間隔1〜2分＝[[Knowledge/mistakes]]のレース注意と同じ）。
 - ペイン消滅の確認前に「消えた」と報告しない。
 

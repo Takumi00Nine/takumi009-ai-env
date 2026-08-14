@@ -108,5 +108,5 @@ marker="$MARKER_DIR/claude-direct-edit-ok-$sid"
 [ -f "$marker" ] && exit 0
 
 # deny（自問を強制）
-reason="delegation-gate: 実装・調査・テスト等の「作る工程」はチームメイト/Agentワーカーへ委任するのが既定です（Preferences/coding-delegation）。このセッションではまだ委任実績がありません。→ (a) チームメイト/ワーカーを起こしてタスクを振るか、(b) 直接編集が妥当な理由（軽微な修正・レビュー指摘の反映・ユーザーの明示指示・例外プロジェクト等）をユーザーへの応答で明示した上で、次を実行してから再試行してください: touch $marker"
+reason="delegation-gate: 実装・調査・テスト等の「作る工程」はチームメイト/Agentワーカーへ委任するのが既定です（Preferences/coding-delegation）。このセッションではまだ委任実績がありません。→ (a) チームメイト/ワーカーを起こしてタスクを振るか、(b) 直接編集が妥当な理由（リーダー自身の成果物への軽微な修正・ユーザーの明示指示・例外プロジェクト等。⚠️ワーカー作成の成果物への修正は理由にならない＝作成元ロールへ差し戻し、停止済みなら同ロールを再起動して委任＝Decisions/2026-08-14-deliverable-revision-by-creator）をユーザーへの応答で明示した上で、次を実行してから再試行してください: touch $marker"
 jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'

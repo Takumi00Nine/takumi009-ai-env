@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-08-13
+updated: 2026-08-14
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -24,7 +24,7 @@ aliases:
 - 同じルールは SSOT 1つ＋他はリンクのみ。旧方針は `deprecated YYYY-MM-DD` で現行より下に隔離。
 - **Projects の frontmatter**: `status:` は4値のみ＝`active`/`paused`/`completed`/`closed`。**状態が動いたら `next:`（15文字以内の次アクション）も更新**（cmux Next ペイン表示元。「Nextの N 番」解決＝`cmux-next-watch.sh --list`）。
 ## 書き方の鉄則
-- 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず `vault-scribe`（常駐チームメイト）へ委任**＝リーダーが内容を確定して渡し、scribe が掟に従い執筆（[[Decisions/2026-08-10-vault-scribe]]）。**リーダー直筆は禁止**＝旧例外「scribe 不在時・軽い1件は直筆可」は本人指示で撤廃（[[Decisions/2026-08-12-vault-scribe-mandatory]]・delegation-gate フックが deny・scribe 不在なら起動してから振る）。**scribe 専任の対象は AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）に限定**＝人間向け領域（Blogs/・Explorations/ ほか6フォルダ以外すべて）はリーダー・ワーカー・スクリプトが直接書き込み可（[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]・旧例外「Codex のみ Blogs/・Explorations/ 直書き可」は人間向け領域全体の直書き可に一般化され不要に）。他ワーカーは AI向け6フォルダへの記録候補があれば「Vault記録候補:」で申告。
+- 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず `vault-scribe`（常駐チームメイト）へ委任**＝リーダーが内容を確定して渡し、scribe が掟に従い執筆（[[Decisions/2026-08-10-vault-scribe]]）。**リーダー直筆は禁止**＝旧例外「scribe 不在時・軽い1件は直筆可」は本人指示で撤廃（[[Decisions/2026-08-12-vault-scribe-mandatory]]・delegation-gate-v2 フックが deny・scribe 不在なら起動してから振る）。**scribe 専任の対象は AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）に限定**＝人間向け領域（Blogs/・Explorations/ ほか6フォルダ以外すべて）はリーダー・ワーカー・スクリプトが直接書き込み可（[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]・旧例外「Codex のみ Blogs/・Explorations/ 直書き可」は人間向け領域全体の直書き可に一般化され不要に）。他ワーカーは AI向け6フォルダへの記録候補があれば「Vault記録候補:」で申告。
 - 長くなったら分割（目安8,000字・Decisions は対象外）＝詳細を別ノートへ分離し相互リンク。
 - フロントマター必須（date/tags/project）・本文編集で `updated` 更新。wiki link はフォルダ付き `[[Folder/note]]`・関連ノートは**相互に**リンク。
 - aliases 必須（README 除く）＝想起フックの検索キー。実際に打ちそうな語1〜5個・汎用語禁止・迷ったら付けない。外部情報系は `review_by:`（任意）。

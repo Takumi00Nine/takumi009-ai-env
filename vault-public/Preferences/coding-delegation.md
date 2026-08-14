@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-08-13
+updated: 2026-08-14
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 aliases:
@@ -20,7 +20,8 @@ aliases:
 - **着手時のループ適用判定（2026-07-21 本人指示）**: まとまったタスクの着手前に「ループ型（自動検証で回す）か・人間チェック挟み込み型か」を判定し**本人に確認してから進める**。基準＝**ゴールが機械的に計測・数値化できるか**（テスト/リント/型/バイト一致＝向く⇔主観のみ＝向かない）。詳細・聞き方の例文＝[[Knowledge/loop-engineering]]。
 - **本人を呼ぶときは `cmux notify --title "📣 <用件>"` を明示発行**（📣なしは届かない。正本＝[[Preferences/cmux-notifications]]）。見せる成果物は cmux ペイン表示してから依頼（`~/work/dotfiles/cmux/show-review.sh`。例外＝Vault ノート・Explorations/ HTML＝Obsidian で見る＝テキスト報告のみ）。
 - **Fable 節約＝セッション分割の徹底（2026-08-10 本人決定）**: 工程・トピックが変われば新セッション、長丁場は `/compact`、リーダーは大物（成果物全文・長ログ）を読まずワーカーに要約させる。200k 超で `context-size-warn.sh` フックが警告→区切りで本人に分割を提案（[[Decisions/2026-08-10-fable-session-split]]）。**Vault の AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への書き込みは常駐 `vault-scribe` へ委任（必須・リーダー直筆は禁止＝[[Decisions/2026-08-12-vault-scribe-mandatory]]）**（[[Decisions/2026-08-10-vault-scribe]]）。人間向け領域（Blogs/・Explorations/ ほか6フォルダ以外）は直接編集可（[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]）。
-- リーダーの直接編集は delegation-gate v2 が制限: 許可パス＝`~/.claude`・tmp のみ（**Vault の AI向け6フォルダは許可パスから除外＝執筆は vault-scribe 必須・人間向け領域は直接編集可**＝[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]）。他は委任するか理由を明示してマーカー touch（[[Decisions/2026-07-05-delegation-gate-v2]]）。**許可パス内でも、テスト・デバッグの反復（書く→動かす→直す）が見込まれる実装は委任する**（リーダー直接は1〜2編集で完結する変更まで。判定目安＝「動かして確認する必要があるか」＝[[Decisions/2026-08-10-delegate-iterative-work]]）。
+- リーダーの直接編集は delegation-gate v2 が制限: 許可パス＝`~/.claude`・tmp のみ（**Vault の AI向け6フォルダは許可パスから除外＝執筆は vault-scribe 必須・人間向け領域は直接編集可**＝[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]）。他は委任するか理由を明示してマーカー touch（[[Decisions/2026-07-05-delegation-gate-v2]]）。**許可パス内でも、テスト・デバッグの反復（書く→動かす→直す）が見込まれる実装は委任する**（リーダー直接は**自身の成果物**で1〜2編集で完結する変更まで＝ワーカー成果物は対象外・作成元へ差し戻し。判定目安＝「動かして確認する必要があるか」＝[[Decisions/2026-08-10-delegate-iterative-work]]）。
+- **成果物の修正は作成元ロールへ差し戻す（2026-08-14 本人指示）**: ワーカー/チームメイトが作成した成果物（要件定義書・設計書・コード等）へのレビュー指摘・修正要望は、リーダーが直接編集せず**作成元ロールへ差し戻して修正させる**。作成個体が停止済み・別セッションでも、**同じロールのチームメイトを再起動して委任**する（[[Decisions/2026-08-14-deliverable-revision-by-creator]]）。
 - ワーカー/チームメイト起動時は軽量版ブートストラップ（absolute-rules のみ必読・Vault 書込禁止＝申告制・obsidian-mcp 不使用）。フル版・Vault 書込はリーダーのみ。
 - 合議＝後戻りコスト高の設計・技術選定のみ: リーダーが論点定義→ワーカー＋Codex が案+根拠+リスク→リーダー統合・決定（委任除外は設けない）。
 ## コード作成の前提（トリアージ・共通化ファースト）
