@@ -31,7 +31,7 @@ If a case arises on a sub machine where a rule needs fixing, don't fix it there 
 ```
 takumi009-ai-env/
 ├── claude/
-│   ├── settings.json          # ~/.claude/settings.json (symlink target)
+│   ├── settings.json          # Template for ~/.claude/settings.json (generated, not a symlink; see below)
 │   ├── hooks/                 # bootstrap-vault.sh, check-sub-update.sh, delegation-gate-v2.sh, bash-danger-gate.sh, next-pane-resolve.sh, vault-recall.sh, vault-read-log.sh
 │   └── agents/                # Worker role definitions (7 roles)
 ├── codex/
@@ -85,6 +85,8 @@ brew bundle          # Reads the Brewfile and installs ripgrep, gitleaks, jq, gh
 
 Claude Code / Codex themselves are outside brew's management, so install them separately from their official sites.
 
+`install-main.sh` requires `python3` (used to generate `claude/settings.json`; also required separately by `check-drift.sh`'s `config.toml`/`settings.json` comparisons). macOS normally ships one via Xcode Command Line Tools, so this usually isn't an issue — if it's missing, `install-main.sh` fails fast at startup with a clear message (run `xcode-select --install`). Language runtimes including Python itself aren't managed via brew in this environment (see `anyenv-runtime-management` in the Vault), so it's intentionally not listed in the Brewfile.
+
 `scripts/ngwords.txt` (NG-word definitions used by `export-public-vault.sh` and `audit.sh`) is **not included in this repository** because it's private data. To run `export-public-vault.sh`/`audit.sh` as-is, either set `NGWORDS_FILE=/path/to/your/ngwords.txt` to point at your own file, or write your own NG-word list.
 
 #### Main environment
@@ -98,7 +100,7 @@ scripts/install-maintenance.sh   # Installs the weekly maintenance-runner Launch
 ```
 
 - `install-main.sh` moves any existing real file to `<dest>.pre-aienv.bak` only the first time before replacing it with a symlink (safe to re-run = idempotent). Use the `--dry-run` option to preview the plan only.
-- Only `codex/config.toml` is generated as a real file — not a symlink — with the placeholder (`__AIENV_HOME__`) replaced by the actual home path (because plain TOML doesn't support shell variable expansion).
+- `codex/config.toml` and `claude/settings.json` are generated as real files — not symlinks. `config.toml`'s placeholder (`__AIENV_HOME__`) is replaced by the actual home path (plain TOML doesn't support shell variable expansion). `settings.json`'s placeholder (`__AIENV_MODEL__`) is replaced by the model appropriate for the machine — `claude-fable-5[1m]` on the main environment (direct `install-main.sh` run), `claude-opus-5` on the sub environment (the sub's Pro plan doesn't support Fable 5; `install-sub.sh` delegates to `install-main.sh` with `--sub-delegate`, which is what selects this value — it does not re-read the machine-role marker). Generating rather than symlinking `settings.json` also avoids a side effect where running `/model` interactively rewrites the *repository's* `claude/settings.json` in place (Claude Code writes its saved model choice into the live user settings file, which used to be a symlink straight into this repo).
 - Both `install-backup.sh` and `install-maintenance.sh` only place the LaunchAgents (bootstrap+enable) — they do **not** trigger an immediate run (kickstart) (because initializing the Vault as a Git repository for the first time is meant to be a staged rollout. Either wait for the next scheduled run, or once you're ready, run `launchctl kickstart -k` manually).
 - At the end, `install-main.sh` automatically runs `scripts/setup-codex-mcp.sh`, which **auto-registers the codex MCP** (`mcp__codex__codex`/`codex-reply`, the core of the review setup) (`claude mcp add codex -s user -- <absolute path to codex> mcp-server`; skipped/idempotent if already registered). On environments where Claude Code / the codex command aren't installed, registration fails, but the installer as a whole still continues with a WARN rather than stopping. To register manually, run `scripts/setup-codex-mcp.sh` standalone, or run the suggested `claude mcp add` command directly.
 - The weekly drift-notification LaunchAgent (`com.takumi009.drift-check.plist` / `scripts/drift-notify.sh`) that `install-main.sh` used to install, and the standalone Vault-cultivation LaunchAgents (`vault-inventory`/`fragments-log`/`knowledge-merge-detect`) formerly installed by `install-vault-agents.sh`, were all removed/consolidated on 2026-07-16 (see [[Decisions/2026-07-16-nightly-batch-direct-write]] in the Vault). `install-maintenance.sh` migrates any of these 4 retired LaunchAgent labels still loaded on the machine (bootout + remove) before installing the new `com.takumi009.maintenance` LaunchAgent. The unattended weekly path now lives entirely in the new `maintenance.sh` runner.
@@ -154,7 +156,7 @@ scripts/check-drift.sh
 
 Checks the following 5 points and lists them (**it does not exit 1 even if drift is detected** — it's purely a report tool for manual checking):
 
-1. Whether the 12 symlink files point to the actual files in the repo
+1. Whether the 16 symlink files point to the actual files in the repo, plus a placeholder-aware content check of the generated `~/.claude/settings.json` against the repo's template (the `model` field is excluded from drift only when it's a string that legitimately differs — e.g. after switching models with `/model`, or by the main/sub machine-role's expected value; a missing/non-string `model`, or any other key that doesn't match the template, is still flagged as drift)
 2. Whether `~/.codex/config.toml` (a generated file) matches the repo's template with the placeholder expansion applied
 3. Whether this repository has any uncommitted changes
 4. Whether `vault-public/Preferences` differs from the real Vault's `Preferences` (detects export omissions from `export-public-vault.sh`)
@@ -252,7 +254,7 @@ None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the
 ```
 takumi009-ai-env/
 ├── claude/
-│   ├── settings.json          # ~/.claude/settings.json （symlink先）
+│   ├── settings.json          # ~/.claude/settings.json のテンプレ（symlinkではなく生成、後述）
 │   ├── hooks/                 # bootstrap-vault.sh・check-sub-update.sh・delegation-gate-v2.sh・bash-danger-gate.sh・next-pane-resolve.sh・vault-recall.sh・vault-read-log.sh
 │   └── agents/                # ワーカー役割定義（7ロール）
 ├── codex/
@@ -306,6 +308,8 @@ brew bundle          # Brewfile を見て ripgrep・gitleaks・jq・gh・macmon 
 
 Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイトから別途インストールしてください。
 
+`install-main.sh` は `python3` を必要とします（`claude/settings.json` の生成に使用。`check-drift.sh` の `config.toml`/`settings.json` 比較でも別途必要）。macOSは通常Xcode Command Line Tools経由でpython3を持つため通常は問題になりません。無い場合は`install-main.sh`が起動直後に明確なメッセージ付きでfail-fastします（`xcode-select --install`で導入してください）。言語ランタイム（Python自身を含む）はこの環境ではbrew管理しない方針のため（Vaultの`anyenv-runtime-management`参照）、意図的にBrewfileには含めていません。
+
 `scripts/ngwords.txt`（`export-public-vault.sh`・`audit.sh` が使うNGワード定義）は私的データのため**このリポジトリには含まれません**。`export-public-vault.sh`/`audit.sh` をそのまま実行するには、`NGWORDS_FILE=/path/to/your/ngwords.txt` で自分のファイルを指定するか、自分のNGワード定義を作成してください。
 
 #### メイン環境
@@ -319,7 +323,7 @@ scripts/install-maintenance.sh   # 週次メンテナンスランナー用Launch
 ```
 
 - `install-main.sh` は既存の実ファイルを初回だけ `<dest>.pre-aienv.bak` に退避してから symlink に置き換えます（再実行しても安全＝冪等）。`--dry-run` オプションで計画だけを確認できます。
-- `codex/config.toml` だけは symlink ではなく、プレースホルダ（`__AIENV_HOME__`）を実ホームパスへ置換した実ファイルとして生成されます（plain TOML はシェル変数展開されないため）。
+- `codex/config.toml`・`claude/settings.json` は symlink ではなく実ファイルとして生成されます。`config.toml` はプレースホルダ（`__AIENV_HOME__`）を実ホームパスへ置換します（plain TOML はシェル変数展開されないため）。`settings.json` はプレースホルダ（`__AIENV_MODEL__`）をマシンに応じたmodel値へ置換します — メイン環境（`install-main.sh` 直接実行）は `claude-fable-5[1m]`、サブ環境（`install-sub.sh` が `--sub-delegate` 付きで `install-main.sh` へ委譲。サブはProプランでFable 5非対応）は `claude-opus-5`（この値の決定は委譲経路そのものから直接行われ、machine-roleマーカーの読み返しには依存しません）。symlinkではなく生成にしているのは、symlinkのままだとセッション内で `/model` を実行した際にClaude Code自身がユーザー設定ファイルへ保存した選択を書き込む仕様により、symlink先＝このリポジトリの `claude/settings.json` が直接書き換わってしまう副作用を避けるためでもあります。
 - `install-backup.sh`・`install-maintenance.sh` はどちらも LaunchAgent の配置（bootstrap+enable）までを行い、**即時実行（kickstart）はしません**（Vault の初回git化は段階的ロールアウトが前提のため。初回実行は次回の定期発火を待つか、準備が整ってから手動で `launchctl kickstart -k` してください）。
 - `install-main.sh` は末尾で `scripts/setup-codex-mcp.sh` を自動実行し、**codex MCP（`mcp__codex__codex`/`codex-reply`、レビュー体制の中核）を自動登録**します（`claude mcp add codex -s user -- <codexの絶対パス> mcp-server`。既に登録済みならskip・冪等）。Claude Code / codex コマンドが未導入の環境では登録に失敗しますが、その場合も installer 全体は止まらず WARN で続行します。手動で登録する場合は `scripts/setup-codex-mcp.sh` を単体実行するか、案内される `claude mcp add` コマンドを直接実行してください。
 - `install-main.sh` が配置していた**週次drift通知LaunchAgent**（`com.takumi009.drift-check.plist`／`scripts/drift-notify.sh`）と、`install-vault-agents.sh`（撤去済み）が配置していたVault育成系LaunchAgent3種（`vault-inventory`／`fragments-log`／`knowledge-merge-detect`）は、いずれも2026-07-16の簡素化で撤去・統合しました（Vault内 `Decisions/2026-07-16-nightly-batch-direct-write` 参照）。`install-maintenance.sh` はこの旧4ラベルがまだマシンに残っていれば移行（bootout＋削除）してから新設の `com.takumi009.maintenance` LaunchAgentを設置します。週次無人実行の経路は新設の `maintenance.sh` ランナーへ完全に移りました。
@@ -375,7 +379,7 @@ scripts/check-drift.sh
 
 以下5点を検査し、一覧表示します（**検知しても exit 1 にはしません**。あくまで手動確認用のレポートツールです）:
 
-1. symlink 12ファイルが repo の実体を指しているか
+1. symlink 16ファイルが repo の実体を指しているか。加えて生成物 `~/.claude/settings.json` の内容がプレースホルダ展開込みで repo テンプレと一致しているか（`model` フィールドは文字列型かつ正常な差分（`/model` での切替やメイン/サブの役割による期待値差）の場合のみ除外し、欠落・非文字列型・テンプレに無いキーはdrift計上する）
 2. `~/.codex/config.toml`（生成物）が repo のテンプレとプレースホルダ展開込みで一致しているか
 3. このリポジトリに未commitの変更が無いか
 4. `vault-public/Preferences` と実Vaultの `Preferences` に差分が無いか（`export-public-vault.sh` のエクスポート漏れ検知）

@@ -187,7 +187,9 @@ echo "=== 7. clone失敗（不正なURL）でもinstall-main.sh自体は失敗�
   assert_true "WARNメッセージが出る" \
     "$(echo "$out" | grep -q 'WARN.*clone.*失敗' && echo 1 || echo 0)"
   assert_true "claude/codexのsymlink化自体は完了している" \
-    "$([[ -L "$HOME_DIR/.claude/settings.json" ]] && echo 1 || echo 0)"
+    "$([[ -L "$HOME_DIR/.claude/hooks/bootstrap-vault.sh" ]] && echo 1 || echo 0)"
+  assert_true "settings.jsonも生成されている（2026-08-21 machine-role対応でsymlinkから変更）" \
+    "$([[ -f "$HOME_DIR/.claude/settings.json" && ! -L "$HOME_DIR/.claude/settings.json" ]] && echo 1 || echo 0)"
 
   rm -rf "$HOME_DIR"
 }

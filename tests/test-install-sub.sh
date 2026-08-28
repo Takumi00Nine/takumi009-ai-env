@@ -29,6 +29,15 @@
 # machine-roleマーカーファイル（積極的な証明）方式へ変更した（リーダー裁定・
 # Codex一次レビュー指摘Major対応）。7〜9番でこのマーカー設置を検証する。
 #
+# 2026-08-21: claude/settings.json を symlink から「テンプレ+生成」方式へ変更した
+# （codex/config.tomlと同型。理由: JSONもシェル変数展開されない・symlinkのままだと
+# セッション内`/model`実行時にClaude Code自身がrepo管理下のファイルを直接書き換えて
+# しまう副作用があった）。"model"フィールドはマシン別（メイン=claude-fable-5[1m]・
+# サブ=claude-opus-5。サブはProプランでFable 5非対応、[1m]も付けない＝リーダー指示）
+# に出し分ける。決定は--sub-delegateの有無（＝install-sub.sh経由か直接実行か）から
+# 直接行われ、machine-roleマーカーの読み返しには依存しない。4番を旧来のsymlink検証
+# から生成物検証へ更新し、4b〜4eでmodel出し分け・環境変数上書き・内容保持を追加検証する。
+#
 # 実行方法: bash tests/test-install-sub.sh
 
 set -euo pipefail
@@ -124,10 +133,92 @@ echo "=== 4. claude/・codex/ の symlink化が install-main.sh 経由で行わ�
 
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
 
-  assert_eq "settings.jsonがrepoへのsymlinkになっている" "$REPO_ROOT/claude/settings.json" \
-    "$(readlink "$FAKE_HOME/.claude/settings.json")"
+  assert_eq "bootstrap-vault.shがrepoへのsymlinkになっている" "$REPO_ROOT/claude/hooks/bootstrap-vault.sh" \
+    "$(readlink "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh")"
+  assert_true "settings.jsonが生成されている（symlinkではなく実ファイル。2026-08-21 machine-role対応でsymlinkから変更）" \
+    "$([[ -f "$FAKE_HOME/.claude/settings.json" && ! -L "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
   assert_true "config.tomlが生成されている（symlinkではなく実ファイル）" \
     "$([[ -f "$FAKE_HOME/.codex/config.toml" && ! -L "$FAKE_HOME/.codex/config.toml" ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 4b. install-sub.sh 経由で生成されるsettings.jsonのmodelはサブ既定値(claude-opus-5・[1m]無し)に置換される ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+
+  settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
+  assert_true "modelがclaude-opus-5になっている" \
+    "$(printf '%s' "$settings_content" | grep -q '"model": "claude-opus-5"' && echo 1 || echo 0)"
+  assert_true "__AIENV_MODEL__プレースホルダが残っていない" \
+    "$(printf '%s' "$settings_content" | grep -q '__AIENV_MODEL__' && echo 0 || echo 1)"
+  assert_true "[1m]サフィックスは付かない（リーダー指示：サブはFable専用の1M contextを付けない）" \
+    "$(printf '%s' "$settings_content" | grep -q '\[1m\]' && echo 0 || echo 1)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 4c. install-main.sh単体実行(--sub-delegate無し)で生成されるsettings.jsonのmodelはメイン既定値(claude-fable-5[1m])に置換される ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/install-main.sh" >/dev/null
+
+  settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
+  assert_true "modelがclaude-fable-5[1m]になっている" \
+    "$(printf '%s' "$settings_content" | grep -q '"model": "claude-fable-5\[1m\]"' && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 4d. AIENV_MODEL_MAIN/AIENV_MODEL_SUB環境変数でmodel値を上書きできる（テスト用） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  AIENV_MODEL_SUB="custom-test-model" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+
+  settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
+  assert_true "AIENV_MODEL_SUBで上書きした値が反映される" \
+    "$(printf '%s' "$settings_content" | grep -q '"model": "custom-test-model"' && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 4e. settings.json生成後も他のキー（permissions等）はテンプレの中身を保っている（プレースホルダ以外は無変更であることの確認） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+
+  assert_true "permissions.allowの中身がテンプレ由来のまま含まれている" \
+    "$(grep -q 'mcp__codex__codex' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
+  assert_true "生成物が有効なJSONとしてパースできる" \
+    "$(python3 -c "import json; json.load(open('$FAKE_HOME/.claude/settings.json'))" 2>/dev/null && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 4f. model値に引用符・バックスラッシュが含まれても壊れたJSONを生成しない（Codex一次レビュー指摘・Minor対応の回帰確認: sedプレースホルダ置換からpython3 json moduleでの直接キー代入へ変更した効果） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  AIENV_MODEL_SUB='weird"model\value' SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+
+  assert_true "生成物が有効なJSONとしてパースできる（引用符・バックスラッシュを含む値でも壊れない）" \
+    "$(python3 -c "import json; json.load(open('$FAKE_HOME/.claude/settings.json'))" 2>/dev/null && echo 1 || echo 0)"
+  assert_true "model値が完全一致で読み戻せる" \
+    "$(python3 -c "
+import json
+d = json.load(open('$FAKE_HOME/.claude/settings.json'))
+print(1 if d.get('model') == 'weird\"model\\\\value' else 0)
+" 2>/dev/null)"
 
   rm -rf "$FAKE_HOME"
 }

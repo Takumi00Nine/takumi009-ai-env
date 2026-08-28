@@ -2,8 +2,10 @@
 # ポータブル化されたAI環境の「ズレ」を検知する手動実行ツール（Phase 1.5）。
 #
 # チェック項目:
-#   ① symlink 12ファイル（install-main.sh の link() 呼び出しと同じ集合）が
-#      repo の実体を指しているか
+#   ① symlink 16ファイル（install-main.sh の link() 呼び出しと同じ集合）が
+#      repo の実体を指しているか。加えて①-2として、生成物 ~/.claude/settings.json
+#      （2026-08-21よりsymlinkではなく生成物。詳細は下記①-2セクション本体の
+#      コメント参照）がrepoテンプレとプレースホルダ展開込みで一致しているか
 #   ② ~/.codex/config.toml（生成物）が repo の codex/config.toml テンプレと
 #      「プレースホルダ展開を考慮すれば」一致しているか（実ファイルを
 #      __AIENV_HOME__ へ逆置換してから、python3標準tomllibでTOMLとして解析し、
@@ -166,6 +168,13 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 # 私的パッチ（別のprivateリポジトリ）のローカルclone先。環境変数で上書き可
 # （ユニットテスト用。本番は既定値のままでよい＝README.md「導入手順」記載のパス）。
 : "${AIENV_PRIVATE_REPO:=$HOME/work/takumi009-ai-env-private}"
+# ①-2（~/.claude/settings.json）で使う machine-role マーカー・model既定値。
+# scripts/install-main.sh・claude/hooks/check-sub-update.sh 等と同じ環境変数名・
+# 既定値・fail-closedの読み方（trimして中身がちょうど"sub"の場合だけサブ扱い。
+# マーカー不在・読めない・中身が違う等はすべてmain扱い）を踏襲する。
+: "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
+: "${AIENV_MODEL_MAIN:=claude-fable-5[1m]}"
+: "${AIENV_MODEL_SUB:=claude-opus-5}"
 
 JSON_MODE=0
 for arg in "$@"; do
@@ -207,12 +216,19 @@ echo "======================================================================"
 echo "① symlink が repo を向いているか"
 echo "======================================================================"
 
+# 2026-08-21: bash-danger-gate.sh・next-pane-resolve.sh・check-sub-update.sh の
+# 3件が本一覧から漏れていた（install-main.shは配置しているのに監視対象外だった
+# 既存不具合。今回のsettings.json対応でこの配列を触ったのを機にCodex一次
+# レビュー指摘・Major対応として合わせて追加。settings.json/①-2の対応とは独立の
+# 修正のため、READMEの「N件」表記もこの3件を含めた実数に更新している）。
 SYMLINKS=(
-  "$HOME/.claude/settings.json|$DIR/claude/settings.json"
   "$HOME/.claude/hooks/bootstrap-vault.sh|$DIR/claude/hooks/bootstrap-vault.sh"
   "$HOME/.claude/hooks/delegation-gate-v2.sh|$DIR/claude/hooks/delegation-gate-v2.sh"
+  "$HOME/.claude/hooks/bash-danger-gate.sh|$DIR/claude/hooks/bash-danger-gate.sh"
   "$HOME/.claude/hooks/vault-recall.sh|$DIR/claude/hooks/vault-recall.sh"
   "$HOME/.claude/hooks/vault-read-log.sh|$DIR/claude/hooks/vault-read-log.sh"
+  "$HOME/.claude/hooks/next-pane-resolve.sh|$DIR/claude/hooks/next-pane-resolve.sh"
+  "$HOME/.claude/hooks/check-sub-update.sh|$DIR/claude/hooks/check-sub-update.sh"
   "$HOME/.codex/AGENTS.md|$DIR/codex/AGENTS.md"
   "$HOME/.codex/hooks.json|$DIR/codex/hooks.json"
 )
@@ -244,6 +260,173 @@ for pair in "${SYMLINKS[@]}"; do
 done
 log "symlink総数: ${#SYMLINKS[@]}件 / drift: ${sym_drift}件"
 [ "$sym_drift" -eq 0 ] && log "  -> ✅ 全symlinkがrepoを指しています"
+
+echo
+echo "======================================================================"
+echo "①-2 ~/.claude/settings.json（生成物）と repo テンプレのプレースホルダ展開差分"
+echo "======================================================================"
+
+# claude/settings.json は2026-08-21からsymlinkではなく生成物（scripts/install-main.sh
+# generate_settings_json()。理由は同ファイル冒頭コメント参照＝JSONもシェル変数
+# 展開されない・symlinkのままだと`/model`実行時にClaude Code自身がrepo管理下の
+# ファイルを直接書き換えてしまう副作用があった）。①のsymlink一覧からは除外し、
+# ②のTOML比較と同型（プレースホルダ展開込みの内容比較）だがJSON向けに簡略化した
+# チェックをここで行う。まず旧symlinkのまま残っていないか（[UNEXPECTED-SYMLINK]）
+# を確認してから、生成物としての内容比較に進む。
+#
+# "model"キーだけは特別扱いする: セッション内`/model`で意図的に切り替えた結果が
+# ここに現れることがあり、これは正常な用途のため、キーが存在し文字列型の場合に
+# 限り、値が期待値と異なっていてもdriftには数えずINFO表示に留める（キー自体の
+# 欠落・非文字列型は異常のため通常のDRIFT分類へ回す）。それ以外のキーは
+# テンプレとの厳密一致を要求する。config.tomlの②と異なり既知の自動追記キーが
+# 無いため、テンプレに無いキー（EXTRA-KEY）もWARNに留めずdrift計上する。
+#
+# machine-roleマーカーを読み、期待されるmodel値を決定する（fail-closed＝
+# マーカー不在・読めない・中身が「sub」以外はすべてmain扱い。他フックと同じ
+# 判定パターンを踏襲）。
+SETTINGS_JSON_LIVE="$HOME/.claude/settings.json"
+SETTINGS_JSON_TEMPLATE="$DIR/claude/settings.json"
+MACHINE_ROLE_RAW="$(cat "$AIENV_MACHINE_ROLE_MARKER" 2>/dev/null)"
+MACHINE_ROLE="${MACHINE_ROLE_RAW#"${MACHINE_ROLE_RAW%%[![:space:]]*}"}"
+MACHINE_ROLE="${MACHINE_ROLE%"${MACHINE_ROLE##*[![:space:]]}"}"
+if [ "$MACHINE_ROLE" = "sub" ]; then
+  EXPECTED_MODEL="$AIENV_MODEL_SUB"
+else
+  EXPECTED_MODEL="$AIENV_MODEL_MAIN"
+fi
+
+if [ -L "$SETTINGS_JSON_LIVE" ]; then
+  # 2026-08-21より前のinstall-main.shはsettings.jsonをsymlinkしていた（旧方式）。
+  # 旧symlinkがrepoテンプレをそのまま指している場合、テンプレの"model"値は
+  # __AIENV_MODEL__プレースホルダの生文字列のままであり、下の内容比較ロジックへ
+  # 素通しすると（"model"は特別扱いのため）誤って「一致」と判定されかねない
+  # （Codex一次レビュー指摘・Major対応）。symlinkのままである時点で「/model実行時に
+  # repo管理下のファイルが直接書き換わる」旧来の問題が解消されていないため、
+  # 内容比較を行わず即座にdrift計上する。
+  item_drift "[UNEXPECTED-SYMLINK] $SETTINGS_JSON_LIVE がsymlinkのままです（2026-08-21以降は生成物であるべき。旧versionのinstall-main.shを適用した環境の可能性が高いため、scripts/install-main.shを再実行してください）"
+elif [ ! -f "$SETTINGS_JSON_LIVE" ]; then
+  item_drift "[MISSING] $SETTINGS_JSON_LIVE が存在しません（未インストール？）"
+elif [ ! -f "$SETTINGS_JSON_TEMPLATE" ]; then
+  item_drift "[MISSING] リポジトリ側テンプレが見つかりません: $SETTINGS_JSON_TEMPLATE"
+else
+  SETTINGS_JSON_CLASSIFY_OUT="$(python3 -c "
+import sys, json
+
+def flatten(d, prefix=''):
+    out = {}
+    if isinstance(d, dict):
+        for k, v in d.items():
+            path = f'{prefix}.{k}' if prefix else k
+            if isinstance(v, dict) and v:
+                out.update(flatten(v, path))
+            else:
+                out[path] = v
+    return out
+
+def render(obj, model):
+    if isinstance(obj, dict):
+        return {k: render(v, model) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [render(v, model) for v in obj]
+    if isinstance(obj, str):
+        return obj.replace('__AIENV_MODEL__', model)
+    return obj
+
+try:
+    with open(sys.argv[1]) as f:
+        live = json.load(f)
+except Exception as e:
+    print(f'PARSE_FAILED\tlive\t{type(e).__name__}: {e}')
+    sys.exit(0)
+
+try:
+    with open(sys.argv[2]) as f:
+        template = json.load(f)
+except Exception as e:
+    print(f'PARSE_FAILED\ttemplate\t{type(e).__name__}: {e}')
+    sys.exit(0)
+
+# テンプレの"model"値が __AIENV_MODEL__ の目印から変わっていないかを確認する
+# （Codex二次レビュー指摘・Minor対応: ここを確認せずrender()するだけだと、誰かが
+# テンプレへ再び特定モデルをハードコードする回帰＝今回のタスクの発端そのもの＝が
+# 起きても、そのハードコード値がそのまま「期待値」として扱われてしまい検知
+# できなかった）。scripts/install-main.sh generate_settings_json() も同じ検証を
+# install時に行う（インストール時とdrift監視時の二重の安全網）。
+if not isinstance(template, dict) or template.get('model') != '__AIENV_MODEL__':
+    got = template.get('model') if isinstance(template, dict) else type(template).__name__
+    print(f'TEMPLATE_INVALID\t{got!r}')
+    sys.exit(0)
+
+expected_model = sys.argv[3]
+live_flat = flatten(live)
+tmpl_flat = flatten(render(template, expected_model))
+
+for key in sorted(set(live_flat) | set(tmpl_flat)):
+    if key == 'model' and 'model' in live_flat and isinstance(live_flat['model'], str):
+        # "model"キーが存在し文字列型の場合だけ特別扱いする（Codex一次レビュー
+        # 指摘・Minor対応: キー自体が欠落・非文字列型の場合は「意図的な/model切替」
+        # ではあり得ない異常な状態のため、下の通常DRIFT分類へ素通しして検知する）。
+        live_model = live_flat['model']
+        expect_model = tmpl_flat.get('model', '<missing>')
+        if live_model != expect_model:
+            print(f'MODEL_INFO\t{live_model!r}\t{expect_model!r}')
+        continue
+    if key in tmpl_flat:
+        if key not in live_flat:
+            print(f'DRIFT\tMISSING-KEY\t{key}\t{tmpl_flat[key]!r}')
+        elif live_flat[key] != tmpl_flat[key]:
+            print(f'DRIFT\tDIFF\t{key}\t{tmpl_flat[key]!r}\t{live_flat[key]!r}')
+    else:
+        # config.tomlの②とは異なり、settings.jsonにはCodexアプリのような既知の
+        # 自動追記キーが無いため、テンプレに無いキーはWARN表示に留めず即drift計上
+        # する（Codex一次レビュー指摘・Major対応: WARNのみだとpermissions等への
+        # 意図しない追加変更が総drift0のまま見逃され続ける）。
+        print(f'DRIFT\tEXTRA-KEY\t{key}\t{live_flat[key]!r}')
+" "$SETTINGS_JSON_LIVE" "$SETTINGS_JSON_TEMPLATE" "$EXPECTED_MODEL" 2>&1)"
+  SETTINGS_JSON_CLASSIFY_RC=$?
+  if [ "$SETTINGS_JSON_CLASSIFY_RC" -ne 0 ]; then
+    item_drift "[JSON-PARSE-FAILED] 検査①-2の実行自体に失敗しました（python3 exit=${SETTINGS_JSON_CLASSIFY_RC}）＝監視不能。詳細: ${SETTINGS_JSON_CLASSIFY_OUT}"
+  else
+    drift_before=$TOTAL_DRIFT
+    while IFS=$'\t' read -r kind a b c d; do
+      [ -z "$kind" ] && continue
+      case "$kind" in
+        PARSE_FAILED)
+          case "$a" in
+            live) parse_failed_path="$SETTINGS_JSON_LIVE" ;;
+            template) parse_failed_path="$SETTINGS_JSON_TEMPLATE" ;;
+            *) parse_failed_path="(${a})" ;;
+          esac
+          item_drift "[JSON-PARSE-FAILED] ${parse_failed_path} をJSONとして解析できませんでした（${b}）＝監視不能"
+          ;;
+        TEMPLATE_INVALID)
+          item_drift "[TEMPLATE-INVALID] ${SETTINGS_JSON_TEMPLATE} の 'model' フィールドが __AIENV_MODEL__ の目印から変わっています（現在: ${a}）。誰かが特定モデルをテンプレへ直接ハードコードした可能性があります。__AIENV_MODEL__ プレースホルダへ戻してください"
+          ;;
+        DRIFT)
+          case "$a" in
+            MISSING-KEY)
+              item_drift "[MISSING-KEY] キー '${b}' が ${SETTINGS_JSON_LIVE} にありません（テンプレ値: ${c}）"
+              ;;
+            DIFF)
+              item_drift "[DIFF] キー '${b}' の値がテンプレと異なります（テンプレ: ${c} / 実ファイル: ${d}）"
+              ;;
+            EXTRA-KEY)
+              item_drift "[EXTRA-KEY] キー '${b}' が ${SETTINGS_JSON_LIVE} にのみ存在します（テンプレにありません。値: ${c}）"
+              ;;
+          esac
+          ;;
+        MODEL_INFO)
+          log "  -> ℹ️ INFO: 'model' フィールドが現在の期待値と異なります（現在: ${a} / 期待: ${b}）。セッション内 /model での意図的な切替の可能性があるためdriftには数えません"
+          ;;
+      esac
+    done <<EOF
+$SETTINGS_JSON_CLASSIFY_OUT
+EOF
+    if [ "$TOTAL_DRIFT" -eq "$drift_before" ]; then
+      log "  -> ✅ settings.jsonはテンプレと一致しています（modelフィールドの差分のみ除外）"
+    fi
+  fi
+fi
 
 echo
 echo "======================================================================"

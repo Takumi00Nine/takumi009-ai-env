@@ -14,6 +14,22 @@
 # プレースホルダを実ホームパスへ置換した実ファイルとして生成する
 # （詳細は codex/config.toml 冒頭のコメント参照）。
 #
+# 例外その2: claude/settings.json も symlink しない（2026-08-21 リーダー承認・
+# machine-role対応）。理由は2つ: ① JSONもTOML同様シェル変数展開されないため、
+# "model" フィールドをマシン別（メイン=Fable 5・サブ=Opus 5。サブはPro プランで
+# Fable非対応）に出し分けるには値の置き換えが必要。② symlinkのままだと、
+# セッション内で `/model` を実行した際にClaude Code自身がユーザー設定ファイルの
+# "model" フィールドを書き換える仕様があり、symlink先＝このリポジトリの
+# claude/settings.json が意図せず直接書き換わってしまう副作用があった
+# （config.tomlのnotify等がCodexアプリに自動書き換えられる問題と同型）。
+# generate_settings_json() が実ファイルとして生成することで両方を解消する
+# （config.tomlはsedでのテキスト置換だが、settings.jsonはpython3のjson moduleで
+# トップレベル"model"キーへ直接代入する＝Codex一次レビュー指摘Minor対応。
+# テンプレの__AIENV_MODEL__値はscripts/check-drift.sh①-2が比較に使う目印として
+# 残す）。値は --sub-delegate の有無（＝呼び出し経路）から直接決定する（後述の
+# AIENV_MODEL_MAIN/AIENV_MODEL_SUB）。machine-roleマーカーの読み返しには依存
+# しない＝マーカー不在時の曖昧さという既存の問題が生じない。
+#
 # 使い方:
 #   scripts/install-main.sh                   # 実行（symlink化 / config.toml生成）
 #   scripts/install-main.sh --dry-run         # 置換計画だけ表示（何もしない）
@@ -65,6 +81,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 実launchd＝gui/$(id -u) はHOMEを差し替えても隔離できないため、テストで誤って
 # 実システムのlaunchdへ登録してしまう事故を防ぐ。本番運用では常に既定値=0のまま）。
 : "${SKIP_LAUNCHCTL:=0}"
+# claude/settings.json の "model" 値（マシン別出し分け・2026-08-21）。環境変数で
+# 上書き可（ユニットテスト用。本番は既定値のままでよい）。サブ機はProプラン・
+# Fable 5非対応のためOpus 5をpinする（aliasの"opus"は将来の指す先変更に追従して
+# しまうため使わない＝Web裏取り済み）。[1m]（1M context）サフィックスはメインの
+# Fable 5専用（リーダー指示・サブには付けない）。
+: "${AIENV_MODEL_MAIN:=claude-fable-5[1m]}"
+: "${AIENV_MODEL_SUB:=claude-opus-5}"
 
 DRY_RUN=0
 WITH_DOTFILES=0
@@ -78,9 +101,31 @@ for arg in "$@"; do
   esac
 done
 
+# --- claude/settings.json の model 値を確定する ---
+# --sub-delegate の有無（＝install-sub.sh経由か、直接実行か）だけで決まる。
+# machine-roleマーカーファイルの読み返しには依存しない（同マーカーは
+# fail-closed設計＝「積極的な証明（sub）が無ければmain扱い」だが、本値は
+# そもそも読み返しが不要な一次情報＝どちらのインストーラ経路で呼ばれたかから
+# 直接決まるため、マーカー不在時の曖昧さという既存の問題自体が生じない）。
+if [ "$IS_SUB_DELEGATE" = "1" ]; then
+  AIENV_MODEL_VALUE="$AIENV_MODEL_SUB"
+else
+  AIENV_MODEL_VALUE="$AIENV_MODEL_MAIN"
+fi
+
 log() { echo "[install-main] $*"; }
 warn() { echo "[install-main] WARN: $*" >&2; }
 fail() { echo "[install-main] FAIL: $*" >&2; exit 1; }
+
+# python3依存の早期チェック（Codex二次レビュー指摘・Minor対応: generate_settings_json()が
+# claude/settings.json生成にpython3のjson moduleを必須で使うようになった＝2026-08-21。
+# マーカー書込・symlink化等の実処理が始まってから中途半端な状態でpython3不在に
+# 気付くより、着手前に明確な指示を出す方が親切。--dry-run は実際には何も生成
+# しない＝python3を必要としないため対象外にする）。macOSは通常システムpython3
+# （またはXcode Command Line Tools経由）を持つため通常は問題にならない想定。
+if [ "$DRY_RUN" != "1" ]; then
+  command -v python3 >/dev/null 2>&1 || fail "python3 が見つかりません（claude/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
+fi
 
 # バックアップは「.pre-aienv.bak がまだ無いときだけ」作る（何度実行しても
 # 常にインストール前オリジナルを保持する。symlink化後は dest が symlink に
@@ -147,6 +192,55 @@ generate_config_toml() {
   log "generated: $dest <- $src （__AIENV_HOME__ を $HOME へ置換）"
 }
 
+# generate_settings_json <repo-relative-source> <destination> <model-value>
+# claude/settings.json も config.toml と同じ理由（JSONはシェル変数展開されない・
+# symlinkだとClaude Code自身の `/model` 書込がリポジトリ側ファイルへ直接及んでしまう）
+# で symlink ではなく実ファイルとして生成する。ただし置換方式は config.toml の
+# sedプレースホルダ置換とは異なりpython3のjson moduleでトップレベル"model"キーへ
+# 直接代入する（Codex一次レビュー指摘・Minor対応: sedのメタ文字エスケープは
+# `&`・`\`・sed区切り文字のみを想定しており、JSON側の引用符・バックスラッシュ
+# エスケープには対応していない＝環境変数上書き値に`"`や`\`が含まれると不正JSONを
+# 生成しうる欠陥があった。json moduleでの直接代入ならエスケープ処理自体が不要で
+# 構造的に安全）。テンプレの"model"値（__AIENV_MODEL__）は置換対象の目印・
+# ドキュメントとして残すのみで、実際の置換はテキストマッチではなくキー代入で行う
+# （scripts/check-drift.sh の①-2はテンプレの__AIENV_MODEL__を期待値へ文字列置換して
+# 比較するため、テンプレ側のプレースホルダ表記自体は維持すること）。
+generate_settings_json() {
+  local src="$DIR/$1" dest="$2" model="$3" tmp PY_ERR
+  [ -e "$src" ] || fail "リポジトリのファイルが見つかりません（checkout破損の可能性）: $src"
+  if [ "$DRY_RUN" = "1" ]; then
+    would_backup "$dest" && log "[dry-run] would back up: $dest -> $dest.pre-aienv.bak"
+    log "[dry-run] would generate (not symlink): $dest <- $src （\"model\"を ${model} へ設定）"
+    return
+  fi
+  mkdir -p "$(dirname "$dest")"
+  backup_once "$dest"
+  tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").aienv-tmp.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  # テンプレの"model"値が __AIENV_MODEL__ の目印のままであることを検証してから
+  # 上書きする（Codex二次レビュー指摘・Minor対応: 検証無しに常時上書きすると、
+  # 誰かがテンプレへ再び特定モデルをハードコードしてしまう回帰＝今回のタスクの
+  # 発端そのもの＝が起きても、installは何も気付かず成功してしまう。fail()で
+  # 早期に気付けるようにする）。
+  if ! PY_ERR="$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+if not isinstance(data, dict) or data.get('model') != '__AIENV_MODEL__':
+    got = data.get('model') if isinstance(data, dict) else type(data).__name__
+    print('template \"model\" field is not the __AIENV_MODEL__ placeholder (got: ' + repr(got) + ')', file=sys.stderr)
+    sys.exit(1)
+data['model'] = sys.argv[3]
+with open(sys.argv[2], 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+" "$src" "$tmp" "$model" 2>&1)"; then
+    fail "settings.json の生成に失敗しました（テンプレの検証またはpython3 json処理エラー。checkout破損・テンプレへの誤ったmodel値ハードコード・python3不在等の可能性）: $src${PY_ERR:+ (詳細: $PY_ERR)}"
+  fi
+  mv "$tmp" "$dest"
+  log "generated: $dest <- $src （\"model\"を ${model} へ設定）"
+}
+
 # --- machine-roleマーカー: --sub-delegate無し（＝メイン機としての直接実行）の
 #     場合だけ明示的に"main"を書く。--sub-delegate経由では一切触れない
 #     （委譲元のinstall-sub.shが"sub"を書き込む/書き込む予定のため。詳細は
@@ -175,7 +269,9 @@ if [ "$IS_SUB_DELEGATE" != "1" ]; then
 fi
 
 # --- claude/ ---
-link claude/settings.json               "$HOME/.claude/settings.json"
+# settings.json はsymlinkではなく生成（マシン別modelプレースホルダ置換。上記
+# 「例外その2」コメント参照）。
+generate_settings_json claude/settings.json "$HOME/.claude/settings.json" "$AIENV_MODEL_VALUE"
 link claude/hooks/bootstrap-vault.sh    "$HOME/.claude/hooks/bootstrap-vault.sh"
 link claude/hooks/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.sh"
 # 危険コマンド deny ゲート(PreToolUse Bash)。2026-08-06 追加: 2026-07-19 の

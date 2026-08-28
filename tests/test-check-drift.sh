@@ -69,11 +69,21 @@ make_fake_repo() {
   mkdir -p "$repo/scripts" "$repo/claude/hooks" "$repo/claude/agents" "$repo/codex" "$repo/vault-public/Preferences"
   cp "$REPO_ROOT/$SCRIPT_REL" "$repo/scripts/check-drift.sh"
   chmod +x "$repo/scripts/check-drift.sh"
-  echo '{}' > "$repo/claude/settings.json"
+  cat > "$repo/claude/settings.json" <<'EOF'
+{
+  "permissions": {
+    "allow": ["Bash(npm test)"]
+  },
+  "model": "__AIENV_MODEL__"
+}
+EOF
   echo '#!/bin/bash' > "$repo/claude/hooks/bootstrap-vault.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/delegation-gate-v2.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/bash-danger-gate.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/vault-recall.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/vault-read-log.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/next-pane-resolve.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/check-sub-update.sh"
   echo '# agent' > "$repo/claude/agents/sample-agent.md"
   echo '# AGENTS' > "$repo/codex/AGENTS.md"
   echo '{}' > "$repo/codex/hooks.json"
@@ -85,15 +95,24 @@ EOF
   echo "# サンプル方針" > "$repo/vault-public/Preferences/sample.md"
 }
 
-# claude/・codex/ の symlink化（install-main.sh相当を簡易に再現）＋config.toml生成を行う。
+# claude/・codex/ の symlink化（install-main.sh相当を簡易に再現）＋
+# config.toml・settings.json生成を行う。$3（省略可）はsettings.jsonのmodel値
+# （既定 claude-fable-5[1m]＝machine-roleマーカーを置かないテストの大半が想定する
+# メイン機の既定値。check-drift.sh側のAIENV_MODEL_MAIN既定値と一致させることで
+# 「他項目のfixtureのためだけの」テストで①-2が無関係にdriftを出さないようにする）。
 install_fake_home() {
-  local repo="$1" home="$2"
+  local repo="$1" home="$2" model="${3:-claude-fable-5[1m]}"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
-  ln -s "$repo/claude/settings.json" "$home/.claude/settings.json"
+  # settings.json はsymlinkではなく生成物（install-main.shのgenerate_settings_json()
+  # と同じ __AIENV_MODEL__ プレースホルダ置換方式・2026-08-21 machine-role対応）。
+  sed "s#__AIENV_MODEL__#${model}#g" "$repo/claude/settings.json" > "$home/.claude/settings.json"
   ln -s "$repo/claude/hooks/bootstrap-vault.sh" "$home/.claude/hooks/bootstrap-vault.sh"
   ln -s "$repo/claude/hooks/delegation-gate-v2.sh" "$home/.claude/hooks/delegation-gate-v2.sh"
+  ln -s "$repo/claude/hooks/bash-danger-gate.sh" "$home/.claude/hooks/bash-danger-gate.sh"
   ln -s "$repo/claude/hooks/vault-recall.sh" "$home/.claude/hooks/vault-recall.sh"
   ln -s "$repo/claude/hooks/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
+  ln -s "$repo/claude/hooks/next-pane-resolve.sh" "$home/.claude/hooks/next-pane-resolve.sh"
+  ln -s "$repo/claude/hooks/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
   ln -s "$repo/claude/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/codex/AGENTS.md" "$home/.codex/AGENTS.md"
   ln -s "$repo/codex/hooks.json" "$home/.codex/hooks.json"
@@ -201,7 +220,8 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "symlink drift 0件" "$out" "symlink総数: 8件 / drift: 0件"
+  assert_contains "symlink drift 0件" "$out" "symlink総数: 10件 / drift: 0件"
+  assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
   assert_contains "config.toml一致" "$out" "TOML三分類で一致しています"
   assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
   assert_contains "総drift件数0" "$out" "総drift件数: 0"
@@ -237,19 +257,19 @@ echo "=== 2. ①symlinkが無い（未インストール）を検知する ==="
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "MISSING検知" "$out" "[MISSING]"
-  assert_contains "8件全部drift" "$out" "symlink総数: 8件 / drift: 8件"
+  assert_contains "10件全部drift" "$out" "symlink総数: 10件 / drift: 10件"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 3. ①symlinkが実ファイルに置き換わっている（NOT-SYMLINK）を検知する ==="
+echo "=== 3. ①symlinkが実ファイルに置き換わっている（NOT-SYMLINK）を検知する（2026-08-21: settings.jsonはsymlinkから生成物へ変更したため、判定対象を別のsymlink=bootstrap-vault.shへ差し替え） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  rm "$HOME_DIR/.claude/settings.json"
-  echo '{"hand-edited": true}' > "$HOME_DIR/.claude/settings.json"
+  rm "$HOME_DIR/.claude/hooks/bootstrap-vault.sh"
+  echo '#!/bin/bash' > "$HOME_DIR/.claude/hooks/bootstrap-vault.sh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "NOT-SYMLINK検知" "$out" "[NOT-SYMLINK]"
@@ -257,18 +277,212 @@ echo "=== 3. ①symlinkが実ファイルに置き換わっている（NOT-SYMLI
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 4. ①symlinkが別の場所を指している（WRONG-TARGET）を検知する ==="
+echo "=== 4. ①symlinkが別の場所を指している（WRONG-TARGET）を検知する（2026-08-21: 判定対象をbootstrap-vault.shへ差し替え。理由は3番と同じ） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  rm "$HOME_DIR/.claude/settings.json"
-  echo '{}' > "$HOME_DIR/somewhere-else.json"
-  ln -s "$HOME_DIR/somewhere-else.json" "$HOME_DIR/.claude/settings.json"
+  rm "$HOME_DIR/.claude/hooks/bootstrap-vault.sh"
+  echo '#!/bin/bash' > "$HOME_DIR/somewhere-else.sh"
+  ln -s "$HOME_DIR/somewhere-else.sh" "$HOME_DIR/.claude/hooks/bootstrap-vault.sh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "WRONG-TARGET検知" "$out" "[WRONG-TARGET]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4f. ①-2 settings.jsonがJSONとして解析できない（手動編集破損）場合はJSON-PARSE-FAILEDとして検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  echo '{not valid json' > "$HOME_DIR/.claude/settings.json"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "JSON-PARSE-FAILED検知" "$out" "[JSON-PARSE-FAILED]"
+  assert_contains "監視不能である旨を明示する" "$out" "監視不能"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4g. ①-2 settings.jsonのテンプレ記載キーの値がテンプレと異なる場合は[DIFF]として検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d['permissions']['allow'] = ['Bash(npm run lint)']
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "settings.json DIFF検知" "$out" "[DIFF] キー 'permissions.allow'"
+  assert_not_contains "一致メッセージは出ない" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4h. ①-2 settings.jsonのテンプレ記載キーがlive側から欠落していると[MISSING-KEY]として検知する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+del d['permissions']
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "MISSING-KEY検知" "$out" "[MISSING-KEY] キー 'permissions.allow'"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4i. ①-2 modelフィールドがテンプレの期待値(メイン=claude-fable-5[1m])と異なっていてもdriftにはせずINFO表示のみ（/model等での意図的切替を想定） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  # あえてサブ機の値でsettings.jsonを生成する（machine-roleマーカーは置かない＝
+  # このマシンはmainとして判定される想定）。
+  install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "modelの差分はINFO表示される" "$out" "'model' フィールドが現在の期待値と異なります"
+  assert_not_contains "modelの差分はdriftにしない" "$out" "[DIFF] キー 'model'"
+  assert_contains "総drift件数0（modelの差分だけならdriftにしない）" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4j. ①-2 machine-roleマーカーが「sub」ならmodelの期待値もOpus 5になる（サブ機シナリオ） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5"
+  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
+  printf 'sub\n' > "$HOME_DIR/.config/takumi009-ai-env/machine-role"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "サブ機ならmodelのINFOも出ない（期待値どおりのため）" "$out" "'model' フィールドが現在の期待値と異なります"
+  assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4k. ①-2 settings.jsonが旧versionのまま(symlink)残っているとUNEXPECTED-SYMLINKとして検知する（Codex一次レビュー指摘・Major対応: 旧symlinkがrepoテンプレそのものを指す場合、__AIENV_MODEL__の生文字列がmodel特例扱いで素通りし『一致』と誤判定されていた） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  # 旧方式（2026-08-21より前）を再現: settings.jsonを削除し、repoテンプレへの
+  # symlinkに置き換える（テンプレ側は__AIENV_MODEL__が未置換のまま）。
+  rm "$HOME_DIR/.claude/settings.json"
+  ln -s "$REPO/claude/settings.json" "$HOME_DIR/.claude/settings.json"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "UNEXPECTED-SYMLINK検知" "$out" "[UNEXPECTED-SYMLINK]"
+  assert_not_contains "旧symlinkは誤って一致扱いにならない（回帰確認）" "$out" "settings.jsonはテンプレと一致しています"
+  assert_not_contains "内容比較（DIFF等）は行わず即座にdrift扱いにする" "$out" "[DIFF] キー 'model'"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4l. ①-2 テンプレに無いキーがsettings.jsonに追加されているとEXTRA-KEYとして検知する（Codex一次レビュー指摘・Major対応: 従来WARN表示のみでpermissions等への意図しない追加変更が見逃されていた） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d['extraTopLevelKey'] = 'unexpected'
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "EXTRA-KEY検知" "$out" "[EXTRA-KEY] キー 'extraTopLevelKey'"
+  assert_not_contains "一致メッセージは出ない" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4m. ①-2 modelキー自体がsettings.jsonから欠落しているとMISSING-KEYとしてdrift計上する（Codex一次レビュー指摘・Minor対応: キー欠落まで/model切替と同列にINFO扱いされていた） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+del d['model']
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "MISSING-KEY検知" "$out" "[MISSING-KEY] キー 'model'"
+  assert_not_contains "INFO扱いにはならない（回帰確認）" "$out" "'model' フィールドが現在の期待値と異なります"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4n. ①-2 modelキーが文字列以外の型ならMISSING扱いせず通常のDIFFとしてdrift計上する（Codex一次レビュー指摘・Minor対応の網羅: 非文字列型ケース） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d['model'] = 12345
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "DIFF検知（非文字列型）" "$out" "[DIFF] キー 'model'"
+  assert_not_contains "INFO扱いにはならない（回帰確認）" "$out" "'model' フィールドが現在の期待値と異なります"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4o. ①-2 repoテンプレ側の'model'が__AIENV_MODEL__の目印から変わっている(再ハードコード)場合はTEMPLATE-INVALIDとして検知する（Codex二次レビュー指摘・Minor対応: 今回のタスクの発端＝テンプレへのmodel直書き回帰を、render()だけだと検知できずliveのmodel差分がINFOとして握りつぶされてしまっていた） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  # repoテンプレ側を「誰かが特定モデルを直接ハードコードしてしまった」状態にする。
+  python3 -c "
+import json
+p = '$REPO/claude/settings.json'
+d = json.load(open(p))
+d['model'] = 'claude-hardcoded-oops'
+json.dump(d, open(p, 'w'))
+"
+  install_fake_home "$REPO" "$HOME_DIR" "claude-hardcoded-oops"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "TEMPLATE-INVALID検知" "$out" "[TEMPLATE-INVALID]"
+  assert_contains "実際の値がメッセージに含まれる" "$out" "claude-hardcoded-oops"
+  assert_not_contains "誤って一致扱いにならない（回帰確認）" "$out" "settings.jsonはテンプレと一致しています"
 
   rm -rf "$REPO" "$HOME_DIR"
 }

@@ -55,8 +55,12 @@ echo "=== 1. claudeコマンドが無くてもinstall-main.sh全体はexit 0（W
   assert_eq "exit code 0" "0" "$rc"
   assert_true "codex MCP登録失敗のWARNが出る" \
     "$(echo "$out" | grep -q 'WARN: codex MCP の登録に失敗しました' && echo 1 || echo 0)"
-  assert_true "symlink化（settings.json等）は完了している" \
-    "$([[ -L "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
+  assert_true "symlink化（hooks等）は完了している" \
+    "$([[ -L "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh" ]] && echo 1 || echo 0)"
+  assert_true "settings.jsonも生成されている（symlinkではなく実ファイル）" \
+    "$([[ -f "$FAKE_HOME/.claude/settings.json" && ! -L "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
+  assert_true "settings.jsonのmodelはメイン既定値(claude-fable-5[1m])に置換されている" \
+    "$(grep -q 'claude-fable-5\[1m\]' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
   assert_true "config.tomlも生成されている" \
     "$([[ -f "$FAKE_HOME/.codex/config.toml" ]] && echo 1 || echo 0)"
 

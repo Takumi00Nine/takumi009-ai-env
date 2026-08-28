@@ -123,7 +123,7 @@
       "~/Library/LaunchAgents"
     ]
   },
-  "model": "claude-fable-5[1m]",
+  "model": "__AIENV_MODEL__",
   "hooks": {
     "SessionStart": [
       {
