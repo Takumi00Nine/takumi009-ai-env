@@ -113,19 +113,6 @@ EOF
 EOF
 }
 
-# export-public-vault.sh を実行して exit code を返す（VAULT/AIENV_REPO 上書き。
-# 第3引数（省略可）は NGWORDS_FILE の差し替え＝NGワード系テストがダミー語
-# ファイルを使うため）。
-run_export() {
-  local vault="$1" repo="$2" ngwords="${3:-}"
-  if [[ -n "$ngwords" ]]; then
-    VAULT="$vault" AIENV_REPO="$repo" NGWORDS_FILE="$ngwords" \
-      "$SCRIPT" >"$repo/../stdout.log" 2>"$repo/../stderr.log"
-  else
-    VAULT="$vault" AIENV_REPO="$repo" "$SCRIPT" >"$repo/../stdout.log" 2>"$repo/../stderr.log"
-  fi
-}
-
 # ダミーのNGワードファイルを作る（NGWORD_ALPHA/NGWORD_BETA の2語。ngwords.txtの
 # 実データはテストファイルに書かない＝public履歴に入れないため）。
 make_dummy_ngwords() {
@@ -133,6 +120,34 @@ make_dummy_ngwords() {
   f="$(mktemp)"
   printf 'NGWORD_ALPHA\nNGWORD_BETA' > "$f"
   printf '%s' "$f"
+}
+
+# 既定のNGWORDS_FILE（本テストの全ケースが個別指定しない限りこれを使う）。
+# ⚠️ 2026-08-30 環境依存欠陥の修正（追加1対応）: 従来はrun_export()の第3引数を
+# 省略するとNGWORDS_FILEを一切渡さず、export-public-vault.sh側の既定値
+# （$SCRIPT_DIR/ngwords.txt）へフォールバックしていた。この既定パスは
+# .gitignore対象（scripts/ngwords.txt）の私的資産（実運用ではprivateリポジトリ
+# へのsymlinkとして手動設置される）であり、リポジトリを新規clone/checkout・
+# git worktreeした環境には存在しない。開発者の主作業ディレクトリ
+# （~/work/takumi009-ai-env）にたまたま手動設置済みだったため、そこで実行する
+# 限りは気づかず全緑に見えていたが、tester環境（隔離worktree）やCI相当の
+# クリーンチェックアウトでは「ngwords.txt が見つかりません」でexport-public-
+# vault.sh自体がFAILし、ほぼ全テストが道連れで失敗していた（本体側の
+# fail-closed挙動＝ngwords.txt無しなら止める、は本番の安全設計として正しい
+# ため変更しない。直すのはテスト側＝「実 Vault・実 GitHubには一切依存しない」
+# という本ファイル冒頭の設計方針どおり、テスト自身が使うNGワードファイルは
+# テスト自身が用意する）。
+DEFAULT_NGWORDS_FILE="$(make_dummy_ngwords)"
+trap 'rm -f "$DEFAULT_NGWORDS_FILE"' EXIT
+
+# export-public-vault.sh を実行して exit code を返す（VAULT/AIENV_REPO 上書き。
+# 第3引数（省略可）は NGWORDS_FILE の差し替え＝NGワード系テストがダミー語
+# ファイルを使うため。省略時もDEFAULT_NGWORDS_FILEを渡し、実行環境に存在する
+# かもしれない私的ngwords.txtには依存しない）。
+run_export() {
+  local vault="$1" repo="$2" ngwords="${3:-$DEFAULT_NGWORDS_FILE}"
+  VAULT="$vault" AIENV_REPO="$repo" NGWORDS_FILE="$ngwords" \
+    "$SCRIPT" >"$repo/../stdout.log" 2>"$repo/../stderr.log"
 }
 
 # git log --oneline はコミットが1つも無いrepoでは非ゼロ終了する（fatal）ため、

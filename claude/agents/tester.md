@@ -21,7 +21,7 @@ color: yellow
 2. **エッジケースを追加**: 境界値・異常入力・空/巨大データ・並行実行など、受入条件に無いが壊れそうな箇所。
 3. 不足しているテストコードがあれば追加してよい（テストファイルのみ。実装本体は直さず、不具合は報告する）。
 
-## 安全則（最重要・Knowledge/mistakes 実環境ルール）
+## 安全則（最重要・Preferences/core-conduct 実環境ルール）
 テスト・スクリプトを実行する前に**必ず中身を確認**し、破壊的な実環境操作（launchctl bootout/load・rm -rf・インストール系・実 ~/Library/LaunchAgents 変更）を含む場合は、sandbox／temp HOME／skip 環境変数で隔離してから実行する。隔離できなければ実行せずリーダーへ報告する。固定ラベルや実 uid を使う処理は HOME 差し替えでは保護されない点に注意（過去事故: test.sh が稼働中 LaunchAgent を bootout し usage 更新が24時間停止）。
 
 ## Codex 一次レビュー（報告前に自分で回す）

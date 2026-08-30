@@ -47,12 +47,16 @@ assert_not_contains() {
   fi
 }
 
-# 全6ファイルをVAULT配下に作る（メイン相当のfixture）。
+# 全7ファイルをVAULT配下に作る（メイン相当のfixture）。2026-08-30 §9.0 A-1-3
+# 波及改修（本人承認済み）: `Knowledge/mistakes.md` を除去し
+# `Preferences/core-conduct.md`・`Preferences/core-workflow.md` を追加した
+# bootstrap-vault.shのFILES配列と同じ構成にする。
 make_full_vault() {
   local vault="$1"
   mkdir -p "$vault/Knowledge" "$vault/Preferences" "$vault/Personal"
-  for f in "Knowledge/mistakes.md" "Preferences/absolute-rules.md" "Preferences/profile.md" \
-           "Personal/profile-personal.md" "Preferences/coding-delegation.md" "Preferences/vault-operation.md"; do
+  for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
+           "Preferences/profile.md" "Personal/profile-personal.md" "Preferences/coding-delegation.md" \
+           "Preferences/vault-operation.md"; do
     echo "dummy" > "$vault/$f"
   done
 }
@@ -92,6 +96,39 @@ run_bootstrap() {
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 
+# P1機構（ローカル実体プロファイル）のテスト専用ヘルパー。
+# BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 を明示して有効化した状態で実行する
+# （既定は無効のまま＝run_bootstrap()と挙動を変えないための独立ヘルパー）。
+run_bootstrap_with_profile() {
+  local vault="$1" profile_path="$2"
+  echo '{"session_id":"test-session-0000"}' \
+    | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
+      VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+      VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
+      PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
+      MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
+      AIENV_MACHINE_ROLE_MARKER="/nonexistent-dir/machine-role" \
+      BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" "$SCRIPT" \
+    | jq -r '.hookSpecificOutput.additionalContext'
+}
+
+# 最小能力表7キーすべてに実運用値を入れた「壊れていない」profile.mdを作る。
+make_ok_profile() {
+  local path="$1"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<'EOF'
+---
+inventory_source: Vault(Preferences/Knowledge直下)
+reviewer: 本人
+vault_write: configured(vault-scribe)
+vault_scope: Preferences配下のみ
+ui.user_call: SendMessage(to: main)
+git_role: push可(takumi009-ai-env repo限定)
+web_verification: WebSearch/WebFetch
+---
+EOF
+}
+
 # agent_type付き（ワーカー扱い）でbootstrap-vault.shを実行する。
 run_bootstrap_worker() {
   local vault="$1"
@@ -114,14 +151,16 @@ run_bootstrap_worker() {
 # 2回目 N-5 対応でローカルTZとの取り違えを防ぐ）。
 d_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -u -v"${n}"d +%Y-%m-%dT%H:%M:%SZ; }
 
-echo "=== 1. メイン相当: 6ファイル全部存在 → 6ファイル全部が必読リストに載る ==="
+echo "=== 1. メイン相当: 7ファイル全部存在 → 7ファイル全部が必読リストに載る（2026-08-30 §9.0 A-1-3波及改修後の構成） ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
 
   ctx="$(run_bootstrap "$VAULT_DIR")"
-  assert_contains "6ファイルを読む、の文言" "$ctx" "（6ファイルを1回の並列 Read で同時取得すること）"
-  assert_contains "Knowledge/mistakes.md が列挙される" "$ctx" "Knowledge/mistakes.md"
+  assert_contains "7ファイルを読む、の文言" "$ctx" "（7ファイルを1回の並列 Read で同時取得すること）"
+  assert_contains "Preferences/core-conduct.md が列挙される" "$ctx" "Preferences/core-conduct.md"
+  assert_contains "Preferences/core-workflow.md が列挙される" "$ctx" "Preferences/core-workflow.md"
+  assert_not_contains "Knowledge/mistakes.md はもう必読に含まれない（P2除去対象）" "$ctx" "Knowledge/mistakes.md"
   assert_contains "Personal/profile-personal.md が列挙される" "$ctx" "Personal/profile-personal.md"
   assert_not_contains "「見つかりません」という古い文言は出ない" "$ctx" "見つかりません"
   assert_not_contains "private ノート対象外の注記は出ない（メインでは全部揃うため）" "$ctx" "private ノートはこのマシンには無い"
@@ -129,22 +168,23 @@ echo "=== 1. メイン相当: 6ファイル全部存在 → 6ファイル全部�
   rm -rf "$VAULT_DIR"
 }
 
-echo "=== 2. サブ相当: private系2ファイル欠如 → 4ファイルのみ列挙+対象外の注記 ==="
+echo "=== 2. サブ相当: private系1ファイル欠如 → 6ファイルのみ列挙+対象外の注記（core-conduct/core-workflowはPreferences配下＝サブにも届く前提） ==="
 {
   VAULT_DIR="$(mktemp -d)"
   mkdir -p "$VAULT_DIR/Preferences"
-  for f in "Preferences/absolute-rules.md" "Preferences/profile.md" \
-           "Preferences/coding-delegation.md" "Preferences/vault-operation.md"; do
+  for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
+           "Preferences/profile.md" "Preferences/coding-delegation.md" "Preferences/vault-operation.md"; do
     echo "dummy" > "$VAULT_DIR/$f"
   done
-  # Knowledge/mistakes.md と Personal/profile-personal.md は無い（サブ想定）
+  # Personal/profile-personal.md だけが無い（サブ想定＝private層の意図的欠落）
 
   ctx="$(run_bootstrap "$VAULT_DIR")"
-  assert_contains "4ファイルを読む、の文言" "$ctx" "（4ファイルを1回の並列 Read で同時取得すること）"
+  assert_contains "6ファイルを読む、の文言" "$ctx" "（6ファイルを1回の並列 Read で同時取得すること）"
   assert_contains "Preferences/absolute-rules.md は列挙される" "$ctx" "Preferences/absolute-rules.md"
-  assert_not_contains "Knowledge/mistakes.md は列挙されない（存在しないため）" "$ctx" "Knowledge/mistakes.md"
+  assert_contains "Preferences/core-conduct.md は列挙される（サブにも届く）" "$ctx" "Preferences/core-conduct.md"
+  assert_contains "Preferences/core-workflow.md は列挙される（サブにも届く）" "$ctx" "Preferences/core-workflow.md"
   assert_not_contains "Personal/profile-personal.md は列挙されない（存在しないため）" "$ctx" "Personal/profile-personal.md"
-  assert_contains "private ノート対象外の注記が出る（2件）" "$ctx" "private ノートはこのマシンには無い（サブ）: 2件は対象外"
+  assert_contains "private ノート対象外の注記が出る（1件）" "$ctx" "private ノートはこのマシンには無い（サブ）: 1件は対象外"
   assert_not_contains "「見つかりません」という古い文言は出ない" "$ctx" "見つかりません"
 
   rm -rf "$VAULT_DIR"
@@ -156,7 +196,32 @@ echo "=== 3. Vault丸ごと空（0ファイル） → 0ファイルでも壊れ�
 
   ctx="$(run_bootstrap "$VAULT_DIR")"
   assert_contains "0ファイルを読む、の文言" "$ctx" "（0ファイルを1回の並列 Read で同時取得すること）"
-  assert_contains "6件対象外の注記が出る" "$ctx" "private ノートはこのマシンには無い（サブ）: 6件は対象外"
+  # 2026-08-30 Codex一次レビュー指摘・Major対応: FILES配列のうち
+  # 意図的private層はPersonal/profile-personal.mdの1件だけなので、
+  # 「private対象外」は1件のみ。残り6件（Preferences配下の必須publicノート）は
+  # 「想定外の欠落」として別枠で強めに警告される（下のテスト3bで直接検証）。
+  assert_contains "private対象外の注記は1件のみ" "$ctx" "private ノートはこのマシンには無い（サブ）: 1件は対象外"
+  assert_contains "想定外欠落の警告が出る" "$ctx" "必読のはずのpublicノートが見つかりません"
+
+  rm -rf "$VAULT_DIR"
+}
+
+echo "=== 3b. 必須publicノート(core-conduct.md)だけが欠落 → private対象外にはせず「想定外」として強めに警告する（Codex一次レビュー指摘・Major対応: §7.3③『どちらも読まれない窓』の実検知） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  mkdir -p "$VAULT_DIR/Preferences" "$VAULT_DIR/Personal"
+  for f in "Preferences/absolute-rules.md" "Preferences/core-workflow.md" \
+           "Preferences/profile.md" "Personal/profile-personal.md" \
+           "Preferences/coding-delegation.md" "Preferences/vault-operation.md"; do
+    echo "dummy" > "$VAULT_DIR/$f"
+  done
+  # Preferences/core-conduct.md だけを欠落させる（移送失敗・sync漏れ等を模す）。
+
+  ctx="$(run_bootstrap "$VAULT_DIR")"
+  assert_contains "6ファイルを読む、の文言" "$ctx" "（6ファイルを1回の並列 Read で同時取得すること）"
+  assert_contains "想定外欠落の警告にcore-conduct.mdのフルパスが出る" "$ctx" "Preferences/core-conduct.md"
+  assert_contains "想定外欠落の警告文言が出る" "$ctx" "必読のはずのpublicノートが見つかりません"
+  assert_not_contains "core-conduct.mdの欠落は「privateノート対象外」には数えられない（profile-personal.mdは存在するため当該注記自体が出ない）" "$ctx" "private ノートはこのマシンには無い"
 
   rm -rf "$VAULT_DIR"
 }
@@ -777,6 +842,263 @@ EOF
   assert_contains "ワーカー版本文は健在" "$ctx" "【チームメイト用ブートストラップ｜軽量版】"
 
   rm -rf "$VAULT_DIR" "$LOGDIR" "$INV_DIR" "$PROPOSALS_DIR" "$LAST_RUN_DIR"
+}
+
+echo "=== 10. P1機構(ローカル実体プロファイル): 既定(無効)では固定パスが必読リストに一切現れない（有効化はリーダー側工程に残す・§9.0 A-1） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  PROFILE_PATH="$(mktemp -d)/profile.md"
+  make_ok_profile "$PROFILE_PATH"
+
+  ctx="$(run_bootstrap "$VAULT_DIR")"
+  assert_not_contains "既定では固定パスが必読リストに出ない" "$ctx" "$PROFILE_PATH"
+  assert_not_contains "既定ではローカル実体プロファイル見出しも出ない" "$ctx" "【ローカル実体プロファイル】"
+
+  rm -rf "$VAULT_DIR" "$(dirname "$PROFILE_PATH")"
+}
+
+echo "=== 11. P1機構: 有効化すると、Vault側の必読ファイルに加えて固定パスが1件だけ現れる（P1受入条件①） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  make_ok_profile "$PROFILE_PATH"
+
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
+  occurrences="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH" || true)"
+  assert_eq "固定パスがちょうど1件だけ現れる" "1" "$occurrences"
+  assert_contains "Vault側の必読ファイル(absolute-rules.md)も引き続き現れる" "$ctx" "$VAULT_DIR/Preferences/absolute-rules.md"
+  assert_not_contains "壊れていないprofileでは最小能力警告は出ない" "$ctx" "最小能力"
+
+  rm -rf "$VAULT_DIR" "$PROFILE_DIR"
+}
+
+echo "=== 12. P1機構 T1(実体なし): 最小能力+⚠️になる ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  PROFILE_PATH="$(mktemp -d)/nonexistent/profile.md"
+
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
+  assert_contains "T1: 最小能力+⚠️の警告が出る" "$ctx" "最小能力"
+  assert_contains "T1: 実体なしの理由が出る" "$ctx" "T1"
+  assert_contains "未作成の案内が必読リストに出る" "$ctx" "未作成"
+
+  rm -rf "$VAULT_DIR"
+}
+
+echo "=== 13. P1機構 T2-MINIMAL(未記入sentinel): 最小能力+⚠️になる ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  cat > "$PROFILE_PATH" <<'EOF'
+---
+inventory_source: Vault
+reviewer: <fill-in>
+vault_write: configured
+vault_scope: 全範囲
+ui.user_call: SendMessage
+git_role: pull専用
+web_verification: WebSearch
+---
+EOF
+
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
+  assert_contains "T2-MINIMAL: 最小能力+⚠️の警告が出る" "$ctx" "最小能力"
+  assert_contains "T2-MINIMAL: 未記入sentinelの理由が出る" "$ctx" "T2-MINIMAL"
+
+  rm -rf "$VAULT_DIR" "$PROFILE_DIR"
+}
+
+echo "=== 14. P1機構 T5(既存キー欠落): 最小能力+⚠️になる ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  # git_role キーを欠落させる。
+  cat > "$PROFILE_PATH" <<'EOF'
+---
+inventory_source: Vault
+reviewer: 本人
+vault_write: configured
+vault_scope: 全範囲
+ui.user_call: SendMessage
+web_verification: WebSearch
+---
+EOF
+
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
+  assert_contains "T5: 最小能力+⚠️の警告が出る" "$ctx" "最小能力"
+  assert_contains "T5: 既存キー欠落の理由が出る" "$ctx" "T5"
+  assert_contains "T5: 欠落キー名が出る" "$ctx" "git_role"
+
+  rm -rf "$VAULT_DIR" "$PROFILE_DIR"
+}
+
+echo "=== 15. P1機構 T6(YAML破損): 最小能力+⚠️になる ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  # frontmatterの終端区切りが無い壊れたファイル。
+  cat > "$PROFILE_PATH" <<'EOF'
+---
+inventory_source: Vault
+reviewer: 本人
+EOF
+
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
+  assert_contains "T6: 最小能力+⚠️の警告が出る" "$ctx" "最小能力"
+  assert_contains "T6: YAML破損の理由が出る" "$ctx" "T6"
+
+  rm -rf "$VAULT_DIR" "$PROFILE_DIR"
+}
+
+echo "=== 16. P1機構 T4(新キー未追随): unknown補完+ℹ️で、最小能力へは倒さない ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  # 既知の7キーはすべて揃えたうえで、将来のスキーマ拡張を想定した未知キーを追加する。
+  cat > "$PROFILE_PATH" <<'EOF'
+---
+inventory_source: Vault
+reviewer: 本人
+vault_write: configured
+vault_scope: 全範囲
+ui.user_call: SendMessage
+git_role: pull専用
+web_verification: WebSearch
+future_new_key: 未来のスキーマが追加した値
+---
+EOF
+
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
+  assert_not_contains "T4: 最小能力へは倒さない（degrade警告は出ない）" "$ctx" "を解決できません"
+  assert_contains "T4: 未知キーの情報行が出る" "$ctx" "future_new_key"
+  assert_contains "T4: ℹ️の情報行として出る（⚠️ではない）" "$ctx" "ℹ️ ローカル実体プロファイルに未知のキーがあります"
+
+  rm -rf "$VAULT_DIR" "$PROFILE_DIR"
+}
+
+echo "=== 17. P1機構: 実体がsymlinkの場合は受理せず最小能力+⚠️になる（Codex一次レビュー指摘・Major対応: repo/Vault管理下ファイルへのsymlinkでリモート更新が能力表へ暗黙反映される経路を防ぐ） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  REAL_TARGET="$PROFILE_DIR/real-target.md"
+  make_ok_profile "$REAL_TARGET"
+  ln -s "$REAL_TARGET" "$PROFILE_PATH"
+
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
+  assert_contains "symlinkでは最小能力+⚠️の警告が出る" "$ctx" "最小能力"
+  assert_contains "SYMLINK理由コードが出る" "$ctx" "SYMLINK"
+  # Codex二次レビュー指摘・Major対応: 必読リスト側の判定も揃っていることを
+  # 検証する（resolve_local_profile()だけでなく、リスト表示のfor文自体が
+  # `-f`のみで判定していると、信頼しないはずのsymlink内容を「全文をRead
+  # すること」として読ませる指示が残ってしまう）。
+  assert_not_contains "symlinkは「全文をReadすること」の必読指示に載らない" "$ctx" "$PROFILE_PATH  （全"
+  assert_contains "symlinkのため受理しない旨が必読リスト側にも表示される" "$ctx" "symlinkのため実体として受理しません"
+
+  rm -rf "$VAULT_DIR" "$PROFILE_DIR"
+}
+
+# resolve_local_profile()の生出力（MINIMAL/OK行）だけを取得するテスト専用
+# ヘルパー。BOOTSTRAP_RESOLVE_PROFILE_ONLY=1を使う（2026-08-30 MAJOR-8b対応）。
+run_resolve_local_profile() {
+  local profile_path="$1"
+  echo '{}' | BOOTSTRAP_RESOLVE_PROFILE_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" \
+    BOOTSTRAP_VAULT="/nonexistent-dir" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" "$SCRIPT"
+}
+
+echo "=== 18. resolve_local_profile(): 値が空(\`key:\`のみ)のキーはOKのまま\"unknown\"へ正規化される（2026-08-30 工程横断レビュー指摘・MAJOR-8b対応: 最低契約④どおり空値をOK扱いのまま通さない） ==="
+{
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  cat > "$PROFILE_PATH" <<'EOF'
+---
+inventory_source: Vault
+reviewer:
+vault_write: configured
+vault_scope: 全範囲
+ui.user_call: SendMessage
+git_role: pull専用
+web_verification: WebSearch
+---
+EOF
+
+  out="$(run_resolve_local_profile "$PROFILE_PATH")"
+  assert_contains "OK扱いのまま（最小能力へは倒さない）" "$out" "OK"
+  assert_not_contains "MINIMALへは倒さない" "$out" "MINIMAL"
+  assert_contains "reviewerの値がunknownへ正規化される" "$out" "reviewer=unknown"
+
+  rm -rf "$PROFILE_DIR"
+}
+
+echo "=== 19. resolve_local_profile(): 空白のみの値も\"unknown\"へ正規化される ==="
+{
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  {
+    echo "---"
+    echo "inventory_source: Vault"
+    printf 'reviewer:   \n'
+    echo "vault_write: configured"
+    echo "vault_scope: 全範囲"
+    echo "ui.user_call: SendMessage"
+    echo "git_role: pull専用"
+    echo "web_verification: WebSearch"
+    echo "---"
+  } > "$PROFILE_PATH"
+
+  out="$(run_resolve_local_profile "$PROFILE_PATH")"
+  assert_contains "OK扱いのまま" "$out" "OK"
+  assert_contains "空白のみのreviewerもunknownへ正規化される" "$out" "reviewer=unknown"
+
+  rm -rf "$PROFILE_DIR"
+}
+
+echo "=== 20. resolve_local_profile(): 値が空でも他のキーの値は変わらない（正規化が該当キーだけに閉じている回帰確認） ==="
+{
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  cat > "$PROFILE_PATH" <<'EOF'
+---
+inventory_source: Vault
+reviewer:
+vault_write: configured(vault-scribe)
+vault_scope: 全範囲
+ui.user_call: SendMessage
+git_role: pull専用
+web_verification: WebSearch
+---
+EOF
+
+  out="$(run_resolve_local_profile "$PROFILE_PATH")"
+  assert_contains "reviewer以外(vault_write)の値は空値正規化の影響を受けない" "$out" "vault_write=configured(vault-scribe)"
+
+  rm -rf "$PROFILE_DIR"
+}
+
+echo "=== 21. resolve_local_profile(): 全キー正常記入ならOK・unknown正規化は起きない（回帰確認） ==="
+{
+  PROFILE_DIR="$(mktemp -d)"
+  PROFILE_PATH="$PROFILE_DIR/profile.md"
+  make_ok_profile "$PROFILE_PATH"
+
+  out="$(run_resolve_local_profile "$PROFILE_PATH")"
+  assert_contains "OKが返る" "$out" "OK"
+  assert_not_contains "unknownへの正規化は起きない（元々空値のキーが無いため）" "$out" "=unknown"
+
+  rm -rf "$PROFILE_DIR"
 }
 
 echo

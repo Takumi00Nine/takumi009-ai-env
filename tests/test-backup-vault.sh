@@ -12,6 +12,13 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/backup-vault.sh"
+# shellcheck source=scripts/lib/pid-lock.sh
+# テスト14・14b・14c・14d・19で、Vault書込ロックのfixtureを手書きの1行
+# (PIDのみ)形式ではなく acquire_pid_lock() が実際に生成する形式
+# （2026-08-30 PID再利用対策改修で1行目=PID・2行目=指紋の2行形式へ変更済み）
+# で作るためにsourceする（2026-08-30 リーダー追補・tester独立検証指摘:
+# 手書き1行fixtureのままだと実フォーマットに対する回帰を検出できない）。
+source "$REPO_ROOT/scripts/lib/pid-lock.sh"
 
 PASS=0
 FAIL=0
@@ -520,7 +527,7 @@ echo "=== 14. Vault書込ロック: maintenance.sh(想定)が保持中(生存PID
   echo "note 1" > "$VAULT_DIR/note1.md"
   LOCK="$WORK/lock"
   WRITER_LOCK="$WORK/vault-writer.lock"
-  echo "$$" > "$WRITER_LOCK"   # このテストプロセス自身のPID（確実に生存）
+  acquire_pid_lock "$WRITER_LOCK" 3600 "test-writer-lock"   # 実フォーマット(1行目=PID・2行目=指紋)で生成する（このテストプロセス自身のPID・確実に生存）
 
   rc=0
   run_backup "$VAULT_DIR" "$LOCK" 3600 "$WRITER_LOCK" || rc=$?
@@ -544,7 +551,7 @@ echo "=== 14b. Vault書込ロック: MAINTENANCE_LOCK_OWNER_PIDがロックフ�
   echo "note 1" > "$VAULT_DIR/note1.md"
   LOCK="$WORK/lock"
   WRITER_LOCK="$WORK/vault-writer.lock"
-  echo "$$" > "$WRITER_LOCK"   # このテストプロセス自身のPID（確実に生存）
+  acquire_pid_lock "$WRITER_LOCK" 3600 "test-writer-lock"   # 実フォーマット(1行目=PID・2行目=指紋)で生成する（このテストプロセス自身のPID・確実に生存）
 
   rc=0
   MAINTENANCE_LOCK_OWNER_PID="$$" \
@@ -567,7 +574,7 @@ echo "=== 14c. Vault書込ロック: MAINTENANCE_LOCK_OWNER_PIDが未設定な�
   echo "note 1" > "$VAULT_DIR/note1.md"
   LOCK="$WORK/lock"
   WRITER_LOCK="$WORK/vault-writer.lock"
-  echo "$$" > "$WRITER_LOCK"
+  acquire_pid_lock "$WRITER_LOCK" 3600 "test-writer-lock"   # 実フォーマット(1行目=PID・2行目=指紋)で生成する（このテストプロセス自身のPID・確実に生存）
 
   rc=0
   run_backup "$VAULT_DIR" "$LOCK" 3600 "$WRITER_LOCK" || rc=$?
@@ -586,7 +593,7 @@ echo "=== 14d. Vault書込ロック: MAINTENANCE_LOCK_OWNER_PIDがロックフ�
   echo "note 1" > "$VAULT_DIR/note1.md"
   LOCK="$WORK/lock"
   WRITER_LOCK="$WORK/vault-writer.lock"
-  echo "$$" > "$WRITER_LOCK"   # ロックの実際の保持者はこのテストプロセス
+  acquire_pid_lock "$WRITER_LOCK" 3600 "test-writer-lock"   # 実フォーマット(1行目=PID・2行目=指紋)で生成する（このテストプロセス自身のPID・確実に生存）
 
   rc=0
   # MAINTENANCE_LOCK_OWNER_PIDに実際のロック保持者とは異なる値（例:
@@ -680,7 +687,7 @@ echo "=== 19. --status-file: Vault書込ロック保持中で見送った場合�
   echo "note 1" > "$VAULT_DIR/note1.md"
   LOCK="$WORK/lock"
   WRITER_LOCK="$WORK/vault-writer.lock"
-  echo "$$" > "$WRITER_LOCK"
+  acquire_pid_lock "$WRITER_LOCK" 3600 "test-writer-lock"   # 実フォーマット(1行目=PID・2行目=指紋)で生成する（このテストプロセス自身のPID・確実に生存）
   STATUS="$WORK/status.txt"
 
   run_backup "$VAULT_DIR" "$LOCK" 3600 "$WRITER_LOCK" "$STATUS"

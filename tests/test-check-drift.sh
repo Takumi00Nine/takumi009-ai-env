@@ -69,6 +69,12 @@ make_fake_repo() {
   mkdir -p "$repo/scripts" "$repo/claude/hooks" "$repo/claude/agents" "$repo/codex" "$repo/vault-public/Preferences"
   cp "$REPO_ROOT/$SCRIPT_REL" "$repo/scripts/check-drift.sh"
   chmod +x "$repo/scripts/check-drift.sh"
+  # 2026-08-30 §9.0 A-0-3: check-drift.sh は model値を自前で持たず、値出力口
+  # （install-main.sh --print-model）を呼ぶ。実物をfixtureへコピーする
+  # （--print-modelは他の全処理より先にexitする副作用ゼロの経路のため、
+  # fixture内で呼んでも実システムに一切触れない）。
+  cp "$REPO_ROOT/scripts/install-main.sh" "$repo/scripts/install-main.sh"
+  chmod +x "$repo/scripts/install-main.sh"
   cat > "$repo/claude/settings.json" <<'EOF'
 {
   "permissions": {
@@ -84,6 +90,7 @@ EOF
   echo '#!/bin/bash' > "$repo/claude/hooks/vault-read-log.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/next-pane-resolve.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/check-sub-update.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/context-size-warn.sh"
   echo '# agent' > "$repo/claude/agents/sample-agent.md"
   echo '# AGENTS' > "$repo/codex/AGENTS.md"
   echo '{}' > "$repo/codex/hooks.json"
@@ -113,6 +120,7 @@ install_fake_home() {
   ln -s "$repo/claude/hooks/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
   ln -s "$repo/claude/hooks/next-pane-resolve.sh" "$home/.claude/hooks/next-pane-resolve.sh"
   ln -s "$repo/claude/hooks/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
+  ln -s "$repo/claude/hooks/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"
   ln -s "$repo/claude/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/codex/AGENTS.md" "$home/.codex/AGENTS.md"
   ln -s "$repo/codex/hooks.json" "$home/.codex/hooks.json"
@@ -220,7 +228,7 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "symlink drift 0件" "$out" "symlink総数: 10件 / drift: 0件"
+  assert_contains "symlink drift 0件" "$out" "symlink総数: 11件 / drift: 0件"
   assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
   assert_contains "config.toml一致" "$out" "TOML三分類で一致しています"
   assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
@@ -257,7 +265,7 @@ echo "=== 2. ①symlinkが無い（未インストール）を検知する ==="
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "MISSING検知" "$out" "[MISSING]"
-  assert_contains "10件全部drift" "$out" "symlink総数: 10件 / drift: 10件"
+  assert_contains "11件全部drift" "$out" "symlink総数: 11件 / drift: 11件"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -483,6 +491,233 @@ json.dump(d, open(p, 'w'))
   assert_contains "TEMPLATE-INVALID検知" "$out" "[TEMPLATE-INVALID]"
   assert_contains "実際の値がメッセージに含まれる" "$out" "claude-hardcoded-oops"
   assert_not_contains "誤って一致扱いにならない（回帰確認）" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4p. ①-2 既知アプリ管理キー(agentPushNotifEnabled/inputNeededNotifEnabled)がsettings.jsonに追加されていてもdriftにしない（2026-08-30追加・検出事項⑤/[[Knowledge/symlink-config-app-writeback-pitfall]]） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  # Claude Codeアプリが自動で書き戻す既知キーを2件追加する（2026-08-28実測の再現）。
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d['agentPushNotifEnabled'] = True
+d['inputNeededNotifEnabled'] = False
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "一致メッセージが出る（既知アプリ管理キーは除外される）" "$out" "settings.jsonはテンプレと一致しています"
+  assert_not_contains "agentPushNotifEnabledはEXTRA-KEY扱いにならない" "$out" "agentPushNotifEnabled"
+  assert_not_contains "inputNeededNotifEnabledはEXTRA-KEY扱いにならない" "$out" "inputNeededNotifEnabled"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4q. ①-2 既知アプリ管理キー一覧に無いキーは従来どおりEXTRA-KEYとしてdrift計上する（4pの回帰確認: 除外対象を広げすぎていない） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d['someUnknownKey'] = 'x'
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "未知キーはEXTRA-KEYとして検知される" "$out" "[EXTRA-KEY]"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4q2. ①-2 既知アプリ管理キーと同名でもトップレベル以外（ネストしたキー）は除外しない（Codex一次レビュー指摘・Minor対応: leaf一致だと別階層の同名キーまで誤って除外してしまう） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d.setdefault('permissions', {})['agentPushNotifEnabled'] = True
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "ネストしたagentPushNotifEnabledはEXTRA-KEYとして検知される" "$out" "[EXTRA-KEY]"
+  assert_contains "総drift件数1" "$out" "総drift件数: 1"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4r. ①-2 model値の出力口が一本化されている（install-main.sh --print-model の出力と生成されたsettings.jsonのmodelが一致する。§9.0 A-0-3・値表2箇所重複の解消） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+
+  printed_main="$("$REPO/scripts/install-main.sh" --print-model)"
+  printed_sub="$("$REPO/scripts/install-main.sh" --print-model --sub-delegate)"
+  assert_eq_num "メイン既定値の出力口はsettings.jsonのmodelと一致" "$printed_main" "claude-fable-5[1m]"
+  assert_eq_num "サブ既定値の出力口はsettings.jsonのmodelと一致" "$printed_sub" "claude-opus-5"
+  own_table_lines="$(grep -c ':.*AIENV_MODEL_MAIN:=\|:.*AIENV_MODEL_SUB:=' "$REPO/scripts/check-drift.sh" || true)"
+  assert_eq_num "check-drift.sh自身はAIENV_MODEL_MAIN/SUBの既定値表を持たない（重複解消）" "$own_table_lines" "0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4s. ①-2 model値の出力口（install-main.sh --print-model）が値を返せない場合はfail-openで一致扱いにせずdrift計上する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  rm -f "$REPO/scripts/install-main.sh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "MODEL-VALUE-UNAVAILABLEとして検知される" "$out" "[MODEL-VALUE-UNAVAILABLE]"
+  assert_not_contains "誤って一致扱いにならない" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4t. ①-2 'env'配下のキーはdrift検知時に値を出力しない（Bedrock envファイル取り込み後の値露出防止・2026-08-30 Codex一次レビュー指摘・Major対応） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  # settings.jsonの"env"配下に、Bedrock envファイル取り込みを想定した
+  # 秘密情報風の値（推論プロファイルARN相当）を追加する。
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d.setdefault('env', {})['ANTHROPIC_DEFAULT_OPUS_MODEL'] = 'arn:aws:bedrock:us-east-2:123456789012:application-inference-profile/secret-id'
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "EXTRA-KEYとして検知される（テンプレに無いenvキーのため）" "$out" "[EXTRA-KEY]"
+  assert_contains "値は<redacted>に置換される" "$out" "<redacted>"
+  assert_not_contains "ARNの値そのものはログに出ない" "$out" "123456789012"
+  assert_not_contains "ARNの値そのものはログに出ない(secret-id部分)" "$out" "secret-id"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4u. ①-2 Bedrock envファイルが正しくマージ済みのsettings.jsonは恒常的なEXTRA-KEY drift扱いにならない（2026-08-30 工程横断レビュー指摘・MAJOR-5対応: installer/update-subが正しく生成した状態がdriftとして誤報され続けていた） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
+  cat > "$HOME_DIR/.config/takumi009-ai-env/bedrock.env" <<'EOF'
+CLAUDE_CODE_USE_BEDROCK=1
+AWS_REGION=us-east-1
+EOF
+  # install-main.sh generate_settings_json()が実際に生成する結果を模す
+  # （許可リストに載っているキーのみをenvブロックへ追加した状態）。
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d.setdefault('env', {})['CLAUDE_CODE_USE_BEDROCK'] = '1'
+d['env']['AWS_REGION'] = 'us-east-1'
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "正しくマージ済みの状態はdriftにならず一致と判定される" "$out" "settings.jsonはテンプレと一致しています"
+  assert_not_contains "CLAUDE_CODE_USE_BEDROCKはEXTRA-KEYにならない" "$out" "[EXTRA-KEY]"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4v. ①-2 Bedrock envファイルに書かれているのにsettings.jsonへ反映されていなければMISSING-KEYとして正しく検知する（4uの対比・fail-openにしない確認） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
+  cat > "$HOME_DIR/.config/takumi009-ai-env/bedrock.env" <<'EOF'
+CLAUDE_CODE_USE_BEDROCK=1
+EOF
+  # settings.json側には反映されていない（生成失敗・手動改変等を模す）。
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "MISSING-KEYとして検知される（fail-openで見逃さない）" "$out" "[MISSING-KEY]"
+  assert_contains "キー名env.CLAUDE_CODE_USE_BEDROCKが出る" "$out" "env.CLAUDE_CODE_USE_BEDROCK"
+  assert_contains "値は<redacted>のまま" "$out" "<redacted>"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4w. ①-2 Bedrock env値の出力口が読取失敗で非0終了した場合はfail-openで一致扱いにせずBEDROCK-ENV-VALUE-UNAVAILABLEとして検知する（2026-08-30 Codex二次レビュー指摘・Major対応） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
+  ENV_FILE="$HOME_DIR/.config/takumi009-ai-env/bedrock.env"
+  # bedrock.envをディレクトリとして作る（Codex三次レビュー指摘・Minor対応:
+  # chmod 000はroot実行環境で読めてしまい未検証になりうるが、open()は
+  # ディレクトリに対して実行uidに依存せず常にIsADirectoryErrorで失敗する）。
+  mkdir -p "$ENV_FILE"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "BEDROCK-ENV-VALUE-UNAVAILABLEとして検知される" "$out" "[BEDROCK-ENV-VALUE-UNAVAILABLE]"
+  assert_not_contains "誤って一致扱いにならない" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4x. ①-2 Bedrock env値の出力口がexit0・非空文字列で戻ってきても、中身が壊れたJSON／旧flat形式（envキーが無い）ならfail-openで空env扱いにせずBEDROCK-ENV-VALUE-UNAVAILABLEとして検知する（2026-08-30 Codex 2巡目差し戻し・MAJOR対応: 従来はexit0・非空なら無条件で信頼しており、壊れた/旧形式のpayloadが静かに「空env」として受理される穴があった） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  # install-main.sh を「--print-bedrock-env-jsonがexit0・非空文字列だが
+  # スキーマが壊れている（envキーが無い旧flat形式）」を返すスタブへ差し替える
+  # （--print-modelはinstall_fake_home()の既定modelと一致させ、①-2 model側は
+  # 無関係にdriftを出さないようにする）。
+  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-model)
+    echo "claude-fable-5[1m]"
+    exit 0
+    ;;
+  --print-bedrock-env-json)
+    echo '{"AWS_REGION": "us-east-1"}'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$REPO/scripts/install-main.sh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "壊れた/旧形式のpayloadでもBEDROCK-ENV-VALUE-UNAVAILABLEとして検知される" "$out" "[BEDROCK-ENV-VALUE-UNAVAILABLE]"
+  assert_not_contains "誤って一致扱いにならない" "$out" "settings.jsonはテンプレと一致しています"
 
   rm -rf "$REPO" "$HOME_DIR"
 }

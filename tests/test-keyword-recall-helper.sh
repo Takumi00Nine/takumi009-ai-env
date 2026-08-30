@@ -112,20 +112,27 @@ echo "=== 3. ASCII大文字小文字無視・最低文字数(ASCII3/非ASCII2)�
   rm -rf "$VAULT_DIR"
 }
 
-echo "=== 4. 除外: README.md・EXCLUDE_RELPATHS(起動必読6件)はヒットしても候補に出ない ==="
+echo "=== 4. 除外: README.md・EXCLUDE_RELPATHS(起動必読)はヒットしても候補に出ない ==="
 {
   VAULT_DIR="$(mktemp -d)"
   write_note "$VAULT_DIR/Knowledge/mistakes.md" $'date: 2026-07-10\naliases:\n  - "excludedkeyword"'
   write_note "$VAULT_DIR/Preferences/absolute-rules.md" $'date: 2026-07-10\naliases:\n  - "excludedkeyword2"'
   write_note "$VAULT_DIR/Personal/profile-personal.md" $'date: 2026-07-11\naliases:\n  - "excludedkeyword3"'
   write_note "$VAULT_DIR/Knowledge/README.md" $'date: 2026-07-10' "readme"
+  # 2026-08-30 §9.0 A-1-3波及改修（工程横断レビュー指摘・MAJOR-4対応）:
+  # bootstrap-vault.shのFILES配列に追加したcore-conduct.md・core-workflow.mdも
+  # 想起除外集合に追加したので、あわせて回帰確認する。
+  write_note "$VAULT_DIR/Preferences/core-conduct.md" $'date: 2026-08-30\naliases:\n  - "excludedkeyword4"'
+  write_note "$VAULT_DIR/Preferences/core-workflow.md" $'date: 2026-08-30\naliases:\n  - "excludedkeyword5"'
 
-  out="$(run_helper "$VAULT_DIR" "excludedkeywordとexcludedkeyword2とexcludedkeyword3とREADMEについて聞きたい")"
+  out="$(run_helper "$VAULT_DIR" "excludedkeywordとexcludedkeyword2とexcludedkeyword3とexcludedkeyword4とexcludedkeyword5とREADMEについて聞きたい")"
   relpaths="$(printf '%s' "$out" | relpaths_of)"
   assert_not_contains "mistakes.mdは候補に出ない" "$relpaths" "mistakes.md"
   assert_not_contains "absolute-rules.mdは候補に出ない" "$relpaths" "absolute-rules.md"
   assert_not_contains "profile-personal.mdは候補に出ない" "$relpaths" "profile-personal.md"
   assert_not_contains "README.mdは候補に出ない" "$relpaths" "README.md"
+  assert_not_contains "core-conduct.mdは候補に出ない" "$relpaths" "core-conduct.md"
+  assert_not_contains "core-workflow.mdは候補に出ない" "$relpaths" "core-workflow.md"
 
   rm -rf "$VAULT_DIR"
 }

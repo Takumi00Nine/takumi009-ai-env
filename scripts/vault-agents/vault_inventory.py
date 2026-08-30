@@ -6,7 +6,7 @@
   2. 本文中の最新日付が frontmatter の updated/date より新しい（更新日漏れの疑い）
   3. wiki link ([[...]]) のリンク切れ
   4. 旧方針キーワードの残存（Decisions/mistakes-archive は履歴なので対象外）
-  5. 必読5ファイルの注入サイズ監視
+  5. 必読ファイル（BOOTSTRAP_FILES＝bootstrap-vault.shのFILES配列と同期）の注入サイズ監視
   6. status 付きノートの一覧と停滞検知
   8. Fragments の直近統計（capture が続いているか・昇格レビューの目安）
   9. Knowledge/Preferences/Decisions/Projects/Personal の aliases 欠落（README除く。
@@ -64,21 +64,36 @@ import vault_lib  # noqa: E402
 VAULT = pathlib.Path.home() / "Data" / "obsidian"
 OUT_DIR = pathlib.Path.home() / ".claude" / "logs" / "vault-inventory"
 
-# 必読5ファイル（bootstrap-vault.sh と同じ並び）
+# 必読ファイル（bootstrap-vault.sh の FILES 配列・最終形と同じ並び）。
+# 2026-08-30 §9.0 A-1-3波及改修（本人承認済み）でbootstrap-vault.sh側が
+# Knowledge/mistakes.mdを除去しPreferences/core-conduct.md・
+# Preferences/core-workflow.mdを追加したのに合わせて同期した
+# （リーダー裁定・mistakes.md現役則「schema・設定のキーやスロットを増減する
+# 時は参照側と必ずセットで直す」該当。放置すると週次メンテの棚卸しが
+# check-drift誤報と同型の恒常ノイズを出すため）。
 BOOTSTRAP_FILES = [
-    "Knowledge/mistakes.md",
     "Preferences/absolute-rules.md",
+    "Preferences/core-conduct.md",
+    "Preferences/core-workflow.md",
     "Preferences/profile.md",
     "Personal/profile-personal.md",
     "Preferences/coding-delegation.md",
     "Preferences/vault-operation.md",
 ]
-SIZE_LIMIT_LINES = 40         # 1ファイルの目安（guide §定期チェック）
-# 合計の目安（2026-07-11 改定＝Decisions/2026-07-11-bootstrap-size-limit-rebaseline。
-# 公式アンカー「CLAUDE.md 200行未満推奨・Auto Memory 200行/25KB打ち切り」に対し、
-# 棚卸し間隔中の一時膨張を許容するバッファを取った値。旧: bytes のみ 12288）
-SIZE_LIMIT_TOTAL_LINES = 150  # 合計行数
-SIZE_LIMIT_TOTAL = 20480      # 合計 20KB
+# 2026-08-30 §9.0 A-1-3波及改修（本人承認済み・リーダー裁定）に伴う再基準化:
+# BOOTSTRAP_FILESへcore-conduct.md・core-workflow.mdを追加した結果、必読
+# 集合の実測がメイン機で274行/44,563バイト（旧閾値150行/20,480バイトを
+# 大きく超過・core-conduct.md単体66行・core-workflow.md単体84行で旧40行
+# 閾値も超過）となり、n_issuesが常時3件以上の恒常ノイズを出していた
+# （check-drift誤報と同型の問題）。裁定＝「予算の再基準化」（コア本文の
+# 圧縮はしない＝採用済み本文のchurn回避・P3で必読2枚〈coding-delegation.md・
+# profile.md〉減の予定もあるため）。閾値は「現必読集合の実測＋20%程度の
+# 余裕」へ引き上げた。P3で必読集合が変わった際は本閾値も再度見直すこと。
+SIZE_LIMIT_LINES = 100        # 1ファイルの目安（旧40。実測最大値
+                               # core-workflow.md 84行 × 約1.2 ≒ 100行）
+SIZE_LIMIT_TOTAL_LINES = 330  # 合計行数（旧150。実測274行 × 約1.2 ≒ 330行）
+SIZE_LIMIT_TOTAL = 53500      # 合計バイト数（旧20,480。実測44,563バイト
+                               # × 約1.2 ≒ 53,500バイト）
 
 # 旧方針キーワード（体制が変わったら追記・削除する）
 STALE_PATTERNS = {

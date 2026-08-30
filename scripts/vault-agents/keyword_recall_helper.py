@@ -66,12 +66,21 @@ EXIT_BUDGET_EXCEEDED = 3
 # 2026-07-11決定でPersonal追加＝5フォルダ）。
 SCAN_DIRS = ("Knowledge", "Preferences", "Decisions", "Projects", "Personal")
 
-# 起動必読ファイル（bootstrap-vault.shと同じ6件）。vault-recall.sh側のEXCLUDE_RELPATHSと
-# 完全一致させる必要がある（重複管理・GENERIC_TOKENSと同様に「完全な同期を機械的には
-# 強制しないが更新時は両方見直す」運用。vault-recall.sh側コメント参照）。
+# 起動必読ファイル（bootstrap-vault.shと同じ構成）。vault-recall.sh側の
+# EXCLUDE_RELPATHSと完全一致させる必要がある（重複管理・GENERIC_TOKENSと同様に
+# 「完全な同期を機械的には強制しないが更新時は両方見直す」運用。vault-recall.sh
+# 側コメント参照）。
+# 2026-08-30 §9.0 A-1-3波及改修（本人承認済み）: bootstrap-vault.shのFILES配列に
+# Preferences/core-conduct.md・Preferences/core-workflow.mdを追加した（§9.3 P2
+# 受入①）のに合わせて、想起除外集合にも同じ2件を追加する（工程横断レビュー
+# 指摘・MAJOR-4対応）。⚠️ Knowledge/mistakes.mdの除外は維持する
+# （H19未決＝退役後に想起で拾えるようにするかは別途裁定が要るため、
+# 現状維持のまま除外し続ける）。
 EXCLUDE_RELPATHS = (
     "Knowledge/mistakes.md",
     "Preferences/absolute-rules.md",
+    "Preferences/core-conduct.md",
+    "Preferences/core-workflow.md",
     "Preferences/profile.md",
     "Preferences/coding-delegation.md",
     "Preferences/vault-operation.md",

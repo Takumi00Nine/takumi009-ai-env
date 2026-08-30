@@ -151,9 +151,24 @@ echo "=== 7. personal_link_build_basename_pattern_file: 正規表現特殊文字
 #     （悪性fixture＝Personal link混入のnegative test を兼ねる） ---
 
 # export-public-vault.sh を実行して exit code を返す。
+# ⚠️ 2026-08-30 環境依存欠陥の修正（追加1対応）: 従来はNGWORDS_FILEを渡して
+# おらず、export-public-vault.sh側の既定値（$SCRIPT_DIR/ngwords.txt＝実スクリプト
+# 自身が置かれた $REPO_ROOT/scripts/ngwords.txt）へフォールバックしていた。
+# このパスは.gitignore対象の私的資産（実運用ではprivateリポジトリへの
+# symlinkとして手動設置される）であり、新規clone/checkout・git worktreeした
+# 環境には存在しない。各fixtureが用意する「$repo/scripts/ngwords.txt」は
+# このデフォルト経路では一度も参照されておらず、実際には無関係な
+# $REPO_ROOT/scripts/ngwords.txt（開発者の主作業ディレクトリにたまたま手動
+# 設置済みだったもの）を読んでいたため、そこで実行する限りは気づかず
+# 通っていた（tester環境＝隔離worktreeやCI相当のクリーンチェックアウトでは
+# 「ngwords.txt が見つかりません」でexport-public-vault.sh自体がFAILする）。
+# 本体側のfail-closed挙動（ngwords.txt無しなら止める）は本番の安全設計として
+# 正しいため変更せず、テスト側の意図（fixtureが用意した「$repo/scripts/
+# ngwords.txt」を使わせる）どおりNGWORDS_FILEを明示的に渡すよう修正した。
 run_export() {
   local vault="$1" repo="$2"
-  VAULT="$vault" AIENV_REPO="$repo" "$EXPORT_SCRIPT" >"$WORK_TMP/export-stdout.log" 2>"$WORK_TMP/export-stderr.log"
+  VAULT="$vault" AIENV_REPO="$repo" NGWORDS_FILE="$repo/scripts/ngwords.txt" \
+    "$EXPORT_SCRIPT" >"$WORK_TMP/export-stdout.log" 2>"$WORK_TMP/export-stderr.log"
 }
 
 # audit.sh を --quick で実行する（Personal リンクチェック自体は5番・quickでもスキップ

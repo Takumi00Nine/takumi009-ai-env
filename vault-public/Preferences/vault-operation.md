@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-08-14
+updated: 2026-08-29
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -22,6 +22,7 @@ aliases:
 - **Preferences＝今どう動くか／Decisions＝なぜ／Knowledge＝背景。** 判断は Preferences と Decisions を**ペアで**書く。現行値（設定値・状態）は Projects のみ。
 - 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録（該当ノートは**通し読み**）。
 - 同じルールは SSOT 1つ＋他はリンクのみ。旧方針は `deprecated YYYY-MM-DD` で現行より下に隔離。
+- **部品追加の掟**: 実行部品（スクリプト・フック・LaunchAgent）を追加するときは、対応する Decision に**分類（A=常時/B=定期/C=手動）・テスト増分・廃止条件**を書く。
 - **Projects の frontmatter**: `status:` は4値のみ＝`active`/`paused`/`completed`/`closed`。**状態が動いたら `next:`（15文字以内の次アクション）も更新**（cmux Next ペイン表示元。「Nextの N 番」解決＝`cmux-next-watch.sh --list`）。
 ## 書き方の鉄則
 - 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず `vault-scribe`（常駐チームメイト）へ委任**＝リーダーが内容を確定して渡し、scribe が掟に従い執筆（[[Decisions/2026-08-10-vault-scribe]]）。**リーダー直筆は禁止**＝旧例外「scribe 不在時・軽い1件は直筆可」は本人指示で撤廃（[[Decisions/2026-08-12-vault-scribe-mandatory]]・delegation-gate-v2 フックが deny・scribe 不在なら起動してから振る）。**scribe 専任の対象は AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）に限定**＝人間向け領域（Blogs/・Explorations/ ほか6フォルダ以外すべて）はリーダー・ワーカー・スクリプトが直接書き込み可（[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]・旧例外「Codex のみ Blogs/・Explorations/ 直書き可」は人間向け領域全体の直書き可に一般化され不要に）。他ワーカーは AI向け6フォルダへの記録候補があれば「Vault記録候補:」で申告。

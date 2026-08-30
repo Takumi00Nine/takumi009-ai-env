@@ -168,13 +168,15 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 # 私的パッチ（別のprivateリポジトリ）のローカルclone先。環境変数で上書き可
 # （ユニットテスト用。本番は既定値のままでよい＝README.md「導入手順」記載のパス）。
 : "${AIENV_PRIVATE_REPO:=$HOME/work/takumi009-ai-env-private}"
-# ①-2（~/.claude/settings.json）で使う machine-role マーカー・model既定値。
+# ①-2（~/.claude/settings.json）で使う machine-role マーカー。
 # scripts/install-main.sh・claude/hooks/check-sub-update.sh 等と同じ環境変数名・
 # 既定値・fail-closedの読み方（trimして中身がちょうど"sub"の場合だけサブ扱い。
 # マーカー不在・読めない・中身が違う等はすべてmain扱い）を踏襲する。
+# ⚠️ model既定値（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）はここでは持たない
+# （2026-08-30 §9.0 A-0-3＝値表2箇所重複の解消）。値の出力口は
+# scripts/install-main.sh --print-model [--sub-delegate] に一本化し、
+# 診断側はその出力を読むだけにする（①-2で呼び出す）。
 : "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
-: "${AIENV_MODEL_MAIN:=claude-fable-5[1m]}"
-: "${AIENV_MODEL_SUB:=claude-opus-5}"
 
 JSON_MODE=0
 for arg in "$@"; do
@@ -229,6 +231,10 @@ SYMLINKS=(
   "$HOME/.claude/hooks/vault-read-log.sh|$DIR/claude/hooks/vault-read-log.sh"
   "$HOME/.claude/hooks/next-pane-resolve.sh|$DIR/claude/hooks/next-pane-resolve.sh"
   "$HOME/.claude/hooks/check-sub-update.sh|$DIR/claude/hooks/check-sub-update.sh"
+  # 2026-08-30追加: settings.jsonには2026-08-10導入時から登録済みだったが、
+  # install-main.shへのlink配置が漏れていた（同型4回目・§9.0 A-0-2で修理）。
+  # このSYMLINKS一覧にも同時に漏れていたため、あわせて追加する。
+  "$HOME/.claude/hooks/context-size-warn.sh|$DIR/claude/hooks/context-size-warn.sh"
   "$HOME/.codex/AGENTS.md|$DIR/codex/AGENTS.md"
   "$HOME/.codex/hooks.json|$DIR/codex/hooks.json"
 )
@@ -277,22 +283,79 @@ echo "======================================================================"
 # "model"キーだけは特別扱いする: セッション内`/model`で意図的に切り替えた結果が
 # ここに現れることがあり、これは正常な用途のため、キーが存在し文字列型の場合に
 # 限り、値が期待値と異なっていてもdriftには数えずINFO表示に留める（キー自体の
-# 欠落・非文字列型は異常のため通常のDRIFT分類へ回す）。それ以外のキーは
-# テンプレとの厳密一致を要求する。config.tomlの②と異なり既知の自動追記キーが
-# 無いため、テンプレに無いキー（EXTRA-KEY）もWARNに留めずdrift計上する。
+# 欠落・非文字列型は異常のため通常のDRIFT分類へ回す）。
+#
+# 既知アプリ管理キー一覧（2026-08-30追加・§9.0検出事項⑤/
+# [[Knowledge/symlink-config-app-writeback-pitfall]]）: Claude Code自身が
+# settings.jsonへ書き戻すキー。実測2件はいずれもトップレベルキーのため、
+# トップレベルキー完全一致でのみ除外する（Codex一次レビュー指摘・Minor対応:
+# config.tomlの②はテーブルの深さを問わないleaf key判定だが、settings.jsonで
+# 同じ判定にすると別階層に偶然同名キーがあった場合まで誤って除外してしまう。
+# table prefix一覧は設けない）。これら以外のテンプレに無いキー（EXTRA-KEY）は
+# 引き続きWARNに留めずdrift計上する。
+KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS=(
+  "agentPushNotifEnabled"   # Claude Codeアプリが自動追記する通知設定（2026-08-28実測・実害なし）
+  "inputNeededNotifEnabled" # 同上
+)
 #
 # machine-roleマーカーを読み、期待されるmodel値を決定する（fail-closed＝
 # マーカー不在・読めない・中身が「sub」以外はすべてmain扱い。他フックと同じ
-# 判定パターンを踏襲）。
+# 判定パターンを踏襲）。値そのものは自前の値表を持たず、値出力口
+# （scripts/install-main.sh --print-model [--sub-delegate]）を呼んで得る
+# （§9.0 A-0-3＝値表2箇所重複の解消。診断からは副作用ゼロの--print-modelだけを
+# 呼び、--sub-delegate本体は呼ばない）。
 SETTINGS_JSON_LIVE="$HOME/.claude/settings.json"
 SETTINGS_JSON_TEMPLATE="$DIR/claude/settings.json"
 MACHINE_ROLE_RAW="$(cat "$AIENV_MACHINE_ROLE_MARKER" 2>/dev/null)"
 MACHINE_ROLE="${MACHINE_ROLE_RAW#"${MACHINE_ROLE_RAW%%[![:space:]]*}"}"
 MACHINE_ROLE="${MACHINE_ROLE%"${MACHINE_ROLE##*[![:space:]]}"}"
-if [ "$MACHINE_ROLE" = "sub" ]; then
-  EXPECTED_MODEL="$AIENV_MODEL_SUB"
+EXPECTED_MODEL=""
+# Bedrock envファイルの期待マージ分（2026-08-30 工程横断レビュー指摘・
+# MAJOR-5対応）。値表・許可リストをここに複製せず、install-main.shの
+# --print-bedrock-env-json（副作用ゼロの値出力口）を呼ぶ。
+# ⚠️ 「ファイルが存在しない」場合だけexit 0で{}が返る。ファイルが存在する
+# のに読取・解析に失敗した場合は非0終了する（install-main.sh
+# compute_bedrock_env_json()参照）ため、ここでは fail-open で{}へ丸めず、
+# 失敗を独立したフラグ（EXPECTED_BEDROCK_ENV_UNAVAILABLE）として持ち回り、
+# 後段で[BEDROCK-ENV-VALUE-UNAVAILABLE]としてdrift計上する（Codex二次
+# レビュー指摘・Major対応: 従来は失敗時も{}扱いにしており、Bedrock envが
+# 監視できていないのに「一致」と誤判定しうる穴があった）。exit0・非空文字列
+# でも中身がJSONとして壊れている／トップレベルがdictでない／envキーが
+# dictでない（旧flat形式含む）場合は同様に監視不能として扱う（2026-08-30
+# Codex 2巡目差し戻し・MAJOR対応: 従来はexit0・非空なら無条件で信頼しており、
+# 壊れた/旧形式のpayloadを静かに「空env」として受理する穴があった）。
+EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+EXPECTED_BEDROCK_ENV_UNAVAILABLE=0
+if [ -x "$DIR/scripts/install-main.sh" ]; then
+  if [ "$MACHINE_ROLE" = "sub" ]; then
+    EXPECTED_MODEL="$("$DIR/scripts/install-main.sh" --print-model --sub-delegate 2>/dev/null)" || EXPECTED_MODEL=""
+  else
+    EXPECTED_MODEL="$("$DIR/scripts/install-main.sh" --print-model 2>/dev/null)" || EXPECTED_MODEL=""
+  fi
+  if ! EXPECTED_BEDROCK_ENV_JSON="$("$DIR/scripts/install-main.sh" --print-bedrock-env-json 2>/dev/null)"; then
+    EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
+    EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+  elif [ -z "$EXPECTED_BEDROCK_ENV_JSON" ]; then
+    EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
+    EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+  elif ! python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(d, dict) and isinstance(d.get('env'), dict) else 1)
+" "$EXPECTED_BEDROCK_ENV_JSON" 2>/dev/null; then
+    # exit0・非空文字列でも、JSON不正／トップレベルがdictでない／envキーが
+    # dictでない（旧flat形式やスキーマ崩れを含む）場合はここで検出し、
+    # fail-openで{}へ丸めず監視不能として扱う（2026-08-30 Codex 2巡目差し戻し・
+    # MAJOR対応: 従来はexit0かつ空文字列でなければ無条件で信頼しており、
+    # 壊れた/旧形式のpayloadを静かに「空env」として受理してしまう穴があった）。
+    EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
+    EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+  fi
 else
-  EXPECTED_MODEL="$AIENV_MODEL_MAIN"
+  EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
 fi
 
 if [ -L "$SETTINGS_JSON_LIVE" ]; then
@@ -308,7 +371,19 @@ elif [ ! -f "$SETTINGS_JSON_LIVE" ]; then
   item_drift "[MISSING] $SETTINGS_JSON_LIVE が存在しません（未インストール？）"
 elif [ ! -f "$SETTINGS_JSON_TEMPLATE" ]; then
   item_drift "[MISSING] リポジトリ側テンプレが見つかりません: $SETTINGS_JSON_TEMPLATE"
+elif [ -z "$EXPECTED_MODEL" ]; then
+  # 値出力口（install-main.sh --print-model）が値を返さなかった場合はfail-openで
+  # 「一致」扱いにせず監視不能として drift 計上する（③GIT-STATUS-CHECK-FAILED・
+  # ⑤GH-CHECK-FAILEDと同型の既存の設計思想）。
+  item_drift "[MODEL-VALUE-UNAVAILABLE] model値の出力口（scripts/install-main.sh --print-model）が値を返しませんでした（実行権限・checkout破損等の可能性）＝監視不能"
+elif [ "$EXPECTED_BEDROCK_ENV_UNAVAILABLE" = "1" ]; then
+  # Bedrock env値の出力口（install-main.sh --print-bedrock-env-json）が
+  # 非0終了した場合（envファイルは存在するのに読取・解析に失敗）は、
+  # fail-openで{}扱いにせず監視不能として drift 計上する（2026-08-30
+  # Codex二次レビュー指摘・Major対応と同型の既存の設計思想）。
+  item_drift "[BEDROCK-ENV-VALUE-UNAVAILABLE] Bedrock env値の出力口（scripts/install-main.sh --print-bedrock-env-json）が失敗しました（envファイルの読取・解析エラーの可能性）＝監視不能"
 else
+  app_managed_keys_joined="$(printf '%s\x1f' "${KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS[@]}")"
   SETTINGS_JSON_CLASSIFY_OUT="$(python3 -c "
 import sys, json
 
@@ -358,8 +433,34 @@ if not isinstance(template, dict) or template.get('model') != '__AIENV_MODEL__':
     sys.exit(0)
 
 expected_model = sys.argv[3]
+app_managed_keys = set(k for k in sys.argv[4].split(chr(0x1f)) if k)
 live_flat = flatten(live)
 tmpl_flat = flatten(render(template, expected_model))
+
+# Bedrock envファイルからの期待マージ分（2026-08-30 工程横断レビュー指摘・
+# MAJOR-5対応）: install-main.sh --print-bedrock-env-json（値出力口の一本化・
+# ①-2の他項目と同じ設計）が返す値をテンプレの期待値へ合成する。これが無いと、
+# 正しくBedrockのenvをマージ済みのsettings.jsonが恒常的にEXTRA-KEY drift
+# 扱いになってしまう（installer/update-subは正しく動いているのに毎回
+# 誤報が出る状態）。
+# ⚠️ 出力形式は{'env': {...}, 'rejected_keys': [...], 'malformed_lines': [...]}
+# という構造化オブジェクト（2026-08-30 工程横断レビュー指摘・MAJOR-A対応で
+# rejected_keys/malformed_linesを呼び出し側〈generate_settings_json・
+# update-sub.sh〉へ伝えるために追加された）。check-drift.shはこのうち
+# 'env'サブオブジェクトだけを期待値の合成に使う（rejected_keys・
+# malformed_linesはdrift判定に使わない＝それらはsettings.jsonへ反映されない
+# ことが正しい挙動のため）。
+try:
+    expected_bedrock_payload = json.loads(sys.argv[5]) if len(sys.argv) > 5 else {}
+    if not isinstance(expected_bedrock_payload, dict):
+        expected_bedrock_payload = {}
+except Exception:
+    expected_bedrock_payload = {}
+expected_bedrock_env = expected_bedrock_payload.get('env') or {}
+if not isinstance(expected_bedrock_env, dict):
+    expected_bedrock_env = {}
+for _k, _v in expected_bedrock_env.items():
+    tmpl_flat[f'env.{_k}'] = _v
 
 for key in sorted(set(live_flat) | set(tmpl_flat)):
     if key == 'model' and 'model' in live_flat and isinstance(live_flat['model'], str):
@@ -371,18 +472,35 @@ for key in sorted(set(live_flat) | set(tmpl_flat)):
         if live_model != expect_model:
             print(f'MODEL_INFO\t{live_model!r}\t{expect_model!r}')
         continue
+    # 既知アプリ管理キー（2026-08-30追加・§9.0検出事項⑤）: トップレベルの
+    # キー名完全一致でのみ除外する（Codex一次レビュー指摘・Minor対応:
+    # config.toml②はテーブルの深さを問わないleaf key判定だが、settings.jsonの
+    # 実測2件は両方ともトップレベルキーであり、leaf判定のままだと
+    # 別階層（例: 別セクション配下）に偶然同名キーがあった場合まで誤って
+    # 除外してしまう。実測範囲に限定してトップレベル一致のみ許容する）。
+    # テンプレ記載の有無に関わらず優先する＝Claude Codeが書き戻す値なので、
+    # テンプレとの厳密一致も追随判定も意味を持たない。
+    if '.' not in key and key in app_managed_keys:
+        continue
+    # "env."配下のキーは値を出力しない（2026-08-30 Codex一次レビュー指摘・Major
+    # 対応: §9.0 A-1-4でBedrock envファイルの値がsettings.jsonの"env"ブロックへ
+    # 取り込まれるようになったため、推論プロファイルARN等（アカウントIDを含み
+    # うる＝§4.5）がdrift出力・週次通知ログに平文で載る経路になっていた。
+    # 絶対厳守③に従い、キー名は出すが値は常に<redacted>にする）。
+    def _show(v):
+        return '<redacted>' if key.startswith('env.') else repr(v)
     if key in tmpl_flat:
         if key not in live_flat:
-            print(f'DRIFT\tMISSING-KEY\t{key}\t{tmpl_flat[key]!r}')
+            print(f'DRIFT\tMISSING-KEY\t{key}\t{_show(tmpl_flat[key])}')
         elif live_flat[key] != tmpl_flat[key]:
-            print(f'DRIFT\tDIFF\t{key}\t{tmpl_flat[key]!r}\t{live_flat[key]!r}')
+            print(f'DRIFT\tDIFF\t{key}\t{_show(tmpl_flat[key])}\t{_show(live_flat[key])}')
     else:
-        # config.tomlの②とは異なり、settings.jsonにはCodexアプリのような既知の
-        # 自動追記キーが無いため、テンプレに無いキーはWARN表示に留めず即drift計上
-        # する（Codex一次レビュー指摘・Major対応: WARNのみだとpermissions等への
-        # 意図しない追加変更が総drift0のまま見逃され続ける）。
-        print(f'DRIFT\tEXTRA-KEY\t{key}\t{live_flat[key]!r}')
-" "$SETTINGS_JSON_LIVE" "$SETTINGS_JSON_TEMPLATE" "$EXPECTED_MODEL" 2>&1)"
+        # config.tomlの②と異なり、settings.jsonには既知アプリ管理キー一覧に
+        # 載らないその他の未知キーはWARN表示に留めず即drift計上する（Codex一次
+        # レビュー指摘・Major対応: WARNのみだとpermissions等への意図しない追加
+        # 変更が総drift0のまま見逃され続ける）。
+        print(f'DRIFT\tEXTRA-KEY\t{key}\t{_show(live_flat[key])}')
+" "$SETTINGS_JSON_LIVE" "$SETTINGS_JSON_TEMPLATE" "$EXPECTED_MODEL" "$app_managed_keys_joined" "$EXPECTED_BEDROCK_ENV_JSON" 2>&1)"
   SETTINGS_JSON_CLASSIFY_RC=$?
   if [ "$SETTINGS_JSON_CLASSIFY_RC" -ne 0 ]; then
     item_drift "[JSON-PARSE-FAILED] 検査①-2の実行自体に失敗しました（python3 exit=${SETTINGS_JSON_CLASSIFY_RC}）＝監視不能。詳細: ${SETTINGS_JSON_CLASSIFY_OUT}"

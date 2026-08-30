@@ -51,6 +51,157 @@ TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 : "${MAINTENANCE_LAST_RUN_FILE:=$HOME/.claude/logs/maintenance/last-run.json}"
 : "${MAINTENANCE_STALE_DAYS:=8}"
 
+# ローカル実体プロファイル（2026-08-30 共通コア分離 §9.0 A-1 P1機構）。
+# 正本は各マシンのローカル（$HOME/.config/takumi009-ai-env/profile.md）で
+# repo管理外・非配布（§11.2 source of truth定義）。Vault外の固定パスを必読
+# リストへ載せる小改修だが、有効化そのものはA-1-3の順序厳守対象（移送先
+# core-workflow.mdが未整備のうちに必読へ加えると「どちらも読まれない窓」が
+# 開く＝§7.3③）のため、既定は無効(0)のまま実装し、リーダー側工程で
+# BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 に切り替えるまでは今日までの挙動を一切
+# 変えない（FILES一覧・DIRECTIVE本文とも無改変）。
+: "${BOOTSTRAP_ENABLE_LOCAL_PROFILE:=0}"
+: "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
+# 最小能力表の7キー（§3.3.0）。ここに列挙した7つが「今のスキーマが要求する
+# キー」＝これが欠けていれば§9.0 A-1最低契約④⑤どおり最小能力+⚠️へ倒す
+# （T5＝既存キー欠落）。逆にfrontmatterにこの7つ以外の見慣れないキーが
+# 有っても、それは「まだこのコードが追随していない新しいキー」とみなし
+# unknown扱いで無視するだけに留め、最小能力へは倒さない（T4＝新キー未追随。
+# schema_version／版管理を作らない以上、キー集合の前方互換をこの非対称な
+# 扱いで担保する＝リーダー指示）。
+LOCAL_PROFILE_KNOWN_KEYS=(
+  "inventory_source"
+  "reviewer"
+  "vault_write"
+  "vault_scope"
+  "ui.user_call"
+  "git_role"
+  "web_verification"
+)
+# テスト専用: BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1のとき、最小能力表7キー
+# （LOCAL_PROFILE_KNOWN_KEYS）を1行1キーで標準出力へ返して即終了する。
+# stdin JSON読み込み・ヘルス行計算等の本処理には一切進まない。本番では
+# 未設定のため無効（2026-08-30追加・MINOR-D対応: test-core-docs-placeholder-
+# schema.shがこのキー集合を独自にハードコード再列挙し3重管理になっていたため、
+# ハードコードの代わりにこの実行時ソースを参照させる）。
+if [ "${BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY:-0}" = "1" ]; then
+  printf '%s\n' "${LOCAL_PROFILE_KNOWN_KEYS[@]}"
+  exit 0
+fi
+# 未記入のまま残っていると壊れているのと同じ扱いにする印（T2-MINIMAL。
+# 設計書v10.3で確定した表記＝凍結側の別のT2と識別子が衝突しないよう分離）。
+# サンプル（Preferences/profile-sample.md）は本人裁定（2026-08-30「初期値は
+# メイン機の実値を既定値に戻す」）により全7キーとも実運用値（メイン機の
+# 確認済み実値）を入れて配布し、このsentinelはどのキーにも使わない。
+# fail-soft機構（sentinel検出・未記入判定）自体はコード契約として維持する
+# （サブ機・別マシンで値を書き換えず出荷した場合や、将来キーが増えた場合の
+# 安全弁のため）。詳細は
+# ~/work/takumi009-ai-env-private/docs/core-split/profile-sample-draft.md）。
+LOCAL_PROFILE_SENTINEL='<fill-in>'
+
+# resolve_local_profile <path> — ローカル実体プロファイルをfail-softに解決する。
+# 標準出力へタブ区切り1行を返す:
+#   MINIMAL\t<T1|T2-MINIMAL|T5|T6|SYMLINK>\t<理由>   … 最小能力+⚠️で扱うべきケース
+#     （SYMLINK＝実体がsymlinkだった。マシンローカル・repo管理外という正本の
+#      定義に反するため受理しない＝2026-08-30 Codex一次レビュー指摘・Major対応）
+#   OK\t<key1=val1>\x1e<key2=val2>...[\tUNKNOWN_EXTRA:<k1>,<k2>,...]
+# 判定はキーの有無・YAMLとして壊れていないかまで（validatorは作らない＝
+# 最低契約②）。既定値を発明しない（欠けたキーで補完しない＝最低契約④⑤）。
+resolve_local_profile() {
+  local path="$1"
+  # symlinkは実体として受理しない（2026-08-30 Codex一次レビュー指摘・Major対応:
+  # 「マシンローカル・repo管理外」という正本の定義（§11.2）に反し、repo管理下や
+  # Vault配下のファイルへのsymlinkを経由してリモート更新が能力表へ暗黙に
+  # 反映される経路になりうるため。installer側の非破壊コピーは既存symlinkを
+  # 「既に存在する」として保護するだけで、symlinkを実体として生成することは
+  # 無い＝この判定はinstaller側の設計と矛盾しない）。`[ -L ]`を`[ -f ]`より先に
+  # 判定する（symlink先が通常ファイルの場合`-f`も真になるため）。
+  [ -L "$path" ] && { printf 'MINIMAL\tSYMLINK\t実体はsymlinkであってはいけません（マシンローカルの通常ファイルとして直接作成してください）: %s\n' "$path"; return; }
+  [ -f "$path" ] || { printf 'MINIMAL\tT1\t実体ファイルが存在しません: %s\n' "$path"; return; }
+  local known_joined
+  known_joined="$(printf '%s\x1f' "${LOCAL_PROFILE_KNOWN_KEYS[@]}")"
+  python3 -c "
+import re, sys
+
+path = sys.argv[1]
+sentinel = sys.argv[2]
+known_keys = [k for k in sys.argv[3].split(chr(0x1f)) if k]
+
+try:
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
+except OSError as e:
+    print(f'MINIMAL\tT1\t実体ファイルを読めません: {e}')
+    sys.exit(0)
+
+lines = text.splitlines()
+if not lines or lines[0].strip() != '---':
+    print('MINIMAL\tT6\tfrontmatterの開始区切り(---)がありません')
+    sys.exit(0)
+try:
+    end_idx = lines[1:].index('---') + 1
+except ValueError:
+    print('MINIMAL\tT6\tfrontmatterの終端区切り(---)がありません')
+    sys.exit(0)
+
+values = {}
+for raw in lines[1:end_idx]:
+    if not raw.strip():
+        continue
+    m = re.match(r'^([A-Za-z0-9_.]+):[ \t]?(.*)\$', raw)
+    if not m:
+        print(f'MINIMAL\tT6\t解析できない行があります: {raw!r}')
+        sys.exit(0)
+    values[m.group(1)] = m.group(2).strip()
+
+# 注意: このコメント文中ではバッククォート・二重引用符のどちらも一切
+# 使わない（check-drift.shの既知の落とし穴と同じ理由＝bash側のpython3 -cに
+# 続く二重引用符文字列の内側にあるため、どちらの文字も本来閉じるべき
+# 境界の途中に現れるとbashの構文解釈が壊れる。実装中にkey:という文字列を
+# バッククォートで囲んだ結果、bashがコマンド置換として実行しようとして
+# 「command not found」が出る実バグを踏んで気付いた）。
+# 値が空（key: のように書かれてはいるが中身が無い）場合はunknownへ
+# 正規化する（2026-08-30 工程横断レビュー指摘・Major対応。従来は空文字列の
+# ままOK扱いで通過させており、最低契約④＝未記載・空はunknownとして扱う、に
+# 反していた）。⚠️ これはキー自体が無いケース＝T5とは別物——キーは存在するので
+# missing判定には影響させない。sentinel(未記入固定文言)とも別物——sentinelは
+# 明示的な埋め忘れの印としてT2-MINIMALで最小能力へ倒すが、単なる空値はコア側が既に
+# unknown値を読んで空席等へ倒す設計（core-workflow.md）に委ねるため、
+# ここでは値の正規化だけに留め最小能力へは倒さない。
+for k in known_keys:
+    if k in values and values[k] == '':
+        values[k] = 'unknown'
+
+missing = [k for k in known_keys if k not in values]
+if missing:
+    print('MINIMAL\tT5\t既知キーが欠落しています: ' + ','.join(missing))
+    sys.exit(0)
+
+sentinel_keys = [k for k in known_keys if values.get(k) == sentinel]
+if sentinel_keys:
+    print('MINIMAL\tT2-MINIMAL\t未記入のままのキーがあります: ' + ','.join(sentinel_keys))
+    sys.exit(0)
+
+extra_keys = sorted(set(values) - set(known_keys))
+resolved = chr(0x1e).join(f'{k}={values[k]}' for k in known_keys)
+out = 'OK\t' + resolved
+if extra_keys:
+    out += '\tUNKNOWN_EXTRA:' + ','.join(extra_keys)
+print(out)
+" "$path" "$LOCAL_PROFILE_SENTINEL" "$known_joined" 2>/dev/null \
+    || printf 'MINIMAL\tT6\tprofile.mdの解析自体に失敗しました（python3不在・実行時エラー等）\n'
+}
+
+# テスト専用: BOOTSTRAP_RESOLVE_PROFILE_ONLY=1のとき、resolve_local_profile()の
+# 生出力（MINIMAL/OK行）だけを標準出力へ返して即終了する。stdin JSON読み込み・
+# ヘルス行計算等の本処理には一切進まない。本番では未設定のため無効
+# （2026-08-30追加・MAJOR-8b「値が空=unknownへの正規化」のユニットテスト用。
+# OK分岐の生出力はDIRECTIVE本文に現れないため、直接呼び出す経路が無いと
+# 正規化結果を検証できなかった）。
+if [ "${BOOTSTRAP_RESOLVE_PROFILE_ONLY:-0}" = "1" ]; then
+  resolve_local_profile "$AIENV_LOCAL_PROFILE_PATH"
+  exit 0
+fi
+
 # 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で
 # 「レポート生成→リーダーがセッション内で処理」という間接ループを廃止し、
 # 定常メンテは夜間バッチ(maintenance.sh)がVaultへ直接書き込む方式へ移行した。
@@ -349,24 +500,59 @@ if [ "$is_worker" = "1" ]; then
 ③ obsidian-mcp は使わない（ファイル直接 Read/Grep のみ）。
 EOF
 else
+  # 2026-08-30 §9.0 A-1-3 波及改修（本人承認済み・順序厳守どおり
+  # 移送先core-conduct.md/core-workflow.mdがVault側に配置済み/配置中になった
+  # 段階で実施＝§7.3③「移送先が必読として読まれる状態になってから移送元を
+  # 外す」）: `Knowledge/mistakes.md` を必読から除去し、代わりに
+  # `Preferences/core-conduct.md`・`Preferences/core-workflow.md` を追加した
+  # （§9.3 P2受入①）。`coding-delegation.md`・`profile.md` はこの段では外さない
+  # （移送先未作成のためP3で外す＝設計書のP2/P3段階分けどおり）。
+  # ⚠️ サブ機/メイン機で別配列に分岐させていない——サブ機（private層を持たない
+  # 環境）での欠落判定は下のfor文の存在確認（`-f`）だけで行われ、
+  # core-conduct.md・core-workflow.mdはいずれもPreferences配下＝vault-public
+  # スナップショット経由でサブへも同一pushで届く（Knowledge/
+  # vault-public-distribution-scope）ため、単一のFILES配列のままで
+  # メイン/サブ両方に正しく効く。
   FILES=(
-    "Knowledge/mistakes.md"
     "Preferences/absolute-rules.md"
+    "Preferences/core-conduct.md"
+    "Preferences/core-workflow.md"
     "Preferences/profile.md"
     "Personal/profile-personal.md"
     "Preferences/coding-delegation.md"
     "Preferences/vault-operation.md"
   )
+  # 意図的にサブ機へ配らない（private層）ファイル。FILES配列のうちこれ**だけ**が
+  # 「無くて正常」（2026-07-08リーダー指示）。それ以外は全てPreferences配下＝
+  # vault-publicスナップショット経由でメイン/サブ両方へ同一pushで届く想定の
+  # 必須publicノートであり、欠落は同期失敗・checkout破損・移送順序ミス等の
+  # 異常を示す（2026-08-30 Codex一次レビュー指摘・Major対応: 従来は全ての
+  # 欠落を一律「privateノートはこのマシンには無い」として無警告で握り潰して
+  # いたため、core-conduct.md・core-workflow.mdのような必須publicノートが
+  # 欠落しても「サブでは普通にある欠落」と誤認され、§7.3③が懸念する
+  # 「移送元も移送先も読まれない窓」が実際に開いていても気づけなかった）。
+  LOCAL_ONLY_FILES=(
+    "Personal/profile-personal.md"
+  )
+  is_local_only_file() {
+    local target="$1" candidate
+    for candidate in "${LOCAL_ONLY_FILES[@]}"; do
+      [ "$candidate" = "$target" ] && return 0
+    done
+    return 1
+  }
 
   # 必読ファイル一覧を絶対パス+存在確認+行数付きで生成（行数を載せておくと、
   # 後でReadした結果が全文かどうかAI自身が照合できる）。
-  # サブ機（private層を持たない環境）では Personal/profile-personal.md・
-  # Knowledge/mistakes.md 等が存在しないため、「見つかりません」と毎回警告するのではなく
+  # サブ機（private層を持たない環境）では Personal/profile-personal.md が
+  # 存在しないため、「見つかりません」と毎回警告するのではなく
   # **存在するファイルだけを必読リストに載せる**（2026-07-08 リーダー指示・install-sub.sh対応）。
-  # メイン機（全6ファイルが揃う環境）の挙動は変わらない＝6ファイル全部が列挙される。
+  # メイン機（全7ファイルが揃う環境）の挙動は変わらない＝7ファイル全部が列挙される。
   list=""
   present_count=0
   missing_count=0
+  unexpected_missing=""
+  unexpected_missing_count=0
   for f in "${FILES[@]}"; do
     abs="$VAULT/$f"
     if [ -f "$abs" ]; then
@@ -374,13 +560,60 @@ else
       list="$list
   - $abs  （全${lines}行：Readで全文を読むこと）"
       present_count=$((present_count + 1))
-    else
+    elif is_local_only_file "$f"; then
       missing_count=$((missing_count + 1))
+    else
+      # private層ではない＝サブでも本来存在するはずのpublicノートが欠落している
+      # （同期失敗・checkout破損・移送順序ミス等）。「無くて正常」の件数には
+      # 数えず、別枠で強めに警告する。
+      unexpected_missing="$unexpected_missing
+  - $abs"
+      unexpected_missing_count=$((unexpected_missing_count + 1))
     fi
   done
   if [ "$missing_count" -gt 0 ]; then
     list="$list
   （private ノートはこのマシンには無い（サブ）: ${missing_count}件は対象外）"
+  fi
+  if [ "$unexpected_missing_count" -gt 0 ]; then
+    list="$list
+  ⚠️ 必読のはずのpublicノートが見つかりません（想定外・同期失敗やcheckout破損の可能性。scripts/update-sub.shの再実行・scripts/check-drift.shでの確認を推奨）:$unexpected_missing"
+  fi
+
+  # ローカル実体プロファイル（P1機構・既定無効。BOOTSTRAP_ENABLE_LOCAL_PROFILE=1の
+  # ときだけVault外の固定パスを必読リストへ1件追加する。無効時（既定）は
+  # 今日までの挙動を一切変えない）。
+  LOCAL_PROFILE_WARNING=""
+  if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
+    # symlinkは実体として受理しない（resolve_local_profile()と同じ判定を
+    # 必読リスト表示側にも適用する。Codex二次レビュー指摘・Major対応:
+    # `-f`だけで判定すると、通常ファイルを指すsymlinkが「全文をReadすること」
+    # として必読リストに載り続け、信頼しないはずの内容を読ませる指示が
+    # 残っていた）。
+    if [ -f "$AIENV_LOCAL_PROFILE_PATH" ] && [ ! -L "$AIENV_LOCAL_PROFILE_PATH" ]; then
+      profile_lines=$(wc -l < "$AIENV_LOCAL_PROFILE_PATH" | tr -d ' ')
+      list="$list
+  - $AIENV_LOCAL_PROFILE_PATH  （全${profile_lines}行：Readで全文を読むこと。ローカル実体プロファイル＝非配布）"
+      present_count=$((present_count + 1))
+    elif [ -L "$AIENV_LOCAL_PROFILE_PATH" ]; then
+      list="$list
+  - $AIENV_LOCAL_PROFILE_PATH  （symlinkのため実体として受理しません。通常ファイルとして作り直してください）"
+    else
+      list="$list
+  - $AIENV_LOCAL_PROFILE_PATH  （未作成。installerでサンプルから雛形を作成してください）"
+    fi
+
+    profile_status="$(resolve_local_profile "$AIENV_LOCAL_PROFILE_PATH")"
+    profile_kind="${profile_status%%$'\t'*}"
+    profile_rest="${profile_status#*$'\t'}"
+    if [ "$profile_kind" = "MINIMAL" ]; then
+      profile_reason_code="${profile_rest%%$'\t'*}"
+      profile_reason_msg="${profile_rest#*$'\t'}"
+      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})を解決できません（${profile_reason_code}: ${profile_reason_msg}）。最小能力（reviewer等の各キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。既定値を発明しない。"
+    elif printf '%s' "$profile_status" | grep -q 'UNKNOWN_EXTRA:'; then
+      unknown_extra="${profile_status#*UNKNOWN_EXTRA:}"
+      LOCAL_PROFILE_WARNING="ℹ️ ローカル実体プロファイルに未知のキーがあります（${unknown_extra}）。まだこのマシンのコードが追随していない新しいキーの可能性があるためunknownとして無視してよい（最小能力へは倒さない）。"
+    fi
   fi
 
   # 外部脳ヘルス行（fail-open: 失敗してもブートストラップ本文は必ず出す）。
@@ -402,6 +635,9 @@ $list
 ${HEALTH_LINES:+
 【外部脳ヘルス】（scripts/check-drift.sh ⑥の簡易版。詳細確認は本体を実行）
 $HEALTH_LINES}
+${LOCAL_PROFILE_WARNING:+
+【ローカル実体プロファイル】
+$LOCAL_PROFILE_WARNING}
 EOF
 fi
 

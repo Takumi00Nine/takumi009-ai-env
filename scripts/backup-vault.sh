@@ -95,11 +95,15 @@ command -v git >/dev/null 2>&1 || fail "git が見つかりません"
 
 # --- 1. 多重起動防止ロック（PIDファイル方式・原子的に取得） ---
 # 実装は scripts/lib/pid-lock.sh（acquire_pid_lock）に抽出済み（2026-07-16簡素化・
-# PR1.5③。ロジック自体は敵対的レビュー3巡を経た挙動を一切変えていない＝
-# noclobberによる原子取得・ABA対策のmkdir回収ミューテックス・回収ミューテックス
-# 自体はfail-closedで自動解除しない設計。詳細は同ファイルのコメント参照）。
-# 既存のロック形式（$LOCK_FILE にPIDを書いた1個のファイル）自体は変更していない
-# （tests/test-backup-vault.sh の `echo "$$" > "$LOCK"` 等の既存前提と完全互換）。
+# PR1.5③。ABA対策のmkdir回収ミューテックス・回収ミューテックス自体は
+# fail-closedで自動解除しない設計は不変。ロックファイルの原子的な初期化は
+# 2026-08-30 PID再利用対策改修でnoclobber(`> file`)から、同ディレクトリの
+# 一時ファイルへ完全に書き終えてから`ln`で公開する方式へ変更済み。詳細は
+# 同ファイルのコメント参照）。
+# ロック形式は1行目=PID・2行目=指紋（任意。2026-08-30 PID再利用対策改修で
+# scripts/lib/pid-lock.sh側が追加。詳細は同ファイル参照）。
+# tests/test-backup-vault.sh の `echo "$$" > "$LOCK"` のような指紋なし1行形式も
+# 引き続き読める（後方互換）。
 # STATUS_FILEを渡すことで、busy/error確定時に自動でwrite_status_fileされる。
 acquire_pid_lock "$LOCK_FILE" "$STALE_LOCK_SECONDS" "backup-vault" "$STATUS_FILE"
 
@@ -125,7 +129,12 @@ acquire_pid_lock "$LOCK_FILE" "$STALE_LOCK_SECONDS" "backup-vault" "$STATUS_FILE
 # bypassしない）。
 _bypass_writer_lock_check=0
 if [[ -n "${MAINTENANCE_LOCK_OWNER_PID:-}" && -f "$VAULT_WRITER_LOCK_FILE" ]]; then
-  _lock_file_pid="$(cat "$VAULT_WRITER_LOCK_FILE" 2>/dev/null || true)"
+  # ロックファイルの1行目だけを見る（2026-08-30 PID再利用対策改修で
+  # scripts/lib/pid-lock.sh側が2行目に指紋を追加したため、`cat`で全行を
+  # 読むと2行目まで含んだ複数行文字列になり、下の等価比較が常に不一致に
+  # なってしまう＝この分岐が常にbypassしない側へ倒れ、maintenance.sh自身の
+  # Phase0/Phase3呼び出しまでVault書込ロック競合として弾かれる回帰を招く）。
+  _lock_file_pid="$(sed -n '1p' "$VAULT_WRITER_LOCK_FILE" 2>/dev/null || true)"
   if [[ -n "$_lock_file_pid" && "$_lock_file_pid" == "$MAINTENANCE_LOCK_OWNER_PID" ]]; then
     _bypass_writer_lock_check=1
   fi
