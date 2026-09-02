@@ -254,5 +254,7 @@
   "effortLevel": "__AIENV_EFFORT__",
   "awaySummaryEnabled": false,
   "skipWorkflowUsageWarning": true,
+  "agentPushNotifEnabled": true,
+  "inputNeededNotifEnabled": true,
   "theme": "dark"
 }

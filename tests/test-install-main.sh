@@ -153,6 +153,21 @@ echo "=== 5. settings.jsonに登録済みの全フックがinstall-main.shでも
   rm -rf "$FAKE_HOME"
 }
 
+echo "=== 5b. 通知系アプリ管理キー2つ（agentPushNotifEnabled/inputNeededNotifEnabled）がテンプレ収載により生成settings.jsonにも含まれる（2026-09-02 本人決定。従来はテンプレ未収載のため再生成のたびにアプリ側の追記が脱落しうる状態だった） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
+
+  assert_eq "生成settings.jsonのagentPushNotifEnabledはtrue" "True" \
+    "$(python3 -c "import json; print(json.load(open('$FAKE_HOME/.claude/settings.json'))['agentPushNotifEnabled'])")"
+  assert_eq "生成settings.jsonのinputNeededNotifEnabledはtrue" "True" \
+    "$(python3 -c "import json; print(json.load(open('$FAKE_HOME/.claude/settings.json'))['inputNeededNotifEnabled'])")"
+
+  rm -rf "$FAKE_HOME"
+}
+
 # vault-public/Preferences/profile-sample.md は本来の配置経路が
 # Vault(Preferences/profile-sample.md)→export-public-vault.sh→vault-public/ の
 # 正規パイプライン（vault-scribe工程）であり、このテストファイル（実装ワーカー）
