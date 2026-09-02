@@ -105,6 +105,30 @@ web_verification: configured(websearch)
 EOF
 }
 
+# seed_v2_profile <home> — v2形式（schema_version:2・role.leaderがconfigured）の
+# プロファイルをあらかじめ置く。--check-profile系テスト（13・14番）で使う。
+# role.leaderは既にconfiguredのため、AIENV_LEADER_ROLEの値には依存しない。
+seed_v2_profile() {
+  local home="$1"
+  local dest="$home/.config/takumi009-ai-env/profile.md"
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest" <<'EOF'
+---
+schema_version: 2
+profile_slug: test
+role.leader: configured provider=anthropic-api model=claude-opus-5
+excluded_models: configured value=none
+inventory_source: configured value=work-tools-dir
+reviewer: configured value=codex-mcp
+vault_write: configured value=via-scribe
+vault_scope: configured value=full
+ui.user_call: configured value=send-message
+git_role: configured value=aienv-repo:commit
+web_verification: configured value=websearch
+---
+EOF
+}
+
 echo "=== 1. dry-run: 実際の変更を一切しない ==="
 {
   FAKE_HOME="$(mktemp -d)"
@@ -485,6 +509,97 @@ echo "=== 12. install-main.shへの委譲が非0終了(設計書S4)でも、mach
     "$([[ -f "$MARKER" ]] && [[ "$(cat "$MARKER" | tr -d '[:space:]')" == "sub" ]] && echo 1 || echo 0)"
   assert_true "委譲が非0終了した旨のWARNが出る" \
     "$(echo "$out" | grep -q 'install-main.sh への委譲が非0終了しました' && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 13. --check-profile: install-main.sh へ転送され、直接呼び出しと同じ結果を返す・副作用ゼロ（2026-09-02追加） ==="
+{
+  FAKE_HOME_SUB="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME_SUB"
+  seed_v2_profile "$FAKE_HOME_SUB"
+  FAKE_HOME_MAIN="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME_MAIN"
+  seed_v2_profile "$FAKE_HOME_MAIN"
+
+  rc_sub=0
+  out_sub="$(HOME="$FAKE_HOME_SUB" bash "$SCRIPT" --check-profile 2>&1)" || rc_sub=$?
+  rc_main=0
+  out_main="$(HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/scripts/install-main.sh" --check-profile 2>&1)" || rc_main=$?
+
+  assert_eq "install-sub.sh経由もexit code 0" "0" "$rc_sub"
+  assert_eq "exit codeがinstall-main.sh直接呼び出しと一致" "$rc_main" "$rc_sub"
+  assert_eq "出力がinstall-main.sh直接呼び出しと完全一致" "$out_main" "$out_sub"
+  assert_true "OK行が出る" "$(echo "$out_sub" | grep -q '^OK' && echo 1 || echo 0)"
+  assert_true "Vaultは作られない（副作用ゼロ・step1をskip）" \
+    "$([[ ! -e "$FAKE_HOME_SUB/Data/obsidian" ]] && echo 1 || echo 0)"
+  assert_true "machine-roleマーカーは作られない（副作用ゼロ・step5をskip）" \
+    "$([[ ! -e "$FAKE_HOME_SUB/.config/takumi009-ai-env/machine-role" ]] && echo 1 || echo 0)"
+  assert_true "settings.json・config.tomlも生成されない（step2の委譲先でcheck-profileが自身exitするため）" \
+    "$([[ ! -e "$FAKE_HOME_SUB/.claude/settings.json" && ! -e "$FAKE_HOME_SUB/.codex/config.toml" ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN"
+}
+
+echo "=== 13b. --check-profile: 不正プロファイル（role.leader重複=T6）でも非0終了コード・エラー内容がinstall-main.sh直接呼び出しと一致する・副作用ゼロ（Codex一次レビュー指摘・Minor対応: 正常系だけでは委譲先の非0を誤ってexit 0へ変換する回帰を検出できないため） ==="
+{
+  FAKE_HOME_SUB="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME_SUB"
+  FAKE_HOME_MAIN="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME_MAIN"
+  invalid_profile='---
+schema_version: 2
+profile_slug: test
+role.leader: unknown
+role.leader: configured provider=anthropic-api model=claude-opus-5
+excluded_models: configured value=none
+inventory_source: configured value=work-tools-dir
+reviewer: configured value=codex-mcp
+vault_write: configured value=via-scribe
+vault_scope: configured value=full
+ui.user_call: configured value=send-message
+git_role: configured value=aienv-repo:commit
+web_verification: configured value=websearch
+---'
+  for h in "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN"; do
+    mkdir -p "$h/.config/takumi009-ai-env"
+    printf '%s\n' "$invalid_profile" > "$h/.config/takumi009-ai-env/profile.md"
+  done
+
+  rc_sub=0
+  out_sub="$(HOME="$FAKE_HOME_SUB" bash "$SCRIPT" --check-profile 2>&1)" || rc_sub=$?
+  rc_main=0
+  out_main="$(HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/scripts/install-main.sh" --check-profile 2>&1)" || rc_main=$?
+
+  assert_true "install-sub.sh経由も非0終了する（委譲先の非0をexit 0へ握り潰さない）" \
+    "$([[ "$rc_sub" -ne 0 ]] && echo 1 || echo 0)"
+  assert_eq "exit codeがinstall-main.sh直接呼び出しと一致" "$rc_main" "$rc_sub"
+  assert_eq "エラー内容(PROFILE_INVALID:T6)がinstall-main.sh直接呼び出しと完全一致" "$out_main" "$out_sub"
+  assert_true "PROFILE_INVALID:T6が出る" \
+    "$(echo "$out_sub" | grep -q 'PROFILE_INVALID:T6' && echo 1 || echo 0)"
+  assert_true "Vaultは作られない（副作用ゼロ）" \
+    "$([[ ! -e "$FAKE_HOME_SUB/Data/obsidian" ]] && echo 1 || echo 0)"
+  assert_true "machine-roleマーカーは作られない（副作用ゼロ）" \
+    "$([[ ! -e "$FAKE_HOME_SUB/.config/takumi009-ai-env/machine-role" ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN"
+}
+
+echo "=== 14. --check-profile --print-schema-version: install-sub.sh経由でもschema_versionの値だけを1行返す・副作用ゼロ（2026-09-02追加） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  seed_v2_profile "$FAKE_HOME"
+
+  rc=0
+  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile --print-schema-version 2>&1)" || rc=$?
+
+  assert_eq "exit code 0" "0" "$rc"
+  assert_eq "schema_versionの値だけを1行返す（見出しログ等が混ざらない）" "2" "$out"
+  assert_true "Vaultは作られない（副作用ゼロ）" \
+    "$([[ ! -e "$FAKE_HOME/Data/obsidian" ]] && echo 1 || echo 0)"
+  assert_true "machine-roleマーカーは作られない（副作用ゼロ）" \
+    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/machine-role" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }

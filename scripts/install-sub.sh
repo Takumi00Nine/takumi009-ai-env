@@ -39,9 +39,19 @@
 #   scripts/install-sub.sh                   # 実行（Vault骨格配置 + claude/codex symlink化）
 #   scripts/install-sub.sh --dry-run         # 計画だけ表示（何もしない）
 #   scripts/install-sub.sh --with-dotfiles   # 上記に加え、dotfiles（部品・下請け）も導入する
+#   scripts/install-sub.sh --check-profile   # 副作用ゼロの検査（実行せずプロファイル状態だけ見る）
 #
 # --with-dotfiles は install-main.sh へそのまま委譲する（実装の二重管理を避ける。
 # install-main.sh側の挙動＝相談資料§3-5「dotfilesは独立のまま部品として下請け」）。
+#
+# --check-profile（install-main.sh 4.2-e の検査口をサブ機からも直接叩けるようにする
+# 転送・2026-09-02追加）: install-main.sh 側が副作用ゼロで自身exitする契約
+# （check_profile_cmd()）のため、本スクリプト側でも検査モードのときはstep1
+# （Vault骨格配置）を行わず、委譲呼び出しの直後にinstall-main.shの終了コードを
+# そのまま返して即終了する＝step3〜5（machine-roleマーカー設置等）へは一切進まない。
+# `--check-profile --print-schema-version` を付けた場合は install-main.sh が
+# schema_versionの値だけを1行返す契約（§6）を壊さないよう、本スクリプト自身の
+# ログ（"claude/・codex/ の配置は…委譲します"等）もこのモードでは出さない。
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 
@@ -60,6 +70,8 @@ DRY_RUN=0
 WITH_DOTFILES=0
 RECONFIGURE_LEADER=0
 NON_INTERACTIVE=0
+CHECK_PROFILE=0
+PRINT_SCHEMA_VERSION=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
@@ -69,6 +81,11 @@ for arg in "$@"; do
     # へ委譲する（フラグが落ちると挙動が変わるため必ず転送する）。
     --reconfigure-leader) RECONFIGURE_LEADER=1 ;;
     --non-interactive) NON_INTERACTIVE=1 ;;
+    # 2026-09-02追加: install-main.sh 4.2-eの検査口（副作用ゼロ）をサブ機からも
+    # 直接叩けるようにする転送。--print-schema-versionは--check-profileの
+    # サブモード（単独では意味を持たない・install-main.sh側の既存契約）。
+    --check-profile) CHECK_PROFILE=1 ;;
+    --print-schema-version) PRINT_SCHEMA_VERSION=1 ;;
     *) echo "unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -81,7 +98,12 @@ fail() { echo "[install-sub] FAIL: $*" >&2; exit 1; }
 [ -x "$DIR/scripts/install-main.sh" ] || fail "install-main.sh が見つかりません（checkout破損の可能性）: $DIR/scripts/install-main.sh"
 
 # --- 1. Vault骨格の配置（$VAULT が無い時だけ。既存Vaultは上書きしない） ---
-if [ -e "$VAULT" ]; then
+# ⚠️ --check-profile 検査モードでは一切進まない（2026-09-02追加）。検査は
+# 副作用ゼロの契約（install-main.sh 4.2-e）であり、Vault骨格配置はその契約を
+# 破る副作用そのものなので、検査モードのときはこのstepごとskipする。
+if [ "$CHECK_PROFILE" = "1" ]; then
+  :
+elif [ -e "$VAULT" ]; then
   log "VAULT は既に存在するため骨格配置はskipします（既存を壊さない）: $VAULT"
 else
   if [ "$DRY_RUN" = "1" ]; then
@@ -98,12 +120,18 @@ fi
 # 注意: bash 3.2（macOSシステムbash）は「空配列を "${arr[@]}" 展開」すると
 # set -u 下で unbound variable になる既知の制限がある（bash 4.4で修正済みだが
 # macOSは3.2のまま）。"${arr[@]+"${arr[@]}"}" の形で回避する（実測確認済み）。
-log "claude/・codex/ の配置は install-main.sh に委譲します"
+# ⚠️ --check-profile モードでは、この見出しログ自体を出さない
+# （`--check-profile --print-schema-version` は install-main.sh 側で
+# 「schema_versionの値だけを1行返す」契約＝§6のため、本スクリプト側の
+# 前置きログを挟むと出力契約を壊してしまう）。
+[ "$CHECK_PROFILE" != "1" ] && log "claude/・codex/ の配置は install-main.sh に委譲します"
 main_args=(--sub-delegate)
 [ "$DRY_RUN" = "1" ] && main_args+=(--dry-run)
 [ "$WITH_DOTFILES" = "1" ] && main_args+=(--with-dotfiles)
 [ "$RECONFIGURE_LEADER" = "1" ] && main_args+=(--reconfigure-leader)
 [ "$NON_INTERACTIVE" = "1" ] && main_args+=(--non-interactive)
+[ "$CHECK_PROFILE" = "1" ] && main_args+=(--check-profile)
+[ "$PRINT_SCHEMA_VERSION" = "1" ] && main_args+=(--print-schema-version)
 # ⚠️ 裸の呼び出しで`set -e`に任せると、install-main.sh側が設計書S4等の
 # 「他の処理は完走させたうえで最終的に非0」を意図した終了コードを返した
 # 場合でも、install-sub.shはここで即座に終了してしまい、後続のstep3〜5
@@ -114,6 +142,15 @@ main_args=(--sub-delegate)
 # 後続処理を完走させてからスクリプト末尾で反映する。
 AIENV_MAIN_DELEGATE_RC=0
 "$DIR/scripts/install-main.sh" "${main_args[@]+"${main_args[@]}"}" || AIENV_MAIN_DELEGATE_RC=$?
+
+# --- --check-profile モードはここで終了する（副作用ゼロの検査口・2026-09-02追加）---
+# install-main.sh 側の check_profile_cmd() は自身で完結してexitする契約
+# （検査結果をそのまま返す）。install-sub.sh側はstep3〜5（メイン専用機能の
+# 案内ログ・machine-roleマーカー設置等）へは一切進まず、委譲先の終了コードを
+# そのまま返す。
+if [ "$CHECK_PROFILE" = "1" ]; then
+  exit "$AIENV_MAIN_DELEGATE_RC"
+fi
 
 # --- 3. メイン専用のLaunchAgent類は意図的にインストールしない ---
 log "（メイン専用機能＝backup-vault・maintenance等のLaunchAgentはインストールしていません）"
