@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # vault-public/Preferences/core-conduct.md・core-workflow.md 内の {{…}} プレース
-# ホルダ集合が、最小能力表7キー（§3.3.0）の集合に含まれることを機械判定する
-# 静的テスト（2026-08-30 工程横断レビュー指摘・MAJOR-3支援）。
+# ホルダ集合が、最小能力表7キー（§3.3.0）、または設計上認められた文書参照名
+# （DOC_REFERENCE_KNOWN_KEYS。2026-09-02追加・配役表解凍-設計-2026-09-01.md
+# §7）の集合に含まれることを機械判定する静的テスト（2026-08-30 工程横断
+# レビュー指摘・MAJOR-3支援）。
 #
-# ⚠️ コア本文側の修正はcore-docs担当。このテストは「本文がキー集合と一致して
-# いること」を検証するだけで、本文自体は直さない。本文とスキーマが食い違って
-# いる間はこのテストが失敗し続けるのが正しい挙動（未解決参照を機械的に検知する
-# のがこのテストの目的そのもの）。
+# ⚠️ コア本文側の修正はcore-docs担当。このテストは「本文中の参照が既知の
+# 参照集合と一致していること」を検証するだけで、本文自体は直さない。本文と
+# 参照集合が食い違っている間はこのテストが失敗し続けるのが正しい挙動
+# （未解決参照を機械的に検知するのがこのテストの目的そのもの）。
 #
 # 追加（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応）: 「必読ファイル集合」の
 # 3重管理（claude/hooks/bootstrap-vault.shのFILES配列／scripts/vault-agents/
@@ -62,9 +64,22 @@ if [ "${#KNOWN_KEYS[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# v2配役表解凍で新規に正当化された参照名（2026-09-02追加）。プロファイル
+# YAMLのキー名ではなく、コア本文が配役表という概念そのものを指す散文上の
+# 参照であるため、LOCAL_PROFILE_KNOWN_KEYS（実プロファイルのfrontmatterキー
+# 集合・resolve_local_profile_v1()のT4/T5判定でも使われる正本）へは混ぜず、
+# 別カテゴリの許可リストとしてここに明示する（設計書
+# 配役表解凍-設計-2026-09-01.md §7 冒頭注記差分「採用の有無も配役も
+# {{配役表}} を見る」で規定済み。同じ行が「表を統合したので {{採用表}} と
+# いう参照名は作らない」とも明記しているため、{{採用表}} はこのリストに
+# 加えない＝Vault文言側の懸念は別途リーダーへ報告）。
+DOC_REFERENCE_KNOWN_KEYS=(
+  "配役表"
+)
+
 is_known_key() {
   local target="$1" k
-  for k in "${KNOWN_KEYS[@]}"; do
+  for k in "${KNOWN_KEYS[@]}" "${DOC_REFERENCE_KNOWN_KEYS[@]}"; do
     [ "$k" = "$target" ] && return 0
   done
   return 1
@@ -109,9 +124,9 @@ check_file() {
   while IFS= read -r ph; do
     [ -z "$ph" ] && continue
     if is_known_key "$ph"; then
-      pass "$relpath: {{${ph}}} は最小能力表7キーに含まれる"
+      pass "$relpath: {{${ph}}} は最小能力表7キー、または配役表解凍で正当化された参照名に含まれる"
     else
-      fail_case "$relpath: {{${ph}}} は最小能力表7キーに含まれない（未解決参照。§3.3.0のキー集合＝${KNOWN_KEYS[*]}）"
+      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表7キー＝${KNOWN_KEYS[*]}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]}）"
       unknown=$((unknown + 1))
     fi
   done <<EOF
@@ -119,10 +134,10 @@ $placeholders
 EOF
 }
 
-echo "=== 1. Preferences/core-conduct.md の {{…}} プレースホルダが最小能力表7キーに含まれる ==="
+echo "=== 1. Preferences/core-conduct.md の {{…}} プレースホルダが最小能力表7キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-conduct.md"
 
-echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表7キーに含まれる ==="
+echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表7キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-workflow.md"
 
 echo "=== 3. 回帰: プレースホルダが0件のファイルでもset -e下でスクリプト全体が落ちずfail_caseまで到達する（Codex二次レビュー指摘・Minor対応） ==="
