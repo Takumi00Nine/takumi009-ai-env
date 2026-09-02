@@ -58,10 +58,17 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DRY_RUN=0
 WITH_DOTFILES=0
+RECONFIGURE_LEADER=0
+NON_INTERACTIVE=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --with-dotfiles) WITH_DOTFILES=1 ;;
+    # 2026-09-01 配役表解凍 §3.9: リーダー配役の対話は共通関数1箇所
+    # （install-main.sh側）に置き、install-sub.shはそのままinstall-main.sh
+    # へ委譲する（フラグが落ちると挙動が変わるため必ず転送する）。
+    --reconfigure-leader) RECONFIGURE_LEADER=1 ;;
+    --non-interactive) NON_INTERACTIVE=1 ;;
     *) echo "unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -95,7 +102,18 @@ log "claude/・codex/ の配置は install-main.sh に委譲します"
 main_args=(--sub-delegate)
 [ "$DRY_RUN" = "1" ] && main_args+=(--dry-run)
 [ "$WITH_DOTFILES" = "1" ] && main_args+=(--with-dotfiles)
-"$DIR/scripts/install-main.sh" "${main_args[@]+"${main_args[@]}"}"
+[ "$RECONFIGURE_LEADER" = "1" ] && main_args+=(--reconfigure-leader)
+[ "$NON_INTERACTIVE" = "1" ] && main_args+=(--non-interactive)
+# ⚠️ 裸の呼び出しで`set -e`に任せると、install-main.sh側が設計書S4等の
+# 「他の処理は完走させたうえで最終的に非0」を意図した終了コードを返した
+# 場合でも、install-sub.shはここで即座に終了してしまい、後続のstep3〜5
+# （machine-roleマーカー設置を含む）が一切実行されない（2026-09-01 Codex
+# 差分レビュー指摘・MAJOR対応）。マーカー未設置はcheck-sub-update.sh・
+# update-sub.shのfail-closed判定に影響するため、install-main.shの終了
+# コードもinstall-sub.sh自身の"AIENV_DEFERRED_EXIT_CODE"として引き継ぎ、
+# 後続処理を完走させてからスクリプト末尾で反映する。
+AIENV_MAIN_DELEGATE_RC=0
+"$DIR/scripts/install-main.sh" "${main_args[@]+"${main_args[@]}"}" || AIENV_MAIN_DELEGATE_RC=$?
 
 # --- 3. メイン専用のLaunchAgent類は意図的にインストールしない ---
 log "（メイン専用機能＝backup-vault・maintenance等のLaunchAgentはインストールしていません）"
@@ -126,5 +144,12 @@ fi
 if [ "$DRY_RUN" = "1" ]; then
   log "[dry-run] 完了。実際の変更は一切行っていません。"
 else
-  log "done."
+  if [ "$AIENV_MAIN_DELEGATE_RC" != "0" ]; then
+    warn "install-main.sh への委譲が非0終了しました（詳細は上記のinstall-mainログを参照）。machine-roleマーカー等の他の処理は完了しましたが、全体としては非0終了します。"
+  else
+    log "done."
+  fi
+fi
+if [ "$AIENV_MAIN_DELEGATE_RC" != "0" ]; then
+  exit "$AIENV_MAIN_DELEGATE_RC"
 fi

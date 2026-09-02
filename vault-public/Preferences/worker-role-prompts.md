@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-08-14
+updated: 2026-09-01
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -8,6 +8,11 @@ related:
   - "[[Decisions/2026-07-05-worker-stage-roles]]"
   - "[[Decisions/2026-07-05-delegation-gate-v2]]"
   - "[[Preferences/absolute-rules]]"
+  - "[[Knowledge/model-param-accepted-vs-resolved]]"
+  - "[[Preferences/coding-doc-style]]"
+  - "[[Decisions/2026-08-30-doc-body-archive-split]]"
+  - "[[Knowledge/claude-effort-delivery-paths]]"
+  - "[[Decisions/2026-09-01-doc-rule-bake-into-roles]]"
 aliases:
   - "7ロール運用"
   - "requirements-analyst"
@@ -25,8 +30,8 @@ aliases:
 モデル割り当て（2026-07-25 本人決定＝[[Decisions/2026-07-25-opus5-upstream-roles]]）: **requirements-analyst / system-designer / adoption-critic ＝ Opus 5**（判断の質が下流全体に効く上流工程・実行回数少）、他4ロール＝Sonnet 5 のまま。命名規則に従い上流3ロールは `opus-` プレフィックス（例: `opus-system-designer`）。
 | ロール名 | 工程 | 要旨 |
 |---|---|---|
-| `requirements-analyst` | 要件定義 | 検証可能な受入条件・スコープ外・OSS先行調査（「作らない」提案含む） |
-| `system-designer` | 設計 | 代替案比較（A vs B＋根拠＋リスク）・構成・テスト戦略。合議参加もこれ。**リスク部分（永続状態・人間承認/却下・複数部品連携）は詳細設計まで＝状態遷移(失敗/却下/滞留/復活含む)・source of truth・失敗モードを必ず落とす**（2026-07-18・手戻り前倒し） |
+| `requirements-analyst` | 要件定義 | 検証可能な受入条件・スコープ外・OSS先行調査（「作らない」提案含む）。**要件定義の成果物は「要件定義書（確定事項のみ）」と「検討経緯（論点・代替案比較・レビュー録）」の2ファイル構成を既定とする**（正本＝[[Preferences/coding-doc-style]] §3・[[Decisions/2026-08-30-doc-body-archive-split]]） |
+| `system-designer` | 設計 | 代替案比較（A vs B＋根拠＋リスク）・構成・テスト戦略。合議参加もこれ。**リスク部分（永続状態・人間承認/却下・複数部品連携）は詳細設計まで＝状態遷移(失敗/却下/滞留/復活含む)・source of truth・失敗モードを必ず落とす**（2026-07-18・手戻り前倒し）。**設計成果物は「設計書（確定事項のみ）」と「検討経緯（論点・代替案比較・レビュー録）」の2ファイル構成を既定とする**（正本＝[[Preferences/coding-doc-style]] §3・[[Decisions/2026-08-30-doc-body-archive-split]]。委任プロンプト頼みにせずロール規範側で担保＝2026-09-01 本人指示） |
 | `implementer` | 実装 | 担当ファイル範囲限定・既存様式遵守・ユニットテスト併作。**文書改修も対象** |
 | `tester` | テスト | 受入条件と1対1突合・追試（自己申告を信用しない）・実行前の破壊的操作チェック |
 | `researcher` | 調査（横断） | 裏取り/OSS/作者意図/デバッグ/振り返り分析の5モード。出典URL・確度必須 |
@@ -34,6 +39,9 @@ aliases:
 | `adoption-critic` | 採用判定（ゲート） | 敵対的レビューで「採用する価値があるか」の判定案。3モード＝着手判定（アイデア・要件定義より前）／採用判定（成果物・外部ツール）／継続判定（運用結果）。**品質レビュー（Codex）とは別軸**・最終決定はリーダー→ユーザー |
 
 補助ロール（7工程外）: **`vault-scribe`**（Sonnet 5・執筆代行）＝リーダーが確定した内容の Vault 書き込み専任。内容の新規判断はしない・Codex 一次レビュー対象外（リーダーが diff 実査）。命名＝`sonnet-vault-scribe`。**常駐可**（セッション中は残置してよい＝その旨本人に明示・セッション終了時に停止）。運用の詳細＝[[Preferences/vault-operation]]・[[Decisions/2026-08-10-vault-scribe]]。
+
+## 職種定義を新設・改訂するときの掟（2026-09-01 本人指示）
+職種定義（`~/.claude/agents/*.md`）を新設・改訂するときは、その職種の**成果物種別を確認**し、長寿命文書（設計書・要件書級）を作る職種には出力形式の節へ**「本文（確定事項のみ）＋検討経緯（論点・代替案比較・レビュー録）の2ファイル構成」の1行を必ず含める**（正本＝[[Preferences/coding-doc-style]] §3）。横断ルールは委任プロンプト頼みにせず職種定義側へ焼き込む（実例＝2026-09-01 設計差分書の分割差し戻し＝[[Decisions/2026-09-01-doc-rule-bake-into-roles]]）。
 
 ## リーダーが spawn 時に必ず渡すもの（定義には書けないタスク固有分）
 1. 背景と目的（会話履歴は引き継がれない前提で書く）
@@ -45,6 +53,8 @@ aliases:
 
 呼び方: チームメイト＝「Spawn a teammate using the implementer agent type…」／サブエージェント＝Agent ツールの subagent_type。
 7. **Agent ツールの `model` パラメータは渡さない**（渡すとロール定義 frontmatter の model を上書きする。実例 2026-07-27: 上流ロールに `model: opus` を明示→定義の claude-opus-5 が現行 Opus 4.8 に落ちた・本人指摘で発覚→停止・再起動。モデルの正本はロール定義側＝[[Decisions/2026-07-25-opus5-upstream-roles]]。例外＝本人がその場でモデルを明示指定した場合のみ）。
+
+**モデル指定は「受理された」ことと「意図どおり解決された」ことは別**（詳細＝[[Knowledge/model-param-accepted-vs-resolved]]）。実効モデルの確認手段: リーダー行＝`/status`・named/cmux ワーカー＝起動ペインのモデル表記・in-process ワーカーは現状観測不能。ピン留め効果が未検証の指定経路（例: settings.json 単体経由）ではエイリアス指定を避け、疑わしければ本人へ確認する。
 
 **リーダーの個別指示と標準プロトコルが矛盾したら着手前に確認（2026-08-01 追加）**: ワーカーは、リーダーからのその場の個別指示（例:「Codex 指摘は転送のみ・反映しない」）が本ノートやロール定義の標準手順（例: worker-driven で自分が反映）と食い違う場合、**どちらに従うか着手前に1行確認**する。個別指示が原則優先。実例＝2026-08-01 W4 が「転送のみ」指示を標準プロトコルで上書き解釈し自分で修正まで実施（結果は良かったが監査の穴になり得る）。
 

@@ -69,18 +69,25 @@ make_fake_repo() {
   mkdir -p "$repo/scripts" "$repo/claude/hooks" "$repo/claude/agents" "$repo/codex" "$repo/vault-public/Preferences"
   cp "$REPO_ROOT/$SCRIPT_REL" "$repo/scripts/check-drift.sh"
   chmod +x "$repo/scripts/check-drift.sh"
-  # 2026-08-30 §9.0 A-0-3: check-drift.sh は model値を自前で持たず、値出力口
-  # （install-main.sh --print-model）を呼ぶ。実物をfixtureへコピーする
-  # （--print-modelは他の全処理より先にexitする副作用ゼロの経路のため、
-  # fixture内で呼んでも実システムに一切触れない）。
+  # 2026-08-30 §9.0 A-0-3: check-drift.sh は model/effort値を自前で持たず、
+  # 値出力口（install-main.sh --print-leader-runtime。2026-09-01 配役表解凍
+  # §4.2-a・§4.4で--print-modelから改名）を呼ぶ。実物をfixtureへコピーする
+  # （--print-leader-runtimeは他の全処理より先にexitする副作用ゼロの経路の
+  # ため、fixture内で呼んでも実システムに一切触れない）。
   cp "$REPO_ROOT/scripts/install-main.sh" "$repo/scripts/install-main.sh"
   chmod +x "$repo/scripts/install-main.sh"
+  mkdir -p "$repo/claude/hooks/lib"
+  # ローカル実体プロファイルを置かないfixture（大半のテスト）はv1委譲経路
+  # （§3.5）に入るため、この共有libは通常参照されない。v2プロファイルを
+  # 明示的に置くテスト（後述）のためだけに実物を同梱しておく。
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$repo/claude/hooks/lib/profile_resolve.py"
   cat > "$repo/claude/settings.json" <<'EOF'
 {
   "permissions": {
     "allow": ["Bash(npm test)"]
   },
-  "model": "__AIENV_MODEL__"
+  "model": "__AIENV_MODEL__",
+  "effortLevel": "__AIENV_EFFORT__"
 }
 EOF
   echo '#!/bin/bash' > "$repo/claude/hooks/bootstrap-vault.sh"
@@ -107,12 +114,34 @@ EOF
 # （既定 claude-fable-5[1m]＝machine-roleマーカーを置かないテストの大半が想定する
 # メイン機の既定値。check-drift.sh側のAIENV_MODEL_MAIN既定値と一致させることで
 # 「他項目のfixtureのためだけの」テストで①-2が無関係にdriftを出さないようにする）。
+# $4（省略可）はeffortLevel値。既定"high"＝ローカル実体プロファイルを置かない
+# fixture（大半のテスト）はv1委譲経路（§3.5）に入り、値出力口
+# （--print-leader-runtime）は常にlegacy値"high"を返す（§4.2-g）。空文字を
+# 明示的に渡すとeffortLevelキー自体を持たない生成物になる
+# （§3.8「effort未指定はキー自体を出さない」を模擬するテスト専用）。
 install_fake_home() {
-  local repo="$1" home="$2" model="${3:-claude-fable-5[1m]}"
+  local repo="$1" home="$2" model="${3:-claude-fable-5[1m]}" effort="${4-high}"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
   # settings.json はsymlinkではなく生成物（install-main.shのgenerate_settings_json()
-  # と同じ __AIENV_MODEL__ プレースホルダ置換方式・2026-08-21 machine-role対応）。
-  sed "s#__AIENV_MODEL__#${model}#g" "$repo/claude/settings.json" > "$home/.claude/settings.json"
+  # と同じプレースホルダ置換方式・2026-08-21 machine-role対応）。effortLevelは
+  # sedの単純文字列置換ではキーの削除を表現できないため、model同様の目印
+  # 置換に加えてpython3でキー削除まで行う（install-main.sh generate_settings_
+  # json()の実装を模した最小限の再現）。
+  sed "s#__AIENV_MODEL__#${model}#g" "$repo/claude/settings.json" > "$home/.claude/settings.json.tmp"
+  python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+effort = sys.argv[3]
+if effort:
+    data['effortLevel'] = effort
+else:
+    data.pop('effortLevel', None)
+with open(sys.argv[2], 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+" "$home/.claude/settings.json.tmp" "$home/.claude/settings.json" "$effort"
+  rm -f "$home/.claude/settings.json.tmp"
   ln -s "$repo/claude/hooks/bootstrap-vault.sh" "$home/.claude/hooks/bootstrap-vault.sh"
   ln -s "$repo/claude/hooks/delegation-gate-v2.sh" "$home/.claude/hooks/delegation-gate-v2.sh"
   ln -s "$repo/claude/hooks/bash-danger-gate.sh" "$home/.claude/hooks/bash-danger-gate.sh"
@@ -357,7 +386,7 @@ json.dump(d, open(p, 'w'))
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 4i. ①-2 modelフィールドがテンプレの期待値(メイン=claude-fable-5[1m])と異なっていてもdriftにはせずINFO表示のみ（/model等での意図的切替を想定） ==="
+echo "=== 4i. ①-2 modelフィールドがテンプレの期待値(メイン=claude-fable-5[1m])と異なっていると/model等の意図的切替も含めdrift計上される（2026-09-01工程横断レビュー差し戻しMAJOR対応: 旧実装はここをINFO表示のみに丸め、旧modelのまま放置されても週次総drift 0になっていた。effortLevelとの非対称を解消し、V13は「週次driftで拾う」設計書§6.2-B S10どおりに扱う） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
@@ -367,9 +396,9 @@ echo "=== 4i. ①-2 modelフィールドがテンプレの期待値(メイン=cl
   install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "modelの差分はINFO表示される" "$out" "'model' フィールドが現在の期待値と異なります"
-  assert_not_contains "modelの差分はdriftにしない" "$out" "[DIFF] キー 'model'"
-  assert_contains "総drift件数0（modelの差分だけならdriftにしない）" "$out" "総drift件数: 0"
+  assert_not_contains "modelの差分はもはやINFO表示されない（回帰確認）" "$out" "'model' フィールドが現在の期待値と異なります"
+  assert_contains "modelの差分はDIFFとしてdrift計上される" "$out" "[DIFF] キー 'model'"
+  assert_not_contains "総drift件数0にはならない（回帰確認）" "$out" "総drift件数: 0"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -697,13 +726,15 @@ echo "=== 4x. ①-2 Bedrock env値の出力口がexit0・非空文字列で戻�
   install_fake_home "$REPO" "$HOME_DIR"
   # install-main.sh を「--print-bedrock-env-jsonがexit0・非空文字列だが
   # スキーマが壊れている（envキーが無い旧flat形式）」を返すスタブへ差し替える
-  # （--print-modelはinstall_fake_home()の既定modelと一致させ、①-2 model側は
-  # 無関係にdriftを出さないようにする）。
+  # （--print-leader-runtimeはinstall_fake_home()の既定model/effort
+  # （claude-fable-5[1m]/high）と一致させ、①-2 model/effort側は無関係に
+  # driftを出さないようにする。2026-09-01 配役表解凍以降、値出力口は
+  # --print-modelから--print-leader-runtimeへ一本化＝§4.2-a）。
   cat > "$REPO/scripts/install-main.sh" <<'EOF'
 #!/bin/bash
 case "$1" in
-  --print-model)
-    echo "claude-fable-5[1m]"
+  --print-leader-runtime)
+    echo '{"model": "claude-fable-5[1m]", "effort": "high"}'
     exit 0
     ;;
   --print-bedrock-env-json)
@@ -2520,6 +2551,506 @@ echo "=== 60. ⑦-2 ロック回収ミューテックスの更新時刻が未来
   assert_contains "VAULT-BACKUP-LOCK-FUTURE-DATEが検知される" "$out" "[VAULT-BACKUP-LOCK-FUTURE-DATE]"
   assert_not_contains "様子見の健全表示にはならない" "$out" "様子見です"
   assert_not_contains "STUCK扱いにもしない（別種別に分離）" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+# write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
+# を書く（tests/test-update-sub.shのwrite_v2_profile()と同じ最小セットの
+# 流儀に揃える＝担当Cの他ファイルと様式を合わせる）。
+write_v2_profile() {
+  local dest="$1" leader_line="$2"
+  shift 2
+  mkdir -p "$(dirname "$dest")"
+  {
+    echo "---"
+    echo "schema_version: 2"
+    echo "profile_slug: test"
+    echo "role.leader: ${leader_line}"
+    for extra in "$@"; do
+      printf '%s\n' "$extra"
+    done
+    echo "excluded_models: configured value=none"
+    echo "inventory_source: configured value=work-tools-dir"
+    echo "reviewer: configured value=codex-mcp"
+    echo "vault_write: configured value=via-scribe"
+    echo "vault_scope: configured value=full"
+    echo "ui.user_call: configured value=send-message"
+    echo "git_role: configured value=aienv-repo:commit"
+    echo "web_verification: configured value=websearch"
+    echo "---"
+  } > "$dest"
+}
+
+echo "=== 61. ①-2 effortLevelは三者一致が崩れると/effort等での意図的切替とは扱われず常時driftになる（V13・2026-09-01 設計書§4.4。旧実装ではmodel側だけINFO特例があり非対称だったが、2026-09-01工程横断レビュー差し戻しMAJOR対応でmodel側もdrift扱いへ揃え、この非対称は解消済み） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]" "high"
+  # live側だけeffortLevelを書き換える（/effortでの意図的切替を模す）。
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d['effortLevel'] = 'low'
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "effortLevelの差分はDIFFとして検知される（INFO特例は無い。modelも同様＝テスト4i参照）" "$out" "[DIFF] キー 'effortLevel'"
+  assert_not_contains "effortLevelにはINFO扱いの文言が出ない" "$out" "'effortLevel' フィールドが現在の期待値と異なります"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 62. ①-2 リーダー行がeffort未指定ならeffortLevelキーが存在しないことを期待し、存在すればMISSING扱いではなくEXTRA-KEYとして検知する（§3.8・4.2-a「未指定はキー自体を出さない」の裏返し） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  # install-main.shをeffort未指定（キー自体を出さない）のリーダー実行値を
+  # 返すスタブへ差し替える。
+  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    echo '{"model": "claude-fable-5[1m]"}'
+    exit 0
+    ;;
+  --print-bedrock-env-json)
+    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$REPO/scripts/install-main.sh"
+  # liveのeffortLevelは書いたまま残す（installerがeffort未指定にも関わらず
+  # 誰かが/effort等で値を残した状態を模す）。
+  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]" "leftover-value"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "effortLevelキーが期待値に無いのに存在するのでEXTRA-KEYとして検知される" "$out" "[EXTRA-KEY] キー 'effortLevel'"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 63. ①-2 テンプレの'effortLevel'が__AIENV_EFFORT__の目印から変わっている場合はTEMPLATE-INVALIDとして検知する（model側と対の検査・2026-09-01 設計書§4.4） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  # repoテンプレ側のeffortLevelへ特定値を直書きする（回帰を模す）。
+  cat > "$REPO/claude/settings.json" <<'EOF'
+{
+  "permissions": {
+    "allow": ["Bash(npm test)"]
+  },
+  "model": "__AIENV_MODEL__",
+  "effortLevel": "high-hardcoded-oops"
+}
+EOF
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "TEMPLATE-INVALID(effortLevel)として検知される" "$out" "[TEMPLATE-INVALID]"
+  assert_contains "'effortLevel'フィールドの目印から変わっている旨のメッセージ" "$out" "'effortLevel' フィールドが __AIENV_EFFORT__ の目印から変わっています"
+  assert_not_contains "誤って一致扱いにならない" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 64. ①-2 機械可読コード(LEADER_UNCONFIGURED)が人向け文言へ変換されてMODEL-VALUE-UNAVAILABLEに含まれる（2026-09-01 設計書§4.4・旧2>/dev/nullの丸めを廃止） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" "unknown"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "MODEL-VALUE-UNAVAILABLEが検知される" "$out" "[MODEL-VALUE-UNAVAILABLE]"
+  assert_contains "機械可読コードが人向け文言(リーダー配役が未確定です)へ変換される" "$out" "リーダー配役が未確定です"
+  assert_contains "プロファイルのリーダー行を確認してくださいという案内が出る" "$out" "プロファイルのリーダー行（role.leader）を確認してください"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 65. ①-3 ANTHROPIC_MODEL環境変数が設定されているとEFFECTIVE_MODEL_OVERRIDE_PRESENTとして検知される（値は出さない・V13） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+
+  out="$(ANTHROPIC_MODEL='claude-should-not-leak' DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/scripts/check-drift.sh")"
+  assert_contains "EFFECTIVE_MODEL_OVERRIDE_PRESENTが検知される" "$out" "[EFFECTIVE_MODEL_OVERRIDE_PRESENT]"
+  assert_contains "ANTHROPIC_MODELというキー名は出る" "$out" "ANTHROPIC_MODEL"
+  assert_not_contains "値そのものは出ない" "$out" "claude-should-not-leak"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 66. ①-3 CLAUDE_CODE_EFFORT_LEVEL環境変数が設定されているとEFFECTIVE_EFFORT_OVERRIDE_PRESENTとして検知される（値は出さない・V13） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+
+  out="$(CLAUDE_CODE_EFFORT_LEVEL='xhigh-should-not-leak' DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/scripts/check-drift.sh")"
+  assert_contains "EFFECTIVE_EFFORT_OVERRIDE_PRESENTが検知される" "$out" "[EFFECTIVE_EFFORT_OVERRIDE_PRESENT]"
+  assert_contains "CLAUDE_CODE_EFFORT_LEVELというキー名は出る" "$out" "CLAUDE_CODE_EFFORT_LEVEL"
+  assert_not_contains "値そのものは出ない" "$out" "xhigh-should-not-leak"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 67. ①-3 上書き経路が何も無ければdrift計上せずチェック対象内で健全表示になる（65/66の陰性コントロール） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+
+  out="$(env -u ANTHROPIC_MODEL -u ANTHROPIC_DEFAULT_MODEL -u CLAUDE_CODE_EFFORT_LEVEL \
+    DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/scripts/check-drift.sh")"
+  assert_not_contains "EFFECTIVE_MODEL_OVERRIDE_PRESENTは出ない" "$out" "[EFFECTIVE_MODEL_OVERRIDE_PRESENT]"
+  assert_not_contains "EFFECTIVE_EFFORT_OVERRIDE_PRESENTは出ない" "$out" "[EFFECTIVE_EFFORT_OVERRIDE_PRESENT]"
+  assert_contains "既知の上書き経路は検出されなかった旨の健全表示が出る" "$out" "実効model/effortを上書きしうる既知の経路"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 68. ⑧ --check-profileが非0終了するとPROFILE-VALIDATION-FAILEDとしてdrift計上される（2026-09-01 設計書§4.4） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  # V15（禁止キー名ガード）に違反する行を書く＝fail区分のvalidator違反を
+  # 決定的に起こす（構文エラーの中でも最も再現しやすいケースを選ぶ）。
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5" \
+    "role.leader_api_token: configured provider=anthropic-api model=claude-sonnet-5"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "PROFILE-VALIDATION-FAILEDとして検知される" "$out" "[PROFILE-VALIDATION-FAILED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 69. ⑧ プロファイル実体がまだ存在しない場合はPROFILE-VALIDATION-FAILEDにせずチェック対象外にする（P1ロールアウト未完了・v1委譲期間との整合） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # ローカル実体プロファイルを一切置かない（P1ロールアウト未完了機を模す）。
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "PROFILE-VALIDATION-FAILEDにはならない" "$out" "[PROFILE-VALIDATION-FAILED]"
+  assert_contains "P1ロールアウト未完了として案内される" "$out" "ローカル実体プロファイルがまだ存在しません"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 70. ⑧ advisory（V1-a・V9-f）がdriftとして週次通知に出る／UNKNOWN_EXTRAは独立項目PROFILE-AI-UNREADABLEになる（2026-09-01 設計書§4.4） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  echo "# researcher" > "$REPO/claude/agents/researcher.md"
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5" \
+    "role.researcher: configured provider=anthropic-api model=claude-opus-4.6 effort=xhigh" \
+    "mystery_key: configured value=abc"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "V1-aがPROFILE-ADVISORYとして検知される" "$out" "[PROFILE-ADVISORY:V1-a]"
+  assert_contains "V9-fがPROFILE-ADVISORYとして検知される" "$out" "[PROFILE-ADVISORY:V9-f]"
+  assert_contains "UNKNOWN_EXTRAはPROFILE-AI-UNREADABLEという独立項目になる" "$out" "[PROFILE-AI-UNREADABLE]"
+  assert_contains "PROFILE-AI-UNREADABLEにキー名(mystery_key)が出る" "$out" "mystery_key"
+  assert_not_contains "PROFILE-VALIDATION-FAILEDにはならない（advisoryはfail区分ではない）" "$out" "[PROFILE-VALIDATION-FAILED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 70b. ⑧ advisory T4-PRIME（実体の版がコードの期待版より新しい）もdriftとして週次通知に出る（残課題台帳#3・本人裁定2026-09-01：T4系・JUDGEMENT_UNKNOWNを監視不能系としてdrift計上へ追加） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  # EXPECTED_SCHEMA_VERSION(=2)より新しいschema_versionを書くとT4-PRIME
+  # （このマシンのコードが古い可能性）が発生する（profile_resolve.py
+  # reconcile_schema_version()のdeclared>EXPECTED分岐）。
+  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
+  cat > "$HOME_DIR/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 3
+profile_slug: test
+role.leader: configured provider=anthropic-api model=claude-sonnet-5
+excluded_models: configured value=none
+inventory_source: configured value=work-tools-dir
+reviewer: configured value=codex-mcp
+vault_write: configured value=via-scribe
+vault_scope: configured value=full
+ui.user_call: configured value=send-message
+git_role: configured value=aienv-repo:commit
+web_verification: configured value=websearch
+---
+EOF
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "T4-PRIMEがPROFILE-ADVISORYとして検知される" "$out" "[PROFILE-ADVISORY:T4-PRIME]"
+  assert_not_contains "PROFILE-VALIDATION-FAILEDにはならない（advisoryはfail区分ではない）" "$out" "[PROFILE-VALIDATION-FAILED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 70c. ⑧ advisory JUDGEMENT_UNKNOWN（ワーカーのBedrock経路有効性が判定不能だが通した）もdriftとして週次通知に出る（残課題台帳#3・本人裁定2026-09-01） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  echo "# researcher" > "$REPO/claude/agents/researcher.md"
+  # bedrock.envをディレクトリにする＝bedrock_env_file_kind()がUNAVAILABLEを
+  # 返し、provider=bedrockのワーカー行に対してbedrock_route_enabled()が
+  # 'unknown'を返す（§3.7の判定不能。leader以外は通しつつJUDGEMENT_UNKNOWNを
+  # advisoryへ積む＝profile_resolve.py _evaluate_single_candidate()）。
+  mkdir -p "$HOME_DIR/.config/takumi009-ai-env/bedrock.env"
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5" \
+    "role.researcher: configured provider=bedrock model=sonnet"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "JUDGEMENT_UNKNOWNがPROFILE-ADVISORYとして検知される" "$out" "[PROFILE-ADVISORY:JUDGEMENT_UNKNOWN]"
+  assert_not_contains "PROFILE-VALIDATION-FAILEDにはならない（advisoryはfail区分ではない）" "$out" "[PROFILE-VALIDATION-FAILED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 70d. ⑧ advisory EFFORT_COMPATIBILITY_UNVERIFIED（Bedrock別名で実モデル版を判別できないeffort適合警告）は恒常ノイズ回避のためdrift計上せずINFO表示のみ（残課題台帳#3・本人裁定2026-09-01：V1-a/V9-f/T4系/JUDGEMENT_UNKNOWNとは異なり対象外のまま） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  echo "# researcher" > "$REPO/claude/agents/researcher.md"
+  # provider=bedrockのmodel別名（opus/sonnet/haiku/fable）はeffort=xhighと
+  # 組み合わさっても実モデルの版を判別できないため、V9-fではなく
+  # EFFORT_COMPATIBILITY_UNVERIFIEDになる（profile_resolve.py
+  # model_effort_advisory()）。
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5" \
+    "role.researcher: configured provider=bedrock model=opus effort=xhigh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "EFFORT_COMPATIBILITY_UNVERIFIEDはPROFILE-ADVISORYとして計上されない（driftにしない）" "$out" "[PROFILE-ADVISORY:EFFORT_COMPATIBILITY_UNVERIFIED]"
+  assert_contains "代わりにINFO表示になる" "$out" "advisory該当があります（条件番号: EFFORT_COMPATIBILITY_UNVERIFIED）"
+  assert_contains "INFOメッセージが恒常ノイズ回避の理由を示す" "$out" "恒常ノイズ回避のためdriftには数えません"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 70e. ⑧ advisory T4（版が仮想補完された）もdriftとして週次通知に出る（残課題台帳#3・本人裁定2026-09-01。現行のEXPECTED_SCHEMA_VERSION=2・v2分類の下限=2のため実プロファイルからT4単体だけを発生させられず、profile_resolve.py側コメントも『通常到達しない』と明記している。check-drift.sh自身の分類ロジック（ADVISORY:T4の文字列をdriftへ振り分けられるか）だけを狙い撃ちするため、--check-profileをスタブして直接ADVISORY:T4を返す＝テスト71と同型の手法） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    echo '{"model": "claude-fable-5[1m]", "effort": "high"}'
+    exit 0
+    ;;
+  --print-bedrock-env-json)
+    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+    exit 0
+    ;;
+  --check-profile)
+    printf 'OK\tschema_version=2\tADVISORY:T4\n'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$REPO/scripts/install-main.sh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "T4がPROFILE-ADVISORYとして検知される" "$out" "[PROFILE-ADVISORY:T4]"
+  assert_not_contains "T4-PRIMEと誤認しない（別条件番号との取り違え回帰確認）" "$out" "[PROFILE-ADVISORY:T4-PRIME]"
+  assert_not_contains "PROFILE-VALIDATION-FAILEDにはならない（advisoryはfail区分ではない）" "$out" "[PROFILE-VALIDATION-FAILED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 70f. ⑧ プロファイル契約（§3）の6コードのいずれとも一致しない未知のADVISORYコードは、恒常ノイズ扱いのINFOへ丸めずPROFILE-ADVISORY-UNKNOWNとしてdrift計上する（Codex一次レビュー指摘・Major対応: 従来はEFFORT_COMPATIBILITY_UNVERIFIED以外の全未知コードが唯一のdefault分岐でINFOに丸められており、将来の契約拡張漏れ・resolverとの版ずれを静かに見逃していた） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    echo '{"model": "claude-fable-5[1m]", "effort": "high"}'
+    exit 0
+    ;;
+  --print-bedrock-env-json)
+    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+    exit 0
+    ;;
+  --check-profile)
+    printf 'OK\tschema_version=2\tADVISORY:FUTURE-UNKNOWN-CODE\n'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$REPO/scripts/install-main.sh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "未知コードはPROFILE-ADVISORY-UNKNOWNとしてdrift計上される" "$out" "[PROFILE-ADVISORY-UNKNOWN:FUTURE-UNKNOWN-CODE]"
+  assert_not_contains "恒常ノイズ扱いのINFOメッセージにはならない（回帰確認）" "$out" "advisory該当があります（条件番号: FUTURE-UNKNOWN-CODE）"
+  assert_not_contains "PROFILE-VALIDATION-FAILEDにはならない（advisoryはfail区分ではない）" "$out" "[PROFILE-VALIDATION-FAILED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 71. ⑧ --check-profileがexit 0でもOK行・v1委譲の既知文言のいずれとも一致しない出力ならPROFILE-VALIDATION-FAILEDとして検知する（2026-09-01 Codex二次レビュー指摘・Major対応: 従来はexit 0であれば無条件で健全扱いしていた） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # install-main.shを「--check-profileがexit 0だが未知の応答を返す」スタブへ
+  # 差し替える（契約違反の出力を模す）。
+  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    echo '{"model": "claude-fable-5[1m]", "effort": "high"}'
+    exit 0
+    ;;
+  --print-bedrock-env-json)
+    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+    exit 0
+    ;;
+  --check-profile)
+    echo "UNEXPECTED_RESPONSE_NOT_OK_NOT_V1"
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$REPO/scripts/install-main.sh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "PROFILE-VALIDATION-FAILEDとして検知される（無条件の健全表示にならない）" "$out" "[PROFILE-VALIDATION-FAILED]"
+  assert_not_contains "v1委譲の健全表示にはならない" "$out" "--check-profile は正常終了しました（v1委譲）"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 72. ①-3 live settings.jsonのmodelSettingsが辞書型でない（型不正）場合はV13_UNAVAILABLEとして検知する（2026-09-01 Codex一次レビュー指摘・Major対応: 従来はisinstance()がFalseの場合に何も出力せず健全扱いしていた） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # live側のmodelSettingsを辞書型ではなく配列にする（壊れた/想定外の構造）。
+  python3 -c "
+import json
+p = '$HOME_DIR/.claude/settings.json'
+d = json.load(open(p))
+d['modelSettings'] = ['not-a-dict']
+json.dump(d, open(p, 'w'))
+"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "V13_UNAVAILABLEとして検知される" "$out" "[V13_UNAVAILABLE]"
+  assert_contains "modelSettingsというキー名は出る" "$out" "modelSettings"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 73. ①-2 --print-leader-runtimeがeffortキーを空文字列で返す契約違反はJSON解析失敗として拒否する（未指定＝キー省略との混同を防ぐ・2026-09-01 Codex二次レビュー指摘・Major対応） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    echo '{"model": "claude-fable-5[1m]", "effort": ""}'
+    exit 0
+    ;;
+  --print-bedrock-env-json)
+    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$REPO/scripts/install-main.sh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "MODEL-VALUE-UNAVAILABLEとして検知される（空文字列effortは契約違反）" "$out" "[MODEL-VALUE-UNAVAILABLE]"
+  assert_contains "JSON解析失敗（契約違反）である旨のメッセージが出る" "$out" "リーダー実行値を解決できませんでした"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 74. ①-2 --print-leader-runtimeが複数行に整形されたJSONを返す契約違反は1行JSONの契約違反として拒否する（2026-09-01 Codex二次レビュー指摘・Major対応） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    printf '{\n  "model": "claude-fable-5[1m]",\n  "effort": "high"\n}\n'
+    exit 0
+    ;;
+  --print-bedrock-env-json)
+    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$REPO/scripts/install-main.sh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "MODEL-VALUE-UNAVAILABLEとして検知される（複数行JSONは契約違反）" "$out" "[MODEL-VALUE-UNAVAILABLE]"
 
   rm -rf "$REPO" "$HOME_DIR"
 }

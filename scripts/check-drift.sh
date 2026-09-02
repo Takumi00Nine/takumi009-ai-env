@@ -172,10 +172,11 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 # scripts/install-main.sh・claude/hooks/check-sub-update.sh 等と同じ環境変数名・
 # 既定値・fail-closedの読み方（trimして中身がちょうど"sub"の場合だけサブ扱い。
 # マーカー不在・読めない・中身が違う等はすべてmain扱い）を踏襲する。
-# ⚠️ model既定値（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）はここでは持たない
+# ⚠️ model/effort既定値（AIENV_MODEL_MAIN/AIENV_MODEL_SUB等）はここでは持たない
 # （2026-08-30 §9.0 A-0-3＝値表2箇所重複の解消）。値の出力口は
-# scripts/install-main.sh --print-model [--sub-delegate] に一本化し、
-# 診断側はその出力を読むだけにする（①-2で呼び出す）。
+# scripts/install-main.sh --print-leader-runtime [--sub-delegate] に一本化し
+# （2026-09-01 配役表解凍 §4.2-a・§4.4で--print-modelから改名）、診断側は
+# その出力を読むだけにする（①-2で呼び出す）。
 : "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
 
 JSON_MODE=0
@@ -280,10 +281,12 @@ echo "======================================================================"
 # チェックをここで行う。まず旧symlinkのまま残っていないか（[UNEXPECTED-SYMLINK]）
 # を確認してから、生成物としての内容比較に進む。
 #
-# "model"キーだけは特別扱いする: セッション内`/model`で意図的に切り替えた結果が
-# ここに現れることがあり、これは正常な用途のため、キーが存在し文字列型の場合に
-# 限り、値が期待値と異なっていてもdriftには数えずINFO表示に留める（キー自体の
-# 欠落・非文字列型は異常のため通常のDRIFT分類へ回す）。
+# ⚠️ "model"キーはもはや特別扱いしない（2026-09-01工程横断レビュー差し戻し
+# MAJOR対応）。旧実装はセッション内`/model`での意図的な一時切替を理由に
+# 不一致を常にINFO表示へ丸めており、旧modelのまま放置されても週次総drift
+# 0になっていた。V13は「週次driftで拾う」契約（設計書§6.2-B S10）であり、
+# effortLevelとの非対称も生んでいたため、他のキーと同じDRIFT分類
+# （MISSING-KEY/DIFF/EXTRA-KEY）で扱う（意図的な切替の除外はしない）。
 #
 # 既知アプリ管理キー一覧（2026-08-30追加・§9.0検出事項⑤/
 # [[Knowledge/symlink-config-app-writeback-pitfall]]）: Claude Code自身が
@@ -298,18 +301,69 @@ KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS=(
   "inputNeededNotifEnabled" # 同上
 )
 #
-# machine-roleマーカーを読み、期待されるmodel値を決定する（fail-closed＝
-# マーカー不在・読めない・中身が「sub」以外はすべてmain扱い。他フックと同じ
-# 判定パターンを踏襲）。値そのものは自前の値表を持たず、値出力口
-# （scripts/install-main.sh --print-model [--sub-delegate]）を呼んで得る
-# （§9.0 A-0-3＝値表2箇所重複の解消。診断からは副作用ゼロの--print-modelだけを
-# 呼び、--sub-delegate本体は呼ばない）。
+# machine-roleマーカーを読み、期待されるmodel/effort値を決定する
+# （fail-closed＝マーカー不在・読めない・中身が「sub」以外はすべてmain扱い。
+# 他フックと同じ判定パターンを踏襲）。値そのものは自前の値表を持たず、値出力口
+# （scripts/install-main.sh --print-leader-runtime [--sub-delegate]）を呼んで
+# 得る（§9.0 A-0-3＝値表2箇所重複の解消・2026-09-01 配役表解凍 §4.2-a・§4.4で
+# --print-modelから改名。診断からは副作用ゼロの--print-leader-runtimeだけを
+# 呼び、--sub-delegate本体は呼ばない。⚠️ --sub-delegateフラグ自体はv1委譲期間の
+# フォールバック値選択〈AIENV_MODEL_MAIN/AIENV_MODEL_SUB〉に引き続き使うため、
+# --print-leader-runtimeと併用する＝§4.2-f）。
+#
+# leader_runtime_error_message <コード> [<理由>] — install-main.sh
+# --print-leader-runtime が標準エラーへ返す機械可読コード（4.2-b）を人向け
+# 文言へ変換する（2026-09-01 設計書§4.4。旧実装はここを`2>/dev/null`で理由を
+# 捨てて[MODEL-VALUE-UNAVAILABLE]の定型文だけに丸めていた）。
+# scripts/update-sub.shにも同名の関数を意図的に複製している（両スクリプトは
+# 互いをsourceしない独立プロセスで、変換ロジックは数行のみのため共有libを
+# 新設するほどではない＝bedrock_env_file_kind()等ここまでの既存の複製方針と
+# 同型）。
+leader_runtime_error_message() {
+  local code="$1" reason="${2:-}" msg=""
+  case "$code" in
+    PROFILE_NOT_FOUND|PROFILE_UNREADABLE)
+      msg="プロファイル実体を読み取れませんでした（不在・symlink・権限不足等の可能性）"
+      ;;
+    PROFILE_MIXED)
+      msg="プロファイルのschema_versionが職種行と整合していません（v2の職種行があるのにschema_versionが1のまま）"
+      ;;
+    PROFILE_LEGACY_V1)
+      msg="プロファイルがv1形式のままです。v2へ移行してください"
+      ;;
+    PROFILE_INVALID:*)
+      msg="プロファイルの構文または検証エラーです（${code#PROFILE_INVALID:}）"
+      ;;
+    PROFILE_RESOLVER_MISSING)
+      msg="resolver本体（共有lib）が見つかりません"
+      ;;
+    LEADER_UNCONFIGURED)
+      msg="リーダー配役が未確定です（unknown・not_adopted・行なしのいずれか）"
+      ;;
+    LEADER_UNAVAILABLE_NO_FALLBACK)
+      msg="リーダーの本命・fallbackの双方が使用不可です"
+      ;;
+    LEADER_CANDIDATE_INVALID:*)
+      msg="リーダー候補の検証に失敗しました（条件番号: ${code#LEADER_CANDIDATE_INVALID:}）"
+      ;;
+    PROFILE_RESOLVER_ERROR|*)
+      msg="リーダー実行値を解決できませんでした（原因不明。コード: ${code:-なし}）"
+      ;;
+  esac
+  [ -n "$reason" ] && msg="${msg}（${reason}）"
+  printf '%s。プロファイルのリーダー行（role.leader）を確認してください: %s' "$msg" "$AIENV_LOCAL_PROFILE_PATH_HINT"
+}
+: "${AIENV_LOCAL_PROFILE_PATH_HINT:=$HOME/.config/takumi009-ai-env/profile.md}"
+
 SETTINGS_JSON_LIVE="$HOME/.claude/settings.json"
 SETTINGS_JSON_TEMPLATE="$DIR/claude/settings.json"
 MACHINE_ROLE_RAW="$(cat "$AIENV_MACHINE_ROLE_MARKER" 2>/dev/null)"
 MACHINE_ROLE="${MACHINE_ROLE_RAW#"${MACHINE_ROLE_RAW%%[![:space:]]*}"}"
 MACHINE_ROLE="${MACHINE_ROLE%"${MACHINE_ROLE##*[![:space:]]}"}"
 EXPECTED_MODEL=""
+EXPECTED_EFFORT=""
+EXPECTED_EFFORT_SET=0
+EXPECTED_MODEL_UNAVAILABLE_REASON=""
 # Bedrock envファイルの期待マージ分（2026-08-30 工程横断レビュー指摘・
 # MAJOR-5対応）。値表・許可リストをここに複製せず、install-main.shの
 # --print-bedrock-env-json（副作用ゼロの値出力口）を呼ぶ。
@@ -327,10 +381,103 @@ EXPECTED_MODEL=""
 EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
 EXPECTED_BEDROCK_ENV_UNAVAILABLE=0
 if [ -x "$DIR/scripts/install-main.sh" ]; then
-  if [ "$MACHINE_ROLE" = "sub" ]; then
-    EXPECTED_MODEL="$("$DIR/scripts/install-main.sh" --print-model --sub-delegate 2>/dev/null)" || EXPECTED_MODEL=""
+  # --sub-delegateは併用する（v2解決自体には使われない＝§4.2-fだが、
+  # v1委譲期間中のフォールバック値〈AIENV_MODEL_MAIN/AIENV_MODEL_SUB〉の
+  # 出し分けは引き続きこのフラグの有無だけで決まるため、外すとv1機の
+  # サブがメイン既定値へ倒れてしまう＝2026-09-01実測で発見・回帰させない）。
+  _leader_runtime_print_args=(--print-leader-runtime)
+  [ "$MACHINE_ROLE" = "sub" ] && _leader_runtime_print_args+=(--sub-delegate)
+  _leader_runtime_err_tmp="$(mktemp 2>/dev/null)" || _leader_runtime_err_tmp=""
+  if [ -n "$_leader_runtime_err_tmp" ]; then
+    if _leader_runtime_json="$("$DIR/scripts/install-main.sh" "${_leader_runtime_print_args[@]}" 2>"$_leader_runtime_err_tmp")"; then
+      # ⚠️ JSONとして読めることだけでなく契約（4.2-a）が定める形自体も検査
+      # する: ①stdoutが物理行1行だけ②トップレベルはobject③modelは非空文字列
+      # かつC0制御文字・DEL（0x00-0x1F・0x7F）を含まない④effortは**キーが
+      # 存在する場合に限り**同様の非空clean文字列（2026-09-01 Codex一次・
+      # 二次レビュー指摘・Major対応。scripts/update-sub.shの同名処理と
+      # 意図的に同じ検査を複製）。
+      if _leader_runtime_fields="$(printf '%s' "$_leader_runtime_json" | python3 -c '
+import json, sys
+
+def is_clean_str(s):
+    if not isinstance(s, str) or s == "":
+        return False
+    return not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+
+raw = sys.stdin.read()
+if raw.count(chr(10)) > 1 or (raw.count(chr(10)) == 1 and not raw.endswith(chr(10))):
+    sys.exit(1)
+d = json.loads(raw)
+if not isinstance(d, dict):
+    sys.exit(1)
+model = d.get("model")
+if not is_clean_str(model):
+    sys.exit(1)
+print(model)
+if "effort" in d:
+    effort = d["effort"]
+    if not is_clean_str(effort):
+        sys.exit(1)
+    print("1")
+    print(effort)
+else:
+    print("0")
+    print("")
+' 2>/dev/null)"; then
+        EXPECTED_MODEL="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '1p')"
+        EXPECTED_EFFORT_SET="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '2p')"
+        EXPECTED_EFFORT="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '3p')"
+      else
+        EXPECTED_MODEL_UNAVAILABLE_REASON="$(leader_runtime_error_message "PROFILE_RESOLVER_ERROR" "リーダー実行値のJSON解析に失敗しました（resolve-leaderの出力契約違反の可能性）")"
+      fi
+    else
+      # ⚠️ 契約（4.2-b）は「標準エラーへ`<コード>\t<理由>`を1行」を定めている。
+      # 契約外（複数行・タブ無し・理由が空/制御文字混入等）の出力は生テキスト
+      # のまま理由として再掲しない（2026-09-01 Codex二次レビュー指摘・
+      # Major対応。scripts/update-sub.shと同じ検査を複製）。
+      _leader_runtime_stderr_parsed="$(python3 -c '
+import re, sys
+
+def is_clean_str(s):
+    return s != "" and not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+
+# 機械可読コードは契約（4.2-b・profile-resolve-contract-2026-09-01.md §4）が
+# 列挙する既知の集合に限定する（2026-09-01 Codex三次レビュー指摘・Major
+# 対応。scripts/update-sub.shと同じ検査を複製）。
+KNOWN_CODE_RE = re.compile(
+    r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|PROFILE_MIXED|PROFILE_LEGACY_V1|"
+    r"PROFILE_RESOLVER_MISSING|PROFILE_RESOLVER_ERROR|LEADER_UNCONFIGURED|"
+    r"LEADER_UNAVAILABLE_NO_FALLBACK|"
+    r"PROFILE_INVALID:[A-Za-z0-9_-]+|LEADER_CANDIDATE_INVALID:[A-Za-z0-9_-]+)$"
+)
+
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    raw = f.read()
+lines = raw.split(chr(10))
+if lines and lines[-1] == "":
+    lines = lines[:-1]
+if len(lines) != 1 or chr(9) not in lines[0]:
+    print("INVALID")
+    sys.exit(0)
+code, reason = lines[0].split(chr(9), 1)
+if not KNOWN_CODE_RE.match(code) or not is_clean_str(reason):
+    print("INVALID")
+    sys.exit(0)
+print("VALID")
+print(code)
+print(reason)
+' "$_leader_runtime_err_tmp" 2>/dev/null)"
+      if [ "$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '1p')" = "VALID" ]; then
+        _leader_runtime_code="$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '2p')"
+        _leader_runtime_reason="$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '3p')"
+        EXPECTED_MODEL_UNAVAILABLE_REASON="$(leader_runtime_error_message "${_leader_runtime_code:-PROFILE_RESOLVER_ERROR}" "$_leader_runtime_reason")"
+      else
+        EXPECTED_MODEL_UNAVAILABLE_REASON="$(leader_runtime_error_message "PROFILE_RESOLVER_ERROR" "標準エラーの出力が契約（4.2-b・1行のコード+理由）に従っていません")"
+      fi
+    fi
+    rm -f "$_leader_runtime_err_tmp"
   else
-    EXPECTED_MODEL="$("$DIR/scripts/install-main.sh" --print-model 2>/dev/null)" || EXPECTED_MODEL=""
+    EXPECTED_MODEL_UNAVAILABLE_REASON="一時ファイルを作成できませんでした"
   fi
   if ! EXPECTED_BEDROCK_ENV_JSON="$("$DIR/scripts/install-main.sh" --print-bedrock-env-json 2>/dev/null)"; then
     EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
@@ -356,6 +503,7 @@ sys.exit(0 if isinstance(d, dict) and isinstance(d.get('env'), dict) else 1)
   fi
 else
   EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
+  EXPECTED_MODEL_UNAVAILABLE_REASON="scripts/install-main.sh が見つからないか実行権限がありません"
 fi
 
 if [ -L "$SETTINGS_JSON_LIVE" ]; then
@@ -372,10 +520,13 @@ elif [ ! -f "$SETTINGS_JSON_LIVE" ]; then
 elif [ ! -f "$SETTINGS_JSON_TEMPLATE" ]; then
   item_drift "[MISSING] リポジトリ側テンプレが見つかりません: $SETTINGS_JSON_TEMPLATE"
 elif [ -z "$EXPECTED_MODEL" ]; then
-  # 値出力口（install-main.sh --print-model）が値を返さなかった場合はfail-openで
-  # 「一致」扱いにせず監視不能として drift 計上する（③GIT-STATUS-CHECK-FAILED・
-  # ⑤GH-CHECK-FAILEDと同型の既存の設計思想）。
-  item_drift "[MODEL-VALUE-UNAVAILABLE] model値の出力口（scripts/install-main.sh --print-model）が値を返しませんでした（実行権限・checkout破損等の可能性）＝監視不能"
+  # 値出力口（install-main.sh --print-leader-runtime）が値を返さなかった場合は
+  # fail-openで「一致」扱いにせず監視不能として drift 計上する
+  # （③GIT-STATUS-CHECK-FAILED・⑤GH-CHECK-FAILEDと同型の既存の設計思想。
+  # 2026-09-01 配役表解凍 §4.4: 理由は4.2-bの機械可読コードを
+  # leader_runtime_error_message()で人向け文言へ変換したもの＝旧実装の
+  # `2>/dev/null`による定型文への丸めを廃止）。
+  item_drift "[MODEL-VALUE-UNAVAILABLE] リーダー実行値の出力口（scripts/install-main.sh --print-leader-runtime）が値を返しませんでした＝監視不能: ${EXPECTED_MODEL_UNAVAILABLE_REASON:-理由不明}"
 elif [ "$EXPECTED_BEDROCK_ENV_UNAVAILABLE" = "1" ]; then
   # Bedrock env値の出力口（install-main.sh --print-bedrock-env-json）が
   # 非0終了した場合（envファイルは存在するのに読取・解析に失敗）は、
@@ -432,8 +583,28 @@ if not isinstance(template, dict) or template.get('model') != '__AIENV_MODEL__':
     print(f'TEMPLATE_INVALID\t{got!r}')
     sys.exit(0)
 
+# effortLevelの目印検査はmodel側と対で行う（2026-09-01 配役表解凍 §4.4）。
+# ⚠️ model側だけ守ると、誰かがテンプレへ特定のeffort値を直接ハードコード
+# しても検出できない非対称が残る（4.2-g・install-main.sh generate_settings_
+# json()と同じ検証）。
+if template.get('effortLevel') != '__AIENV_EFFORT__':
+    got_effort = template.get('effortLevel')
+    print(f'TEMPLATE_INVALID_EFFORT\t{got_effort!r}')
+    sys.exit(0)
+
 expected_model = sys.argv[3]
 app_managed_keys = set(k for k in sys.argv[4].split(chr(0x1f)) if k)
+expected_effort_set = sys.argv[6] == '1' if len(sys.argv) > 6 else False
+expected_effort = sys.argv[7] if len(sys.argv) > 7 else ''
+# effortLevelは値そのものをテンプレの文字列置換（render）に任せない
+# （§3.8・4.2-g: 未指定時は"効かない値へ空文字を埋める"のではなく**キー自体を
+# 削除**するのが正しい生成規則であり、V13は「effortLevelキーが存在しないこと」
+# を検査対象にする＝存在したらdrift。render()の単純な文字列置換ではキーの
+# 削除を表現できないため、flatten()より前にdictへ直接反映する）。
+if expected_effort_set:
+    template['effortLevel'] = expected_effort
+else:
+    template.pop('effortLevel', None)
 live_flat = flatten(live)
 tmpl_flat = flatten(render(template, expected_model))
 
@@ -463,15 +634,14 @@ for _k, _v in expected_bedrock_env.items():
     tmpl_flat[f'env.{_k}'] = _v
 
 for key in sorted(set(live_flat) | set(tmpl_flat)):
-    if key == 'model' and 'model' in live_flat and isinstance(live_flat['model'], str):
-        # "model"キーが存在し文字列型の場合だけ特別扱いする（Codex一次レビュー
-        # 指摘・Minor対応: キー自体が欠落・非文字列型の場合は「意図的な/model切替」
-        # ではあり得ない異常な状態のため、下の通常DRIFT分類へ素通しして検知する）。
-        live_model = live_flat['model']
-        expect_model = tmpl_flat.get('model', '<missing>')
-        if live_model != expect_model:
-            print(f'MODEL_INFO\t{live_model!r}\t{expect_model!r}')
-        continue
+    # ⚠️ "model"キーはもはや特別扱いしない（2026-09-01工程横断レビュー
+    # 差し戻しMAJOR対応）。旧実装はセッション内の/modelスラッシュコマンドでの
+    # 意図的な一時切替を理由にmodel不一致を常にMODEL_INFOへ丸めており、旧
+    # モデルのまま放置されても週次総drift 0になっていた（V13は「週次driftで
+    # 拾う」契約＝設計書§6.2-B S10「次回生成で上書きされる。その前にV13が
+    # ⚠️＋週次drift」・
+    # effortLevelとの非対称も解消する。意図的な切替の除外はしない＝下の通常
+    # DRIFT分類（MISSING-KEY/DIFF/EXTRA-KEY）へeffortLevel等と同列に合流させる）。
     # 既知アプリ管理キー（2026-08-30追加・§9.0検出事項⑤）: トップレベルの
     # キー名完全一致でのみ除外する（Codex一次レビュー指摘・Minor対応:
     # config.toml②はテーブルの深さを問わないleaf key判定だが、settings.jsonの
@@ -500,7 +670,7 @@ for key in sorted(set(live_flat) | set(tmpl_flat)):
         # レビュー指摘・Major対応: WARNのみだとpermissions等への意図しない追加
         # 変更が総drift0のまま見逃され続ける）。
         print(f'DRIFT\tEXTRA-KEY\t{key}\t{_show(live_flat[key])}')
-" "$SETTINGS_JSON_LIVE" "$SETTINGS_JSON_TEMPLATE" "$EXPECTED_MODEL" "$app_managed_keys_joined" "$EXPECTED_BEDROCK_ENV_JSON" 2>&1)"
+" "$SETTINGS_JSON_LIVE" "$SETTINGS_JSON_TEMPLATE" "$EXPECTED_MODEL" "$app_managed_keys_joined" "$EXPECTED_BEDROCK_ENV_JSON" "$EXPECTED_EFFORT_SET" "$EXPECTED_EFFORT" 2>&1)"
   SETTINGS_JSON_CLASSIFY_RC=$?
   if [ "$SETTINGS_JSON_CLASSIFY_RC" -ne 0 ]; then
     item_drift "[JSON-PARSE-FAILED] 検査①-2の実行自体に失敗しました（python3 exit=${SETTINGS_JSON_CLASSIFY_RC}）＝監視不能。詳細: ${SETTINGS_JSON_CLASSIFY_OUT}"
@@ -520,6 +690,12 @@ for key in sorted(set(live_flat) | set(tmpl_flat)):
         TEMPLATE_INVALID)
           item_drift "[TEMPLATE-INVALID] ${SETTINGS_JSON_TEMPLATE} の 'model' フィールドが __AIENV_MODEL__ の目印から変わっています（現在: ${a}）。誰かが特定モデルをテンプレへ直接ハードコードした可能性があります。__AIENV_MODEL__ プレースホルダへ戻してください"
           ;;
+        TEMPLATE_INVALID_EFFORT)
+          # 2026-09-01 配役表解凍 §4.4: model側と対のeffortLevel目印検査
+          # （__AIENV_EFFORT__）。片側だけ検査すると「誰かがテンプレへeffort
+          # を直接ハードコードした」を検出できず非対称が残る。
+          item_drift "[TEMPLATE-INVALID] ${SETTINGS_JSON_TEMPLATE} の 'effortLevel' フィールドが __AIENV_EFFORT__ の目印から変わっています（現在: ${a}）。誰かが特定のeffortをテンプレへ直接ハードコードした可能性があります。__AIENV_EFFORT__ プレースホルダへ戻してください"
+          ;;
         DRIFT)
           case "$a" in
             MISSING-KEY)
@@ -533,16 +709,132 @@ for key in sorted(set(live_flat) | set(tmpl_flat)):
               ;;
           esac
           ;;
-        MODEL_INFO)
-          log "  -> ℹ️ INFO: 'model' フィールドが現在の期待値と異なります（現在: ${a} / 期待: ${b}）。セッション内 /model での意図的な切替の可能性があるためdriftには数えません"
-          ;;
       esac
     done <<EOF
 $SETTINGS_JSON_CLASSIFY_OUT
 EOF
     if [ "$TOTAL_DRIFT" -eq "$drift_before" ]; then
-      log "  -> ✅ settings.jsonはテンプレと一致しています（modelフィールドの差分のみ除外）"
+      log "  -> ✅ settings.jsonはテンプレと一致しています"
     fi
+  fi
+fi
+
+echo
+echo "======================================================================"
+echo "①-3 実効model/effortを上書きしうる他の経路の存在確認（値は出さない・2026-09-01 設計書§4.4 V13拡張）"
+echo "======================================================================"
+
+# V13の三者一致（①-2）はファイル内容の比較でしかなく、環境変数は設定より
+# 優先するため、ファイルが一致していても実効値は別の経路で上書きされうる
+# （§1-12）。ここでは**キーの存在だけ**を検査し、値は一切出力しない
+# （絶対厳守③）。検出しても「上書き経路が存在する」という事実の通知であり、
+# 意図的な運用（例: プロジェクト固有の一時設定）の可能性もあるため fail
+# ではなくdrift計上（週次通知＝V13は「drift専用」＝resolverの契約ではない）。
+#
+# ⚠️ 既知の限界（残余リスクとして受容・設計書§9-1/V13の記述どおり）:
+#  - CLIの `--model`/`--effort`・セッション内の `/model`/`/effort` 一時切替は
+#    検出できない。
+#  - project/local settings は**このスクリプトを実行した時点のカレント
+#    ディレクトリ**（$PWD）だけを見る。他のプロジェクトディレクトリの
+#    .claude/settings*.json は検知できない（1台のワークツリーだけを
+#    継続監視する用途を超えるため、本ツールでは複数プロジェクトを走査しない）。
+: "${AIENV_MANAGED_SETTINGS_FILE:=/Library/Application Support/ClaudeCode/managed-settings.json}"
+V13_OVERRIDE_OUT="$(python3 -c "
+import json, os, sys
+
+def key_exists(path, key):
+    # 戻り値: 'yes'/'no'/'unavailable'（値は一切読み取り結果に含めない）。
+    if not os.path.isfile(path):
+        return 'absent'
+    try:
+        with open(path, encoding='utf-8') as f:
+            d = json.load(f)
+    except Exception:
+        return 'unavailable'
+    if not isinstance(d, dict):
+        return 'unavailable'
+    return 'yes' if key in d else 'no'
+
+pwd_settings = os.path.join(os.getcwd(), '.claude', 'settings.json')
+pwd_local_settings = os.path.join(os.getcwd(), '.claude', 'settings.local.json')
+managed_settings = sys.argv[1]
+live_settings = sys.argv[2]
+expected_model = sys.argv[3]
+
+# --- model側 ---
+if os.environ.get('ANTHROPIC_MODEL') is not None:
+    print('MODEL_OVERRIDE\tANTHROPIC_MODEL（環境変数）')
+if os.environ.get('ANTHROPIC_DEFAULT_MODEL') is not None:
+    print('MODEL_OVERRIDE\tANTHROPIC_DEFAULT_MODEL（環境変数）')
+for label, path in (('プロジェクト設定(.claude/settings.json)', pwd_settings),
+                     ('プロジェクトローカル設定(.claude/settings.local.json)', pwd_local_settings),
+                     ('managed settings', managed_settings)):
+    r = key_exists(path, 'model')
+    if r == 'yes':
+        print(f'MODEL_OVERRIDE\t{label}のmodelキー')
+    elif r == 'unavailable':
+        print(f'UNAVAILABLE\t{label}（modelキー確認）')
+
+# --- effort側 ---
+if os.environ.get('CLAUDE_CODE_EFFORT_LEVEL') is not None:
+    print('EFFORT_OVERRIDE\tCLAUDE_CODE_EFFORT_LEVEL（環境変数）')
+for label, path in (('プロジェクト設定(.claude/settings.json)', pwd_settings),
+                     ('プロジェクトローカル設定(.claude/settings.local.json)', pwd_local_settings),
+                     ('managed settings', managed_settings)):
+    r = key_exists(path, 'effortLevel')
+    if r == 'yes':
+        print(f'EFFORT_OVERRIDE\t{label}のeffortLevelキー')
+    elif r == 'unavailable':
+        print(f'UNAVAILABLE\t{label}（effortLevelキー確認）')
+
+# --- modelSettings.<model>.effortLevel（live設定ファイル自身の中） ---
+# ⚠️ modelSettings・modelSettings.<model>のどちらかが辞書型でない（壊れた/
+# 想定外の構造）場合は「無い」と混同せず監視不能として報告する（2026-09-01
+# Codex一次レビュー指摘・Major対応: 従来はisinstance()チェックがFalseの
+# 場合に何も出力せず、型不正を静かに「健全」扱いしていた＝false negative）。
+if expected_model:
+    r_live = key_exists(live_settings, 'modelSettings')
+    if r_live == 'unavailable':
+        print('UNAVAILABLE\tmodelSettings（live settings.json確認）')
+    elif r_live == 'yes':
+        try:
+            with open(live_settings, encoding='utf-8') as f:
+                live_d = json.load(f)
+            ms = live_d.get('modelSettings')
+            if not isinstance(ms, dict):
+                print('UNAVAILABLE\tmodelSettings（live settings.json確認・型不正）')
+            elif expected_model in ms:
+                entry = ms[expected_model]
+                if not isinstance(entry, dict):
+                    print(f'UNAVAILABLE\tmodelSettings.<model>（live settings.json確認・型不正）')
+                elif 'effortLevel' in entry:
+                    print('EFFORT_OVERRIDE\tmodelSettings.<model>.effortLevel（live settings.json）')
+        except Exception:
+            print('UNAVAILABLE\tmodelSettings（live settings.json確認）')
+" "$AIENV_MANAGED_SETTINGS_FILE" "$SETTINGS_JSON_LIVE" "$EXPECTED_MODEL" 2>&1)"
+V13_OVERRIDE_RC=$?
+if [ "$V13_OVERRIDE_RC" -ne 0 ]; then
+  item_drift "[V13_UNAVAILABLE] 実効model/effortの上書き経路確認自体に失敗しました（python3 exit=${V13_OVERRIDE_RC}）＝監視不能。詳細: ${V13_OVERRIDE_OUT}"
+else
+  v13_override_before=$TOTAL_DRIFT
+  while IFS=$'\t' read -r v13_kind v13_detail; do
+    [ -z "$v13_kind" ] && continue
+    case "$v13_kind" in
+      MODEL_OVERRIDE)
+        item_drift "[EFFECTIVE_MODEL_OVERRIDE_PRESENT] ${v13_detail}が存在します（値は出しません）＝settings.json側が正しくてもこちらが優先され実効modelが食い違う可能性があります。意図した設定でなければ削除してください"
+        ;;
+      EFFORT_OVERRIDE)
+        item_drift "[EFFECTIVE_EFFORT_OVERRIDE_PRESENT] ${v13_detail}が存在します（値は出しません）＝settings.json側が正しくてもこちらが優先され実効effortが食い違う可能性があります。意図した設定でなければ削除してください"
+        ;;
+      UNAVAILABLE)
+        item_drift "[V13_UNAVAILABLE] ${v13_detail}を確認できませんでした（JSON解析失敗等）＝監視不能"
+        ;;
+    esac
+  done <<EOF
+$V13_OVERRIDE_OUT
+EOF
+  if [ "$TOTAL_DRIFT" -eq "$v13_override_before" ]; then
+    log "  -> ✅ 実効model/effortを上書きしうる既知の経路（環境変数・project/local/managed settings・modelSettings）は検出されませんでした（CLIフラグ・セッション内一時切替は検出対象外＝残余リスク）"
   fi
 fi
 
@@ -1487,6 +1779,184 @@ if [ -d "$VAULT_BACKUP_RECLAIM_DIR" ]; then
   fi
 else
   log "  -> ✅ ロック回収ミューテックスは残っていません"
+fi
+
+echo
+echo "======================================================================"
+echo "⑧ ローカル実体プロファイルの検証状態（--check-profile・2026-09-01 設計書§4.4）"
+echo "======================================================================"
+
+# --check-profile（4.2-e）は副作用ゼロの検査口。resolve()の契約
+# （profile-resolve-contract-2026-09-01.md §3）どおり、成功時はOK行の直後に
+# 配役一覧を続けて表示するが、**stdoutの1行目だけが機械可読の契約**
+# （OK/MINIMALのタブ区切り）。ここではその1行目だけを見る。
+if [ ! -x "$DIR/scripts/install-main.sh" ]; then
+  log "  -> scripts/install-main.sh が見つからないため --check-profile を実行できません。チェック対象外"
+else
+  # ⚠️ stdoutとstderrを別々に捕捉する（2026-09-01 Codex二次レビュー指摘・
+  # Major対応: 従来は`2>&1`で合流させており、両方に出力があった場合に
+  # 機械可読な1行目を見失う恐れがあった）。機械可読の契約
+  # （resolve()の出力契約＝profile-resolve-contract-2026-09-01.md §3）は
+  # check_profile_cmd()の正常系ではstdout側に現れる（pythonが見つからない
+  # 等の事前チェックだけはfail()経由でstderrへ出て即exitする＝その場合は
+  # stdoutが空になる）。判定にはstdoutの1行目を使い、stdoutが空のときだけ
+  # stderrの1行目で補う。
+  CHECK_PROFILE_STDOUT=""
+  CHECK_PROFILE_STDERR=""
+  CHECK_PROFILE_RC=0
+  _check_profile_err_tmp="$(mktemp 2>/dev/null)" || _check_profile_err_tmp=""
+  if [ -n "$_check_profile_err_tmp" ]; then
+    CHECK_PROFILE_STDOUT="$("$DIR/scripts/install-main.sh" --check-profile 2>"$_check_profile_err_tmp")" || CHECK_PROFILE_RC=$?
+    CHECK_PROFILE_STDERR="$(cat "$_check_profile_err_tmp" 2>/dev/null)"
+    rm -f "$_check_profile_err_tmp"
+  else
+    # 一時ファイルを作れない異常時のみ、やむを得ず合流させる
+    # （fail-openで「一致」扱いにはしない＝後段のPROFILE-VALIDATION-FAILEDへ
+    # 素直に流れる）。
+    CHECK_PROFILE_STDOUT="$("$DIR/scripts/install-main.sh" --check-profile 2>&1)" || CHECK_PROFILE_RC=$?
+  fi
+  CHECK_PROFILE_FIRST_LINE="$(printf '%s\n' "$CHECK_PROFILE_STDOUT" | head -1)"
+  if [ -z "$CHECK_PROFILE_FIRST_LINE" ] && [ -n "$CHECK_PROFILE_STDERR" ]; then
+    CHECK_PROFILE_FIRST_LINE="$(printf '%s\n' "$CHECK_PROFILE_STDERR" | head -1)"
+  fi
+
+  # 1行目を厳密にタブ区切りで分類する（RCの成否に関わらず常に1回だけ解析
+  # する。2026-09-01 Codex一次レビュー指摘・Major対応: 従来は`grep -q '^OK'`
+  # という前方一致だけでRC!=0時の分岐を決めており、非0終了なのに偶然
+  # 'OK'から始まる出力（契約違反）であれば検証失敗を見逃しうる穴があった。
+  # 併せて、本来のOK/MINIMAL/PROFILE_NOT_FOUND判定もexit codeに頼らず
+  # 1行目の内容そのもの＝厳密な等価比較で行う）。パーサ自体の終了コードも
+  # 確認し、解析不能（python3不在・予期せぬ例外等）を「正常終了」に丸めない。
+  CHECK_PROFILE_PARSED=""
+  CHECK_PROFILE_PARSE_RC=0
+  CHECK_PROFILE_PARSED="$(python3 -c "
+import sys
+line = sys.argv[1]
+parts = line.split(chr(9))
+status = parts[0] if parts else ''
+advisory = ''
+unknown_extra = ''
+if status == 'OK':
+    for p in parts[1:]:
+        if p.startswith('ADVISORY:'):
+            advisory = p[len('ADVISORY:'):]
+        elif p.startswith('UNKNOWN_EXTRA:'):
+            unknown_extra = p[len('UNKNOWN_EXTRA:'):]
+print('STATUS' + chr(9) + status)
+print('ADVISORY' + chr(9) + advisory)
+print('UNKNOWN_EXTRA' + chr(9) + unknown_extra)
+" "$CHECK_PROFILE_FIRST_LINE" 2>/dev/null)" || CHECK_PROFILE_PARSE_RC=$?
+  CP_STATUS="$(printf '%s\n' "$CHECK_PROFILE_PARSED" | awk -F'\t' '$1=="STATUS"{print $2}')"
+  CP_ADVISORY="$(printf '%s\n' "$CHECK_PROFILE_PARSED" | awk -F'\t' '$1=="ADVISORY"{print $2}')"
+  CP_UNKNOWN_EXTRA="$(printf '%s\n' "$CHECK_PROFILE_PARSED" | awk -F'\t' '$1=="UNKNOWN_EXTRA"{print $2}')"
+  # v1委譲経路の唯一の既知の安全な非OK応答（check_profile_cmd()がlist-roles
+  # のPROFILE_LEGACY_V1を捕捉して出す固定文言。install-main.sh:998の
+  # log()呼び出しをそのまま転記＝log()は"[install-main] "を前置するため
+  # その形まで含めて**完全一致**で判定する（2026-09-01 Codex三次レビュー
+  # 指摘・Major対応: 前方一致/部分一致だと「未知の異常応答にたまたま同じ
+  # 部分文字列が含まれる」ケースを誤って安全と判定しうる）。
+  # ⚠️ 文言一致は他チーム（担当B）の実装文言に依存する弱い結合だが、
+  # 「exit 0なら中身を見ずOK以外も健全」というfail-openより安全側。
+  CP_IS_KNOWN_V1_MESSAGE=0
+  if [ "$CHECK_PROFILE_FIRST_LINE" = "[install-main] プロファイルはv2形式ではありません（v1）。v1互換のまま運用されています。v2へ移行してください（§3.5）。" ]; then
+    CP_IS_KNOWN_V1_MESSAGE=1
+  fi
+
+  if [ "$CHECK_PROFILE_PARSE_RC" -ne 0 ]; then
+    item_drift "[PROFILE-VALIDATION-FAILED] --check-profile の出力を解析できませんでした（python3 exit=${CHECK_PROFILE_PARSE_RC}）＝監視不能。詳細: ${CHECK_PROFILE_FIRST_LINE:-空}"
+  elif [ "$CHECK_PROFILE_RC" -ne 0 ] && [ "$CP_STATUS" = "PROFILE_NOT_FOUND" ] && case "$CHECK_PROFILE_FIRST_LINE" in *$'\t'*) true ;; *) false ;; esac; then
+    # ⚠️ ローカル実体が一度も作られていない（P1ロールアウト未完了・v1委譲
+    # 期間中のマシン）を「壊れている」と誤検知しない。他の値出力口
+    # （resolve_leader_runtime）と同じく「実体が無い＝v1委譲」を落ちない
+    # 挙動として扱う設計方針（§3.5）をここでも踏襲する。機械可読コード
+    # （PROFILE_NOT_FOUND）の**厳密一致**で判定する＝人向け文言は
+    # install-main.sh側の実装変更で変わりうるため、コード側で判定する
+    # 方が壊れにくい。⚠️ タブ区切りの理由が続く正規の形（`<コード>\t<理由>`）
+    # であることも要求する（2026-09-01 Codex三次レビュー指摘・Major対応:
+    # 裸の"PROFILE_NOT_FOUND"1語だけでも同じ扱いになっていた＝契約の
+    # 「タブ+理由」を満たさない出力を素通ししていた）。
+    log "  -> ローカル実体プロファイルがまだ存在しません（P1ロールアウト未完了・v1委譲期間の可能性）。チェック対象外"
+  elif [ "$CHECK_PROFILE_RC" -ne 0 ]; then
+    # ⚠️ fail区分のvalidator違反は resolver 側（install-main.sh --print-
+    # leader-runtime／settings.json生成）で既に止まる契約（§5「resolverの
+    # exit契約」）。ここで検出するのは「同じ違反を①-2とは独立の経路
+    # （--check-profile）から見て、SessionStart/週次通知でも必ず拾う」ため
+    # であり、fail条件を二重に定義するものではない（設計書§4.4の注記）。
+    # ⚠️ CP_STATUSが厳密に'OK'と一致する場合を除きすべて対象にする
+    # （2026-09-01 Codex一次レビュー指摘・Major対応: 従来は前方一致の
+    # 誤判定余地があった）。
+    item_drift "[PROFILE-VALIDATION-FAILED] --check-profile が非0終了しました（${CHECK_PROFILE_FIRST_LINE:-理由不明}）＝ローカル実体プロファイルの検証に失敗しています。修正方法は上記の出力（行番号とキー名）を参照してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
+  elif [ "$CP_STATUS" != "OK" ] && [ "$CP_IS_KNOWN_V1_MESSAGE" != "1" ]; then
+    # ⚠️ RC=0なのにOK行でも既知のv1委譲文言でもない＝空status・未知status・
+    # 契約変更等の可能性がある「監視不能」であり、無条件の健全表示にしない
+    # （2026-09-01 Codex二次レビュー指摘・Major対応: 従来はexit 0であれば
+    # OK以外を無条件でv1委譲とみなし健全扱いしていた＝false negative）。
+    item_drift "[PROFILE-VALIDATION-FAILED] --check-profile はexit 0でしたが、既知の応答形式（OK行／v1委譲の案内）のいずれとも一致しない出力でした＝監視不能。詳細: ${CHECK_PROFILE_FIRST_LINE:-空}"
+  elif [ "$CP_STATUS" != "OK" ]; then
+    # RC=0・既知のv1委譲文言＝list-rolesがPROFILE_LEGACY_V1を返し
+    # install-main.sh側がログ表示のみでexit 0にする既存の委譲経路（§3.5）。
+    # 壊れているわけではないため drift にはしない（既存のv1委譲の扱いを
+    # 維持）。
+    log "  -> ✅ --check-profile は正常終了しました（v1委譲）"
+  else
+    check_profile_drift_before=$TOTAL_DRIFT
+    check_profile_had_info=0
+    if [ -n "$CP_ADVISORY" ]; then
+      # advisory のうち V1-a・V9-f・T4系（T4・T4-PRIME）・JUDGEMENT_UNKNOWN を
+      # driftとして週次通知に出す（残課題台帳#3・本人裁定2026-09-01）。
+      # ⚠️ プロファイル契約（profile-resolve-contract-2026-09-01.md §3）が
+      # ADVISORY:に列挙しうる6コードのうち、監視不能系（版が仮想補完された
+      # T4／このマシンのコードが古い可能性があるT4-PRIME／Bedrock経路・pin
+      # 留めの判定不能だが通したJUDGEMENT_UNKNOWN）は「監視できていない」
+      # こと自体が異常であり、V1-a・V9-fと同様にdrift計上へ拡張する。一方
+      # EFFORT_COMPATIBILITY_UNVERIFIED（別名等でmodel実体を判別できない
+      # ためのeffort適合警告）だけは恒常的に成立しうるノイズのため、本人裁定
+      # により引き続きINFO表示に留めdriftへは数えない。⚠️ 契約が列挙する6
+      # コードのいずれとも一致しない未知コードはEFFORT_COMPATIBILITY_
+      # UNVERIFIEDと同列のINFOへは丸めず、PROFILE-ADVISORY-UNKNOWNとして
+      # drift計上する（Codex一次レビュー指摘・Major対応: 6コード限定の契約に
+      # 対する不一致自体が監視不能だから）。
+      IFS=',' read -ra cp_advisory_items <<< "$CP_ADVISORY"
+      for cp_item in "${cp_advisory_items[@]}"; do
+        [ -z "$cp_item" ] && continue
+        case "$cp_item" in
+          V1-a|V9-f|T4|T4-PRIME|JUDGEMENT_UNKNOWN)
+            item_drift "[PROFILE-ADVISORY:${cp_item}] ローカル実体プロファイルにadvisory該当があります（条件番号: ${cp_item}）。詳細は install-main.sh --check-profile の出力を確認してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
+            ;;
+          EFFORT_COMPATIBILITY_UNVERIFIED)
+            check_profile_had_info=1
+            log "  -> ℹ️ INFO: advisory該当があります（条件番号: ${cp_item}）。恒常ノイズ回避のためdriftには数えません（本人裁定2026-09-01）"
+            ;;
+          *)
+            # ⚠️ プロファイル契約（§3）がADVISORY:に列挙する6コードのいずれとも
+            # 一致しない未知コード（将来の追加漏れ・contract側との版ずれ等の
+            # 可能性）は、無条件でINFOへ丸めない（Codex一次レビュー指摘・Major
+            # 対応: 従来は`*)`が唯一INFO扱いのデフォルト分岐であり、契約の
+            # 6コード以外＝本来はresolverとの契約不一致であるものまで
+            # 「恒常ノイズ」として静かに見逃していた）。監視不能として
+            # drift計上する。
+            item_drift "[PROFILE-ADVISORY-UNKNOWN:${cp_item}] ローカル実体プロファイルに未知のadvisory条件番号があります（条件番号: ${cp_item}）。プロファイル契約（profile-resolve-contract-2026-09-01.md §3）の6コードのいずれとも一致しません＝resolverとの契約不一致の可能性があり監視不能です: $AIENV_LOCAL_PROFILE_PATH_HINT"
+            ;;
+        esac
+      done
+    fi
+    if [ -n "$CP_UNKNOWN_EXTRA" ]; then
+      # ⚠️ UNKNOWN_EXTRAはadvisoryとは別扱い（§4a・T9'）: AI側は必読除外＝
+      # 最小能力として振る舞うため、独立した[PROFILE-AI-UNREADABLE]項目で
+      # 出す（キー名のみ・値は出さない＝絶対厳守③・V15と同じ秘匿方針）。
+      item_drift "[PROFILE-AI-UNREADABLE] ローカル実体プロファイルに未知キーがあり、AI側は必読から除外されています（キー名: ${CP_UNKNOWN_EXTRA}）。機械側の解決値は有効なままですが、AIはこのプロファイルを読めていません。対処: scripts/update-sub.sh でコードを追随させるか、未知キーを削除してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
+    fi
+    if [ "$TOTAL_DRIFT" -eq "$check_profile_drift_before" ]; then
+      if [ "$check_profile_had_info" = "1" ]; then
+        # 2026-09-01 Codex二次レビュー指摘・Minor対応: 対象外advisory
+        # （INFO表示）が出ているのに「何も検出されなかった」と言うのは
+        # 自己矛盾。driftが0件であることだけを言う。
+        log "  -> ✅ --check-profile は正常終了しました（drift対象のadvisory・未知キーは検出されませんでした。対象外advisoryは上記INFO参照）"
+      else
+        log "  -> ✅ --check-profile は正常終了し、advisory・未知キーも検出されませんでした"
+      fi
+    fi
+  fi
 fi
 
 echo

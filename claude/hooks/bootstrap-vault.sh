@@ -61,6 +61,36 @@ TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 # 変えない（FILES一覧・DIRECTIVE本文とも無改変）。
 : "${BOOTSTRAP_ENABLE_LOCAL_PROFILE:=0}"
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
+# v2配役表解凍（配役表解凍-設計-2026-09-01.md §4.1-g・U-5）: 判定式の正本は
+# claude/hooks/lib/profile_resolve.py の1箇所だけに置く。installerはhookを
+# 個別symlinkしており（install-main.sh:574-599）lib専用のリンクは持たないため、
+# bootstrap-vault.sh自身のsymlinkを解決した実体ディレクトリ直下のlib/を見る
+# （二重管理を避ける＝A-0-3で潰した「値表2箇所重複」の再発防止と同じ考え方）。
+resolve_bootstrap_self_dir() {
+  local src="${BASH_SOURCE[0]}"
+  while [ -L "$src" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    case "$src" in
+      /*) ;;
+      *) src="$dir/$src" ;;
+    esac
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
+: "${PROFILE_RESOLVE_LIB:=$BOOTSTRAP_SELF_DIR/lib/profile_resolve.py}"
+# Bedrockのピン留め実値ファイル（install-main.shと同じ既定値。§6.1）。
+# V9-d③・V12の判定にだけ使う＝値そのものは読まず特定キーの有無/非空だけ見る。
+: "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
+# コア職種マニフェスト（V1-a・V1-b）の実体側入力。claude/hooks/../agents。
+: "${AIENV_AGENTS_DIR:=$BOOTSTRAP_SELF_DIR/../agents}"
+# installerの生成物（scripts/install-main.sh generate_settings_json()の
+# 出力先。scripts/check-drift.shのSETTINGS_JSON_LIVEと同じ既定値）。
+# S10/S11/S16対応（check_leader_settings_drift参照）の比較先として読むだけ
+# ＝副作用ゼロ。
+: "${AIENV_SETTINGS_JSON_FILE:=$HOME/.claude/settings.json}"
 # 最小能力表の7キー（§3.3.0）。ここに列挙した7つが「今のスキーマが要求する
 # キー」＝これが欠けていれば§9.0 A-1最低契約④⑤どおり最小能力+⚠️へ倒す
 # （T5＝既存キー欠落）。逆にfrontmatterにこの7つ以外の見慣れないキーが
@@ -98,15 +128,17 @@ fi
 # ~/work/takumi009-ai-env-private/docs/core-split/profile-sample-draft.md）。
 LOCAL_PROFILE_SENTINEL='<fill-in>'
 
-# resolve_local_profile <path> — ローカル実体プロファイルをfail-softに解決する。
-# 標準出力へタブ区切り1行を返す:
+# resolve_local_profile_v1 <path> — v1（7キー・状態を持たない自由値）実体を
+# fail-softに解決する。§3.5「v1と分類されたときの挙動＝現行実装へ丸ごと委譲する」
+# の"現行実装"そのもの＝v2解凍後もロジックを一切変えない（v1の値は日本語自由文
+# なのでv2文法を当てると必ず落ちるため）。標準出力へタブ区切り1行を返す:
 #   MINIMAL\t<T1|T2-MINIMAL|T5|T6|SYMLINK>\t<理由>   … 最小能力+⚠️で扱うべきケース
 #     （SYMLINK＝実体がsymlinkだった。マシンローカル・repo管理外という正本の
 #      定義に反するため受理しない＝2026-08-30 Codex一次レビュー指摘・Major対応）
 #   OK\t<key1=val1>\x1e<key2=val2>...[\tUNKNOWN_EXTRA:<k1>,<k2>,...]
 # 判定はキーの有無・YAMLとして壊れていないかまで（validatorは作らない＝
 # 最低契約②）。既定値を発明しない（欠けたキーで補完しない＝最低契約④⑤）。
-resolve_local_profile() {
+resolve_local_profile_v1() {
   local path="$1"
   # symlinkは実体として受理しない（2026-08-30 Codex一次レビュー指摘・Major対応:
   # 「マシンローカル・repo管理外」という正本の定義（§11.2）に反し、repo管理下や
@@ -191,14 +223,300 @@ print(out)
     || printf 'MINIMAL\tT6\tprofile.mdの解析自体に失敗しました（python3不在・実行時エラー等）\n'
 }
 
-# テスト専用: BOOTSTRAP_RESOLVE_PROFILE_ONLY=1のとき、resolve_local_profile()の
+# is_v2_resolve_output_well_formed <line> <exit_code> — v2 resolve の出力が
+# §5 stdout契約のフィールド文法どおりか（固定順・既知フィールドのみ・
+# 単一行）を厳密に検査する（Codex二次・三次レビュー指摘・Major対応:
+# 従来はOK/MINIMALで始まる1行というだけを見ており、余分な文字列の混入や
+# フィールドの重複・順序違反を素通りさせていた＝§5「未知・重複・順序違反は
+# 最小能力へ倒す」に反していた）。
+# ⚠️ このregexはclaude/hooks/lib/profile_resolve.pyのdo_resolve()が生成する
+# フィールド集合と1対1で対応する。新しいフィールドをresolve()の出力へ足す
+# ときは、この関数も同じコミットで更新すること（値表の重複ではなく契約の
+# 形式検査であり、profile_resolve.py側には同じ正規表現を持たせない＝
+# 判定式を2箇所化しないため、更新漏れの検出は両者を変更するテスト
+# （test-bootstrap-vault.sh）が担う）。
+is_v2_resolve_output_well_formed() {
+  local s="$1" rc="$2"
+  # 複数行（改行混入）は問答無用で契約違反。
+  [ "$(printf '%s' "$s" | wc -l | tr -d ' ')" = "0" ] || return 1
+  # nameは職種名(role.<name>の<name>部分)＝parserのKEY_RE(§3.1)と同じ文字集合
+  # [A-Za-z0-9_.-]+を許す（Codexレビュー指摘・Major対応: 小文字ハイフンのみに
+  # 限定していたため、大文字・アンダースコア・ドットを含む正常な職種名の
+  # 出力を誤ってT10へ倒していた）。
+  local name='[A-Za-z0-9_.-]+' code='[A-Za-z0-9_-]+' key='[A-Za-z0-9_.-]+' tab notab
+  tab="$(printf '\t')"
+  # ⚠️ POSIX ERE（bashの=~が使うバックエンド）はブラケット式内で\tを
+  # タブへ解釈しない。実際のタブ文字を埋め込む必要がある。
+  notab="[^${tab}]+"
+  case "$s" in
+    OK"$tab"*)
+      [ "$rc" = "0" ] || return 1
+      local re="^OK${tab}schema_version=[0-9]+(${tab}FALLBACK:${name}(,${name})*)?(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${code}(,${code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
+      [[ "$s" =~ $re ]]
+      ;;
+    MINIMAL"$tab"*)
+      [ "$rc" = "1" ] || return 1
+      # 理由部分にタブを含めない＝コード・理由の2フィールドだけに限定する
+      # （Codexレビュー指摘・Major対応: `.+`は改行以外の任意文字＝タブも含む
+      # ため、余分な第4フィールドが紛れ込んでも受理してしまっていた）。
+      local re="^MINIMAL${tab}[A-Za-z0-9_-]+${tab}${notab}\$"
+      [[ "$s" =~ $re ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# resolve_local_profile <path> — v1/v2/混在を分類し、適切な経路へ委譲する
+# ディスパッチャ（配役表解凍-設計-2026-09-01.md §3.5「評価順を契約として固定
+# する」の①〜⑥をここで実行する）。標準出力へタブ区切り1行:
+#   MINIMAL\t<コード>\t<理由>          … 最小能力+⚠️（§6.2状態機械A）
+#   LEGACY_V1\t<v1のOK生payload>       … v1委譲・現行実装がOKだった場合のみ
+#   OK\t<解決値>[\tFALLBACK:...][\tVACANT:...][\tVACANT_REASON:...]
+#        [\tVACANT_UNKNOWN:...][\tADVISORY:...][\tUNKNOWN_EXTRA:...]
+# ⚠️ v1/v2いずれの分類でも「①存在/symlink→②preflight(V15)」は共通で必ず
+# 通す（v1の現行実装には元々V15が無かったため、これはv1経路にとって新規の
+# 検査＝意図的な仕様変更）。
+resolve_local_profile() {
+  local path="$1"
+  [ -L "$path" ] && { printf 'MINIMAL\tSYMLINK\t実体はsymlinkであってはいけません（マシンローカルの通常ファイルとして直接作成してください）: %s\n' "$path"; return; }
+  [ -f "$path" ] || { printf 'MINIMAL\tT1\t実体ファイルが存在しません: %s\n' "$path"; return; }
+
+  if [ ! -f "$PROFILE_RESOLVE_LIB" ]; then
+    printf 'MINIMAL\tT10\tresolver本体が見つかりません: %s\n' "$PROFILE_RESOLVE_LIB"
+    return
+  fi
+
+  local preflight_out preflight_rc=0
+  preflight_out="$(python3 "$PROFILE_RESOLVE_LIB" preflight "$path" 2>/dev/null)"
+  preflight_rc=$?
+  if [ "$preflight_rc" != "0" ]; then
+    if [ -n "$preflight_out" ]; then
+      printf 'MINIMAL\t%s\n' "$preflight_out"
+    else
+      printf 'MINIMAL\tT10\tresolver本体の実行に失敗しました（preflight）\n'
+    fi
+    return
+  fi
+
+  local classification classify_rc=0
+  classification="$(python3 "$PROFILE_RESOLVE_LIB" classify "$path" 2>/dev/null)"
+  classify_rc=$?
+  if [ "$classify_rc" != "0" ] || [ -z "$classification" ]; then
+    printf 'MINIMAL\tT10\tresolver本体の実行に失敗しました（classify）\n'
+    return
+  fi
+
+  case "$classification" in
+    v1)
+      local v1_out
+      v1_out="$(resolve_local_profile_v1 "$path")"
+      case "$v1_out" in
+        OK*)
+          # トップレベルだけLEGACY_V1へ差し替える（7キーの生値は再包装しない
+          # ＝§3.5）。UNKNOWN_EXTRA等の後続フィールドはそのまま引き継ぐ。
+          printf 'LEGACY_V1\t%s\n' "${v1_out#OK$'\t'}"
+          ;;
+        *)
+          printf '%s\n' "$v1_out"
+          ;;
+      esac
+      ;;
+    mixed)
+      printf 'MINIMAL\tT3-PRIME\tschema_versionが無いのに職種行(role./fallback.)があります（混在）\n'
+      ;;
+    v2)
+      local v2_out v2_rc=0
+      v2_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$path" \
+        --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)"
+      v2_rc=$?
+      if is_v2_resolve_output_well_formed "$v2_out" "$v2_rc"; then
+        printf '%s\n' "$v2_out"
+      else
+        printf 'MINIMAL\tT10\tresolver本体の出力が契約違反です（resolve）\n'
+      fi
+      ;;
+    *)
+      printf 'MINIMAL\tT10\tresolver本体が不明な分類結果を返しました\n'
+      ;;
+  esac
+}
+
+# テスト専用: BOOTSTRAP_RESOLVE_PROFILE_ONLY=1のとき、resolve_local_profile_v1()の
 # 生出力（MINIMAL/OK行）だけを標準出力へ返して即終了する。stdin JSON読み込み・
 # ヘルス行計算等の本処理には一切進まない。本番では未設定のため無効
 # （2026-08-30追加・MAJOR-8b「値が空=unknownへの正規化」のユニットテスト用。
 # OK分岐の生出力はDIRECTIVE本文に現れないため、直接呼び出す経路が無いと
-# 正規化結果を検証できなかった）。
+# 正規化結果を検証できなかった）。⚠️ v2解凍(2026-09-01)でresolve_local_profile()は
+# v1/v2/混在の分類ディスパッチャに役割が変わった（OKをLEGACY_V1へ差し替える等）
+# ため、このテスト専用フックはv1固有の正規化ロジックを直接検証するべく
+# resolve_local_profile_v1()を直接呼ぶよう据え置く（分類・委譲そのものは
+# `classify`/`resolve_local_profile()`の別テストで検証する）。
 if [ "${BOOTSTRAP_RESOLVE_PROFILE_ONLY:-0}" = "1" ]; then
+  resolve_local_profile_v1 "$AIENV_LOCAL_PROFILE_PATH"
+  exit 0
+fi
+
+# テスト専用: BOOTSTRAP_RESOLVE_PROFILE_DISPATCH_ONLY=1のとき、新設の
+# resolve_local_profile()（v1/v2/混在の分類ディスパッチャそのもの）の生出力
+# だけを標準出力へ返して即終了する（2026-09-01追加。T12=LEGACY_V1トップ
+# レベル差し替え・T3-PRIME=混在・T10=lib欠落を直接検証する経路が無かった
+# ため。tester独立検証・§10欠落指摘対応）。本番では未設定のため無効。
+if [ "${BOOTSTRAP_RESOLVE_PROFILE_DISPATCH_ONLY:-0}" = "1" ]; then
   resolve_local_profile "$AIENV_LOCAL_PROFILE_PATH"
+  exit 0
+fi
+
+# check_leader_settings_drift <path> — 配役表解凍-設計-2026-09-01.md
+# §6.2-B（状態機械B）のS10（settings.jsonを手で直した/`/model`で保存した）・
+# S11（旧settings.jsonを保持したまま放置）・S16（profile更新は成功したが
+# settings生成は失敗した）に対応する。3状態はいずれも共通して「次の
+# SessionStartでV13が必ず⚠️を出す」ことを設計契約として要求している
+# （§6.2-B各行）。しかし週次drift（scripts/check-drift.shのV13＝三者一致の
+# フル実装）は「次にcheck-drift.shを手動/cronで実行するまで」気づけない。
+# 本関数はそのギャップを埋める軽量版で、SessionStartの毎回で必ず走る。
+#
+# スコープをv2のrole.leader行に限定する（v1の値出力口＝
+# AIENV_MODEL_MAIN/SUBはmachine-role/--sub-delegateに依存する別経路であり、
+# ここで再実装すると判定式が2箇所に増える＝A-0-3で潰した重複の再発になる。
+# v1はcheck-drift.shの週次V13が既に--print-leader-runtime経由でmodel/effort
+# 両方をカバーしている。呼び出し元＝本ファイル下部でprofile_kind="OK"
+# （v2の`resolve`が成功）のときだけ本関数を呼ぶ）。
+#
+# 期待値（何がリーダー行の解決値か）はprofile_resolve.pyのresolve-leader
+# サブコマンド1箇所に委譲し、本関数はその結果とsettings.jsonの実値を
+# 突き合わせるだけに留める（判定式を複数箇所に増やさない＝§4.1-g・U-5と
+# 同じ考え方の横展開。install-main.shの--print-leader-runtimeも同じ
+# resolve-leaderを呼ぶ＝値表の正本は1箇所のまま）。
+#
+# 副作用ゼロ・読み取り専用（settings.jsonは開いて読むだけ）。
+# 標準出力: 0行（一致・監視対象外）または1行の⚠️メッセージ。
+# ⚠️ 絶対厳守③（認証情報・シークレットを露出しない）はトークン・鍵・
+# パスワード・`.env`等の全般が対象であり、本関数はそのいずれも扱わない
+# （比較に使うのは"model"/"effortLevel"という設定値のみ）。加えてBedrockの
+# ピン留め実値も本関数の比較対象・出力のどちらにも現れない
+# （bedrock.envの値そのものはgenerate_settings_json()が"env"ブロックへ
+# 別途マージするが、settings.jsonをjson.loadで読む際に構造上そのブロックも
+# メモリへは載る。ただし比較・出力のどちらにも一切参照・使用しない＝
+# 実際に見るのは"model"/"effortLevel"の2キーだけ。resolve-leaderの出力にも
+# ピン実値は含まれない＝profile-resolve-contract §9）。
+# ⚠️ 不一致メッセージはフィールド名（model/effortLevel）だけを列挙し、
+# 実際の値（settings.json側・プロファイル側どちらも）は一切出力しない。
+check_leader_settings_drift() {
+  local path="$1"
+  local leader_json leader_rc
+  leader_json="$(python3 "$PROFILE_RESOLVE_LIB" resolve-leader "$path" \
+    --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)"
+  leader_rc=$?
+  # 呼び出し元はresolve_local_profile()が既にv2のOKを返した直後にだけ
+  # 本関数を呼ぶ契約のため、resolve-leaderは通常ここで成功するはずである
+  # （V4＝§3.5-Lのfail条件はresolve()のexit契約に含まれるため、resolve()が
+  # OKを返した時点でleader行は候補評価まで通っている）。それでも失敗する
+  # 場合はプロファイルが2回のプロセス起動の間に書き換わった・python3が
+  # 一時的に落ちた等のレースであり、静かに素通りさせず「監視不能」として
+  # 扱う（リーダー要件③＝比較不能を静かに通過させない）。
+  if [ "$leader_rc" != "0" ] || [ -z "$leader_json" ]; then
+    printf '⚠️ settings.json(%s)との整合を確認できませんでした（配役表のリーダー実行値を再取得できません＝監視不能）。scripts/install-main.sh --check-profile で確認してください。\n' "$AIENV_SETTINGS_JSON_FILE"
+    return
+  fi
+
+  local cmp_out cmp_rc
+  cmp_out="$(python3 -c "
+import json, sys
+
+leader_json_raw = sys.argv[1]
+settings_path = sys.argv[2]
+
+try:
+    leader = json.loads(leader_json_raw)
+except Exception:
+    print('UNAVAILABLE\t配役表のリーダー実行値を解析できません')
+    sys.exit(0)
+if not isinstance(leader, dict):
+    print('UNAVAILABLE\t配役表のリーダー実行値が想定形式ではありません')
+    sys.exit(0)
+expected_model = leader.get('model')
+if not isinstance(expected_model, str) or not expected_model:
+    print('UNAVAILABLE\t配役表のリーダー実行値にmodelがありません')
+    sys.exit(0)
+# 契約(profile-resolve-contract §4)ではeffort未指定時はキー自体を出さない
+# ため、キーが無い場合だけ「未指定」として扱う。キーはあるのに値が文字列
+# でない・空文字列という契約違反の形は「未指定」へ静かに丸めず監視不能に
+# する（Codex一次レビュー指摘・Major対応: 従来は不正な型を黙ってNone
+# 〈未指定〉へ変換しており、resolverの契約違反を検出できずに一致と誤判定
+# しうる穴があった）。
+if 'effort' in leader:
+    expected_effort = leader.get('effort')
+    if not isinstance(expected_effort, str) or not expected_effort:
+        print('UNAVAILABLE\t配役表のリーダー実行値のeffortが不正です')
+        sys.exit(0)
+else:
+    expected_effort = None
+
+try:
+    with open(settings_path, encoding='utf-8') as f:
+        settings = json.load(f)
+except FileNotFoundError:
+    print('UNAVAILABLE\tsettings.jsonが存在しません（installerを実行してください）')
+    sys.exit(0)
+except (OSError, json.JSONDecodeError):
+    print('UNAVAILABLE\tsettings.jsonを読めません（壊れている・権限不足の可能性）')
+    sys.exit(0)
+if not isinstance(settings, dict):
+    print('UNAVAILABLE\tsettings.jsonの内容が想定形式ではありません')
+    sys.exit(0)
+
+problems = []
+actual_model = settings.get('model')
+if actual_model != expected_model:
+    problems.append('model' if isinstance(actual_model, str) and actual_model else 'model(欠落)')
+
+has_effort_key = 'effortLevel' in settings
+actual_effort = settings.get('effortLevel')
+if expected_effort is None:
+    if has_effort_key:
+        problems.append('effortLevel(想定は未設定)')
+else:
+    if actual_effort != expected_effort:
+        problems.append('effortLevel')
+
+if problems:
+    print('MISMATCH\t' + ','.join(problems))
+else:
+    print('OK')
+" "$leader_json" "$AIENV_SETTINGS_JSON_FILE" 2>/dev/null)"
+  cmp_rc=$?
+  if [ "$cmp_rc" != "0" ] || [ -z "$cmp_out" ]; then
+    printf '⚠️ settings.json(%s)との整合を確認できませんでした（比較処理自体が失敗＝監視不能）。\n' "$AIENV_SETTINGS_JSON_FILE"
+    return
+  fi
+
+  local tab
+  tab="$(printf '\t')"
+  case "$cmp_out" in
+    OK)
+      : # 一致。何も出力しない（呼び出し元は空文字列を「警告なし」として扱う）。
+      ;;
+    "UNAVAILABLE${tab}"*)
+      printf '⚠️ settings.json(%s)との整合を確認できませんでした（%s）。\n' "$AIENV_SETTINGS_JSON_FILE" "${cmp_out#UNAVAILABLE"$tab"}"
+      ;;
+    "MISMATCH${tab}"*)
+      printf '⚠️ settings.json(%s)が配役表のリーダー行(role.leader)の解決値と一致していません（不一致フィールド: %s）。scripts/install-main.sh の再実行（サブ機は scripts/update-sub.sh）で追随させるか、意図的な一時切替（/model 等）でなければ確認してください。\n' "$AIENV_SETTINGS_JSON_FILE" "${cmp_out#MISMATCH"$tab"}"
+      ;;
+    *)
+      printf '⚠️ settings.json(%s)との整合を確認できませんでした（比較結果を解釈できません＝監視不能）。\n' "$AIENV_SETTINGS_JSON_FILE"
+      ;;
+  esac
+}
+
+# テスト専用: BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1のとき、
+# check_leader_settings_drift()の生出力（0行または1行の⚠️メッセージ）だけを
+# 標準出力へ返して即終了する。stdin JSON読み込み・ヘルス行計算等の本処理
+# には一切進まない。本番では未設定のため無効（S10/S11/S16結合テスト用・
+# 2026-09-01追加）。
+if [ "${BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY:-0}" = "1" ]; then
+  check_leader_settings_drift "$AIENV_LOCAL_PROFILE_PATH"
   exit 0
 fi
 
@@ -583,36 +901,95 @@ else
   # ローカル実体プロファイル（P1機構・既定無効。BOOTSTRAP_ENABLE_LOCAL_PROFILE=1の
   # ときだけVault外の固定パスを必読リストへ1件追加する。無効時（既定）は
   # 今日までの挙動を一切変えない）。
+  #
+  # 必読掲載条件（§4a・U-8裁定 2026-09-01）: 「通常ファイル→preflight→浅い
+  # 走査→分類別parser→fail区分のvalidator非違反→UNKNOWN_EXTRA無し」の**全部**
+  # が成功したときだけ全文Readを指示する。1つでも欠ければ「利用不可」の
+  # 短い注記だけを list に載せ、全文は読ませない（AI側は最小能力として振る舞う。
+  # 機械側の解決可否とは独立＝§4a表の「機械は既知キー部分が有効でもAIは除外」）。
   LOCAL_PROFILE_WARNING=""
   if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
-    # symlinkは実体として受理しない（resolve_local_profile()と同じ判定を
-    # 必読リスト表示側にも適用する。Codex二次レビュー指摘・Major対応:
-    # `-f`だけで判定すると、通常ファイルを指すsymlinkが「全文をReadすること」
-    # として必読リストに載り続け、信頼しないはずの内容を読ませる指示が
-    # 残っていた）。
-    if [ -f "$AIENV_LOCAL_PROFILE_PATH" ] && [ ! -L "$AIENV_LOCAL_PROFILE_PATH" ]; then
+    # resolve_local_profile()自身がsymlink拒否(SYMLINK)・不在(T1)を含めた
+    # 全状態を返すため、必読リスト表示側で-L/-fを個別に再判定しない
+    # （判定式を2箇所に増やさない＝A-0-3と同型の重複防止）。
+    profile_status="$(resolve_local_profile "$AIENV_LOCAL_PROFILE_PATH")"
+    profile_kind="${profile_status%%$'\t'*}"
+    profile_rest="${profile_status#*$'\t'}"
+    profile_has_unknown_extra=0
+    printf '%s' "$profile_status" | grep -q 'UNKNOWN_EXTRA:' && profile_has_unknown_extra=1
+
+    if { [ "$profile_kind" = "OK" ] || [ "$profile_kind" = "LEGACY_V1" ]; } \
+       && [ "$profile_has_unknown_extra" = "0" ]; then
       profile_lines=$(wc -l < "$AIENV_LOCAL_PROFILE_PATH" | tr -d ' ')
       list="$list
   - $AIENV_LOCAL_PROFILE_PATH  （全${profile_lines}行：Readで全文を読むこと。ローカル実体プロファイル＝非配布）"
       present_count=$((present_count + 1))
-    elif [ -L "$AIENV_LOCAL_PROFILE_PATH" ]; then
-      list="$list
+    elif [ "$profile_kind" = "MINIMAL" ]; then
+      profile_reason_code="${profile_rest%%$'\t'*}"
+      case "$profile_reason_code" in
+        T1)
+          list="$list
+  - $AIENV_LOCAL_PROFILE_PATH  （未作成。installerでサンプルから雛形を作成してください）"
+          ;;
+        SYMLINK)
+          list="$list
   - $AIENV_LOCAL_PROFILE_PATH  （symlinkのため実体として受理しません。通常ファイルとして作り直してください）"
+          ;;
+        *)
+          list="$list
+  - $AIENV_LOCAL_PROFILE_PATH  （プロファイル利用不可のため全文はReadさせません。詳細は下記【ローカル実体プロファイル】を参照）"
+          ;;
+      esac
     else
       list="$list
-  - $AIENV_LOCAL_PROFILE_PATH  （未作成。installerでサンプルから雛形を作成してください）"
+  - $AIENV_LOCAL_PROFILE_PATH  （プロファイル利用不可のため全文はReadさせません。詳細は下記【ローカル実体プロファイル】を参照）"
     fi
 
-    profile_status="$(resolve_local_profile "$AIENV_LOCAL_PROFILE_PATH")"
-    profile_kind="${profile_status%%$'\t'*}"
-    profile_rest="${profile_status#*$'\t'}"
     if [ "$profile_kind" = "MINIMAL" ]; then
       profile_reason_code="${profile_rest%%$'\t'*}"
       profile_reason_msg="${profile_rest#*$'\t'}"
-      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})を解決できません（${profile_reason_code}: ${profile_reason_msg}）。最小能力（reviewer等の各キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。既定値を発明しない。"
-    elif printf '%s' "$profile_status" | grep -q 'UNKNOWN_EXTRA:'; then
+      if [ "$profile_reason_code" = "T11" ]; then
+        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})に認証情報らしいキー名があります（${profile_reason_msg}）。該当行を削除してください。認証情報は専用の資格情報機構（AWS CLI/SSO等）へ置いてください。bedrock.envに置いてよいのは認証情報ではないモデルのピン留め値だけです。最小能力（reviewer等の各キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。"
+      else
+        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})を解決できません（${profile_reason_code}: ${profile_reason_msg}）。最小能力（reviewer等の各キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。既定値を発明しない。"
+      fi
+    elif [ "$profile_has_unknown_extra" = "1" ]; then
+      # T9'（U-8裁定）: 未知キーの「値」にV15では検出できない秘密が
+      # 書かれている可能性があるため、advisoryとして読ませ続けることをやめ、
+      # AI向けには必読除外・最小能力として振る舞わせる（機械側の解決は有効）。
+      # ⚠️ リーダー裁定（UNKNOWN_EXTRAフィールド追加の承認と同時、2026-09-01）:
+      # 「プロファイル利用不可＝最小能力」「ワーカー起動は本人確認へ倒す」を
+      # 文言として明示する（4.1-fのDIRECTIVE注入契約どおり、この信号を根拠に
+      # 具体的な振る舞いまで書く。単に「最小能力として扱ってください」だけでは
+      # ワーカー起動時に何をすべきかが伝わらない）。
       unknown_extra="${profile_status#*UNKNOWN_EXTRA:}"
-      LOCAL_PROFILE_WARNING="ℹ️ ローカル実体プロファイルに未知のキーがあります（${unknown_extra}）。まだこのマシンのコードが追随していない新しいキーの可能性があるためunknownとして無視してよい（最小能力へは倒さない）。"
+      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイルに未知のキーがあります（${unknown_extra}）。機械側（resolver/installer）は既知キー部分のみ有効ですが、**プロファイル利用不可＝最小能力**としてAI向けには必読から除外します（U-8裁定・秘匿優先。まだこのマシンのコードが追随していない新しいキーの可能性があります）。配役の状態が確認できない以上、**ワーカー起動は本人確認へ倒してください**（Preferences/core-workflow.md §7 職種が空席のとき）。"
+    elif [ "$profile_kind" = "LEGACY_V1" ]; then
+      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイルはv1形式です。配役表を使うにはv2へ移行してください（${AIENV_LOCAL_PROFILE_PATH}）。"
+    elif printf '%s' "$profile_status" | grep -q -E '(FALLBACK|VACANT|VACANT_REASON|VACANT_UNKNOWN|ADVISORY):'; then
+      # 4.1-f: 配役の値そのものは再掲しないが、縮退・fallback・未確定の
+      # 職種名と条件番号はDIRECTIVEへ必ず注入する（静かな失敗を防ぐ）。
+      casting_note="$(printf '%s' "$profile_status" | sed -E 's/^OK\t//')"
+      LOCAL_PROFILE_WARNING="ℹ️ 配役表の状態（職種名と条件番号のみ・値は含みません）: ${casting_note}。詳細はPreferences/core-workflow.md §7（職種が空席のとき）を参照してください。"
+    fi
+
+    # S10/S11/S16対応（check_leader_settings_drift参照）: v2の`resolve`が
+    # OKを返した（＝role.leaderが候補評価まで通った）セッションでは、
+    # settings.jsonがその解決値へ追随しているかを毎回軽く比較する。
+    # ⚠️ UNKNOWN_EXTRAの有無を問わない（上のAI向け必読可否＝§4a・U-8とは
+    # 独立の判定。resolve-leaderはUNKNOWN_EXTRAを見ないため機械側は既知キー
+    # 部分が有効＝§4aの表のとおり）。LEGACY_V1（v1委譲）はスコープ外
+    # （関数コメント参照。週次drift＝check-drift.shのV13が既にv1をカバー）。
+    if [ "$profile_kind" = "OK" ]; then
+      leader_settings_drift_warning="$(check_leader_settings_drift "$AIENV_LOCAL_PROFILE_PATH")"
+      if [ -n "$leader_settings_drift_warning" ]; then
+        if [ -n "$LOCAL_PROFILE_WARNING" ]; then
+          LOCAL_PROFILE_WARNING="${LOCAL_PROFILE_WARNING}
+${leader_settings_drift_warning}"
+        else
+          LOCAL_PROFILE_WARNING="$leader_settings_drift_warning"
+        fi
+      fi
     fi
   fi
 

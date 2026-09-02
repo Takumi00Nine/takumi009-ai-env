@@ -28,6 +28,23 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
+# セクション6・7（配役表解凍・担当D追加分）で共有するヘルパー。
+# install-main.shのextract_profile_schema_block()関数だけをsedで静的抽出して
+# evalする（全体sourceによる実インストール処理の副作用を避けるため）。
+# 一度evalに成功すれば以後は再抽出せず既存の関数定義を再利用する（declare -Fで
+# 判定。セクション7から呼んでもセクション6の定義がそのまま使える）。
+# 戻り値0=関数が使える状態／非0=抽出失敗（呼び出し側でfail_caseすること）。
+ensure_extract_profile_schema_block_fn() {
+  if declare -F extract_profile_schema_block >/dev/null 2>&1; then
+    return 0
+  fi
+  local fn_src
+  fn_src="$(sed -n '/^extract_profile_schema_block() {/,/^}/p' "$REPO_ROOT/scripts/install-main.sh")" || return 1
+  [ -n "$fn_src" ] || return 1
+  eval "$fn_src"
+  declare -F extract_profile_schema_block >/dev/null 2>&1
+}
+
 # 最小能力表7キー（§3.3.0）。ハードコードで再列挙せず、claude/hooks/
 # bootstrap-vault.sh の LOCAL_PROFILE_KNOWN_KEYS（正本）を実行時ソースとして
 # 参照する（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応: 従来はここに独自の
@@ -227,6 +244,186 @@ PYEOF
         fail_case "$desc"
       fi
     done <<< "$RESULT"
+  fi
+}
+
+echo "=== 6. 静的（配役表解凍・担当D）: vault-public/Preferences/profile-sample.md の \`\`\`yaml ブロックが scripts/install-main.sh の extract_profile_schema_block() で抽出できる（設計書§10「静的」①・4.5） ==="
+{
+  PROFILE_SAMPLE="$REPO_ROOT/vault-public/Preferences/profile-sample.md"
+
+  # install-main.sh全体をsourceすると実インストール処理が走ってしまうため、
+  # extract_profile_schema_block()関数の定義部分だけを静的抽出して使う
+  # （関数は`^extract_profile_schema_block() {`で始まり`^}`で終わる単純な形。
+  # 対象関数内に行頭"}"の入れ子は無い＝この抽出方法で安全に切り出せる。
+  # 抽出・eval自体の失敗は共有ヘルパーensure_extract_profile_schema_block_fn()
+  # 内で吸収し、戻り値でfail_caseへ倒せるようにする＝Codex一次レビュー指摘・
+  # Minor対応）。
+  if ! ensure_extract_profile_schema_block_fn; then
+    fail_case "install-main.shからextract_profile_schema_block()関数を抽出できない（関数名変更・削除の可能性）"
+  else
+    EXTRACT_OUT=""
+    extract_rc=0
+    if EXTRACT_OUT="$(extract_profile_schema_block "$PROFILE_SAMPLE" 2>&1)"; then
+      extract_rc=0
+    else
+      extract_rc=$?
+    fi
+    if [ "$extract_rc" -ne 0 ]; then
+      fail_case "profile-sample.mdから\`\`\`yamlブロックを抽出できない（詳細: ${EXTRACT_OUT}）"
+    else
+      pass "extract_profile_schema_block()がprofile-sample.mdからブロックを抽出できる"
+      if [[ "$(printf '%s\n' "$EXTRACT_OUT" | head -1)" == "---" ]]; then
+        pass "抽出したブロックの先頭行が---（installerが読む雛形フォーマット）"
+      else
+        fail_case "抽出したブロックの先頭行が---でない（installerの雛形フォーマットと不一致）"
+      fi
+      if printf '%s\n' "$EXTRACT_OUT" | grep -q '^role\.leader:'; then
+        pass "抽出したブロックにrole.leader行が含まれる（配役表v2の必須配役行）"
+      else
+        fail_case "抽出したブロックにrole.leader行が含まれない"
+      fi
+      if printf '%s\n' "$EXTRACT_OUT" | grep -q '^schema_version:'; then
+        pass "抽出したブロックにschema_version行が含まれる"
+      else
+        fail_case "抽出したブロックにschema_version行が含まれない"
+      fi
+    fi
+  fi
+}
+
+echo "=== 7. 静的（配役表解凍・担当D）: 固定キー集合＋動的プレフィックス2種＋期待版がprofile-sample.mdとprofile_resolve.py（known-keys／print-schema-version）で一致する（設計書§10「静的」②・§3.4・profile-resolve-contract-2026-09-01.md§7） ==="
+{
+  PROFILE_RESOLVE_PY="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
+  PROFILE_SAMPLE="$REPO_ROOT/vault-public/Preferences/profile-sample.md"
+
+  if [ ! -f "$PROFILE_RESOLVE_PY" ]; then
+    # 担当Aの成果物（claude/hooks/lib/profile_resolve.py）が本ブランチへ未着地の
+    # 間は、契約（profile-resolve-contract-2026-09-01.md）どおりにテストだけを
+    # 先に書いておき、lib着地後にこのテストを再実行して結合確認する運用
+    # （リーダー指示・2026-09-01）。したがってこの分岐に入っている間のNGは
+    # このテスト自体の不具合ではなく「担当A成果物の未着地」を示す。
+    fail_case "claude/hooks/lib/profile_resolve.py が未配置のため known-keys/print-schema-version との一致を検証できない（担当A成果物の未着地待ち・契約＝profile-resolve-contract-2026-09-01.md §7。着地後に本テストを再実行して結合確認すること）"
+  elif ! ensure_extract_profile_schema_block_fn; then
+    fail_case "install-main.shからextract_profile_schema_block()関数を抽出できない（セクション6と同一失敗のはず＝想定外）"
+  else
+    # `VAR="$(cmd)"`単独（`||`無し）はset -e下でcmdが非0を返すと即座にスクリプト
+    # 全体を終了させてしまう（Codex一次レビュー指摘・Major対応）。以下すべての
+    # コマンド置換をif/elseで包み、rcを明示的に取り出す形に統一する。
+    known_keys_rc=0
+    if KNOWN_KEYS_OUT="$(python3 "$PROFILE_RESOLVE_PY" known-keys 2>&1)"; then
+      known_keys_rc=0
+    else
+      known_keys_rc=$?
+    fi
+    if [ "$known_keys_rc" -ne 0 ]; then
+      fail_case "profile_resolve.py known-keys が非0終了した（詳細: ${KNOWN_KEYS_OUT}）"
+    elif ! SAMPLE_BLOCK="$(extract_profile_schema_block "$PROFILE_SAMPLE" 2>&1)"; then
+      fail_case "profile-sample.mdから\`\`\`yamlブロックを抽出できない（詳細: ${SAMPLE_BLOCK}）"
+    else
+      pass "profile_resolve.py known-keys が成功する"
+
+      # 抽出したサンプルブロックを一時ファイルへ書き、print-schema-versionの
+      # 入力に使う（このサブコマンドはパス引数を取る値なし・副作用ゼロの契約）。
+      TMP_SAMPLE_BLOCK="$(mktemp)"
+      printf '%s\n' "$SAMPLE_BLOCK" > "$TMP_SAMPLE_BLOCK"
+
+      print_version_rc=0
+      if PRINT_VERSION_OUT="$(python3 "$PROFILE_RESOLVE_PY" print-schema-version "$TMP_SAMPLE_BLOCK" 2>&1)"; then
+        print_version_rc=0
+      else
+        print_version_rc=$?
+      fi
+      rm -f "$TMP_SAMPLE_BLOCK"
+
+      # known-keys／print-schema-versionの出力とサンプル本文を、この場だけの
+      # 突合ロジックとして直接文字列処理せずpython3へ渡す（既存のsection5と
+      # 同じ「現物を静的抽出して突合するだけ・registryは作らない」方針）。
+      RESULT="$(python3 - "$KNOWN_KEYS_OUT" "$SAMPLE_BLOCK" "$PRINT_VERSION_OUT" "$print_version_rc" <<'PYEOF'
+import re
+import sys
+
+known_keys_out, sample_block, print_version_out, print_version_rc = sys.argv[1:5]
+
+fixed_line = next((l for l in known_keys_out.splitlines() if l.startswith('FIXED:')), None)
+prefixes_line = next((l for l in known_keys_out.splitlines() if l.startswith('PREFIXES:')), None)
+schema_version_line = next((l for l in known_keys_out.splitlines() if l.startswith('SCHEMA_VERSION:')), None)
+
+results = []
+
+if fixed_line is None or prefixes_line is None or schema_version_line is None:
+    results.append(('FAIL', f'known-keysの出力にFIXED/PREFIXES/SCHEMA_VERSIONのいずれかが無い（出力: {known_keys_out!r}）'))
+else:
+    fixed_keys = set(fixed_line[len('FIXED:'):].split(','))
+    prefixes = set(prefixes_line[len('PREFIXES:'):].split(','))
+    expected_version = schema_version_line[len('SCHEMA_VERSION:'):].strip()
+
+    # サンプルブロックの先頭階層キー（コメント行・空行・"---"区切り行を除く）を抽出。
+    sample_keys = set()
+    sample_schema_version = None
+    for line in sample_block.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or stripped == '---':
+            continue
+        m = re.match(r'^([A-Za-z0-9_.-]+):', line)
+        if not m:
+            continue
+        key = m.group(1)
+        sample_keys.add(key)
+        if key == 'schema_version':
+            sample_schema_version = line.split(':', 1)[1].split('#', 1)[0].strip()
+
+    dynamic_keys = {k for k in sample_keys if any(k.startswith(p) for p in prefixes)}
+    sample_fixed_keys = sample_keys - dynamic_keys
+
+    if sample_fixed_keys == fixed_keys:
+        results.append(('PASS', 'profile-sample.mdの固定キー集合がprofile_resolve.py known-keysのFIXEDと完全一致する'))
+    else:
+        only_sample = sample_fixed_keys - fixed_keys
+        only_code = fixed_keys - sample_fixed_keys
+        results.append(('FAIL', f'固定キー集合が不一致（サンプルのみ: {sorted(only_sample)} / コードのみ: {sorted(only_code)}）'))
+
+    used_prefixes = {p for p in prefixes if any(k.startswith(p) for k in sample_keys)}
+    if prefixes == {'role.', 'fallback.'}:
+        results.append(('PASS', 'known-keysの動的プレフィックスがrole./fallback.の2種で固定されている'))
+    else:
+        results.append(('FAIL', f'known-keysの動的プレフィックスがrole./fallback.の2種ではない（実際: {sorted(prefixes)}）'))
+    if used_prefixes == prefixes:
+        results.append(('PASS', 'サンプルが動的プレフィックス2種の両方を実際に使用している'))
+    else:
+        results.append(('FAIL', f'サンプルで使われていない動的プレフィックスがある（未使用: {sorted(prefixes - used_prefixes)}）'))
+
+    if sample_schema_version is None:
+        results.append(('FAIL', 'サンプルにschema_version行が無い'))
+    elif sample_schema_version == expected_version:
+        results.append(('PASS', f'サンプルのschema_version({sample_schema_version})がknown-keysの期待版({expected_version})と一致する'))
+    else:
+        results.append(('FAIL', f'サンプルのschema_version({sample_schema_version})がknown-keysの期待版({expected_version})と不一致'))
+
+    if print_version_rc != '0':
+        results.append(('FAIL', f'print-schema-versionが非0終了した（詳細: {print_version_out!r}）'))
+    elif print_version_out.strip() == expected_version:
+        results.append(('PASS', f'print-schema-versionの出力({print_version_out.strip()})がknown-keysの期待版と一致する'))
+    else:
+        results.append(('FAIL', f'print-schema-versionの出力({print_version_out.strip()})がknown-keysの期待版({expected_version})と不一致'))
+
+for status, desc in results:
+    print(f'{status}\t{desc}')
+PYEOF
+)"
+
+      if [ -z "$RESULT" ]; then
+        fail_case "known-keys/print-schema-versionとの突合が何も出力しなかった（想定外）"
+      else
+        while IFS=$'\t' read -r status desc; do
+          [ -z "$status" ] && continue
+          if [ "$status" = "PASS" ]; then
+            pass "$desc"
+          else
+            fail_case "$desc"
+          fi
+        done <<< "$RESULT"
+      fi
+    fi
   fi
 }
 

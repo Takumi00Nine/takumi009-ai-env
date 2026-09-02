@@ -1,11 +1,13 @@
 ---
 date: 2026-07-20
-updated: 2026-08-30
+updated: 2026-09-01
 tags: [preference, coding, documentation, structure]
 project: meta
 related:
   - "[[Decisions/2026-07-16-simplification-item-cleanups]]"
   - "[[Decisions/2026-08-30-doc-body-archive-split]]"
+  - "[[Decisions/2026-09-01-doc-rule-bake-into-roles]]"
+  - "[[Preferences/worker-role-prompts]]"
 aliases:
   - "共有ライブラリ分離"
   - "本文と差分の同期"

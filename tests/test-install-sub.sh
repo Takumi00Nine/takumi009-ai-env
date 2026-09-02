@@ -75,6 +75,36 @@ make_fake_home() {
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
 }
 
+# 2026-09-01 配役表解凍（設計書§3.9）: v2雛形はrole.leaderがunknownのまま
+# 配布されるため、リーダー配役が未確定のままinstall-main.sh（install-sub.sh
+# 経由の委譲も含む）を対話・--non-interactiveいずれも指定せず実行すると
+# 対話可否の判定で止まる。本ファイルの主眼＝Vault骨格配置・symlink化・
+# machine-roleマーカーとは無関係なテストは、この既定値をexportしておくことで
+# 「未確定→envの値を検査して採用（質問しない）」経路を常に通す。
+export AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5'
+
+# seed_v1_profile <home> — v1形式（schema_version・role.*行を持たない7キー
+# のみ）のプロファイルをあらかじめ置く。§4.2-a「v1と分類されたらlegacy実装
+# （AIENV_MODEL_MAIN/AIENV_MODEL_SUB）へ委譲する」経路を強制し、
+# AIENV_LEADER_ROLEやv2の対話確定を経由させたくないテスト
+# （model値そのものの置換ロジックを検証する4b/4c/4d/4f）で使う。
+seed_v1_profile() {
+  local home="$1"
+  local dest="$home/.config/takumi009-ai-env/profile.md"
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest" <<'EOF'
+---
+inventory_source: configured(work-tools-dir)
+reviewer: configured(codex-mcp)
+vault_write: configured(via-scribe)
+vault_scope: configured(full)
+ui.user_call: configured(send-message)
+git_role: configured(aienv-repo:commit)
+web_verification: configured(websearch)
+---
+EOF
+}
+
 echo "=== 1. dry-run: 実際の変更を一切しない ==="
 {
   FAKE_HOME="$(mktemp -d)"
@@ -147,8 +177,12 @@ echo "=== 4b. install-sub.sh 経由で生成されるsettings.jsonのmodelはサ
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
+  # v1相当に固定してlegacy委譲を強制する（本テストの主眼＝
+  # AIENV_MODEL_MAIN/SUBの置換ロジックであり、v2配役表のリーダー確定とは
+  # 無関係なため）。
+  seed_v1_profile "$FAKE_HOME"
 
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+  env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
 
   settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
   assert_true "modelがclaude-opus-5になっている" \
@@ -165,8 +199,9 @@ echo "=== 4c. install-main.sh単体実行(--sub-delegate無し)で生成され�
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
+  seed_v1_profile "$FAKE_HOME"
 
-  SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/install-main.sh" >/dev/null
+  env -u AIENV_LEADER_ROLE SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/install-main.sh" >/dev/null
 
   settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
   assert_true "modelがclaude-fable-5[1m]になっている" \
@@ -179,8 +214,9 @@ echo "=== 4d. AIENV_MODEL_MAIN/AIENV_MODEL_SUB環境変数でmodel値を上書�
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
+  seed_v1_profile "$FAKE_HOME"
 
-  AIENV_MODEL_SUB="custom-test-model" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+  env -u AIENV_LEADER_ROLE AIENV_MODEL_SUB="custom-test-model" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
 
   settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
   assert_true "AIENV_MODEL_SUBで上書きした値が反映される" \
@@ -208,8 +244,12 @@ echo "=== 4f. model値に引用符・バックスラッシュが含まれても�
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
+  # v1相当に固定する（weird"model\valueはv2のmodel形式検証〈V9-b〉を
+  # 通らないため、v2配役表経由では本テストの意図＝JSON生成側のエスケープ
+  # 耐性を検証できない）。
+  seed_v1_profile "$FAKE_HOME"
 
-  AIENV_MODEL_SUB='weird"model\value' SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+  env -u AIENV_LEADER_ROLE AIENV_MODEL_SUB='weird"model\value' SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
 
   assert_true "生成物が有効なJSONとしてパースできる（引用符・バックスラッシュを含む値でも壊れない）" \
     "$(python3 -c "import json; json.load(open('$FAKE_HOME/.claude/settings.json'))" 2>/dev/null && echo 1 || echo 0)"
@@ -371,6 +411,80 @@ echo "=== 9. machine-roleマーカー: 2回実行しても内容は「sub」の�
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
 
   assert_eq "2回目もマーカーの中身は「sub」のまま" "sub" "$(cat "$MARKER" | tr -d '[:space:]')"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 10. §3.9対話フラグの転送: --non-interactiveがinstall-main.shへ転送される（追完・2026-09-01リーダー指示） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  # ⚠️ AIENV_FORCE_TTY_FOR_TESTで対話可能を強制したうえで--non-interactive
+  # を渡す（2026-09-01 Codex差分レビュー指摘・MAJOR対応: コマンド置換自体が
+  # 非TTYのため、これを付けないと「単に非TTYだから失敗した」のか「転送された
+  # --non-interactiveが優先されたから失敗した」のかを区別できず、転送処理
+  # そのものを削除してもテストが偽陽性で通ってしまう）。
+  rc=0
+  out="$(env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --non-interactive 2>&1)" || rc=$?
+  assert_true "exit非0（--non-interactiveがinstall-main.shへ転送されTTY強制より優先される）" \
+    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "LEADER_UNCONFIGURED_NONINTERACTIVEが出る" \
+    "$(echo "$out" | grep -q 'LEADER_UNCONFIGURED_NONINTERACTIVE' && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 11. §3.9対話フラグの転送: --reconfigure-leaderがinstall-main.shへ転送される（追完・2026-09-01リーダー指示） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
+  mkdir -p "$(dirname "$PROFILE_PATH")"
+  cat > "$PROFILE_PATH" <<'EOF'
+---
+schema_version: 2
+profile_slug: test
+role.leader: configured provider=anthropic-api model=claude-opus-5
+excluded_models: configured value=none
+inventory_source: configured value=work-tools-dir
+reviewer: configured value=codex-mcp
+vault_write: configured value=via-scribe
+vault_scope: configured value=full
+ui.user_call: configured value=send-message
+git_role: configured value=aienv-repo:commit
+web_verification: configured value=websearch
+---
+EOF
+
+  rc=0
+  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5' \
+    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1 || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "--reconfigure-leaderがinstall-main.shへ転送され、AIENV_LEADER_ROLEの新しい値が採用される" \
+    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-sonnet-5' "$PROFILE_PATH" && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 12. install-main.shへの委譲が非0終了(設計書S4)でも、machine-roleマーカー等の後続処理は完走したうえで最終的に非0終了する（2026-09-01 Codex差分レビュー指摘・MAJOR対応: 裸呼び出しだとset -eでmarker設置前に即終了していた） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  MARKER="$FAKE_HOME/.config/takumi009-ai-env/machine-role"
+  # bedrock.envのパスをディレクトリにして、install-main.sh側のsettings.json
+  # 生成だけを確実に失敗させる（設計書S4・install-main.sh側で非0終了する
+  # ようになった状態を再現する）。
+  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
+
+  rc=0
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
+  assert_true "install-sub.sh全体は非0終了する（install-mainの非0を伝播）" \
+    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "machine-roleマーカーは設置される（後続処理が完走している）" \
+    "$([[ -f "$MARKER" ]] && [[ "$(cat "$MARKER" | tr -d '[:space:]')" == "sub" ]] && echo 1 || echo 0)"
+  assert_true "委譲が非0終了した旨のWARNが出る" \
+    "$(echo "$out" | grep -q 'install-main.sh への委譲が非0終了しました' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }

@@ -16,6 +16,18 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/install-main.sh"
 
+# 2026-09-01 配役表解凍（設計書§3.9）: v2雛形はrole.leaderがunknownのまま
+# 配布されるため、リーダー配役が未確定のままinstall-main.shを（対話・
+# --non-interactiveいずれも指定せず）実行すると対話可否の判定で止まる。
+# 本ファイルの主眼＝codex MCP登録の呼び分けとは無関係なので、既定値を
+# exportして「未確定→envの値を検査して採用（質問しない）」経路を通す
+# （tests/test-install-main.shと同じ対策）。
+# ⚠️ 本ファイルの既存アサーション（settings.jsonのmodelがメイン既定値
+# claude-fable-5[1m]になっていること）を壊さないよう、AIENV_LEADER_ROLEも
+# 同じ値に合わせる（test-install-main.shはclaude-sonnet-5を使うが、
+# そちらのアサーションは値そのものを検証しないため問題にならない）。
+export AIENV_LEADER_ROLE='provider=anthropic-api model=claude-fable-5[1m]'
+
 PASS=0
 FAIL=0
 

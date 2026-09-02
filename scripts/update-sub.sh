@@ -59,6 +59,21 @@ STALE_LOCK_SECONDS="${STALE_LOCK_SECONDS:-3600}"
 log() { echo "[update-sub] $*"; }
 warn() { echo "[update-sub] WARN: $*" >&2; }
 fail() { echo "[update-sub] FAIL: $*" >&2; exit 1; }
+# EXIT_CODE — スクリプト全体の最終終了コード（既定0）。設計書§3.9
+# 「update-sub.shはリーダー行が未確定ならWARN＋非0終了」を満たすための
+# フラグ（Codex一次レビュー指摘・Blocking対応・2026-09-01）。
+# ⚠️ **リーダー実行値（--print-leader-runtime）の取得失敗**に加え、**Bedrock
+# envファイルが実在するのに読めない／解析できない場合（BEDROCK_STATUS=
+# EXISTS_BUT_UNAVAILABLE）も**非0にする（状態機械B・設計書§6.2-B S4「生成
+# 中止・旧保持・非0」・2026-09-01工程横断レビュー差し戻しMAJOR対応）。
+# install-main.sh側は同じS4裁定を先行実装済みであり、update-sub.shだけが
+# WARN＋exit 0のまま非対称になっていた（旧コメント「リーダー未確定とは
+# 無関係な既存の失敗モードのため対象にしない＝exit 0のまま」は本裁定と
+# 矛盾していたため撤回する）。「対話の途中で止まらない」という§3.9の趣旨に
+# 合わせ、失敗を検知しても後続の4a〜4c（config.toml再生成・Preferences
+# 再同期・骨格フォルダ補充）は続行し、スクリプト末尾で初めてこのフラグに
+# 従って終了する（deferred方式＝leader未確定時と同じ扱い）。
+EXIT_CODE=0
 
 # bedrock_env_file_kind <path> — Bedrock envファイルの種別を1行で標準出力へ
 # 印字する: ABSENT（本当に存在しない＝ENOENT）／UNAVAILABLE（通常ファイル以外
@@ -154,12 +169,14 @@ after_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
 
 # --- 2b. settings.json の再生成（git の HEAD が変わっていなくても実行する。
 #         §9.0 A-0-1・§11.2 項目3）---
-# 値の正本＝model値の出力口を install-main.sh --print-model に一本化した
-# （scripts/check-drift.shも同じ出力口を呼ぶ）。サブは常に --sub-delegate 側の
-# 値（AIENV_MODEL_SUB）を使う。HEAD不変でも実行するのは、値の正本が将来
-# ローカルプロファイル（~/.config/takumi009-ai-env/profile.md）になったとき、
-# repoのgit履歴を進めなくても再生成が効くようにするため（現時点では
-# install-main.shの値は静的だが、経路自体を先に繋いでおく＝§11.2の注記）。
+# 値の正本＝model/effortの出力口を install-main.sh --print-leader-runtime に
+# 一本化した（2026-09-01 配役表解凍 §4.2-a・§4.3。scripts/check-drift.shも
+# 同じ出力口を呼ぶ）。プロファイルがv1（旧7キーのみ・schema_versionが無い/1）
+# または実体が存在しない場合は、値出力口自身がAIENV_MODEL_MAIN/AIENV_MODEL_SUB
+# （--sub-delegateの有無で選ぶ現行の解決）へ委譲する＝v1委譲期間の後方互換
+# （§3.5）。旧`--print-model`は廃止予定のためもう呼ばない。HEAD不変でも実行
+# するのは、プロファイルの手編集（リーダー行だけの変更）がgit履歴を進めなくても
+# 再生成に反映されるようにするため（§11.2 項目3の受入条件そのもの）。
 # 「早期終了（3.の変化無しexit）より前」に置くのが要点——変化無しでも
 # settings.jsonだけは追随させる。生成に失敗したら旧ファイルは一切触らない
 # （mktemp+mvの原子性。install-main.sh generate_settings_json() と同じ設計判断の
@@ -173,18 +190,168 @@ elif ! command -v python3 >/dev/null 2>&1; then
 elif [ ! -x "$DIR/scripts/install-main.sh" ]; then
   warn "scripts/install-main.sh が見つかりません（checkout破損の可能性）。settings.json の再生成をskipします（旧ファイルは保持します）"
 else
+  # leader_runtime_error_message <コード> [<理由>] — install-main.sh
+  # --print-leader-runtime が標準エラーへ返す機械可読コード（4.2-b。
+  # `<コード>\t<理由>`の1行）を人向け文言へ変換する（2026-09-01 設計書§4.3。
+  # 旧実装はここを`2>/dev/null`で理由ごと捨てて汎用WARNへ丸めていた＝静かに
+  # 既定モデルへ倒れる経路を作らないための機構が理由まで見えないと直しようが
+  # なかった。文面には必ず「プロファイルのリーダー行を確認してください」を
+  # 含める＝リーダー指示）。scripts/check-drift.shにも同名の関数を意図的に
+  # 複製している（両スクリプトは互いをsourceしない独立プロセスで、変換ロジックは
+  # 数行のみのため共有libを新設するほどではない＝bedrock_env_file_kind()等
+  # ここまでの既存の複製方針と同型）。
+  leader_runtime_error_message() {
+    local code="$1" reason="${2:-}" msg=""
+    case "$code" in
+      PROFILE_NOT_FOUND|PROFILE_UNREADABLE)
+        msg="プロファイル実体を読み取れませんでした（不在・symlink・権限不足等の可能性）"
+        ;;
+      PROFILE_MIXED)
+        msg="プロファイルのschema_versionが職種行と整合していません（v2の職種行があるのにschema_versionが1のまま）"
+        ;;
+      PROFILE_LEGACY_V1)
+        msg="プロファイルがv1形式のままです。v2へ移行してください"
+        ;;
+      PROFILE_INVALID:*)
+        msg="プロファイルの構文または検証エラーです（${code#PROFILE_INVALID:}）"
+        ;;
+      PROFILE_RESOLVER_MISSING)
+        msg="resolver本体（共有lib）が見つかりません"
+        ;;
+      LEADER_UNCONFIGURED)
+        msg="リーダー配役が未確定です（unknown・not_adopted・行なしのいずれか）"
+        ;;
+      LEADER_UNAVAILABLE_NO_FALLBACK)
+        msg="リーダーの本命・fallbackの双方が使用不可です"
+        ;;
+      LEADER_CANDIDATE_INVALID:*)
+        msg="リーダー候補の検証に失敗しました（条件番号: ${code#LEADER_CANDIDATE_INVALID:}）"
+        ;;
+      PROFILE_RESOLVER_ERROR|*)
+        msg="リーダー実行値を解決できませんでした（原因不明。コード: ${code:-なし}）"
+        ;;
+    esac
+    [ -n "$reason" ] && msg="${msg}（${reason}）"
+    printf '%s。プロファイルのリーダー行（role.leader）を確認してください: %s' "$msg" "$AIENV_LOCAL_PROFILE_PATH_HINT"
+  }
+  : "${AIENV_LOCAL_PROFILE_PATH_HINT:=$HOME/.config/takumi009-ai-env/profile.md}"
+
   MODEL_VALUE=""
+  EFFORT_VALUE=""
   MODEL_OK=0
   # ⚠️ `if MODEL_VALUE=$(...); then`の条件は「コマンド置換の終了コード」だけを
   # 見ており、$MODEL_VALUE自体は非0終了でも出力があれば非空になりうる
   # （2026-08-30 Codex四次レビュー指摘・MAJOR対応: 以前は後続の判定で
-  # `[ -n "$MODEL_VALUE" ]`だけを見ていたため、print-modelが部分出力を残して
-  # 非0終了した場合に「取得成功」と誤判定し、model値取得失敗時のWARN分岐へ
-  # 到達しないまま生成経路へ入ってしまい、かつBEDROCK_STATUS/BEDROCK_PAYLOADが
+  # `[ -n "$MODEL_VALUE" ]`だけを見ていたため、値出力口が部分出力を残して
+  # 非0終了した場合に「取得成功」と誤判定し、取得失敗時のWARN分岐へ到達
+  # しないまま生成経路へ入ってしまい、かつBEDROCK_STATUS/BEDROCK_PAYLOADが
   # 未初期化のままset -u下で異常終了しうる欠陥があった）。取得成功/失敗は
   # 明示フラグMODEL_OKで判定する。
-  if MODEL_VALUE="$("$DIR/scripts/install-main.sh" --print-model --sub-delegate 2>/dev/null)"; then
-    MODEL_OK=1
+  _leader_runtime_err_tmp="$(mktemp 2>/dev/null)" || _leader_runtime_err_tmp=""
+  if [ -n "$_leader_runtime_err_tmp" ]; then
+    # ⚠️ --sub-delegateは付けたまま渡す。v2解決自体には使われない（§4.2-f）が、
+    # v1委譲期間中のフォールバック値（AIENV_MODEL_MAIN/AIENV_MODEL_SUBの
+    # 出し分け）は引き続きこのフラグの有無だけで決まる。外すとv1機でサブが
+    # メイン既定値へ倒れてしまう（2026-09-01実測で発見・回帰させない）。
+    if _leader_runtime_json="$("$DIR/scripts/install-main.sh" --print-leader-runtime --sub-delegate 2>"$_leader_runtime_err_tmp")"; then
+      # model・effortの抽出はinstall-main.sh本体（resolve_leader_runtime呼び出し
+      # 直後）と同じ「1回のpython3呼び出しで両方取り出す」方式（値の再パースを
+      # 増やさない）。⚠️ JSONとして読めることだけでなく、契約（4.2-a）が定める
+      # 形自体も検査する: ①stdoutが物理行1行だけ（契約「1行のJSON」）②
+      # トップレベルはobject③modelは非空文字列かつC0制御文字・DEL（0x00-0x1F・
+      # 0x7F）を含まない④effortは**キーが存在する場合に限り**同様の非空
+      # clean文字列（存在しない＝正常な省略。空文字列を許すとupdate側とcheck-
+      # drift側で「未指定」の判定基準が食い違う）。enumそのもの（低/中/高等）
+      # まではここで検査しない（enumはprovider/配送先ごとに異なりresolver側が
+      # 唯一の正本＝値表の重複を増やさない）。契約違反はJSON解析失敗と同列に
+      # resolve-leaderの出力契約違反として扱う（2026-09-01 Codex一次・二次
+      # レビュー指摘・Major対応: 従来はjson.load()が例外を出さなければ無条件で
+      # 信頼しており、非文字列値・制御文字混入・複数行整形JSON・
+      # `"effort": ""`のような矛盾値の契約違反を検出できなかった）。
+      if _leader_runtime_fields="$(printf '%s' "$_leader_runtime_json" | python3 -c '
+import json, sys
+
+def is_clean_str(s):
+    if not isinstance(s, str) or s == "":
+        return False
+    return not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+
+raw = sys.stdin.read()
+if raw.count(chr(10)) > 1 or (raw.count(chr(10)) == 1 and not raw.endswith(chr(10))):
+    sys.exit(1)
+d = json.loads(raw)
+if not isinstance(d, dict):
+    sys.exit(1)
+model = d.get("model")
+if not is_clean_str(model):
+    sys.exit(1)
+if "effort" in d:
+    effort = d["effort"]
+    if not is_clean_str(effort):
+        sys.exit(1)
+else:
+    effort = ""
+print(model)
+print(effort)
+' 2>/dev/null)"; then
+        MODEL_VALUE="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '1p')"
+        EFFORT_VALUE="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '2p')"
+        MODEL_OK=1
+      else
+        warn "$(leader_runtime_error_message "PROFILE_RESOLVER_ERROR" "リーダー実行値のJSON解析に失敗しました（resolve-leaderの出力契約違反の可能性）")"
+      fi
+    else
+      # ⚠️ 契約（4.2-b）は「標準エラーへ`<コード>\t<理由>`を1行」を定めている。
+      # 契約外（複数行・タブ無し・理由が空/制御文字混入等）の出力は、たとえ
+      # 1行目だけを見ても内容をそのまま理由として再掲しない＝契約違反自体を
+      # 汎用文言に倒し、契約外の生テキストをログへ流さない
+      # （2026-09-01 Codex二次レビュー指摘・Major対応: 従来は1行目を取り出す
+      # だけで、その中身の妥当性〈タブの有無・理由の空文字・制御文字混入〉を
+      # 検証していなかった）。
+      _leader_runtime_stderr_parsed="$(python3 -c '
+import re, sys
+
+def is_clean_str(s):
+    return s != "" and not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+
+# 機械可読コードは契約（4.2-b・profile-resolve-contract-2026-09-01.md §4）が
+# 列挙する既知の集合に限定する（2026-09-01 Codex三次レビュー指摘・Major
+# 対応: 構文的にcleanなだけの未知コードを無条件で通すと、将来の実装不具合で
+# 任意文字列が「コード」として素通りしログへ再掲されうる）。
+KNOWN_CODE_RE = re.compile(
+    r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|PROFILE_MIXED|PROFILE_LEGACY_V1|"
+    r"PROFILE_RESOLVER_MISSING|PROFILE_RESOLVER_ERROR|LEADER_UNCONFIGURED|"
+    r"LEADER_UNAVAILABLE_NO_FALLBACK|"
+    r"PROFILE_INVALID:[A-Za-z0-9_-]+|LEADER_CANDIDATE_INVALID:[A-Za-z0-9_-]+)$"
+)
+
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    raw = f.read()
+lines = raw.split(chr(10))
+if lines and lines[-1] == "":
+    lines = lines[:-1]
+if len(lines) != 1 or chr(9) not in lines[0]:
+    print("INVALID")
+    sys.exit(0)
+code, reason = lines[0].split(chr(9), 1)
+if not KNOWN_CODE_RE.match(code) or not is_clean_str(reason):
+    print("INVALID")
+    sys.exit(0)
+print("VALID")
+print(code)
+print(reason)
+' "$_leader_runtime_err_tmp" 2>/dev/null)"
+      if [ "$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '1p')" = "VALID" ]; then
+        _leader_runtime_code="$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '2p')"
+        _leader_runtime_reason="$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '3p')"
+        warn "リーダー実行値の取得に失敗しました（scripts/install-main.sh --print-leader-runtime）: $(leader_runtime_error_message "${_leader_runtime_code:-PROFILE_RESOLVER_ERROR}" "$_leader_runtime_reason")"
+      else
+        warn "リーダー実行値の取得に失敗しました（scripts/install-main.sh --print-leader-runtime）: $(leader_runtime_error_message "PROFILE_RESOLVER_ERROR" "標準エラーの出力が契約（4.2-b・1行のコード+理由）に従っていません")"
+      fi
+    fi
+    rm -f "$_leader_runtime_err_tmp"
+  else
+    warn "リーダー実行値の取得に失敗しました: 一時ファイルを作成できませんでした"
   fi
   BEDROCK_STATUS="ABSENT"
   BEDROCK_PAYLOAD='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
@@ -236,9 +403,21 @@ else
     fi
   fi
   if [ "$MODEL_OK" != "1" ]; then
-    warn "model値の取得に失敗しました（scripts/install-main.sh --print-model --sub-delegate）。settings.json の再生成をskipします（旧ファイルは保持します）"
+    # 取得失敗の理由は上のwarn（leader_runtime_error_message経由）で既に出力済み。
+    # settings.json の再生成をskipします（旧ファイルは保持します）。
+    # ⚠️ 設計書§3.9「update-sub.shはリーダー行が未確定ならWARN＋非0終了」の
+    # 実装（2026-09-01 Codex一次レビュー指摘・Blocking対応）。ここでは
+    # 直ちにexitせず、後続の4a〜4c（config.toml再生成・Preferences再同期・
+    # 骨格フォルダ補充）は続行させたうえで、スクリプト末尾でこのフラグに
+    # 従って終了する＝「対話の途中で止まらない」という同節の趣旨を保ちつつ、
+    # 最終的な終了コードには必ず反映させる。
+    EXIT_CODE=1
   elif [ "$BEDROCK_STATUS" = "EXISTS_BUT_UNAVAILABLE" ]; then
-    : # settings.json本体の再生成ごとskipし旧ファイルを保持する（上でWARN済み）
+    # settings.json本体の再生成ごとskipし旧ファイルを保持する（上でWARN済み）。
+    # ⚠️ ここも非0終了にする（状態機械B S4・2026-09-01工程横断レビュー差し戻し
+    # MAJOR対応。上のEXIT_CODEコメント参照）。leader未確定の場合と同じ
+    # deferred方式＝4a〜4cは続行し、スクリプト末尾でこのフラグに従って終了する。
+    EXIT_CODE=1
   else
     settings_tmp="$(mktemp "$(dirname "$SETTINGS_JSON_DEST")/.$(basename "$SETTINGS_JSON_DEST").aienv-tmp.XXXXXX")"
     if PY_OUT="$(python3 -c "
@@ -249,7 +428,22 @@ if not isinstance(data, dict) or data.get('model') != '__AIENV_MODEL__':
     got = data.get('model') if isinstance(data, dict) else type(data).__name__
     print('template \"model\" field is not the __AIENV_MODEL__ placeholder (got: ' + repr(got) + ')', file=sys.stderr)
     sys.exit(1)
+# effortLevelの目印検査はmodel側と対で行う（2026-09-01 配役表解凍 §4.2-g・
+# install-main.sh generate_settings_json()と同じ検証。片側だけ検査すると
+# 誰かがテンプレへ特定のeffort値を直接ハードコードしても検出できない）。
+if data.get('effortLevel') != '__AIENV_EFFORT__':
+    got_effort = data.get('effortLevel')
+    print('template \"effortLevel\" field is not the __AIENV_EFFORT__ placeholder (got: ' + repr(got_effort) + ')', file=sys.stderr)
+    sys.exit(1)
 data['model'] = sys.argv[3]
+effort = sys.argv[5]
+if effort:
+    data['effortLevel'] = effort
+else:
+    # 未指定はキー自体を削除する（セッション/アカウント既定に従う。
+    # ⚠️ v1委譲期間だけはeffortにlegacy値'high'が入るためキーは維持される
+    # ＝install-main.sh generate_settings_json()と同じ非対称。§4.2-g）。
+    data.pop('effortLevel', None)
 
 payload = json.loads(sys.argv[4])
 template_env_keys = set((data.get('env') or {}).keys())
@@ -271,9 +465,9 @@ if payload.get('rejected_keys'):
     print('REJECTED_ENV_KEYS:' + ','.join(payload['rejected_keys']))
 if payload.get('malformed_lines'):
     print('MALFORMED_ENV_LINES:' + ','.join(payload['malformed_lines']))
-" "$SETTINGS_JSON_SRC" "$settings_tmp" "$MODEL_VALUE" "$BEDROCK_PAYLOAD" 2>&1)"; then
+" "$SETTINGS_JSON_SRC" "$settings_tmp" "$MODEL_VALUE" "$BEDROCK_PAYLOAD" "$EFFORT_VALUE" 2>&1)"; then
       mv "$settings_tmp" "$SETTINGS_JSON_DEST"
-      log "settings.json を再生成しました（model=${MODEL_VALUE}）: $SETTINGS_JSON_DEST"
+      log "settings.json を再生成しました（model=${MODEL_VALUE}, effort=${EFFORT_VALUE:-未指定}）: $SETTINGS_JSON_DEST"
       while IFS= read -r py_out_line; do
         case "$py_out_line" in
           SKIPPED_ENV_KEYS:*)
@@ -301,7 +495,10 @@ fi
 #         既に済んでいる＝Codex一次レビュー指摘・Nit対応） ---
 if [ "$before_head" = "$after_head" ]; then
   log "変更なし（repoのHEAD: ${after_head}）。settings.json再生成のほかは何もしません。"
-  exit 0
+  # ⚠️ ここで無条件に0終了すると、2b.でEXIT_CODEへ記録したリーダー未確定の
+  # 失敗（§3.9）が握り潰される（2026-09-01 Codex一次レビュー指摘・Blocking
+  # 対応の一部）。
+  exit "$EXIT_CODE"
 fi
 
 log "更新を検知しました: ${before_head} -> ${after_head}"
@@ -361,3 +558,10 @@ if [ -d "$DIR/vault-public" ]; then
 fi
 
 log "done."
+# ⚠️ EXIT_CODEは2b.でリーダー実行値の取得に失敗した場合、またはBedrock env
+# ファイルが実在するのに読めない／解析できない場合（BEDROCK_STATUS=
+# EXISTS_BUT_UNAVAILABLE）に1になる（設計書§3.9「update-sub.shはリーダー行が
+# 未確定ならWARN＋非0終了」・状態機械B S4。2026-09-01 Codex一次レビュー指摘・
+# Blocking対応／同日工程横断レビュー差し戻しMAJOR対応）。4a〜4cはいずれの
+# 場合も続行済みのため、ここで初めて反映する。
+exit "$EXIT_CODE"

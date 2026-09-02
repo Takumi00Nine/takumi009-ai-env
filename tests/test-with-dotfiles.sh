@@ -24,6 +24,13 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 
+# 2026-09-01 配役表解凍（設計書§3.9）: v2雛形はrole.leaderがunknownのまま
+# 配布されるため、リーダー配役が未確定のままinstall-main.shを対話・
+# --non-interactiveいずれも指定せず実行すると対話可否の判定で止まる。
+# 本ファイルの主眼＝--with-dotfilesの呼び分けとは無関係なので、既定値を
+# exportして「未確定→envの値を検査して採用（質問しない）」経路を通す。
+export AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5'
+
 PASS=0
 FAIL=0
 

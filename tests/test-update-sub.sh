@@ -72,21 +72,28 @@ EOF
 
 # claude/settings.json テンプレ＋実物の scripts/install-main.sh を SRC へ足す
 # （settings.json再生成テスト用。§9.0 A-0-1）。実物のinstall-main.shを使う理由は
-# tests/test-check-drift.shと同じ＝--print-modelは他の全処理より先にexitする
+# tests/test-check-drift.shと同じ＝--print-leader-runtime（2026-09-01 配役表
+# 解凍以降の値出力口。旧--print-modelから改名）は他の全処理より先にexitする
 # 副作用ゼロの経路のため、fixture内で呼んでも実システムに一切触れない。
 add_settings_json_template() {
   local src="$1"
-  mkdir -p "$src/scripts" "$src/claude"
+  mkdir -p "$src/scripts" "$src/claude" "$src/claude/hooks/lib" "$src/claude/agents"
   cat > "$src/claude/settings.json" <<'EOF'
 {
   "permissions": {
     "allow": ["Bash(npm test)"]
   },
-  "model": "__AIENV_MODEL__"
+  "model": "__AIENV_MODEL__",
+  "effortLevel": "__AIENV_EFFORT__"
 }
 EOF
   cp "$REPO_ROOT/scripts/install-main.sh" "$src/scripts/install-main.sh"
   chmod +x "$src/scripts/install-main.sh"
+  # 2026-09-01 配役表解凍: --print-leader-runtime がv2実体を解決する際に
+  # 共有lib（claude/hooks/lib/profile_resolve.py）を必要とする（実体が
+  # 存在しない/v1のfixtureではこのlibを一切参照しない＝v1委譲経路のため、
+  # ここへ実物を置いても既存のv1系テストの挙動は変わらない）。
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$src/claude/hooks/lib/profile_resolve.py"
   git -C "$src" add -A
   git -C "$src" commit -q -m "add settings.json template + install-main.sh"
   git -C "$src" push -q origin HEAD:main
@@ -111,6 +118,36 @@ run_update() {
   local dir="$1" home="$2" vault="$3" lock="$4"
   make_sub_marker "$home"
   DIR="$dir" HOME="$home" VAULT="$vault" LOCK_FILE="$lock" "$SCRIPT"
+}
+
+# write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
+# を書く（schema_version・能力軸7キー・excluded_modelsは固定キー検査
+# （V7/V8-b）を通すための最小セット。role.leaderの行は必須引数、それ以外の
+# 職種行は可変長の追加引数で渡す。tests/test-check-drift.shの同名関数・
+# tests/test-install-main.shのwrite_v2_profile_with_bedrock_role()と
+# 同じ最小セット・様式に揃える）。
+write_v2_profile() {
+  local dest="$1" leader_line="$2"
+  shift 2
+  mkdir -p "$(dirname "$dest")"
+  {
+    echo "---"
+    echo "schema_version: 2"
+    echo "profile_slug: test"
+    echo "role.leader: ${leader_line}"
+    for extra in "$@"; do
+      printf '%s\n' "$extra"
+    done
+    echo "excluded_models: configured value=none"
+    echo "inventory_source: configured value=work-tools-dir"
+    echo "reviewer: configured value=codex-mcp"
+    echo "vault_write: configured value=via-scribe"
+    echo "vault_scope: configured value=full"
+    echo "ui.user_call: configured value=send-message"
+    echo "git_role: configured value=aienv-repo:commit"
+    echo "web_verification: configured value=websearch"
+    echo "---"
+  } > "$dest"
 }
 
 echo "=== 1. 変更なし: 何もしない（静か・冪等） ==="
@@ -500,7 +537,7 @@ echo "=== 10. settings.json再生成: HEADが変わっていなくてもサブ�
     "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
   assert_true "settings.jsonが生成される" \
     "$([[ -f "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
-  assert_true "modelはサブ既定値(claude-opus-5)へ解決される（値出力口＝install-main.sh --print-model --sub-delegate）" \
+  assert_true "modelはサブ既定値(claude-opus-5)へ解決される（値出力口＝install-main.sh --print-leader-runtime --sub-delegate）" \
     "$(grep -q 'claude-opus-5' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
   assert_true "再生成メッセージが出る" \
     "$(echo "$out" | grep -q 'settings.json を再生成しました' && echo 1 || echo 0)"
@@ -580,6 +617,15 @@ CLAUDE_CODE_USE_BEDROCK=1
 ANTHROPIC_DEFAULT_OPUS_MODEL=us.anthropic.claude-opus-4-8
 EOF
   chmod 644 "$ENV_FILE"
+  # 2026-09-01 §4.2-d改訂（担当Bコミット36745b2/fe06258）: ANTHROPIC_DEFAULT_
+  # OPUS_MODELは固定許可から動的許可へ変わった（プロファイルのrole.*/
+  # fallback.*が実際にprovider=bedrock model=opusを使っているときだけ許可）。
+  # v2プロファイルでresearcherをそう配役し、動的に許可されることを確認する
+  # （リーダー実査指摘・結合確認対応: tests/test-install-main.shの
+  # write_v2_profile_with_bedrock_role()と同じ様式）。
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5" \
+    "role.researcher: configured provider=bedrock model=opus"
   LOCK="$WORK/lock"
 
   run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
@@ -661,7 +707,7 @@ EOF
     out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
     chflags nouchg "$ENV_FILE" 2>/dev/null || true
 
-    assert_eq "settings.json再生成が中止されてもupdate-sub.sh全体はexit 0で完走する" "0" "$rc"
+    assert_eq "settings.json再生成が中止されると4a〜4cは続行されるがupdate-sub.sh全体は最終的に非0終了する（状態機械B S4・2026-09-01工程横断レビュー差し戻しMAJOR対応）" "1" "$rc"
     assert_true "パーミッション矯正失敗のWARNが出る" \
       "$(echo "$out" | grep -q 'パーミッションを0600へ揃えられませんでした' && echo 1 || echo 0)"
     assert_true "再生成中止・既存ファイル保持のWARNが出る" \
@@ -709,7 +755,7 @@ EOF
   rc=0
   out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
 
-  assert_eq "settings.json再生成が中止されてもupdate-sub.sh全体はexit 0で完走する" "0" "$rc"
+  assert_eq "settings.json再生成が中止されると4a〜4cは続行されるがupdate-sub.sh全体は最終的に非0終了する（状態機械B S4・2026-09-01工程横断レビュー差し戻しMAJOR対応）" "1" "$rc"
   assert_true "ディレクトリである旨のWARNが出る（無警告のまま素通りしない）" \
     "$(echo "$out" | grep -q '通常ファイルではありません' && echo 1 || echo 0)"
   POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
@@ -748,7 +794,7 @@ EOF
   rc=0
   out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
 
-  assert_eq "settings.json再生成が中止されてもupdate-sub.sh全体はexit 0で完走する" "0" "$rc"
+  assert_eq "settings.json再生成が中止されると4a〜4cは続行されるがupdate-sub.sh全体は最終的に非0終了する（状態機械B S4・2026-09-01工程横断レビュー差し戻しMAJOR対応）" "1" "$rc"
   assert_true "dangling symlinkである旨のWARNが出る（ABSENT扱いで無警告のまま素通りしない）" \
     "$(echo "$out" | grep -q '通常ファイルではありません' && echo 1 || echo 0)"
   POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
@@ -789,7 +835,7 @@ EOF
   rc=0
   out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
 
-  assert_eq "settings.json再生成が中止されてもupdate-sub.sh全体はexit 0で完走する" "0" "$rc"
+  assert_eq "settings.json再生成が中止されると4a〜4cは続行されるがupdate-sub.sh全体は最終的に非0終了する（状態機械B S4・2026-09-01工程横断レビュー差し戻しMAJOR対応）" "1" "$rc"
   assert_true "解析失敗のWARNが出る" \
     "$(echo "$out" | grep -q 'Bedrock envファイルの解析に失敗しました' && echo 1 || echo 0)"
   POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
@@ -828,11 +874,68 @@ EOF
   out="$(AIENV_BEDROCK_ENV_FILE="$LOCKED_DIR/bedrock.env" run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
   chmod 700 "$LOCKED_DIR"
 
-  assert_eq "settings.json再生成が中止されてもupdate-sub.sh全体はexit 0で完走する" "0" "$rc"
+  assert_eq "settings.json再生成が中止されると4a〜4cは続行されるがupdate-sub.sh全体は最終的に非0終了する（状態機械B S4・2026-09-01工程横断レビュー差し戻しMAJOR対応）" "1" "$rc"
   assert_true "通常ファイルではない旨のWARNが出る（探索権限不足もABSENT扱いにされない）" \
     "$(echo "$out" | grep -q '通常ファイルではありません' && echo 1 || echo 0)"
   POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
   assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 15e. settings.json再生成が中止され最終的に非0終了する場合でも、4a〜4c（config.toml再生成・Preferences再同期）は実際に続行されている（S4のdeferred方式の振る舞いカバレッジ・Codexレビュー指摘Major対応: HEAD変化を伴わない15/15b〜15dだけでは4a〜4cの続行そのものは検証できていなかった） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env" "$FAKE_HOME/.claude"
+  cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
+{
+  "model": "sentinel-pre-existing-value"
+}
+EOF
+  PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
+  # HEADを進める変更をorigin側へpushしておく（4a〜4cが実際に走ったことを、
+  # 変更前には存在しなかった内容で確認するため）。
+  MARKER="MARKER-15e-$(date +%s)-$$"
+  cat > "$SRC/codex/config.toml" <<EOF
+service_tier = "default"
+[mcp_servers.obsidian]
+args = ["__AIENV_HOME__/Data/obsidian", "${MARKER}"]
+EOF
+  echo "# ${MARKER}" > "$SRC/vault-public/Preferences/rule-15e.md"
+  # 4c（新しい骨格フォルダの補充）も同じテストで検証する（Codex二次レビュー
+  # 指摘・Minor対応: 4a/4bだけでは「4a〜4cが続行」の受入条件を完全には
+  # 証明できていなかった）。
+  mkdir -p "$SRC/vault-public/NewFolder15e"
+  echo "# ${MARKER}" > "$SRC/vault-public/NewFolder15e/README.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "15e: config.toml更新+新規Preferences"
+  git -C "$SRC" push -q origin HEAD:main
+  # Bedrock envパスをディレクトリにしてEXISTS_BUT_UNAVAILABLE(S4)を発生させる
+  # （15bと同じ発生源。ここではHEAD変化との組み合わせを狙い撃ちする）。
+  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+
+  assert_eq "settings.json再生成が中止されてもupdate-sub.sh全体は最終的に非0終了する（S4）" "1" "$rc"
+  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
+  assert_eq "settings.jsonは再生成されず旧ファイルが保持される(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
+  assert_true "4a. config.tomlは実際に再生成されている（新content=マーカー入りのHOME置換済み）" \
+    "$(grep -q "$FAKE_HOME/Data/obsidian.*$MARKER" "$FAKE_HOME/.codex/config.toml" 2>/dev/null && echo 1 || echo 0)"
+  assert_true "4b. Preferencesは実際に再同期されている（新規ファイルのマーカーが宛先へ実転写）" \
+    "$(grep -q "$MARKER" "$FAKE_HOME/Data/obsidian/Preferences/rule-15e.md" 2>/dev/null && echo 1 || echo 0)"
+  assert_true "4c. 新しい骨格フォルダが実際に補充されている（新規READMEのマーカーが宛先へ実転写）" \
+    "$(grep -q "$MARKER" "$FAKE_HOME/Data/obsidian/NewFolder15e/README.md" 2>/dev/null && echo 1 || echo 0)"
+  assert_true "更新を検知したログが出る（HEADが実際に進んだことの確認）" \
+    "$(echo "$out" | grep -q '更新を検知しました' && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
@@ -868,7 +971,7 @@ EOF
   rm -rf "$WORK"
 }
 
-echo "=== 16b. settings.json再生成: model値の出力口が部分出力を残しつつ非0終了しても、取得失敗として扱い既存settings.jsonを保持する（2026-08-30 Codex四次レビュー指摘・MAJOR対応: 従来は\$MODEL_VALUEが非空かどうかだけで成功/失敗を判定しており、部分出力を残す非0終了を誤って成功扱いし、BEDROCK_STATUS/BEDROCK_PAYLOAD未初期化のままset -u下で異常終了しうる欠陥があった） ==="
+echo "=== 16b. settings.json再生成: model値の出力口が部分出力を残しつつ非0終了しても、取得失敗として扱い既存settings.jsonを保持しWARN＋非0終了する（2026-08-30 Codex四次レビュー指摘・MAJOR対応: 従来は\$MODEL_VALUEが非空かどうかだけで成功/失敗を判定しており、部分出力を残す非0終了を誤って成功扱いし、BEDROCK_STATUS/BEDROCK_PAYLOAD未初期化のままset -u下で異常終了しうる欠陥があった。2026-09-01 Codex一次レビュー指摘・Blocking対応: 取得失敗時はスクリプト全体もexit 0ではなく非0で終わる＝設計書§3.9「WARN＋非0終了」） ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
@@ -887,12 +990,13 @@ echo "=== 16b. settings.json再生成: model値の出力口が部分出力を残
 }
 EOF
   PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  # install-main.shを「--print-model --sub-delegateへ部分出力を残しつつ
-  # 非0終了する」スタブへ差し替える。
+  # install-main.shを「--print-leader-runtimeへ部分出力を残しつつ非0終了する」
+  # スタブへ差し替える（2026-09-01 配役表解凍以降、値出力口は--print-model
+  # から--print-leader-runtimeへ一本化＝§4.2-a）。
   cat > "$SUB/scripts/install-main.sh" <<'EOF'
 #!/bin/bash
 case "$1" in
-  --print-model)
+  --print-leader-runtime)
     echo "partial-output-before-crash"
     exit 1
     ;;
@@ -905,9 +1009,9 @@ EOF
   rc=0
   out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
 
-  assert_eq "update-sub.sh全体はexit 0で完走する(set -uでの異常終了が再発しない)" "0" "$rc"
-  assert_true "model値の取得に失敗した旨のWARNが出る" \
-    "$(echo "$out" | grep -q 'model値の取得に失敗しました' && echo 1 || echo 0)"
+  assert_eq "set -uでの異常終了が再発しない代わりにexit 1（設計書§3.9・WARN＋非0終了）で終わる" "1" "$rc"
+  assert_true "リーダー実行値の取得に失敗した旨のWARNが出る" \
+    "$(echo "$out" | grep -q 'リーダー実行値の取得に失敗しました' && echo 1 || echo 0)"
   assert_not_contains_helper() {
     local desc="$1" haystack="$2" needle="$3"
     if [[ "$haystack" != *"$needle"* ]]; then pass "$desc"; else fail_case "$desc (含まれてはいけないのに含まれる: \"$needle\")"; fi
@@ -1015,13 +1119,38 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   mkdir -p "$FAKE_HOME_INSTALLER/.claude/hooks" "$FAKE_HOME_INSTALLER/.claude/agents" \
            "$FAKE_HOME_INSTALLER/.codex" "$FAKE_HOME_INSTALLER/.config/takumi009-ai-env"
   printf '%s\n' "$ENV_CONTENT" > "$FAKE_HOME_INSTALLER/.config/takumi009-ai-env/bedrock.env"
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME_INSTALLER" bash "$REPO_ROOT/scripts/install-main.sh" --sub-delegate >/dev/null 2>&1
+  # 2026-09-01 §4.2-d改訂（担当Bコミット36745b2/fe06258）: Bedrockモデルpin
+  # キー（ANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODEL）は固定許可から動的許可へ
+  # 変わった（プロファイルのrole.*/fallback.*が実際にprovider=bedrockで
+  # その別名を使っているときだけ許可）。installer/updater双方に、
+  # opus/sonnet/haikuの3別名すべてを配役したv2プロファイルを事前に置く
+  # （リーダー実査指摘・結合確認対応）。role.leaderはAIENV_LEADER_ROLEと
+  # 一致させ対話を発生させない（既存の値と一致→そのまま通す・冪等＝§3.9）。
+  write_v2_profile "$FAKE_HOME_INSTALLER/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5" \
+    "role.researcher: configured provider=bedrock model=opus" \
+    "role.tester: configured provider=bedrock model=sonnet" \
+    "role.operator: configured provider=bedrock model=haiku"
+  # 2026-09-01 配役表解凍（設計書§3.9）: v2雛形はrole.leaderがunknownのまま
+  # 配布されるが、上記で事前にconfigured済みのプロファイルを置いたため
+  # 雛形配置（非破壊・初回のみ）はskipされ、対話にも入らない
+  # （tests/test-install-main.shが採用している既定パターンと同じ＝担当B
+  # からの引き継ぎ）。
+  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5' \
+    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME_INSTALLER" bash "$REPO_ROOT/scripts/install-main.sh" --sub-delegate >/dev/null 2>&1
 
   # --- update-sub.sh（pull経路。SUBクローン＝add_settings_json_templateが
   #     $SRCへ実物のinstall-main.shをコピー済みなので--print-*系は動く）---
   FAKE_HOME_UPDATER="$WORK/home_updater"
   mkdir -p "$FAKE_HOME_UPDATER/.codex" "$FAKE_HOME_UPDATER/Data/obsidian" "$FAKE_HOME_UPDATER/.config/takumi009-ai-env"
   printf '%s\n' "$ENV_CONTENT" > "$FAKE_HOME_UPDATER/.config/takumi009-ai-env/bedrock.env"
+  # updater側にも同じ配役のv2プロファイルを置く（installer側と同一集合の
+  # Bedrock由来envキーが動的に許可されることの前提を揃える）。
+  write_v2_profile "$FAKE_HOME_UPDATER/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5" \
+    "role.researcher: configured provider=bedrock model=opus" \
+    "role.tester: configured provider=bedrock model=sonnet" \
+    "role.operator: configured provider=bedrock model=haiku"
   LOCK="$WORK/lock"
   run_update "$SUB" "$FAKE_HOME_UPDATER" "$FAKE_HOME_UPDATER/Data/obsidian" "$LOCK" >/dev/null
 
@@ -1052,6 +1181,253 @@ print(json.dumps({k: env[k] for k in keys if k in env}, sort_keys=True))
   env_installer="$bedrock_env_installer"
   assert_true "envブロックに実際にBedrock由来のキーが5件とも含まれている（比較が空同士の偶然一致でないことの確認）" \
     "$(echo "$env_installer" | grep -q 'CLAUDE_CODE_USE_BEDROCK' && echo "$env_installer" | grep -q 'AWS_REGION' && echo "$env_installer" | grep -q 'ANTHROPIC_DEFAULT_OPUS_MODEL' && echo "$env_installer" | grep -q 'ANTHROPIC_DEFAULT_SONNET_MODEL' && echo "$env_installer" | grep -q 'ANTHROPIC_DEFAULT_HAIKU_MODEL' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 20. §4.3: リーダー配役未確定(role.leader: unknown)なら機械可読コードを人向け文言へ変換してWARNし、settings.jsonを再生成しない（旧ファイル保持・fail-open）（2026-09-01 配役表解凍） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "unknown"
+  cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
+{
+  "model": "sentinel-pre-existing-value"
+}
+EOF
+  PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+
+  # 2026-09-01 Codex一次レビュー指摘・Blocking対応: 設計書§3.9
+  # 「update-sub.shはリーダー行が未確定ならWARN＋非0終了」どおり、対話を
+  # せず旧ファイルを保持する代わりに終了コードは非0になる（「対話はしない」
+  # ≠「exit 0で完走する」＝旧テストの誤った期待を修正）。
+  assert_eq "update-sub.sh全体は非0終了する（対話はしないが成功扱いにもしない・§3.9）" "1" "$rc"
+  assert_true "機械可読コードLEADER_UNCONFIGUREDが人向け文言に変換される" \
+    "$(echo "$out" | grep -q 'リーダー配役が未確定です' && echo 1 || echo 0)"
+  assert_true "WARN文面に「プロファイルのリーダー行を確認してください」を含む" \
+    "$(echo "$out" | grep -q 'プロファイルのリーダー行（role.leader）を確認してください' && echo 1 || echo 0)"
+  assert_true "生の機械可読コード(LEADER_UNCONFIGURED)自体は理由として画面に残っていてもよいが、素の2>/dev/nullの汎用WARNへ丸められていない" \
+    "$(echo "$out" | grep -q '値の取得に失敗しました（scripts/install-main.sh --print-model' && echo 0 || echo 1)"
+  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
+  assert_eq "settings.jsonは再生成されず旧ファイルが保持される（バイト単位で不変）" "$PRE_SHA" "$POST_SHA"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 21. §4.3: リーダー行のeffortが3者一致で追随する（modelとeffortの両方＝設計書§4.3「updateはmodelとeffortの両方へ追随」） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5 effort=high"
+  LOCK="$WORK/lock"
+
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
+
+  assert_true "modelがプロファイルのリーダー行どおりに解決される" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('model')=='claude-sonnet-5' else 1)" && echo 1 || echo 0)"
+  assert_true "effortLevelがプロファイルのリーダー行のeffortどおりに解決される" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('effortLevel')=='high' else 1)" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 21b. §4.3: リーダー行にeffort未指定ならeffortLevelキー自体が出力されない（正常な省略と解決失敗を混同しない・4.2-a） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5"
+  LOCK="$WORK/lock"
+
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
+
+  assert_true "effortLevelキー自体が存在しない" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if 'effortLevel' not in d else 1)" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 22. §11.2 項目3の受入条件（設計書§4.3・リーダー確認）: repoのHEADが不変でも、プロファイルのリーダー行だけを書き換えればsettings.jsonが追随する ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
+  write_v2_profile "$PROFILE_PATH" "configured provider=anthropic-api model=claude-sonnet-5"
+  LOCK="$WORK/lock"
+  HEAD_BEFORE="$(git -C "$SUB" rev-parse HEAD)"
+
+  out1="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)"
+  assert_true "1回目: 変更なしメッセージが出る（HEAD不変）" \
+    "$(echo "$out1" | grep -q '変更なし' && echo 1 || echo 0)"
+  assert_true "1回目: modelはリーダー行どおり(claude-sonnet-5)" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('model')=='claude-sonnet-5' else 1)" && echo 1 || echo 0)"
+
+  # ⚠️ repo($SUB)には一切触れず、ローカル実体プロファイルのリーダー行だけを
+  # 書き換える（本人がエディタで1行編集する運用を模す）。
+  write_v2_profile "$PROFILE_PATH" "configured provider=anthropic-api model=claude-opus-5 effort=low"
+  HEAD_MID="$(git -C "$SUB" rev-parse HEAD)"
+  assert_eq "リーダー行の書き換え自体はrepoのHEADを一切動かさない" "$HEAD_BEFORE" "$HEAD_MID"
+
+  out2="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)"
+  HEAD_AFTER="$(git -C "$SUB" rev-parse HEAD)"
+  assert_eq "2回目もrepoのHEADは不変のまま（pull由来の変化ゼロ）" "$HEAD_BEFORE" "$HEAD_AFTER"
+  assert_true "2回目: 変更なしメッセージが出る（HEAD不変のまま）" \
+    "$(echo "$out2" | grep -q '変更なし' && echo 1 || echo 0)"
+  assert_true "2回目: modelが書き換え後のリーダー行(claude-opus-5)へ追随する" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('model')=='claude-opus-5' else 1)" && echo 1 || echo 0)"
+  assert_true "2回目: effortLevelも書き換え後のリーダー行(low)へ追随する" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('effortLevel')=='low' else 1)" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 23. §4.2-a契約検証: --print-leader-runtimeがeffortキーを空文字列で返す契約違反はJSON解析失敗として拒否しWARN＋非0終了する（未指定＝キー省略との混同を防ぐ・2026-09-01 Codex二次レビュー指摘・Major対応） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude"
+  cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
+{
+  "model": "sentinel-pre-existing-value"
+}
+EOF
+  PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
+  cat > "$SUB/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    echo '{"model": "claude-fable-5[1m]", "effort": ""}'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$SUB/scripts/install-main.sh"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+
+  assert_eq "空文字列effortは契約違反として非0終了する（§3.9）" "1" "$rc"
+  assert_true "JSON解析失敗（契約違反）である旨のWARNが出る" \
+    "$(echo "$out" | grep -q 'リーダー実行値のJSON解析に失敗しました' && echo 1 || echo 0)"
+  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
+  assert_eq "旧settings.jsonが変わらず残る" "$PRE_SHA" "$POST_SHA"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 24. §4.2-b契約検証: 標準エラーが複数行・タブ無し等の契約違反のときは生テキストを再掲せず汎用文言へ倒す（2026-09-01 Codex二次レビュー指摘・Major対応） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude"
+  echo '{"model": "sentinel-pre-existing-value"}' > "$FAKE_HOME/.claude/settings.json"
+  cat > "$SUB/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    printf 'MULTI_LINE_STDERR_LINE_1\nMULTI_LINE_STDERR_LINE_2_MIGHT_LEAK\n' >&2
+    exit 1
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$SUB/scripts/install-main.sh"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+
+  assert_eq "契約違反時も非0終了する" "1" "$rc"
+  assert_true "契約違反である旨の汎用文言が出る" \
+    "$(echo "$out" | grep -q '標準エラーの出力が契約' && echo 1 || echo 0)"
+  assert_not_contains_helper2() {
+    local desc="$1" haystack="$2" needle="$3"
+    if [[ "$haystack" != *"$needle"* ]]; then pass "$desc"; else fail_case "$desc (含まれてはいけないのに含まれる: \"$needle\")"; fi
+  }
+  assert_not_contains_helper2 "契約外の2行目の生テキストはログに出ない" "$out" "MIGHT_LEAK"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 25. §4.2-b契約検証: 構文上はcleanだが契約に無い未知の機械可読コードは拒否し、コード自体をログへ再掲しない（2026-09-01 Codex三次レビュー指摘・Major対応） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude"
+  echo '{"model": "sentinel-pre-existing-value"}' > "$FAKE_HOME/.claude/settings.json"
+  cat > "$SUB/scripts/install-main.sh" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --print-leader-runtime)
+    printf 'UNKNOWN_SENSITIVE_CODE\tsome-reason\n' >&2
+    exit 1
+    ;;
+esac
+exit 1
+EOF
+  chmod +x "$SUB/scripts/install-main.sh"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+
+  assert_eq "契約外コードでも非0終了する" "1" "$rc"
+  assert_true "契約違反である旨の汎用文言が出る" \
+    "$(echo "$out" | grep -q '標準エラーの出力が契約' && echo 1 || echo 0)"
+  assert_not_contains_helper2 "契約に無い未知コード自体はログに出ない" "$out" "UNKNOWN_SENSITIVE_CODE"
 
   rm -rf "$WORK"
 }

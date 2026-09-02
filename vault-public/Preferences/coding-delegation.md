@@ -1,10 +1,12 @@
 ---
 date: 2026-06-14
-updated: 2026-08-21
+updated: 2026-09-02
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 related:
   - "[[Projects/navi-orchestrator]]"
+  - "[[Preferences/core-workflow]]"
+  - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
 aliases:
   - "Claudeに残す4つ"
   - "オーケストレーター強制"
@@ -13,7 +15,7 @@ aliases:
 > 背景＝「ループエンジニアリング」の実装（[[Knowledge/loop-engineering]]）。
 ## 基本構図
 - **Claude 本体（リーダー・オーケストレーター）**: ①最終意思決定 ②外部脳記録 ③ユーザー対話 ④実環境が要る結合検証、＋各工程の采配。実装・調査・テスト等の「作る工程」は自分でやらず着手前にワーカーへ委任。
-- **モデル割り当て（2026-07-21 本人決定・2026-08-21 マシン別明文化）**: リーダー＝**メイン機は Fable 5 固定・サブ機は Opus 5**（プラン差により＝[[Decisions/2026-08-21-machine-role-model-assignment]]）。ワーカー割り当てはメイン/サブ共通。**ワーカー/生成物には極力 Fable 5 を割り当てない**（生成＝Sonnet/Opus/Haiku・画像＝Codex・例外＝本人明示のみ）。
+- **モデル割り当て（2026-07-21 本人決定・2026-09-01 配役表解凍で痩身化）**: リーダー・ワーカーの実際の配役とモデル実値は**正本は配役表（ローカルプロファイル）**（[[Preferences/core-workflow]]・経緯＝[[Decisions/2026-09-01-role-cast-table-unfreeze]]・旧マシン別実値の経緯＝[[Decisions/2026-08-21-machine-role-model-assignment]]）。Preferences にはマシン別のモデル実値を書かない。**ワーカー/生成物には極力 Fable 5 を割り当てない**方針は維持（生成＝Sonnet/Opus/Haiku・画像＝Codex・例外＝本人明示のみ）。
 - **Claude ワーカー**: 作る工程の実働。`~/.claude/agents/` の7工程ロールを名指しで委任（正本＝[[Preferences/worker-role-prompts]]）。既定 Sonnet 5・**要件定義/設計/採用判定は Opus 5**（[[Decisions/2026-07-25-opus5-upstream-roles]]・⚠️**デザイン系成果物の案件は例外＝要件定義から Codex 主担当**＝[[Decisions/2026-08-10-codex-upstream-for-design]]）。起動は `cct`・チームメイトは in-process（[[Decisions/2026-08-07-teammate-in-process-permanent]]）。
 - **Codex＝一次レビュアーが主務**（上限時の代替＝Opus 5＝[[Decisions/2026-08-07-opus5-fallback-reviewer]]）。実装・調査の委任も可＝既定は Claude ワーカーのまま「上限余剰・得意分野・本人指定」で裁量（[[Decisions/2026-07-23-codex-delegation-reopened]]）。**ビジュアル素材生成（画像・3D/Blender・ボクセル）は最初から Codex（gpt-5.6-sol）へ一気通貫**（[[Decisions/2026-07-21-image-tasks-codex-end-to-end]]・最終検収は Claude・⚠️独立チェックは本人評価か Claude レビュー）。**デザイン系成果物の案件は要件定義・設計の上流工程も Codex 主担当**（2026-08-10 本人決定＝[[Decisions/2026-08-10-codex-upstream-for-design]]。この場合の一次レビューは Opus 5 に入れ替え＝生成×検証の独立を維持）。ただし**案件内の非デザイン部品（JS・ロジック・データ集計等の仕組み部分）は通常ルール＝Claudeワーカーへ委任**し Codex は一次レビュアーに戻す（部品単位の分割＝[[Decisions/2026-08-13-design-project-component-split]]・本人明示 2026-08-13）。
 ## 工程フロー（正本＝[[Preferences/codex-review-protocol]]）
