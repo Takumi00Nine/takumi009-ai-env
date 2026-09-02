@@ -9,6 +9,7 @@
       "WebSearch",
       "WebFetch(domain:*)",
       "Edit(~/Data/**)",
+      "Read(~/.config/takumi009-ai-env/profile.md)",
       "Skill(schedule)",
       "Skill(update-config)",
       "Skill(claude-api)"

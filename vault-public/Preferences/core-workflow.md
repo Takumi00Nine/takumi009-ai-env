@@ -9,6 +9,7 @@ related:
   - "[[Preferences/coding-delegation]]"
   - "[[Preferences/absolute-rules]]"
   - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
+  - "[[Preferences/worker-role-prompts]]"
 aliases:
   - "共通コア工程"
   - "職種定義"

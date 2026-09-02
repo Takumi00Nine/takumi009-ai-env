@@ -168,6 +168,19 @@ echo "=== 5b. 通知系アプリ管理キー2つ（agentPushNotifEnabled/inputNe
   rm -rf "$FAKE_HOME"
 }
 
+echo "=== 5c. profile.md（実体プロファイル）へのRead allowルールがテンプレ収載により生成settings.jsonにも含まれる（2026-09-02 SessionStartフックの必読リストにprofile.mdが載ったがadditionalDirectoriesは~/.configを含まないため個別allowが必要。Read tool allow rule は working directory 外でも単一ファイル指定で機能する＝https://code.claude.com/docs/en/permissions の Read(~/.zshrc) 例で確認済み） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
+
+  assert_true "生成settings.jsonのpermissions.allowにprofile.md用Read allowルールが含まれる" \
+    "$(python3 -c "import json; d=json.load(open('$FAKE_HOME/.claude/settings.json')); exit(0 if 'Read(~/.config/takumi009-ai-env/profile.md)' in d['permissions']['allow'] else 1)" && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
 # vault-public/Preferences/profile-sample.md は本来の配置経路が
 # Vault(Preferences/profile-sample.md)→export-public-vault.sh→vault-public/ の
 # 正規パイプライン（vault-scribe工程）であり、このテストファイル（実装ワーカー）

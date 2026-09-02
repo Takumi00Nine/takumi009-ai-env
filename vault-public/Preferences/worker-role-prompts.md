@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-01
+updated: 2026-09-02
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -13,6 +13,8 @@ related:
   - "[[Decisions/2026-08-30-doc-body-archive-split]]"
   - "[[Knowledge/claude-effort-delivery-paths]]"
   - "[[Decisions/2026-09-01-doc-rule-bake-into-roles]]"
+  - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
+  - "[[Preferences/core-workflow]]"
 aliases:
   - "7ロール運用"
   - "requirements-analyst"
@@ -27,7 +29,7 @@ aliases:
 
 ## 7ロール一覧（既定 model: sonnet・**上流3ロール＝claude-opus-5**）
 
-モデル割り当て（2026-07-25 本人決定＝[[Decisions/2026-07-25-opus5-upstream-roles]]）: **requirements-analyst / system-designer / adoption-critic ＝ Opus 5**（判断の質が下流全体に効く上流工程・実行回数少）、他4ロール＝Sonnet 5 のまま。命名規則に従い上流3ロールは `opus-` プレフィックス（例: `opus-system-designer`）。
+モデル割り当て（2026-07-25 本人決定＝[[Decisions/2026-07-25-opus5-upstream-roles]]）: **requirements-analyst / system-designer / adoption-critic ＝ Opus 5**（判断の質が下流全体に効く上流工程・実行回数少）、他4ロール＝Sonnet 5 のまま。命名規則に従い上流3ロールは `opus-` プレフィックス（例: `opus-system-designer`）。これらは職種定義の既定値であり、実際の配役の正本は配役表（[[Preferences/core-workflow]] §1・[[Preferences/coding-delegation]]）。
 | ロール名 | 工程 | 要旨 |
 |---|---|---|
 | `requirements-analyst` | 要件定義 | 検証可能な受入条件・スコープ外・OSS先行調査（「作らない」提案含む）。**要件定義の成果物は「要件定義書（確定事項のみ）」と「検討経緯（論点・代替案比較・レビュー録）」の2ファイル構成を既定とする**（正本＝[[Preferences/coding-doc-style]] §3・[[Decisions/2026-08-30-doc-body-archive-split]]） |
@@ -52,9 +54,13 @@ aliases:
 6. ツール境界: Web調査だけで足りるタスクは**「Bash/gh 不使用・WebFetch で読む」を明示**（ワーカーの許可リスト外コマンドは承認プロンプトがユーザーへ飛び、作業も止まるため）
 
 呼び方: チームメイト＝「Spawn a teammate using the implementer agent type…」／サブエージェント＝Agent ツールの subagent_type。
-7. **Agent ツールの `model` パラメータは渡さない**（渡すとロール定義 frontmatter の model を上書きする。実例 2026-07-27: 上流ロールに `model: opus` を明示→定義の claude-opus-5 が現行 Opus 4.8 に落ちた・本人指摘で発覚→停止・再起動。モデルの正本はロール定義側＝[[Decisions/2026-07-25-opus5-upstream-roles]]。例外＝本人がその場でモデルを明示指定した場合のみ）。
+7. **配役の指定＝正本は配役表**（コア＝[[Preferences/core-workflow]] §1 spawn 条文・[[Decisions/2026-09-01-role-cast-table-unfreeze]]）。配役表はセッション開始時に読んだ値を使う。`agents/*.md` の `model:` は「指定しなかった場合の既定値」であり、配役表の派生物ではない（二重管理にしない）。
+   - 配役表の `model` と職種定義の既定値が一致する職種（現状のメイン機は全職種が一致）では、Agent ツールの `model` パラメータを**渡さない**＝定義側の具体 ID がそのまま効く。渡すと別名（sonnet/opus/haiku/fable の4種しか受理されない）へ置き換えることになり、別名は具体 ID に固定されない（実例 2026-07-27: `model: opus` を明示→定義の claude-opus-5 が当時の既定 Opus へ落ちた）。
+   - 配役表が定義の既定値と**異なる**値を要求する場合: `provider=bedrock` の別名（opus/sonnet/haiku/fable）はピン留めが効いている確認が取れていればその別名をそのまま渡す（未確認なら渡さず本人へ上げる＝コア §1 条文④）。`provider=anthropic-api` の具体 ID は Agent ツールの `model` パラメータでは渡せない（別名 enum のみ受理）ため、勝手に別名へ読み替えず「職種定義の `model:` 改訂」か「本人裁定」へ上げる。エイリアスを発明しない。
+   - 指定漏れ・別名の誤解決は機構では塞げない（設計書 F-4）。実効モデルの確認＝ワーカー別トランスクリプト（`~/.claude/projects/<プロジェクト>/<セッション>/subagents/agent-*.jsonl`）の `model` フィールドを見る（in-process ワーカーも可・[[Knowledge/model-param-accepted-vs-resolved]]）。ペイン先頭のモデル表記はペイン運用時のみ存在し、in-process（既定）では無い（2026-09-02 実測）。正本はトランスクリプト。命名規則 `<配役>-<職種名>` は判別の補助。
+   - 例外＝本人がその場でモデルを明示指定した場合はその指示に従う（従来どおり）。
 
-**モデル指定は「受理された」ことと「意図どおり解決された」ことは別**（詳細＝[[Knowledge/model-param-accepted-vs-resolved]]）。実効モデルの確認手段: リーダー行＝`/status`・named/cmux ワーカー＝起動ペインのモデル表記・in-process ワーカーは現状観測不能。ピン留め効果が未検証の指定経路（例: settings.json 単体経由）ではエイリアス指定を避け、疑わしければ本人へ確認する。
+**モデル指定は「受理された」ことと「意図どおり解決された」ことは別**（詳細＝[[Knowledge/model-param-accepted-vs-resolved]]）。実効モデルの確認手段: リーダー行＝`/status`・ワーカー行（named/cmux・in-process とも）＝ワーカー別トランスクリプトの `model` フィールドが正本。ペイン先頭のモデル表記はペイン運用時のみ存在し、in-process（既定）では無い（2026-09-02 実測）。ピン留め効果が未検証の指定経路（例: settings.json 単体経由）ではエイリアス指定を避け、疑わしければ本人へ確認する。
 
 **リーダーの個別指示と標準プロトコルが矛盾したら着手前に確認（2026-08-01 追加）**: ワーカーは、リーダーからのその場の個別指示（例:「Codex 指摘は転送のみ・反映しない」）が本ノートやロール定義の標準手順（例: worker-driven で自分が反映）と食い違う場合、**どちらに従うか着手前に1行確認**する。個別指示が原則優先。実例＝2026-08-01 W4 が「転送のみ」指示を標準プロトコルで上書き解釈し自分で修正まで実施（結果は良かったが監査の穴になり得る）。
 
