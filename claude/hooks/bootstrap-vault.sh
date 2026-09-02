@@ -56,10 +56,12 @@ TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 # repo管理外・非配布（§11.2 source of truth定義）。Vault外の固定パスを必読
 # リストへ載せる小改修だが、有効化そのものはA-1-3の順序厳守対象（移送先
 # core-workflow.mdが未整備のうちに必読へ加えると「どちらも読まれない窓」が
-# 開く＝§7.3③）のため、既定は無効(0)のまま実装し、リーダー側工程で
-# BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 に切り替えるまでは今日までの挙動を一切
-# 変えない（FILES一覧・DIRECTIVE本文とも無改変）。
-: "${BOOTSTRAP_ENABLE_LOCAL_PROFILE:=0}"
+# 開く＝§7.3③）だったため、当初は既定を無効(0)のまま実装し、Vault側改訂
+# （core-conduct.md・core-workflow.md）が完了してから切り替える設計にしていた。
+# 2026-09-02: Vault反映が完了したため、本人裁定（案A・両機同時切替。
+# rollout-runbook.md 現行トラック§7）に従い既定値を 0→1 へ切り替え済み
+# （FILES一覧・DIRECTIVE本文は無改変。変わるのはこのフラグの既定値1点のみ）。
+: "${BOOTSTRAP_ENABLE_LOCAL_PROFILE:=1}"
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
 # v2配役表解凍（配役表解凍-設計-2026-09-01.md §4.1-g・U-5）: 判定式の正本は
 # claude/hooks/lib/profile_resolve.py の1箇所だけに置く。installerはhookを
@@ -898,9 +900,9 @@ else
   ⚠️ 必読のはずのpublicノートが見つかりません（想定外・同期失敗やcheckout破損の可能性。scripts/update-sub.shの再実行・scripts/check-drift.shでの確認を推奨）:$unexpected_missing"
   fi
 
-  # ローカル実体プロファイル（P1機構・既定無効。BOOTSTRAP_ENABLE_LOCAL_PROFILE=1の
-  # ときだけVault外の固定パスを必読リストへ1件追加する。無効時（既定）は
-  # 今日までの挙動を一切変えない）。
+  # ローカル実体プロファイル（P1機構・2026-09-02から既定有効。
+  # BOOTSTRAP_ENABLE_LOCAL_PROFILE=0を明示したときだけ、Vault外の固定パスを
+  # 必読リストへ追加しない旧来の挙動（P1導入前）に戻る）。
   #
   # 必読掲載条件（§4a・U-8裁定 2026-09-01）: 「通常ファイル→preflight→浅い
   # 走査→分類別parser→fail区分のvalidator非違反→UNKNOWN_EXTRA無し」の**全部**

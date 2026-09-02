@@ -78,6 +78,13 @@ make_full_vault() {
 # 7番目の引数はmachine-roleマーカーファイルのパス（既定は存在しないパス＝
 # マーカー無し。中身が厳密に"sub"のときだけ④死活検知をスキップする挙動の
 # テスト用に2026-08-06追加）。
+# 2026-09-02: BOOTSTRAP_ENABLE_LOCAL_PROFILEのコード側既定値が0→1へ変更された
+# （案A採用・rollout-runbook.md現行トラック§7）。本ヘルパーはP1機構（ローカル
+# 実体プロファイル）を検証しない大多数のテストで使われるため、既定値の変更に
+# よって実機の$HOME/.config/takumi009-ai-env/profile.mdを不用意に読みに行き
+# 非決定的になる事故を防ぐ目的で、ここでは明示的に0を指定して従来どおり
+# 無効固定にする（P1機構自体の回帰は#37「ゲート無効」テスト・新設した
+# 「既定値1」テスト・run_bootstrap_with_profile()の専用テストで別途担保する）。
 run_bootstrap() {
   local vault="$1"
   local reads_log="${2:-/nonexistent-dir/vault-reads.tsv}"
@@ -92,13 +99,15 @@ run_bootstrap() {
       VAULT_INVENTORY_LOG_DIR="$inv_log_dir" \
       PREFERENCES_PROPOSALS_DIR="$proposals_dir" \
       MAINTENANCE_LAST_RUN_FILE="$last_run_file" \
-      AIENV_MACHINE_ROLE_MARKER="$role_marker" "$SCRIPT" \
+      AIENV_MACHINE_ROLE_MARKER="$role_marker" \
+      BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 
 # P1機構（ローカル実体プロファイル）のテスト専用ヘルパー。
 # BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 を明示して有効化した状態で実行する
-# （既定は無効のまま＝run_bootstrap()と挙動を変えないための独立ヘルパー）。
+# （run_bootstrap()は2026-09-02からBOOTSTRAP_ENABLE_LOCAL_PROFILE=0を明示固定に
+# したため、本ヘルパーとは挙動が分かれる独立ヘルパーのまま維持する）。
 # 3番目の引数（省略可）はsettings.jsonの比較先パス。省略時は存在しない
 # パスを既定にする（S10/S11/S16対応・check_leader_settings_drift追加に
 # あわせて2026-09-01追加。既定を実機の$HOME/.claude/settings.jsonのままに
@@ -851,7 +860,7 @@ EOF
   rm -rf "$VAULT_DIR" "$LOGDIR" "$INV_DIR" "$PROPOSALS_DIR" "$LAST_RUN_DIR"
 }
 
-echo "=== 10. P1機構(ローカル実体プロファイル): 既定(無効)では固定パスが必読リストに一切現れない（有効化はリーダー側工程に残す・§9.0 A-1） ==="
+echo "=== 10. P1機構(ローカル実体プロファイル): ゲート無効(BOOTSTRAP_ENABLE_LOCAL_PROFILE=0明示。run_bootstrap()の固定値)では固定パスが必読リストに一切現れない（2026-09-02からコードの既定値は1・§9.0 A-1／rollout-runbook.md現行トラック§7） ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
@@ -859,8 +868,8 @@ echo "=== 10. P1機構(ローカル実体プロファイル): 既定(無効)で�
   make_ok_profile "$PROFILE_PATH"
 
   ctx="$(run_bootstrap "$VAULT_DIR")"
-  assert_not_contains "既定では固定パスが必読リストに出ない" "$ctx" "$PROFILE_PATH"
-  assert_not_contains "既定ではローカル実体プロファイル見出しも出ない" "$ctx" "【ローカル実体プロファイル】"
+  assert_not_contains "ゲート無効では固定パスが必読リストに出ない" "$ctx" "$PROFILE_PATH"
+  assert_not_contains "ゲート無効ではローカル実体プロファイル見出しも出ない" "$ctx" "【ローカル実体プロファイル】"
 
   rm -rf "$VAULT_DIR" "$(dirname "$PROFILE_PATH")"
 }
@@ -2148,11 +2157,25 @@ EOF
   assert_contains "空文字列のeffortも監視不能(effortが不正)の分岐になる" "$out" "配役表のリーダー実行値のeffortが不正です"
   rm -rf "$STUB_LIB_DIR"
 
-  echo "--- ゲート無効(BOOTSTRAP_ENABLE_LOCAL_PROFILE未設定=既定0)では、settings.jsonが不一致でもDIRECTIVEに一切現れない(今日までの挙動を変えない) ---"
+  echo "--- ゲート無効(BOOTSTRAP_ENABLE_LOCAL_PROFILE=0を明示。run_bootstrap()の固定値)では、settings.jsonが不一致でもDIRECTIVEに一切現れない(P1導入前の挙動) ---"
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
   ctx="$(run_bootstrap "$VAULT_DIR")"
   assert_not_contains "ゲート無効時はsettings.json関連の文言が一切出ない" "$ctx" "settings.json"
+
+  echo "--- 2026-09-02 案A採用の回帰: BOOTSTRAP_ENABLE_LOCAL_PROFILEを一切指定しないと、コードの既定値(0→1へ変更済み)によりP1機構が有効になる ---"
+  ctx="$(echo '{"session_id":"test-session-0000"}' \
+    | env -u BOOTSTRAP_ENABLE_LOCAL_PROFILE \
+        BOOTSTRAP_VAULT="$VAULT_DIR" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
+        VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+        VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
+        PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
+        MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
+        AIENV_MACHINE_ROLE_MARKER="/nonexistent-dir/machine-role" \
+        AIENV_LOCAL_PROFILE_PATH="/nonexistent-dir/profile-for-default-gate-test.md" \
+        "$SCRIPT" \
+    | jq -r '.hookSpecificOutput.additionalContext')"
+  assert_contains "フラグ未指定でも既定値1でP1機構が動く(未作成プロファイルのT1案内が出る)" "$ctx" "未作成。installerでサンプルから雛形を作成してください"
 
   echo "--- 結合(SessionStart全体): ゲート有効・不一致プロファイルでDIRECTIVEの【ローカル実体プロファイル】ブロックに警告が注入される ---"
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$LEADER_PROFILE" "$SETTINGS_MODEL_MISMATCH")"
