@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-02
+updated: 2026-09-03
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -15,6 +15,7 @@ related:
   - "[[Decisions/2026-09-01-doc-rule-bake-into-roles]]"
   - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
   - "[[Preferences/core-workflow]]"
+  - "[[Decisions/2026-09-03-worker-write-tools-for-deliverable-roles]]"
 aliases:
   - "7ロール運用"
   - "requirements-analyst"
@@ -44,6 +45,10 @@ aliases:
 
 ## 職種定義を新設・改訂するときの掟（2026-09-01 本人指示）
 職種定義（`~/.claude/agents/*.md`）を新設・改訂するときは、その職種の**成果物種別を確認**し、長寿命文書（設計書・要件書級）を作る職種には出力形式の節へ**「本文（確定事項のみ）＋検討経緯（論点・代替案比較・レビュー録）の2ファイル構成」の1行を必ず含める**（正本＝[[Preferences/coding-doc-style]] §3）。横断ルールは委任プロンプト頼みにせず職種定義側へ焼き込む（実例＝2026-09-01 設計差分書の分割差し戻し＝[[Decisions/2026-09-01-doc-rule-bake-into-roles]]）。
+
+成果物（設計書・要件書・報告書・判定書など、ファイルとして残す文書）を作る職種には **`tools:` に `Edit, Write` を必ず含める**（本文が「保存する」と言うのに書けない定義にしない。実例＝2026-09-03 設計者が書き込めない問題＝[[Decisions/2026-09-03-worker-write-tools-for-deliverable-roles]]）。
+
+職種定義7本は repo への symlink＝改訂は commit・push を伴いサブ機へ配布される。vault-scribe.md のみ機体ローカル（配布外）。既存セッションの個体には反映されない。
 
 ## リーダーが spawn 時に必ず渡すもの（定義には書けないタスク固有分）
 1. 背景と目的（会話履歴は引き継がれない前提で書く）

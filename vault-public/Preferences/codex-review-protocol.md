@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-01
+updated: 2026-09-03
 tags: [preference, codex, review, delegation, protocol]
 project: meta
 related:
@@ -10,6 +10,7 @@ related:
   - "[[Knowledge/cmux-cli]]"
   - "[[Decisions/2026-07-05-worker-driven-codex-review]]"
   - "[[Decisions/2026-07-05-codex-reviewer-only]]"
+  - "[[Preferences/codex-exec-worker]]"
 aliases:
   - "レビュー委任プロトコル"
   - "worker-driven呼び出し方"
@@ -75,6 +76,7 @@ per-deliverable の Codex 一次レビュー（コード/行レベル）とは**
 - **フォールバック**: ワーカーが Codex を使えない場合（旧定義個体・接続一時障害等）は、最終報告に「Codex レビュー未実施（ツール不可）」と明記→**リーダーが代行レビュー**→反映はワーカーへ差し戻し（軽微でもリーダーは直接修正しない＝[[Decisions/2026-08-14-deliverable-revision-by-creator]]）。
 - **Codex はサンドボックス（`read-only` 含む）でも Web 調査可**（web_search ツール経由・実測 2026-06-21＝詳細 [[Knowledge/codex-mcp]]。公式仕様では生のネットワークは workspace-write の `network_access` opt-in だが、Web 検索は別経路で通る）。**「Codex はネット不可」を委任回避・依頼文の前提にしない**（サブ機で誤認事例 2026-09-01。Knowledge はサブへ配布されないため、この運用知識は本ノート＝Preferences 側が正本の届け先）。
 - **Codex 使用上限時＝Claude Opus 5 を代替レビュアーに（2026-08-07 本人決定＝[[Decisions/2026-08-07-opus5-fallback-reviewer]]）**: 上限エラーで回復待ちが出荷を止めるなら、リーダーが Opus 5（**`claude-opus-5` 明示・エイリアス「opus」禁止＝4.8 に落ちる**）を単発起動して同一の観点・出力形式でレビューする。effort＝**通常 medium**・締めの全体構成レビューのみ xhigh（本人指定）。独立性低下（Claude 系同士）は許容・後戻りコスト高案件は Codex 回復後に事後クロス可。
+- Codex を実装ワーカーとして起動する手順（exec 背景実行・レビュー手順は本ノートのまま）＝[[Preferences/codex-exec-worker]]。
 
 ## その他
 - Vault 書込は**リーダーの Claude のみ**（Codex・ワーカーは申告→リーダー代筆＝[[Preferences/vault-operation]]）。Codex はクラウド routines 不可。

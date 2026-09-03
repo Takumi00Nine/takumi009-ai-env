@@ -833,7 +833,7 @@ echo "=== 8b. 外部脳ヘルス行②: ログ時刻が壊れている/未来日
   rm -rf "$VAULT_DIR" "$LOGDIR"
 }
 
-echo "=== 9. 外部脳ヘルス行: ワーカー向け軽量版には注入されない ==="
+echo "=== 9. ワーカー(agent_type付き)には2026-09-03の軽量版撤去により何も注入されない（is_worker判定自体は健在で即exit 0。共通ルールの正本はagents/*.mdの共通ルール節へ移管済み） ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
@@ -850,12 +850,13 @@ EOF
   printf '{"started_at": "%s"}' "$(d_ts -10)" > "$LAST_RUN_FILE"
 
   ctx="$(run_bootstrap_worker "$VAULT_DIR" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "$INV_DIR" "$PROPOSALS_DIR" "$LAST_RUN_FILE")"
+  assert_eq "ワーカー版のadditionalContextは完全に空（軽量版DIRECTIVEを撤去しexit 0のみ）" "" "$ctx"
   assert_not_contains "ワーカー版にはヘルス見出しが出ない" "$ctx" "【外部脳ヘルス】"
   assert_not_contains "ワーカー版には棚卸し情報も出ない" "$ctx" "棚卸し最新"
   assert_not_contains "ワーカー版にはフック死の疑いも出ない" "$ctx" "フック死の疑い"
   assert_not_contains "ワーカー版にはPreferences提案通知も出ない（提案が実在しても）" "$ctx" "夜間バッチで運用ルールの昇格提案"
   assert_not_contains "ワーカー版には死活警告も出ない（last-run.jsonが古くても）" "$ctx" "週次メンテが"
-  assert_contains "ワーカー版本文は健在" "$ctx" "【チームメイト用ブートストラップ｜軽量版】"
+  assert_not_contains "旧軽量版の見出し文言はもう出ない（撤去の回帰確認）" "$ctx" "【チームメイト用ブートストラップ｜軽量版】"
 
   rm -rf "$VAULT_DIR" "$LOGDIR" "$INV_DIR" "$PROPOSALS_DIR" "$LAST_RUN_DIR"
 }
