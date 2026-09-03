@@ -18,7 +18,7 @@ aliases:
 
 経路は **`codex exec` を Bash の `run_in_background: true` で起動**する。終了時にリーダーへ完了通知が届き、チームメイトの idle 通知と同じ受け取り方になる。
 
-本ノートは「実装をどう起動するか」だけを扱う。レビューの割り当ては書かない（正本＝[[Preferences/codex-review-protocol]]）。
+本ノートは委任のたびに Codex に読ませるため**最小サイズを維持**する（起動手順のみ。背景・経緯・他経路の説明は書かない）。レビューの割り当ては正本＝[[Preferences/codex-review-protocol]]。
 
 実測環境＝codex-cli 0.144.6・2026-09-03・メイン機。
 
@@ -41,6 +41,6 @@ codex exec --skip-git-repo-check -s workspace-write -C /abs/path -o report2.md \
 ```
 - **依頼文に必ず入れる内容は Claude ワーカーと同じ**: ①absolute-rules を読む指示（**exec は PreToolUse フックの対象外**なので手動で明記。[[Preferences/absolute-rules]]）②承認済み設計 ③担当ファイル範囲 ④受入条件 ⑤Vault 書込禁止と「Vault記録候補:」での申告 ⑥報告形式（変更ファイル一覧→動作確認手順→受入条件との対応→未解決点）。
 - **1呼び出し＝1工程・15分以内で返る粒度に切る**。大きい実装は resume で分割。
-- **背景実行に Bash ツールの10分上限は効かない**（公式 tools-reference・2026-09-03 裏取り）。前景実行が時間切れになっても殺されず背景へ移される仕様なので、`run_in_background: true` で起動した exec はそのまま走り切る。止まる条件は3つだけ＝①前景サブエージェント（Claude ワーカー）が起動した場合はそのワーカーの最終応答時に終了する（リーダー本体か背景サブエージェントから起動すれば継続）②セッション終了 ③`</dev/null` 忘れ。「15分以内」は安全側の運用であって上限ではない。
+- **背景起動した exec は Bash の10分上限に縛られず走り切る**（公式仕様）。止まるのは①前景サブエージェントから起動した場合（その最終応答時）②セッション終了 ③`</dev/null` 忘れ、の3つだけ。
 - モデルと effort は `~/.codex/config.toml` の既定（sol・medium）。変えるときは `-m` と `-c model_reasoning_effort=`。xhigh は使わない（[[Decisions/2026-08-07-avoid-xhigh-effort]]）。
 - stderr に "Reading additional input from stdin..." が出るのは `</dev/null` の EOF 読みで、正常。
