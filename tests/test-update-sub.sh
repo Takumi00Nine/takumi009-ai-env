@@ -99,6 +99,26 @@ EOF
   git -C "$src" push -q origin HEAD:main
 }
 
+# SRCへ claude/agents/<name>.md を追加してcommit+pushする（4d.のagents
+# symlinkテスト用。中身は識別できれば何でもよいので最小のfrontmatterのみ）。
+add_agent_role() {
+  local src="$1" name="$2"
+  mkdir -p "$src/claude/agents"
+  cat > "$src/claude/agents/${name}.md" <<EOF
+---
+name: ${name}
+description: テスト用ロール定義
+tools: Read
+model: sonnet
+color: green
+---
+テスト用ロール定義（${name}）。
+EOF
+  git -C "$src" add -A
+  git -C "$src" commit -q -m "add claude/agents/${name}.md"
+  git -C "$src" push -q origin HEAD:main
+}
+
 # origin から clone した「サブ機相当」のrepoを作る。
 make_sub_clone() {
   local bare="$1" sub="$2"
@@ -1428,6 +1448,271 @@ EOF
   assert_true "契約違反である旨の汎用文言が出る" \
     "$(echo "$out" | grep -q '標準エラーの出力が契約' && echo 1 || echo 0)"
   assert_not_contains_helper2 "契約に無い未知コード自体はログに出ない" "$out" "UNKNOWN_SENSITIVE_CODE"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 26. 4d. claude/agents/*.md のsymlink化: 新規追加されたロール定義（例: vault-scribe.md）で、サブ機に既に実ファイルが置かれている場合は退避してからsymlink化する（本人指示・2026-09-03最優先・受入条件6） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  # サブ機に既に存在する「機体ローカルの実ファイル」を模す
+  # （メイン機で~/.claude/agents/vault-scribe.mdが実ファイルだった状況と同型）。
+  echo "サブ機ローカルの旧vault-scribe定義" > "$FAKE_HOME/.claude/agents/vault-scribe.md"
+
+  # repoへvault-scribe.mdを新規追加（HEADを進める＝4.の実行条件）。
+  add_agent_role "$SRC" "vault-scribe"
+
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
+  assert_true "更新検知メッセージが出る" \
+    "$(echo "$out" | grep -q '更新を検知しました' && echo 1 || echo 0)"
+  assert_true "既存の実ファイルが .pre-aienv.bak へ退避された旨が出る" \
+    "$(echo "$out" | grep -q "backed up: $FAKE_HOME/.claude/agents/vault-scribe.md ->" && echo 1 || echo 0)"
+  assert_true "退避先ファイルに旧内容が残っている" \
+    "$([[ -f "$FAKE_HOME/.claude/agents/vault-scribe.md.pre-aienv.bak" ]] && grep -q 'サブ機ローカルの旧vault-scribe定義' "$FAKE_HOME/.claude/agents/vault-scribe.md.pre-aienv.bak" && echo 1 || echo 0)"
+  assert_true "vault-scribe.mdがrepoを指すsymlinkになる" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/vault-scribe.md" ]] && echo 1 || echo 0)"
+  assert_eq "symlink先がrepoのclaude/agents/vault-scribe.mdと一致する" \
+    "$SUB/claude/agents/vault-scribe.md" "$(readlink "$FAKE_HOME/.claude/agents/vault-scribe.md")"
+  assert_true "linkedログが出る" \
+    "$(echo "$out" | grep -q "linked: $FAKE_HOME/.claude/agents/vault-scribe.md -> $SUB/claude/agents/vault-scribe.md" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 26b. 4d.: 既に正しいsymlinkが張られているロールは何もしない（no-op・退避ファイルを作らない） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_agent_role "$SRC" "vault-scribe"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  # 初回install-sub.sh相当で既に正しくsymlink済みの状態を模す。
+  ln -s "$SUB/claude/agents/vault-scribe.md" "$FAKE_HOME/.claude/agents/vault-scribe.md"
+
+  # HEADを進めるための無関係な変更（4.の実行条件を満たすため）。
+  echo "# 追加方針" > "$SRC/vault-public/Preferences/rule2.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add rule2"
+  git -C "$SRC" push -q origin HEAD:main
+
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
+  assert_true "既に正しいsymlinkのままである" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/vault-scribe.md" ]] && echo 1 || echo 0)"
+  assert_eq "symlink先が変わっていない" \
+    "$SUB/claude/agents/vault-scribe.md" "$(readlink "$FAKE_HOME/.claude/agents/vault-scribe.md")"
+  assert_true ".pre-aienv.bakは作られない（symlinkは退避対象ではない）" \
+    "$([[ ! -e "$FAKE_HOME/.claude/agents/vault-scribe.md.pre-aienv.bak" ]] && echo 1 || echo 0)"
+  assert_true "linked/backed upのログは出ない（no-op）" \
+    "$(echo "$out" | grep -Eq '(linked|backed up): .*vault-scribe\.md' && echo 0 || echo 1)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 26c. 4d.: repoから削除されたロールへのdangling symlinkは削除せずWARNのみに留める（本人指示: 削除は本人判断） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  # claude/agents/ ディレクトリ自体は存在するが、retired-role.mdだけが
+  # repoから既に削除されている状況を再現する（26g. のディレクトリ自体が
+  # 丸ごと無いケースとは区別する＝Codexレビュー指摘対応でディレクトリ欠落と
+  # 個別ロール削除を混同しないよう修正したため、fixture側もそれに合わせる）。
+  add_agent_role "$SRC" "vault-scribe"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  # repoには存在しない旧ロールへのsymlink（dangling）を模す
+  # （かつてrepoにあったが削除された想定。retiredされた職種を指すsymlinkを
+  # 事前に作っておく）。
+  ln -s "$SUB/claude/agents/retired-role.md" "$FAKE_HOME/.claude/agents/retired-role.md"
+
+  # HEADを進めるための変更（4.の実行条件を満たすため）。
+  echo "# 追加方針" > "$SRC/vault-public/Preferences/rule2.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add rule2"
+  git -C "$SRC" push -q origin HEAD:main
+
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)
+  assert_true "削除されたロールへのdangling symlink警告が出る" \
+    "$(echo "$out" | grep -q "repoから削除されたロール定義へのsymlinkが残っています" && echo 1 || echo 0)"
+  assert_true "symlink自体は削除されずに残る" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/retired-role.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 26d. 4d.: aienv管理下でないdangling symlink（\$AGENTS_SRC_DIR配下以外を指す）はWARN対象にしない（誤検知防止・Codexレビュー指摘対応） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  # dangling走査自体が実際に有効化される（agents_md_count>0）状態を作るため、
+  # 少なくとも1件の管理対象ロールをrepoへ用意する（Codexフォローアップ
+  # レビュー指摘・Minor対応: claude/agents/が空のままだと走査自体がskipされ、
+  # このテストは`case`のフィルタを削除しても合格してしまっていた）。
+  add_agent_role "$SRC" "vault-scribe"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  # repo外（本スクリプトが関与しないアプリ由来を模す）の実体無きsymlinkを置く。
+  ln -s "$FAKE_HOME/somewhere-else/foreign-agent.md" "$FAKE_HOME/.claude/agents/foreign-agent.md"
+
+  echo "# 追加方針" > "$SRC/vault-public/Preferences/rule2.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add rule2"
+  git -C "$SRC" push -q origin HEAD:main
+
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)
+  assert_true "dangling走査自体は実際に有効（vault-scribe.mdがsymlink化される）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/vault-scribe.md" ]] && echo 1 || echo 0)"
+  assert_true "aienv管理下でないdanglingは削除されたロールの警告対象にならない" \
+    "$(echo "$out" | grep -q "foreign-agent" && echo 0 || echo 1)"
+  assert_true "aienv管理下でないsymlinkのリンク先は変わらない（触らない）" \
+    "$([[ "$(readlink "$FAKE_HOME/.claude/agents/foreign-agent.md")" = "$FAKE_HOME/somewhere-else/foreign-agent.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 26e. 4d.: 古いrepoパス・別ファイルを指す誤ったsymlinkは現在のrepoパスへ張り直す（no-opではなく修復する） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_agent_role "$SRC" "vault-scribe"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  # 別ファイルを指す誤ったsymlinkを模す（過去のパス変更・手動編集事故等）。
+  ln -s "$SUB/claude/agents/nonexistent-old-name.md" "$FAKE_HOME/.claude/agents/vault-scribe.md"
+
+  echo "# 追加方針" > "$SRC/vault-public/Preferences/rule2.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add rule2"
+  git -C "$SRC" push -q origin HEAD:main
+
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)
+  assert_true "linkedログが出る（張り直しが実行された）" \
+    "$(echo "$out" | grep -q "linked: $FAKE_HOME/.claude/agents/vault-scribe.md -> $SUB/claude/agents/vault-scribe.md" && echo 1 || echo 0)"
+  assert_eq "symlink先が現在のrepoパスへ修復される" \
+    "$SUB/claude/agents/vault-scribe.md" "$(readlink "$FAKE_HOME/.claude/agents/vault-scribe.md")"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 26f. 4d.: 既に .pre-aienv.bak が存在する場合は2回目以降の実行で上書き・二重退避しない ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  echo "サブ機ローカルの旧vault-scribe定義" > "$FAKE_HOME/.claude/agents/vault-scribe.md"
+  add_agent_role "$SRC" "vault-scribe"
+
+  # 1回目: 実ファイル退避＋symlink化。
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
+
+  # バックアップ作成後に何者かが.pre-aienv.bakの中身を書き換えたと仮定
+  # （本物のオリジナルが既に退避済みであることの目印として、意図的に別内容へ
+  # 書き換える＝2回目実行で上書きされたら退避規則違反として検出できる）。
+  echo "退避直後の内容（これを上書きしてはいけない）" > "$FAKE_HOME/.claude/agents/vault-scribe.md.pre-aienv.bak"
+
+  # symlinkを削除し、再び実ファイルへ戻す（.pre-aienv.bakが既にある状態で
+  # destが実ファイルの分岐を実際に踏ませるため＝Codexフォローアップレビュー
+  # 指摘・Minor対応: 2回目時点でdestが既にsymlinkのままだと`elif [ -e "$dest" ]`
+  # 側のバックアップ判定コード自体が一切実行されず、`[ ! -e
+  # "$dest.pre-aienv.bak" ]`を誤って消しても本テストは合格してしまっていた）。
+  rm -f "$FAKE_HOME/.claude/agents/vault-scribe.md"
+  echo "2回目実行時点でのローカル実ファイル（symlinkが何らかの理由で失われた想定）" \
+    > "$FAKE_HOME/.claude/agents/vault-scribe.md"
+
+  # 2回目: repoへさらに変更をpushしHEADを進め、update-sub.shを再実行する。
+  echo "# 追加方針2" > "$SRC/vault-public/Preferences/rule3.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add rule3"
+  git -C "$SRC" push -q origin HEAD:main
+  out2=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
+
+  assert_eq ".pre-aienv.bakは2回目実行で上書きされない（二重退避しない）" \
+    "退避直後の内容（これを上書きしてはいけない）" \
+    "$(cat "$FAKE_HOME/.claude/agents/vault-scribe.md.pre-aienv.bak")"
+  assert_true "backed upログは2回目では出ない（.pre-aienv.bakが既にあるため）" \
+    "$(echo "$out2" | grep -q 'backed up:.*vault-scribe' && echo 0 || echo 1)"
+  assert_true "symlinkとして復元される（実ファイルのままにはしない）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/vault-scribe.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 26g. 4d.: claude/agents/ ディレクトリ自体が無い（checkout破損）場合はfailせずWARNのみで他の処理は続行する ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+  # make_origin fixtureはclaude/agents/を持たない（意図的にディレクトリ欠落を再現）。
+
+  # ディレクトリ丸ごと欠落時にdangling走査そのものが（誤発報防止のため）
+  # skipされることも合わせて確認する（Codexフォローアップレビュー指摘・Minor
+  # 対応: 既存symlinkが1つも無い状態だと「個別削除WARNが出ない」ことを
+  # 検証できていなかった）。
+  ln -s "$SUB/claude/agents/old-role.md" "$FAKE_HOME/.claude/agents/old-role.md"
+
+  echo "# 追加方針" > "$SRC/vault-public/Preferences/rule2.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add rule2"
+  git -C "$SRC" push -q origin HEAD:main
+
+  rc=0
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
+  assert_eq "exit code 0（agentsディレクトリ欠落だけでは致命的エラーにしない）" "0" "$rc"
+  assert_true "claude/agents/欠落のWARNが出る" \
+    "$(echo "$out" | grep -q 'claude/agents/ が見つかりません' && echo 1 || echo 0)"
+  assert_true "ディレクトリ丸ごと欠落時は個別ロール削除のWARNは出ない（誤発報しない）" \
+    "$(echo "$out" | grep -q '削除されたロール定義へのsymlinkが残っています' && echo 0 || echo 1)"
+  assert_true "既存symlinkは削除されずそのまま残る" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/old-role.md" ]] && echo 1 || echo 0)"
+  assert_true "4a. config.tomlは続行している" \
+    "$([[ -f "$FAKE_HOME/.codex/config.toml" ]] && echo 1 || echo 0)"
+  assert_true "4b. Preferences再同期は続行している" \
+    "$([[ -f "$FAKE_HOME/Data/obsidian/Preferences/rule2.md" ]] && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }

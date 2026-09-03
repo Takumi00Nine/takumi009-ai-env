@@ -41,6 +41,12 @@
 #      c. vault-public/ 配下に新しい骨格フォルダ（Preferences以外）があり、
 #         $VAULT にまだ存在しなければ mkdir + README.md を補充する
 #         （既存フォルダの中身・READMEには触らない）
+#      d. claude/agents/*.md を $HOME/.claude/agents/ へ symlink化する
+#         （install-main.sh の agents symlinkループ・link()/backup_once()と
+#          同じ様式・同じ退避規則。2026-09-03 本人指示で追加＝従来このスクリプトは
+#          agentsの同期を一切行っておらず、repoへ新しいロール定義を追加しても
+#          サブ機へ配布されない欠落があった。repoから削除されたロールへの
+#          dangling symlinkは削除せずWARNのみに留める＝削除は本人判断）
 #
 # パスは $HOME 相対（DIR・VAULT・LOCK_FILE は環境変数で上書き可＝ユニットテスト用。
 # 本番実行時は既定値のまま呼べば良い）。
@@ -70,9 +76,9 @@ fail() { echo "[update-sub] FAIL: $*" >&2; exit 1; }
 # WARN＋exit 0のまま非対称になっていた（旧コメント「リーダー未確定とは
 # 無関係な既存の失敗モードのため対象にしない＝exit 0のまま」は本裁定と
 # 矛盾していたため撤回する）。「対話の途中で止まらない」という§3.9の趣旨に
-# 合わせ、失敗を検知しても後続の4a〜4c（config.toml再生成・Preferences
-# 再同期・骨格フォルダ補充）は続行し、スクリプト末尾で初めてこのフラグに
-# 従って終了する（deferred方式＝leader未確定時と同じ扱い）。
+# 合わせ、失敗を検知しても後続の4a〜4d（config.toml再生成・Preferences
+# 再同期・骨格フォルダ補充・agents symlink化）は続行し、スクリプト末尾で初めて
+# このフラグに従って終了する（deferred方式＝leader未確定時と同じ扱い）。
 EXIT_CODE=0
 
 # bedrock_env_file_kind <path> — Bedrock envファイルの種別を1行で標準出力へ
@@ -407,16 +413,16 @@ print(reason)
     # settings.json の再生成をskipします（旧ファイルは保持します）。
     # ⚠️ 設計書§3.9「update-sub.shはリーダー行が未確定ならWARN＋非0終了」の
     # 実装（2026-09-01 Codex一次レビュー指摘・Blocking対応）。ここでは
-    # 直ちにexitせず、後続の4a〜4c（config.toml再生成・Preferences再同期・
-    # 骨格フォルダ補充）は続行させたうえで、スクリプト末尾でこのフラグに
-    # 従って終了する＝「対話の途中で止まらない」という同節の趣旨を保ちつつ、
-    # 最終的な終了コードには必ず反映させる。
+    # 直ちにexitせず、後続の4a〜4d（config.toml再生成・Preferences再同期・
+    # 骨格フォルダ補充・agents symlink化）は続行させたうえで、スクリプト末尾で
+    # このフラグに従って終了する＝「対話の途中で止まらない」という同節の趣旨を
+    # 保ちつつ、最終的な終了コードには必ず反映させる。
     EXIT_CODE=1
   elif [ "$BEDROCK_STATUS" = "EXISTS_BUT_UNAVAILABLE" ]; then
     # settings.json本体の再生成ごとskipし旧ファイルを保持する（上でWARN済み）。
     # ⚠️ ここも非0終了にする（状態機械B S4・2026-09-01工程横断レビュー差し戻し
     # MAJOR対応。上のEXIT_CODEコメント参照）。leader未確定の場合と同じ
-    # deferred方式＝4a〜4cは続行し、スクリプト末尾でこのフラグに従って終了する。
+    # deferred方式＝4a〜4dは続行し、スクリプト末尾でこのフラグに従って終了する。
     EXIT_CODE=1
   else
     settings_tmp="$(mktemp "$(dirname "$SETTINGS_JSON_DEST")/.$(basename "$SETTINGS_JSON_DEST").aienv-tmp.XXXXXX")"
@@ -557,11 +563,80 @@ if [ -d "$DIR/vault-public" ]; then
   done
 fi
 
+# --- 4d. claude/agents/*.md を ~/.claude/agents/ へ symlink化する ---
+# 本人指示（2026-09-03・最優先）: 従来このスクリプトは claude/agents/ の同期を
+# 一切行っておらず、repoへ新しいロール定義（例: vault-scribe.md）を追加しても
+# サブ機へ配布されない欠落があった（install-main.sh は agents を含む全symlinkを
+# 再構築するが、update-sub.sh はサブ機の日常運用で使う軽量更新のため、新規
+# agentファイルの取り込みに install-sub.sh のフル再実行が必要になっていた）。
+# install-main.sh の agents symlinkループ・link()/backup_once()と同じ様式・
+# 同じ退避規則（意図的な複製。ロジックを変える場合は install-main.sh 側も
+# 合わせて見直すこと＝4a.の config.toml再生成と同じ流儀。共有関数化も検討したが
+# 「最小差分を優先」という本人指示により見送った）。
+AGENTS_SRC_DIR="$DIR/claude/agents"
+AGENTS_DEST_DIR="$HOME/.claude/agents"
+if [ -d "$AGENTS_SRC_DIR" ]; then
+  mkdir -p "$AGENTS_DEST_DIR"
+  agents_md_count=0
+  for f in "$AGENTS_SRC_DIR"/*.md; do
+    [ -e "$f" ] || continue
+    agents_md_count=$((agents_md_count + 1))
+    name="$(basename "$f")"
+    dest="$AGENTS_DEST_DIR/$name"
+    if [ -L "$dest" ]; then
+      # 既にsymlinkの場合: リンク先が正しければ何もしない（no-op）。違えば
+      # （古いrepoパスを指している・danglingを含む）張り直す＝install-main.shの
+      # `ln -sfn` と同じ「常に正しい状態へ収束させる」方針。
+      [ "$(readlink "$dest")" = "$f" ] && continue
+    elif [ -e "$dest" ]; then
+      # symlinkでない実ファイルが既にある場合はinstall-main.sh backup_once()と
+      # 同じ規則で退避してからsymlink化する（.pre-aienv.bakが既にあれば二重に
+      # 退避しない＝インストール前オリジナルを保持し続ける）。
+      if [ ! -e "$dest.pre-aienv.bak" ]; then
+        cp "$dest" "$dest.pre-aienv.bak"
+        log "backed up: $dest -> $dest.pre-aienv.bak"
+      fi
+    fi
+    ln -sfn "$f" "$dest"
+    log "linked: $dest -> $f"
+  done
+  if [ "$agents_md_count" -eq 0 ]; then
+    # ⚠️ .mdが0件の場合もcheckout破損の可能性として扱い、以降のdangling走査は
+    # 行わない（Codexフォローアップレビュー指摘・Minor対応: ディレクトリ自体は
+    # あるが中身が空／.md以外しか無い状態も、ディレクトリ丸ごと欠落と同じ
+    # 「checkout全体の異常」であり、既存の全symlinkを個別の「削除された
+    # ロール」として誤って警告してしまう事故を防ぐため、この場合もdangling
+    # 走査をskipする＝上のディレクトリ丸ごと欠落時の分岐と同じ扱いに揃える）。
+    warn "claude/agents/ に .md ファイルが1つもありません（checkout破損の可能性）。roleのsymlink化はskipされました: $AGENTS_SRC_DIR"
+  else
+    # repoから削除されたロールのsymlink（dangling）は削除せず警告のみに留める
+    # （本人指示: 削除は本人判断）。aienv管理下（$AGENTS_SRC_DIR配下を指す）
+    # symlinkに限定して検査する＝本スクリプトが関与しない他アプリ由来のsymlinkを
+    # 誤検知しないため。⚠️ $AGENTS_SRC_DIR自体が存在しない・中身が空の場合は
+    # この走査を行わない（Codex一次・フォローアップレビュー指摘・Minor対応:
+    # checkout全体が壊れているケースと個別ロール削除のケースを混同し、既存の
+    # 全symlinkを誤って「削除されたロール」として警告してしまう事故を防ぐ）。
+    if [ -d "$AGENTS_DEST_DIR" ]; then
+      for existing in "$AGENTS_DEST_DIR"/*.md; do
+        [ -L "$existing" ] || continue
+        target="$(readlink "$existing")"
+        case "$target" in
+          "$AGENTS_SRC_DIR"/*)
+            [ -e "$target" ] || warn "repoから削除されたロール定義へのsymlinkが残っています（削除はしません・本人判断）: $existing -> $target"
+            ;;
+        esac
+      done
+    fi
+  fi
+else
+  warn "claude/agents/ が見つかりません（checkout破損の可能性）。roleのsymlink化をskipします: $AGENTS_SRC_DIR"
+fi
+
 log "done."
 # ⚠️ EXIT_CODEは2b.でリーダー実行値の取得に失敗した場合、またはBedrock env
 # ファイルが実在するのに読めない／解析できない場合（BEDROCK_STATUS=
 # EXISTS_BUT_UNAVAILABLE）に1になる（設計書§3.9「update-sub.shはリーダー行が
 # 未確定ならWARN＋非0終了」・状態機械B S4。2026-09-01 Codex一次レビュー指摘・
-# Blocking対応／同日工程横断レビュー差し戻しMAJOR対応）。4a〜4cはいずれの
+# Blocking対応／同日工程横断レビュー差し戻しMAJOR対応）。4a〜4dはいずれの
 # 場合も続行済みのため、ここで初めて反映する。
 exit "$EXIT_CODE"
