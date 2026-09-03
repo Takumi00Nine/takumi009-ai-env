@@ -48,7 +48,7 @@ aliases:
 
 成果物（設計書・要件書・報告書・判定書など、ファイルとして残す文書）を作る職種には **`tools:` に `Edit, Write` を必ず含める**（本文が「保存する」と言うのに書けない定義にしない。実例＝2026-09-03 設計者が書き込めない問題＝[[Decisions/2026-09-03-worker-write-tools-for-deliverable-roles]]）。
 
-職種定義7本は repo への symlink＝改訂は commit・push を伴いサブ機へ配布される。vault-scribe.md のみ機体ローカル（配布外）。既存セッションの個体には反映されない。
+職種定義8本（7工程＋vault-scribe）は repo への symlink＝改訂は commit・push を伴いサブ機へ配布される（vault-scribe.md は 2026-09-03 に repo 収録＝[[Decisions/2026-09-03-sub-machine-vault-write-policy]]）。既存セッションの個体には反映されない。
 
 ## リーダーが spawn 時に必ず渡すもの（定義には書けないタスク固有分）
 1. 背景と目的（会話履歴は引き継がれない前提で書く）

@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-02
+updated: 2026-09-03
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -86,7 +86,7 @@ role.implementer:          configured provider=anthropic-api model=claude-sonnet
 role.tester:               configured provider=anthropic-api model=claude-sonnet-5
 role.researcher:           configured provider=anthropic-api model=claude-sonnet-5
 role.operator:             configured provider=anthropic-api model=claude-sonnet-5
-role.scribe:               configured provider=anthropic-api model=claude-sonnet-5
+role.vault-scribe:         configured provider=anthropic-api model=claude-sonnet-5
 role.primary-reviewer:     configured provider=external execution=external-mcp model=codex-review-default
 role.ja-doc:               unknown        # 候補=Qwen（H17 実測評価待ち・経路未実装）
 # Bedrock機ではこう書く（例）:
