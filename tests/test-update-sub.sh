@@ -1717,6 +1717,229 @@ echo "=== 26g. 4d.: claude/agents/ ディレクトリ自体が無い（checkout�
   rm -rf "$WORK"
 }
 
+echo "=== 26h. 2c.（旧4d）はHEADが不変でも実行される（本人実査・2026-09-03緊急対応の回帰テスト: 当初4d.は4.配下〈HEAD変化時のみ〉に置いており、サブ機の2回目以降の実行がHEAD不変で3.の早期終了に入るとagentsのsymlink化に一切到達しない実バグがあった。SUBを最初からrepoの最新HEADでclone〈＝pullで進む差分が無い〉した状態でも、まだsymlink化されていない実ファイルが正しくsymlink化されることを確認する） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_agent_role "$SRC" "vault-scribe"
+  # SRCへvault-scribe.mdを追加した"後"にcloneする＝SUBは最初からrepoの最新HEAD
+  # を持つ（pullで進む差分が存在しない）。
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  before_head_test="$(git -C "$SUB" rev-parse HEAD)"
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
+  after_head_test="$(git -C "$SUB" rev-parse HEAD)"
+
+  assert_eq "このテストの前提: pullで進むHEADの差分が実際に存在しない" "$before_head_test" "$after_head_test"
+  assert_true "『変更なし』メッセージが出る（HEAD不変の経路を通っている証拠）" \
+    "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
+  assert_true "HEAD不変でもvault-scribe.mdがsymlink化される（旧実装ならここが失敗していた）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/vault-scribe.md" ]] && echo 1 || echo 0)"
+  assert_true "4a.（config.toml再生成、HEAD変化時のみ）はHEAD不変のため実行されない（2c.との違いの確認）" \
+    "$([[ ! -e "$FAKE_HOME/.codex/config.toml" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 27. 自己更新対策: update-sub.sh自身がpullで更新された場合、新版のスクリプトへexecしなおして最初からやり直す（本人実査・2026-09-03緊急対応: bashはスクリプトを逐次読みするため、実行中の自分自身をpullで書き換えたまま処理を続けると不定動作になる実害があった。テスト③〈無限ループしない〉も兼ねる＝ログの重複有無で検証） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_agent_role "$SRC" "vault-scribe"
+  # v1 = 実物のupdate-sub.sh（自己更新対応版そのもの）をrepoへ同梱する
+  # （自己参照テストのため、テストハーネスの$SCRIPTではなく$SUB/scripts/
+  # update-sub.shを直接bashで起動する＝本番のcronから手動実行される経路と
+  # 同じ形）。
+  cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add v1 update-sub.sh"
+  git -C "$SRC" push -q origin HEAD:main
+
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+  make_sub_marker "$FAKE_HOME"
+
+  # v2 = v1の1行目（shebang）直後に実際に実行される識別用echoを差し込んだもの
+  # （Codexフォローアップレビュー指摘・Nit対応: 単なる末尾コメントの追加だと
+  # ファイルのバイト列が変わっただけの証明にしかならず、「re-exec後に実際に
+  # v2の中身が実行された」ことまでは直接示せなかった。execで起動される
+  # プロセスの最初の一手として必ず標準エラーに出る行を挿入することで、
+  # v1が単に生き残って処理を続けたのではなく、v2へ確かに切り替わったことを
+  # 直接観測できるようにする）。ロジック自体はv1と同じ自己更新対応版のまま。
+  awk 'NR==1{print; print "echo \"V2-EXECUTED-MARKER\" >&2"; next} {print}' \
+    "$REPO_ROOT/scripts/update-sub.sh" > "$SRC/scripts/update-sub.sh"
+  echo "# 追加方針v2" > "$SRC/vault-public/Preferences/rule2.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "bump update-sub.sh to v2 + rule2"
+  git -C "$SRC" push -q origin HEAD:main
+
+  rc=0
+  out="$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" bash "$SUB/scripts/update-sub.sh" 2>&1)" || rc=$?
+
+  assert_eq "自己更新のre-exec後もexit 0で正常終了する" "0" "$rc"
+  assert_true "自己更新検知のログが出る" \
+    "$(echo "$out" | grep -q 'update-sub.sh自身が更新されました' && echo 1 || echo 0)"
+  assert_true "新版で最初からやり直す旨のログが出る" \
+    "$(echo "$out" | grep -q '新版のスクリプトで最初からやり直しています' && echo 1 || echo 0)"
+  assert_true "v2固有の識別マーカーが実際に出る（v1が生き残ったのではなくv2へ確かに切り替わった直接証拠）" \
+    "$(echo "$out" | grep -q 'V2-EXECUTED-MARKER' && echo 1 || echo 0)"
+  assert_true "識別マーカーはre-exec後に1回だけ出る（v1側が誤って実行を続けていない証拠）" \
+    "$([ "$(echo "$out" | grep -c 'V2-EXECUTED-MARKER')" -eq 1 ] && echo 1 || echo 0)"
+  assert_true "『既に実行中です』にはならない（execがPIDを保つため自分自身のロックに阻まれない）" \
+    "$(echo "$out" | grep -q '既に実行中です' && echo 0 || echo 1)"
+  assert_true "再exec後の新版でagents symlink化(2c)が実行される" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/vault-scribe.md" ]] && echo 1 || echo 0)"
+  assert_true "再exec後の新版で4b(Preferences再同期)も実行される（元のHEAD差分が正しく引き継がれている証拠。引き継ぎが無ければ『pull済みでHEAD不変』に見えて4a〜4cが空振りする）" \
+    "$([[ -f "$FAKE_HOME/Data/obsidian/Preferences/rule2.md" ]] && echo 1 || echo 0)"
+  assert_eq "自己更新の検知・再実行ログが1回だけ出る（無限ループしていない証拠）" \
+    "1" "$(echo "$out" | grep -c 'update-sub.sh自身が更新されました')"
+  assert_true "実行完了後、多重起動防止ロックファイルが残っていない（handoff方式でも最終的なEXIT trapが正しく発火しクリーンアップされる証拠。Codexフォローアップレビュー指摘・Minor対応）" \
+    "$([[ ! -e "$LOCK" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 27c. 自己更新対策(handoff): ロックファイルのPIDは自分自身と一致するが指紋（プロセス開始時刻）が食い違う場合はfail-closedで拒否する（PID再利用対策。Codexフォローアップレビュー指摘・Major対応: 当初はPID一致だけで引き継いでおり、環境変数の誤残留＋異常終了した旧ロックの残留＋PID番号の再利用が偶然重なると、他プロセスのロックを誤って『自分のもの』として引き継いでしまう穴があった） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+  make_sub_marker "$FAKE_HOME"
+
+  orig_head="$(git -C "$SUB" rev-parse HEAD)"
+
+  # update-sub.shの$$と実際に一致するPIDを、ロックファイル作成時点で
+  # 前もって知ることはできない（$(...)で起動すると新しいPIDになるため）。
+  # そこで小さな中継スクリプトを使う: 中継スクリプトは自分自身の$$（＝
+  # execで置き換えた後もupdate-sub.shの$$と同一になる）で「PIDは一致するが
+  # 指紋だけ食い違う」ロックファイルを書いてから、そのままexecでupdate-sub.sh
+  # へ引き継ぐ（execはPIDを保つため、中継スクリプトが書いたPIDが
+  # そのままupdate-sub.shの$$になる＝「たまたま自分と同じPID番号だが
+  # 実際には別プロセスが書いた古いロック」というPID再利用シナリオの
+  # 直接再現）。
+  RELAY="$WORK/relay.sh"
+  cat > "$RELAY" <<'RELAYEOF'
+#!/usr/bin/env bash
+printf '%s\n%s\n' "$$" "FAKE-DIFFERENT-FINGERPRINT-Thu-Jan-1-00:00:00-1970" > "$1"
+shift
+exec "$@"
+RELAYEOF
+  chmod +x "$RELAY"
+
+  rc=0
+  out="$(AIENV_UPDATE_SUB_REEXEC=1 AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD="$orig_head" \
+    DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" \
+    bash "$RELAY" "$LOCK" bash "$REPO_ROOT/scripts/update-sub.sh" 2>&1)" || rc=$?
+
+  assert_eq "PID一致でも指紋が食い違えばexit 1(FAIL)で拒否する" "1" "$rc"
+  assert_true "所有者が一致しない旨のFAILメッセージが出る" \
+    "$(echo "$out" | grep -q '多重起動防止ロックの所有者が自分自身と一致しません' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 27d. 自己更新対策(handoff): 記録された指紋が『取得不能』予約値（FINGERPRINT-UNAVAILABLE）の場合はPIDが一致していてもfail-closedで拒否する（Codexフォローアップレビュー指摘・Major対応: 共有ライブラリ本体の_pid_lock_is_alive()は『他者の正当なロックを誤って削除しない』ためにこの予約値をPID生存のみで生存扱いへ倒すが、handoffは向きが逆＝『自分のものと証明できるか』が問われるため、証明できない予約値は受理してはならない） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+  make_sub_marker "$FAKE_HOME"
+
+  orig_head="$(git -C "$SUB" rev-parse HEAD)"
+
+  # 27c.と同じ中継スクリプト方式で、PIDは正しく一致させたまま、指紋を
+  # 「取得不能」予約値（scripts/lib/pid-lock.shの_PID_LOCK_FP_UNAVAILABLEと
+  # 同じ文字列）にする。
+  RELAY2="$WORK/relay2.sh"
+  cat > "$RELAY2" <<'RELAYEOF'
+#!/usr/bin/env bash
+printf '%s\n%s\n' "$$" "FINGERPRINT-UNAVAILABLE" > "$1"
+shift
+exec "$@"
+RELAYEOF
+  chmod +x "$RELAY2"
+
+  rc=0
+  out="$(AIENV_UPDATE_SUB_REEXEC=1 AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD="$orig_head" \
+    DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" \
+    bash "$RELAY2" "$LOCK" bash "$REPO_ROOT/scripts/update-sub.sh" 2>&1)" || rc=$?
+
+  assert_eq "指紋が『取得不能』予約値のままではPID一致だけでは受理せずexit 1(FAIL)で拒否する" "1" "$rc"
+  assert_true "所有者が一致しない旨のFAILメッセージが出る" \
+    "$(echo "$out" | grep -q '多重起動防止ロックの所有者が自分自身と一致しません' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 27b. 自己更新対策: AIENV_UPDATE_SUB_REEXECガードが立っていても、引き継ぐべき多重起動防止ロックが実在しない（execによる正当な引き継ぎではない）場合はfail-closedで拒否する（本人環境・LaunchAgent等へこの内部専用環境変数が誤って残留・伝播した場合の安全策。Codexフォローアップレビュー指摘・Minor対応: ロックを解放してから再取得する旧方式ではこの検証手段自体が無かったが、1.をhandoff方式へ変更したことで『引き継ぐべきロックが無ければ拒否する』という直接的なfail-closed経路が持てるようになった。無限ループしないことの直接証拠でもある＝サイレントにpullをスキップし続けず即fail()する） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+  make_sub_marker "$FAKE_HOME"
+
+  orig_head="$(git -C "$SUB" rev-parse HEAD)"
+
+  # SUBがまだ取得していない、update-sub.sh自身を書き換える新しいcommitを
+  # originへ用意する（ガードが誤って通ってしまった場合にpullで拾われ自己更新
+  # チェックが発火するはずの状況を実在させ、そこへ到達しないことも併せて
+  # 確認する）。
+  mkdir -p "$SRC/scripts"
+  printf '#!/usr/bin/env bash\n# pending self-update not yet pulled by SUB\n' > "$SRC/scripts/update-sub.sh"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "update-sub.sh has a pending update SUB hasn't pulled yet"
+  git -C "$SRC" push -q origin HEAD:main
+
+  # $LOCKはまだ一切存在しない＝正当なacquire_pid_lock()を経て取得された
+  # ロックではない状態を模す（本物のre-execなら直前のプロセスが必ず
+  # 取得済みのはず）。update-sub.sh本体は非0終了するため`|| true`で
+  # set -e下でもテストスクリプト自体を落とさないようにする。
+  rc=0
+  out="$(AIENV_UPDATE_SUB_REEXEC=1 AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD="$orig_head" \
+    DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" \
+    bash "$REPO_ROOT/scripts/update-sub.sh" 2>&1)" || rc=$?
+
+  after_head="$(git -C "$SUB" rev-parse HEAD)"
+  assert_eq "引き継ぐべきロックが無ければexit 1(FAIL)で拒否する（サイレントにpullをスキップし続けない）" "1" "$rc"
+  assert_true "ロックが見つからない旨のFAILメッセージが出る" \
+    "$(echo "$out" | grep -q '引き継ぐべき多重起動防止ロックが見つかりません' && echo 1 || echo 0)"
+  assert_eq "SUBのHEADはpullされず元のままである（fail-closedによりgit pull自体に到達しなかった証拠）" \
+    "$orig_head" "$after_head"
+  assert_true "自己更新チェックの検知ログ（自身が更新されました）は出ない（ロック確認で拒否されpull自体に到達しないため）" \
+    "$(echo "$out" | grep -q 'update-sub.sh自身が更新されました' && echo 0 || echo 1)"
+
+  rm -rf "$WORK"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

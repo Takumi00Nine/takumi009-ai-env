@@ -22,15 +22,44 @@
 #   0. machine-roleマーカーの確認（「sub」でなければ即fail()で拒否）
 #   1. スクリプト自身の多重起動防止ロック（scripts/lib/pid-lock.shの
 #      acquire_pid_lock()＝backup-vault.sh・maintenance.shと共通の実装。
-#      2026-08-30 Codex 2巡目差し戻し・MAJOR対応で独自実装から移行した）
+#      2026-08-30 Codex 2巡目差し戻し・MAJOR対応で独自実装から移行した）。
+#      ⚠️ 下記2.の自己更新re-exec後は、新規取得ではなく既存ロックの
+#      「引き継ぎ（handoff）」になる（詳細は2.参照）。
 #   2. git pull --ff-only（衝突可能性を排除。ff不可ならWARNで終了。サブは
-#      編集しない運用のため通常は起きないはずだが、念のため force しない）
+#      編集しない運用のため通常は起きないはずだが、念のため force しない）。
+#      ⚠️ 自己更新対策（2026-09-03 本人実査・緊急対応）: pullでこのスクリプト
+#      自身（scripts/update-sub.sh）が変わっていた場合、その場で新版へ
+#      exec しなおして最初からやり直す。bashはスクリプトを逐次読みするため、
+#      実行中の自分自身をpullで書き換えたまま処理を続けると、後続処理が
+#      旧版のまま・あるいは不定動作になる既知の危険がある（実際にサブ機で
+#      1回目の実行だけagentsのsymlink化〈当時追加直後の新機能〉が効かない
+#      という実害が発生した）。execはPIDを保つため、自分の多重起動防止
+#      ロックは解放せずそのまま引き継ぐ（1.参照）＝解放→再取得の往復を
+#      挟むと、その間に別プロセスへロックを奪われる競合窓が生じ、そのプロセスは
+#      既にpull済みのHEADを見て「変更なし」と誤判定し、config.toml再生成・
+#      Preferences再同期・骨格フォルダ補充〈4a〜4c〉が次のupstream更新まで
+#      欠落しうるため（Codexレビュー指摘・Major対応で解放方式から変更）。
+#      再exec後はAIENV_UPDATE_SUB_REEXEC=1・AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD
+#      （自己更新前の元のHEAD。実在するcommitであることを検証したうえで
+#      信頼する＝環境変数の誤残留対策）を環境変数で引き継ぎ、pullを再実行せず
+#      before_head/after_headを復元する（引き継がないと「pull済みでHEAD
+#      不変」に見えてしまい、4.の変更検知が誤って空振りする）。
 #   2b. settings.json の再生成（§9.0 A-0-1・2026-08-30追加）。⚠️ ここは
 #       「HEADが変化していなくても」実行する＝下の3.の早期終了より前に置く
 #       （Codex一次レビュー指摘・Nit対応: 3.の「何もせず終了」は git pull由来の
 #       処理に限った説明であり、settings.json再生成はHEAD不変でも走る）。
-#   3. pull で HEAD が変化していなければ、2b.より後の処理（4.）は何もせず終了
-#      （静か・冪等）
+#   2c. claude/agents/*.md を $HOME/.claude/agents/ へ symlink化する
+#       （install-main.sh の agents symlinkループ・link()/backup_once()と
+#        同じ様式・同じ退避規則。2026-09-03 本人指示で追加＝従来このスクリプトは
+#        agentsの同期を一切行っておらず、repoへ新しいロール定義を追加しても
+#        サブ機へ配布されない欠落があった。repoから削除されたロールへの
+#        dangling symlinkは削除せずWARNのみに留める＝削除は本人判断）。
+#       ⚠️ 冪等で軽い処理のため2b.と同じく「HEADが変化していなくても」実行する
+#       位置に置く（当初は4.配下〈HEAD変化時のみ〉に置いていたが、2回目以降の
+#       実行がHEAD不変で早期終了する経路だとagentsのsymlink化に一切到達しない
+#       実バグがあったため、2026-09-03 本人実査で2b.と同じ扱いへ位置を修正した）。
+#   3. pull で HEAD が変化していなければ、2b./2c.より後の処理（4.）は何もせず
+#      終了（静か・冪等）
 #   4. 変化があれば:
 #      a. codex/config.toml をテンプレから再生成する
 #         （install-main.sh の generate_config_toml() と同等処理。
@@ -41,12 +70,6 @@
 #      c. vault-public/ 配下に新しい骨格フォルダ（Preferences以外）があり、
 #         $VAULT にまだ存在しなければ mkdir + README.md を補充する
 #         （既存フォルダの中身・READMEには触らない）
-#      d. claude/agents/*.md を $HOME/.claude/agents/ へ symlink化する
-#         （install-main.sh の agents symlinkループ・link()/backup_once()と
-#          同じ様式・同じ退避規則。2026-09-03 本人指示で追加＝従来このスクリプトは
-#          agentsの同期を一切行っておらず、repoへ新しいロール定義を追加しても
-#          サブ機へ配布されない欠落があった。repoから削除されたロールへの
-#          dangling symlinkは削除せずWARNのみに留める＝削除は本人判断）
 #
 # パスは $HOME 相対（DIR・VAULT・LOCK_FILE は環境変数で上書き可＝ユニットテスト用。
 # 本番実行時は既定値のまま呼べば良い）。
@@ -76,9 +99,9 @@ fail() { echo "[update-sub] FAIL: $*" >&2; exit 1; }
 # WARN＋exit 0のまま非対称になっていた（旧コメント「リーダー未確定とは
 # 無関係な既存の失敗モードのため対象にしない＝exit 0のまま」は本裁定と
 # 矛盾していたため撤回する）。「対話の途中で止まらない」という§3.9の趣旨に
-# 合わせ、失敗を検知しても後続の4a〜4d（config.toml再生成・Preferences
-# 再同期・骨格フォルダ補充・agents symlink化）は続行し、スクリプト末尾で初めて
-# このフラグに従って終了する（deferred方式＝leader未確定時と同じ扱い）。
+# 合わせ、失敗を検知しても後続の2c・4a〜4c（agents symlink化・config.toml
+# 再生成・Preferences再同期・骨格フォルダ補充）は続行し、スクリプト末尾で
+# 初めてこのフラグに従って終了する（deferred方式＝leader未確定時と同じ扱い）。
 EXIT_CODE=0
 
 # bedrock_env_file_kind <path> — Bedrock envファイルの種別を1行で標準出力へ
@@ -141,6 +164,23 @@ fi
 command -v git >/dev/null 2>&1 || fail "git が見つかりません"
 command -v rsync >/dev/null 2>&1 || fail "rsync が見つかりません"
 
+# 自己更新によるre-exec（下記2.参照）で渡された環境変数が「本物」かどうかを
+# ここで一度だけ判定し、以降の1.（ロック）・2.（pull）双方で同じ判定結果を
+# 使う（判定を2箇所へ分散させると、たとえば1.だけ「re-execとみなす」・2.は
+# 「みなさない」という食い違いが起こりうるため、単一の正本にする）。
+# `AIENV_UPDATE_SUB_REEXEC=1`だけでなく`AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD`が
+# このリポジトリに実在するcommitであることまで検証する（Codexレビュー
+# 指摘・Minor対応: シェル環境やLaunchAgent設定にこの内部専用変数が誤って
+# 残留・伝播した場合、検証無しだと恒久的にgit pull自体をスキップし続けて
+# しまう。真正なre-exec以外はこのガードを無視して通常のロック取得・pull
+# 経路へフォールバックする）。
+IS_SELF_UPDATE_REEXEC=0
+if [ "${AIENV_UPDATE_SUB_REEXEC:-}" = "1" ] \
+   && [ -n "${AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD:-}" ] \
+   && git -C "$DIR" cat-file -e "${AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD}^{commit}" >/dev/null 2>&1; then
+  IS_SELF_UPDATE_REEXEC=1
+fi
+
 # --- 1. 多重起動防止ロック ---
 # 2026-08-30 Codex 2巡目差し戻し・MAJOR対応: 従来は本ファイル内で
 # backup-vault.shと同等のロック取得ロジックを独自に複製していたが、
@@ -156,7 +196,53 @@ command -v rsync >/dev/null 2>&1 || fail "rsync が見つかりません"
 # ＝重複実装の解消）。
 # shellcheck source=scripts/lib/pid-lock.sh
 source "$DIR/scripts/lib/pid-lock.sh"
-acquire_pid_lock "$LOCK_FILE" "$STALE_LOCK_SECONDS" "update-sub"
+if [ "$IS_SELF_UPDATE_REEXEC" = "1" ]; then
+  # 自己更新によるre-exec後（下記2.参照）: execはPIDを保つため、直前の
+  # プロセスが取得したロックファイルは引き続き自分自身の所有物である
+  # （PID・プロセス開始時刻とも不変）。解放してから改めてacquire_pid_lock()
+  # で再取得する設計だと、解放〜再取得の間に別プロセスがロックを奪える
+  # 競合窓が生じ、そのプロセスは既にpull済みのHEADを見て「変更なし」と
+  # 誤判定するため、config.toml再生成・Preferences再同期・骨格フォルダ補充
+  # （4a〜4c）が次のupstream更新まで欠落しうる（Codexレビュー指摘・Major
+  # 対応: 当初はexec前に明示的に解放していたが、この実害を見落としていた）。
+  # そこで一切解放せず、既存のロックファイルを「自分のもの」としてそのまま
+  # 引き継ぐ（handoff）。PID一致だけでは不十分（Codexフォローアップレビュー
+  # 指摘・Major対応: 共有ライブラリ本体〈_pid_lock_is_alive()〉がPID再利用
+  # 問題〈死んだ旧所有者のPID番号が別プロセスへ再利用される〉への対策として
+  # PID＋プロセス開始時刻の指紋照合を採用しているのと同じ理由で、handoff側も
+  # 指紋まで照合しないと、環境変数の誤残留＋異常終了した旧ロックの残留＋
+  # PID番号の再利用が偶然重なった場合に誤って他プロセスのロックを「自分の
+  # もの」として引き継いでしまう穴があった）。
+  # ⚠️ ライブラリ本体（_pid_lock_is_alive）の「判定不能なら生存扱いへ倒す」
+  # という設計は、あくまで“他プロセスの正当なロックを誤って削除しない”ための
+  # fail-openであり、目的が逆（Codexフォローアップレビュー指摘・Major対応:
+  # 当初はこの判定不能→受理という向きをそのまま流用していたが、handoffは
+  # “これを自分のものとして採用してよいか”という判断であり、証明できない
+  # 場合はfail-closedで拒否すべきだった）。そのためhandoffでは、記録された
+  # 指紋が実指紋（予約値_PID_LOCK_FP_UNAVAILABLEや空の旧形式ではない）で
+  # あり、かつ現在の指紋も取得でき、両者が完全一致した場合のみ受理する。
+  if [ ! -e "$LOCK_FILE" ]; then
+    fail "自己更新の再実行(exec)後、引き継ぐべき多重起動防止ロックが見つかりません（${LOCK_FILE}）。前段の実行がロックを取得できていなかった可能性があります。"
+  fi
+  lock_owner_pid="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
+  lock_owner_fp="$(sed -n '2p' "$LOCK_FILE" 2>/dev/null || true)"
+  handoff_ok=0
+  if [ "$lock_owner_pid" = "$$" ] \
+     && [ -n "$lock_owner_fp" ] \
+     && [ "$lock_owner_fp" != "$_PID_LOCK_FP_UNAVAILABLE" ]; then
+    current_fp="$(_pid_lock_fingerprint "$$" 2>/dev/null || true)"
+    if [ -n "$current_fp" ] && [ "$lock_owner_fp" = "$current_fp" ]; then
+      handoff_ok=1
+    fi
+  fi
+  if [ "$handoff_ok" != "1" ]; then
+    fail "自己更新の再実行(exec)後、多重起動防止ロックの所有者が自分自身と一致しません（記録PID: ${lock_owner_pid:-不明}・自分のPID: $$）。execの直前に別プロセスがロックを奪った可能性があります: ${LOCK_FILE}"
+  fi
+  _PID_LOCK_ACQUIRED_FILES+=("$LOCK_FILE")
+  _pid_lock_register_cleanup
+else
+  acquire_pid_lock "$LOCK_FILE" "$STALE_LOCK_SECONDS" "update-sub"
+fi
 
 # --- 2. git pull --ff-only ---
 if ! git -C "$DIR" remote get-url origin >/dev/null 2>&1; then
@@ -164,14 +250,75 @@ if ! git -C "$DIR" remote get-url origin >/dev/null 2>&1; then
   exit 0
 fi
 
-before_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
-pull_rc=0
-git -C "$DIR" pull --ff-only >/dev/null 2>&1 || pull_rc=$?
-if [ "$pull_rc" -ne 0 ]; then
-  warn "git pull --ff-only に失敗しました（ローカル変更との衝突等の可能性。サブは編集しない運用のため通常は起きないはずです）: $DIR"
-  exit 0
+if [ "$IS_SELF_UPDATE_REEXEC" = "1" ]; then
+  # 自己更新によるre-exec後（下記参照）: pullは既に完了しているため
+  # 再実行しない。before_headは自己更新が起きる"前"の元の値を環境変数経由で
+  # 引き継ぐ（引き継がないと、ここで改めてpullした場合〈既にpull済みなので
+  # 差分ゼロ〉before_head=after_headとなり、3.の早期終了で本来届けるべき
+  # config.toml再生成・Preferences再同期・骨格フォルダ補充・agents symlink化
+  # が丸ごと空振りしてしまう）。
+  before_head="${AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD:-}"
+  after_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
+  log "update-sub.sh自身の更新を検知したため、新版のスクリプトで最初からやり直しています（元のHEAD: ${before_head} -> ${after_head}）。"
+else
+  before_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
+  pull_rc=0
+  git -C "$DIR" pull --ff-only >/dev/null 2>&1 || pull_rc=$?
+  if [ "$pull_rc" -ne 0 ]; then
+    warn "git pull --ff-only に失敗しました（ローカル変更との衝突等の可能性。サブは編集しない運用のため通常は起きないはずです）: $DIR"
+    exit 0
+  fi
+  after_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
+
+  # ⚠️ 自己更新対策（2026-09-03 本人実査・緊急対応）: pullでこのスクリプト
+  # 自身（scripts/update-sub.sh）が変わっていたら、その場で新版へexecしなおして
+  # 最初からやり直す。bashはスクリプトを逐次読みするため、実行中の自分自身を
+  # pullで書き換えたまま処理を続けると、後続処理が旧版のまま・あるいは不定動作
+  # になる既知の危険がある（サブ機の実機で、1回目の実行だけagentsのsymlink化が
+  # 効かないという実害が発生し発見した）。
+  if [ "$before_head" != "$after_head" ]; then
+    # git diff自体が失敗した場合（オブジェクト破損・before_headが不正な値等）は
+    # 「自己更新なし」に丸めず、安全側（自己更新ありとみなして新版へやり直す）に
+    # 倒す（Codex一次レビュー指摘・Major対応: `2>/dev/null || echo ''`だと
+    # git diffの失敗と「差分ゼロ」を区別できず、fail-openで保護が効かなくなる
+    # 経路があった）。
+    self_changed=""
+    diff_rc=0
+    self_changed="$(git -C "$DIR" diff --name-only "$before_head" "$after_head" -- scripts/update-sub.sh 2>/dev/null)" || diff_rc=$?
+    if [ "$diff_rc" -ne 0 ] || [ -n "$self_changed" ]; then
+      if [ "$diff_rc" -ne 0 ]; then
+        log "update-sub.sh自身が変わったかどうかを判定できませんでした（git diff失敗・コード${diff_rc}）。安全側として新版のスクリプトで最初からやり直します（${before_head} -> ${after_head}）。"
+      else
+        log "update-sub.sh自身が更新されました（${before_head} -> ${after_head}）。新版のスクリプトで最初からやり直します。"
+      fi
+      # ⚠️ ロックは解放しない（1.のhandoff方式を参照）。execはPIDを保つため、
+      # 既に取得済みのロックファイルはexec後もそのまま自分自身の所有物であり、
+      # 解放→再取得という往復を挟まないことで、その間に別プロセスへロックを
+      # 奪われる競合窓自体を作らない（Codexレビュー指摘・Major対応: 当初は
+      # ここでexec前に明示的解放していたが、解放〜再取得の間に別プロセスが
+      # 割り込むと、そのプロセスは既にpull済みのHEADを見て「変更なし」と
+      # 誤判定し、config.toml再生成・Preferences再同期・骨格フォルダ補充
+      # 〈4a〜4c〉が次のupstream更新まで欠落しうる実害があった）。
+      export AIENV_UPDATE_SUB_REEXEC=1
+      export AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD="$before_head"
+      # LOCK_FILEを明示的にexportする（Codexレビュー指摘・Minor対応:
+      # LOCK_FILEが呼び出し元の環境変数由来ではなく`: "${LOCK_FILE:=...}"`の
+      # 既定値だった場合、この行が無いとexportされず子プロセスへ引き継がれ
+      # ない。今回の新版はexec先も自分自身＝同じ既定値ロジックなので実害は
+      # 出ないが、将来ロック既定パスの算出方法が変わった場合でも、1.が
+      # handoffする対象を「実際に取得したロックのパスそのもの」に固定する
+      # ための安全策）。
+      export LOCK_FILE
+      # execが対象を起動できない場合（パーミッション不足・破損等）でも
+      # フォールスルーせずfail()を確実に届けるため、execfailを立てておく
+      # （Codex一次レビュー指摘・Minor対応: execfail無しだと非対話bashは
+      # exec失敗時にそのままshell自体を終了し、直後のfail()に到達しない）。
+      shopt -s execfail
+      exec bash "$DIR/scripts/update-sub.sh" "$@"
+      fail "update-sub.sh自身の更新を検知しましたが、新版への再実行(exec)に失敗しました: $DIR/scripts/update-sub.sh"
+    fi
+  fi
 fi
-after_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
 
 # --- 2b. settings.json の再生成（git の HEAD が変わっていなくても実行する。
 #         §9.0 A-0-1・§11.2 項目3）---
@@ -496,11 +643,87 @@ EOF
   fi
 fi
 
+# --- 2c. claude/agents/*.md を ~/.claude/agents/ へ symlink化する（git の
+#         HEAD が変わっていなくても実行する。2b.と同じ理由） ---
+# 本人指示（2026-09-03・最優先）: 従来このスクリプトは claude/agents/ の同期を
+# 一切行っておらず、repoへ新しいロール定義（例: vault-scribe.md）を追加しても
+# サブ機へ配布されない欠落があった（install-main.sh は agents を含む全symlinkを
+# 再構築するが、update-sub.sh はサブ機の日常運用で使う軽量更新のため、新規
+# agentファイルの取り込みに install-sub.sh のフル再実行が必要になっていた）。
+# install-main.sh の agents symlinkループ・link()/backup_once()と同じ様式・
+# 同じ退避規則（意図的な複製。ロジックを変える場合は install-main.sh 側も
+# 合わせて見直すこと＝4a.の config.toml再生成と同じ流儀。共有関数化も検討したが
+# 「最小差分を優先」という本人指示により見送った）。
+# ⚠️ 当初は4.配下（HEAD変化時のみ実行）に置いていたが、サブ機の実機で
+# 「2回目以降の実行はHEAD不変で3.の早期終了に入り、agentsのsymlink化に
+# 一切到達しない」という実バグが発生したため、2026-09-03 本人実査で2b.と
+# 同じ「HEAD不変でも実行する」位置へ移した（冪等で軽い処理のため毎回
+# 走らせて問題ない）。
+AGENTS_SRC_DIR="$DIR/claude/agents"
+AGENTS_DEST_DIR="$HOME/.claude/agents"
+if [ -d "$AGENTS_SRC_DIR" ]; then
+  mkdir -p "$AGENTS_DEST_DIR"
+  agents_md_count=0
+  for f in "$AGENTS_SRC_DIR"/*.md; do
+    [ -e "$f" ] || continue
+    agents_md_count=$((agents_md_count + 1))
+    name="$(basename "$f")"
+    dest="$AGENTS_DEST_DIR/$name"
+    if [ -L "$dest" ]; then
+      # 既にsymlinkの場合: リンク先が正しければ何もしない（no-op）。違えば
+      # （古いrepoパスを指している・danglingを含む）張り直す＝install-main.shの
+      # `ln -sfn` と同じ「常に正しい状態へ収束させる」方針。
+      [ "$(readlink "$dest")" = "$f" ] && continue
+    elif [ -e "$dest" ]; then
+      # symlinkでない実ファイルが既にある場合はinstall-main.sh backup_once()と
+      # 同じ規則で退避してからsymlink化する（.pre-aienv.bakが既にあれば二重に
+      # 退避しない＝インストール前オリジナルを保持し続ける）。
+      if [ ! -e "$dest.pre-aienv.bak" ]; then
+        cp "$dest" "$dest.pre-aienv.bak"
+        log "backed up: $dest -> $dest.pre-aienv.bak"
+      fi
+    fi
+    ln -sfn "$f" "$dest"
+    log "linked: $dest -> $f"
+  done
+  if [ "$agents_md_count" -eq 0 ]; then
+    # ⚠️ .mdが0件の場合もcheckout破損の可能性として扱い、以降のdangling走査は
+    # 行わない（Codexフォローアップレビュー指摘・Minor対応: ディレクトリ自体は
+    # あるが中身が空／.md以外しか無い状態も、ディレクトリ丸ごと欠落と同じ
+    # 「checkout全体の異常」であり、既存の全symlinkを個別の「削除された
+    # ロール」として誤って警告してしまう事故を防ぐため、この場合もdangling
+    # 走査をskipする＝上のディレクトリ丸ごと欠落時の分岐と同じ扱いに揃える）。
+    warn "claude/agents/ に .md ファイルが1つもありません（checkout破損の可能性）。roleのsymlink化はskipされました: $AGENTS_SRC_DIR"
+  else
+    # repoから削除されたロールのsymlink（dangling）は削除せず警告のみに留める
+    # （本人指示: 削除は本人判断）。aienv管理下（$AGENTS_SRC_DIR配下を指す）
+    # symlinkに限定して検査する＝本スクリプトが関与しない他アプリ由来のsymlinkを
+    # 誤検知しないため。⚠️ $AGENTS_SRC_DIR自体が存在しない・中身が空の場合は
+    # この走査を行わない（Codex一次・フォローアップレビュー指摘・Minor対応:
+    # checkout全体が壊れているケースと個別ロール削除のケースを混同し、既存の
+    # 全symlinkを誤って「削除されたロール」として警告してしまう事故を防ぐ）。
+    if [ -d "$AGENTS_DEST_DIR" ]; then
+      for existing in "$AGENTS_DEST_DIR"/*.md; do
+        [ -L "$existing" ] || continue
+        target="$(readlink "$existing")"
+        case "$target" in
+          "$AGENTS_SRC_DIR"/*)
+            [ -e "$target" ] || warn "repoから削除されたロール定義へのsymlinkが残っています（削除はしません・本人判断）: $existing -> $target"
+            ;;
+        esac
+      done
+    fi
+  fi
+else
+  warn "claude/agents/ が見つかりません（checkout破損の可能性）。roleのsymlink化をskipします: $AGENTS_SRC_DIR"
+fi
+
 # --- 3. repoの更新が無ければ、4.（config.toml再生成・Preferences再同期・
-#         骨格フォルダ補充）は行わず終了する（settings.json再生成は2b.で
-#         既に済んでいる＝Codex一次レビュー指摘・Nit対応） ---
+#         骨格フォルダ補充）は行わず終了する（settings.json再生成は2b.・
+#         agents symlink化は2c.で既に済んでいる＝Codex一次レビュー指摘・
+#         Nit対応の横展開） ---
 if [ "$before_head" = "$after_head" ]; then
-  log "変更なし（repoのHEAD: ${after_head}）。settings.json再生成のほかは何もしません。"
+  log "変更なし（repoのHEAD: ${after_head}）。settings.json再生成・agents symlink化のほかは何もしません。"
   # ⚠️ ここで無条件に0終了すると、2b.でEXIT_CODEへ記録したリーダー未確定の
   # 失敗（§3.9）が握り潰される（2026-09-01 Codex一次レビュー指摘・Blocking
   # 対応の一部）。
@@ -563,80 +786,11 @@ if [ -d "$DIR/vault-public" ]; then
   done
 fi
 
-# --- 4d. claude/agents/*.md を ~/.claude/agents/ へ symlink化する ---
-# 本人指示（2026-09-03・最優先）: 従来このスクリプトは claude/agents/ の同期を
-# 一切行っておらず、repoへ新しいロール定義（例: vault-scribe.md）を追加しても
-# サブ機へ配布されない欠落があった（install-main.sh は agents を含む全symlinkを
-# 再構築するが、update-sub.sh はサブ機の日常運用で使う軽量更新のため、新規
-# agentファイルの取り込みに install-sub.sh のフル再実行が必要になっていた）。
-# install-main.sh の agents symlinkループ・link()/backup_once()と同じ様式・
-# 同じ退避規則（意図的な複製。ロジックを変える場合は install-main.sh 側も
-# 合わせて見直すこと＝4a.の config.toml再生成と同じ流儀。共有関数化も検討したが
-# 「最小差分を優先」という本人指示により見送った）。
-AGENTS_SRC_DIR="$DIR/claude/agents"
-AGENTS_DEST_DIR="$HOME/.claude/agents"
-if [ -d "$AGENTS_SRC_DIR" ]; then
-  mkdir -p "$AGENTS_DEST_DIR"
-  agents_md_count=0
-  for f in "$AGENTS_SRC_DIR"/*.md; do
-    [ -e "$f" ] || continue
-    agents_md_count=$((agents_md_count + 1))
-    name="$(basename "$f")"
-    dest="$AGENTS_DEST_DIR/$name"
-    if [ -L "$dest" ]; then
-      # 既にsymlinkの場合: リンク先が正しければ何もしない（no-op）。違えば
-      # （古いrepoパスを指している・danglingを含む）張り直す＝install-main.shの
-      # `ln -sfn` と同じ「常に正しい状態へ収束させる」方針。
-      [ "$(readlink "$dest")" = "$f" ] && continue
-    elif [ -e "$dest" ]; then
-      # symlinkでない実ファイルが既にある場合はinstall-main.sh backup_once()と
-      # 同じ規則で退避してからsymlink化する（.pre-aienv.bakが既にあれば二重に
-      # 退避しない＝インストール前オリジナルを保持し続ける）。
-      if [ ! -e "$dest.pre-aienv.bak" ]; then
-        cp "$dest" "$dest.pre-aienv.bak"
-        log "backed up: $dest -> $dest.pre-aienv.bak"
-      fi
-    fi
-    ln -sfn "$f" "$dest"
-    log "linked: $dest -> $f"
-  done
-  if [ "$agents_md_count" -eq 0 ]; then
-    # ⚠️ .mdが0件の場合もcheckout破損の可能性として扱い、以降のdangling走査は
-    # 行わない（Codexフォローアップレビュー指摘・Minor対応: ディレクトリ自体は
-    # あるが中身が空／.md以外しか無い状態も、ディレクトリ丸ごと欠落と同じ
-    # 「checkout全体の異常」であり、既存の全symlinkを個別の「削除された
-    # ロール」として誤って警告してしまう事故を防ぐため、この場合もdangling
-    # 走査をskipする＝上のディレクトリ丸ごと欠落時の分岐と同じ扱いに揃える）。
-    warn "claude/agents/ に .md ファイルが1つもありません（checkout破損の可能性）。roleのsymlink化はskipされました: $AGENTS_SRC_DIR"
-  else
-    # repoから削除されたロールのsymlink（dangling）は削除せず警告のみに留める
-    # （本人指示: 削除は本人判断）。aienv管理下（$AGENTS_SRC_DIR配下を指す）
-    # symlinkに限定して検査する＝本スクリプトが関与しない他アプリ由来のsymlinkを
-    # 誤検知しないため。⚠️ $AGENTS_SRC_DIR自体が存在しない・中身が空の場合は
-    # この走査を行わない（Codex一次・フォローアップレビュー指摘・Minor対応:
-    # checkout全体が壊れているケースと個別ロール削除のケースを混同し、既存の
-    # 全symlinkを誤って「削除されたロール」として警告してしまう事故を防ぐ）。
-    if [ -d "$AGENTS_DEST_DIR" ]; then
-      for existing in "$AGENTS_DEST_DIR"/*.md; do
-        [ -L "$existing" ] || continue
-        target="$(readlink "$existing")"
-        case "$target" in
-          "$AGENTS_SRC_DIR"/*)
-            [ -e "$target" ] || warn "repoから削除されたロール定義へのsymlinkが残っています（削除はしません・本人判断）: $existing -> $target"
-            ;;
-        esac
-      done
-    fi
-  fi
-else
-  warn "claude/agents/ が見つかりません（checkout破損の可能性）。roleのsymlink化をskipします: $AGENTS_SRC_DIR"
-fi
-
 log "done."
 # ⚠️ EXIT_CODEは2b.でリーダー実行値の取得に失敗した場合、またはBedrock env
 # ファイルが実在するのに読めない／解析できない場合（BEDROCK_STATUS=
 # EXISTS_BUT_UNAVAILABLE）に1になる（設計書§3.9「update-sub.shはリーダー行が
 # 未確定ならWARN＋非0終了」・状態機械B S4。2026-09-01 Codex一次レビュー指摘・
-# Blocking対応／同日工程横断レビュー差し戻しMAJOR対応）。4a〜4dはいずれの
-# 場合も続行済みのため、ここで初めて反映する。
+# Blocking対応／同日工程横断レビュー差し戻しMAJOR対応）。2c・4a〜4cは
+# いずれの場合も続行済みのため、ここで初めて反映する。
 exit "$EXIT_CODE"
