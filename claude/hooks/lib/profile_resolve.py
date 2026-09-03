@@ -117,15 +117,20 @@ CAPABILITY_VALUE_PATTERNS = {
 # 持たない）。
 
 # コア職種マニフェスト（V1-a）: claude/agents/*.md を持たない職種の固定リスト。
-# scribeは機体ローカル定義（例: ~/.claude/agents/vault-scribe.md）を持つため
-# claude/agents/配下には無いが「定義が無い」わけではない＝V1-bの専用写像で扱う。
+# ⚠️ 職種名＝claude/agents/配下のファイル名（拡張子除く）＝Task tool spawn時に
+# subagent_typeへ渡す値、という不変条件をここでも維持する（2026-09-03本人裁定:
+# scribe職種は「配役表のキーはrole.scribeのままファイル名だけvault-scribe.md」
+# という不一致を対応表で吸収する方式を試みたが、サブ機で実際に
+# 「role.scribeを見てsubagent_type=scribeでspawn→定義ファイルが無く失敗」が
+# 起きたため撤回。対応表〈旧AGENT_FILE_TO_ROLE〉は削除し、配役表側のキーを
+# role.vault-scribeへ改名して名前を一致させる方式に統一した）。
+# scribeは2026-09-03より claude/agents/vault-scribe.md としてrepoへ収録され
+# サブ機へも配布されるようになったため、このリストには含めない（ファイル名
+# 走査で自動的に職種名"vault-scribe"としてマニフェストへ入る＝下記
+# role_and_core_manifest_diff()参照）。
 CORE_ROLES_WITHOUT_REPO_AGENT_FILE = frozenset(
-    {"leader", "navi", "primary-reviewer", "ja-doc", "scribe"}
+    {"leader", "navi", "primary-reviewer", "ja-doc"}
 )
-# V1-b: 機体ローカル定義を持つ職種の写像（正本パスは例。実在確認のみ行う）。
-ROLE_LOCAL_AGENT_FILE = {
-    "scribe": os.path.expanduser("~/.claude/agents/vault-scribe.md"),
-}
 # leaderはspawn対象外なのでV1-bの対象から無条件除外する。
 ROLE_EXEMPT_FROM_DEFINITION_CHECK = frozenset({"leader"})
 
@@ -671,6 +676,11 @@ def role_and_core_manifest_diff(parsed: ParsedProfile, agents_dir: Optional[str]
     if agents_dir and os.path.isdir(agents_dir):
         for fname in os.listdir(agents_dir):
             if fname.endswith(".md"):
+                # 職種名＝ファイル名（拡張子除く）の不変条件どおり、正規化は
+                # 一切行わない（2026-09-03本人裁定: 対応表によるファイル名→
+                # 職種名の変換〈旧AGENT_FILE_TO_ROLE〉は撤回した。ファイル名と
+                # 異なる職種名を使いたい場合は、配役表側のキーをファイル名へ
+                # 改名して揃える）。
                 manifest.add(fname[: -len(".md")])
     role_names = set(parsed.roles)
     only_in_profile = sorted(role_names - manifest)
@@ -686,11 +696,12 @@ def role_definition_exists(name: str, execution: str, agents_dir: Optional[str])
         return True
     if execution != "subagent":
         return True  # external-*はV1-bの対象外
-    local_path = ROLE_LOCAL_AGENT_FILE.get(name)
-    if local_path is not None:
-        return os.path.isfile(local_path)
     if agents_dir is None:
         return True  # agents_dir未指定＝判定材料が無い＝判定不能を"存在する"側へ倒す
+    # 職種名＝ファイル名（拡張子除く）の不変条件どおり、常にagents_dir配下を
+    # 職種名そのままで引く（2026-09-03本人裁定: scribe職種の機体ローカル
+    # 定義への専用写像〈旧ROLE_LOCAL_AGENT_FILE〉は撤回した。vault-scribe.mdは
+    # repo収録済みでagents_dir配下にあるため、他の職種と同じ経路で判定できる）。
     return os.path.isfile(os.path.join(agents_dir, f"{name}.md"))
 
 

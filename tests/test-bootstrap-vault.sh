@@ -2197,6 +2197,118 @@ EOF
   rm -rf "$VAULT_DIR"
 }
 
+echo "=== 57. V1-aマニフェスト: claude/agents/vault-scribe.mdは職種名'vault-scribe'としてファイル名そのままマニフェストへ数えられ、旧職種名'scribe'は入らない（2026-09-03本人裁定・方針変更: 対応表〈旧AGENT_FILE_TO_ROLE〉でファイル名と職種名の不一致を吸収する方式は、サブ機で『role.scribeを見てsubagent_type=scribeでspawn→定義ファイルが無く失敗』という実害が起きたため撤回し、配役表側のキーをrole.vault-scribeへ改名して職種名＝ファイル名の不変条件に揃える方式へ変更した） ==="
+{
+  # role_and_core_manifest_diff()本体を直接呼ぶ（マニフェスト計算ロジックの
+  # 再実装ではなく、実装コードそのものを検証する）。role表は空にし、
+  # only_in_manifest（＝マニフェスト全件）をそのまま確認する。
+  result="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 - "$AGENTS_DIR" <<'PYEOF'
+import sys
+import profile_resolve as pr
+
+
+class FakeParsed:
+    roles: dict = {}
+
+
+agents_dir = sys.argv[1]
+_, only_in_manifest = pr.role_and_core_manifest_diff(FakeParsed(), agents_dir)
+print("vault_scribe_count=" + str(only_in_manifest.count("vault-scribe")))
+print("scribe_present=" + str("scribe" in only_in_manifest))
+PYEOF
+)"
+  assert_contains "マニフェストに'vault-scribe'が1回だけ入る（ファイル名そのまま）" "$result" "vault_scribe_count=1"
+  assert_contains "旧職種名'scribe'はマニフェストに入らない" "$result" "scribe_present=False"
+}
+
+echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行の全ロール構成でresolve()を通してもADVISORY:V1-aが出ない（57.の単体確認をCLI経由でも裏付け。2026-09-03本人裁定・方針変更対応） ==="
+{
+  # 実AGENTS_DIR（claude/agents/、vault-scribe.md収録後）を使い、現行の
+  # コア職種マニフェスト全件（CORE_ROLES_WITHOUT_REPO_AGENT_FILE 4件 +
+  # claude/agents/*.md 8件＝ファイル名そのまま、計12件）ちょうどをrole.表へ
+  # 宣言する。leader以外は状態を"unknown"にして属性検証（V9-b等）を回避し、
+  # V1-aの対称差判定だけに焦点を絞る（他ロールのstateはV1-aの結果に影響
+  # しない＝role_and_core_manifest_diff()はparsed.rolesのキーのみを見る）。
+  COMPLETE_ROSTER="$(mktemp -d)/complete-roster.md"
+  make_v2_profile "$COMPLETE_ROSTER" \
+    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
+    "role.navi: unknown" \
+    "role.primary-reviewer: unknown" \
+    "role.ja-doc: unknown" \
+    "role.adoption-critic: unknown" \
+    "role.implementer: unknown" \
+    "role.operator: unknown" \
+    "role.requirements-analyst: unknown" \
+    "role.researcher: unknown" \
+    "role.system-designer: unknown" \
+    "role.tester: unknown" \
+    "role.vault-scribe: unknown"
+
+  out="$(resolve_v2 "$COMPLETE_ROSTER")"  || true
+  # bash 3.2(macOS既定)では`$(case ... esac)`のような command substitution
+  # 内caseの構文解析に既知の不具合があるため、他のテスト（22番等）と同じく
+  # caseを独立文として使い、結果を変数へ代入する方式に揃える。
+  head_ok=0
+  case "$out" in
+    OK*) head_ok=1 ;;
+  esac
+  assert_eq "先頭フィールドはOK（プロファイル自体は妥当）" "1" "$head_ok"
+  assert_not_contains "role.vault-scribeで揃えればADVISORY:V1-aが出ない" "$out" "ADVISORY:V1-a"
+}
+
+echo "=== 58b. V1-aマニフェスト(結合・回帰防止・対照実験): 完全ロースターのうち'role.vault-scribe'の1行だけを旧キー'role.scribe'へ差し替えると、他は一切変えていないのにADVISORY:V1-aが出るようになる（受入条件どおり・2026-09-03本人裁定: 特別な互換処理は入れない＝'行を書かなかった職種はunknown'の既存規則に従い、vault-scribeはVACANT_UNKNOWN・scribeはマニフェストに無いキーとしてV1-a advisoryに出る。Codexレビュー指摘・Minor対応: 当初はleaderとscribeの2行だけの疎なプロファイルで検証しており、他の10職種が欠けていること自体でもV1-aが出てしまうため『role.scribeへの置換だけが原因』というこの受入条件を厳密に隔離できていなかった。58.の完全ロースターから1行だけ差し替える対照実験にすることで、原因を旧キーの使用だけに絞り込む） ==="
+{
+  # 58.と全く同じ完全ロースターから、'role.vault-scribe'の行だけを
+  # 'role.scribe'（旧キー）へ差し替える。他の11行（leader含む）は58.と
+  # 完全に同一。
+  OLD_KEY_ROSTER="$(mktemp -d)/old-key-roster.md"
+  make_v2_profile "$OLD_KEY_ROSTER" \
+    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
+    "role.navi: unknown" \
+    "role.primary-reviewer: unknown" \
+    "role.ja-doc: unknown" \
+    "role.adoption-critic: unknown" \
+    "role.implementer: unknown" \
+    "role.operator: unknown" \
+    "role.requirements-analyst: unknown" \
+    "role.researcher: unknown" \
+    "role.system-designer: unknown" \
+    "role.tester: unknown" \
+    "role.scribe: unknown"
+
+  out="$(resolve_v2 "$OLD_KEY_ROSTER")"  || true
+  assert_contains "58.の完全ロースターと1行しか違わないのに、旧キー'role.scribe'のままではADVISORY:V1-aが出る（改名を促す）" "$out" "ADVISORY:V1-a"
+  assert_contains "vault-scribeはマニフェストにあるがrole表に無いためVACANT_UNKNOWNに出る" "$out" "vault-scribe"
+}
+
+echo "=== 59. 方針変更の反映確認: 旧方式の対応表（AGENT_FILE_TO_ROLE・ROLE_LOCAL_AGENT_FILE）がコードから完全に撤去されている（2026-09-03本人裁定・方針変更。将来誰かが対応表方式を再導入する回帰を検知する） ==="
+{
+  result="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 - <<'PYEOF'
+import profile_resolve as pr
+
+print("has_agent_file_to_role=" + str(hasattr(pr, "AGENT_FILE_TO_ROLE")))
+print("has_role_local_agent_file=" + str(hasattr(pr, "ROLE_LOCAL_AGENT_FILE")))
+PYEOF
+)"
+  assert_contains "AGENT_FILE_TO_ROLE対応表は存在しない" "$result" "has_agent_file_to_role=False"
+  assert_contains "ROLE_LOCAL_AGENT_FILE対応表は存在しない" "$result" "has_role_local_agent_file=False"
+}
+
+echo "=== 60. V1-b直接検証: role_definition_exists('vault-scribe', 'subagent', agents_dir)が対応表を介さずagents_dir配下を職種名そのままで引いて実在有無を正しく判定する（'scribe'という旧職種名では定義ファイルが無いと判定される＝職種名＝ファイル名の不変条件の直接確認） ==="
+{
+  result="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 - "$AGENTS_DIR" <<'PYEOF'
+import sys
+import profile_resolve as pr
+
+agents_dir = sys.argv[1]
+print("vault_scribe=" + str(pr.role_definition_exists("vault-scribe", "subagent", agents_dir)))
+print("scribe=" + str(pr.role_definition_exists("scribe", "subagent", agents_dir)))
+PYEOF
+)"
+  assert_contains "'vault-scribe'はagents_dir配下にvault-scribe.mdがあるためTrue" "$result" "vault_scribe=True"
+  assert_contains "旧職種名'scribe'はscribe.mdが無いためFalse（対応表による救済はしない）" "$result" "scribe=False"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

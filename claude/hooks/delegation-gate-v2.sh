@@ -72,7 +72,7 @@ case "$fpath" in
   "$VAULT_PREFIX"/Fragments/*|"$VAULT_PREFIX"/Knowledge/*|"$VAULT_PREFIX"/Decisions/*|"$VAULT_PREFIX"/Projects/*|"$VAULT_PREFIX"/Preferences/*|"$VAULT_PREFIX"/Personal/*)
     vault_marker="$MARKER_DIR/claude-vault-direct-ok-$sid"
     [ -f "$vault_marker" ] && exit 0
-    reason="delegation-gate: 外部脳（Vault）の AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への執筆は常駐チームメイト vault-scribe へ委任してください（Preferences/vault-operation。2026-08-12 本人指示で「軽い1件はリーダー直筆可」の例外は撤廃・2026-08-13 本人指示で対象は AI向け6フォルダに限定）。リーダーは内容を確定して scribe へ渡す係です。scribe 不在なら起動してから振る。scribe が使えない緊急時のみ、理由をユーザーへの応答で明示した上で次を実行してから再試行: touch $vault_marker"
+    reason="delegation-gate: 外部脳（Vault）の AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への執筆は常駐チームメイト vault-scribe へ委任してください（Preferences/vault-operation。2026-08-12 本人指示で「軽い1件はリーダー直筆可」の例外は撤廃・2026-08-13 本人指示で対象は AI向け6フォルダに限定）。リーダーは内容を確定して vault-scribe へ渡す係です。vault-scribe 不在なら起動してから振る（Task toolのsubagent_typeは必ず\"vault-scribe\"を使う＝\"scribe\"という省略形は職種名・エージェント定義ファイル名のいずれとも一致せずspawn失敗する）。vault-scribe が使えない緊急時のみ、理由をユーザーへの応答で明示した上で次を実行してから再試行: touch $vault_marker"
     jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
     exit 0
     ;;
