@@ -1,10 +1,12 @@
 ---
 date: 2026-06-14
-updated: 2026-08-31
+updated: 2026-09-03
 tags: [profile, preferences]
 project: external-brain
 aliases:
   - "応対ルール"
+  - "旧資料"
+  - "work/old"
 ---
 # プロフィール（AI向け行動ルール）
 > 個人情報は private 側（Personal）に分離済み。本ノートは応対ルールと環境情報のみ。

@@ -11,6 +11,10 @@ related:
 aliases:
   - "Claudeに残す4つ"
   - "オーケストレーター強制"
+  - "モデル割り当て"
+  - "Fable除外"
+  - "cmux notify"
+  - "delegation-gate 許可パス"
 ---
 # 開発の役割分担（Claude中心＋Codex一次レビュアー）
 > 背景＝「ループエンジニアリング」の実装（[[Knowledge/loop-engineering]]）。
