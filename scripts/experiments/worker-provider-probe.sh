@@ -60,6 +60,11 @@
 #     https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html
 #     (Generate a short-term API key > Python)
 #     https://github.com/aws/aws-bedrock-token-generator-python/blob/main/README.md
+#   - Claude Sonnet 5 の Geo/Global inference ID（--model 既定値の根拠・
+#     2026-09-04確認）: bedrock-runtime の Geo inference ID は us./eu./au.、
+#     Global は global.anthropic.claude-sonnet-5。ap-southeast-2 は
+#     Geo(au.)/Global のみ利用可（In-Region 不可）。
+#     https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
 #
 # 使い方（JA） / Usage (EN):
 #   git pull 後に、このリポジトリのルートから実行する:
@@ -72,8 +77,13 @@
 # オプション（JA） / Options (EN):
 #   --only <名前,...>   実行するバリアントだけを選ぶ（例: --only A,B,F1,G2）。
 #                       Restrict which variants run (e.g. --only A,B,F1,G2).
-#   --model <ID>        G1〜G4/G6 で使う Bedrock 上のモデルID（既定: 下記参照）。
-#                       Bedrock model ID for G1-G4/G6 (default: see below).
+#   --model <ID>        G1〜G4/G6 で使う Bedrock 上のモデルID（既定: 下記参照。
+#                       現在の既定は au.anthropic.claude-sonnet-5＝サブ機が
+#                       AU/ap-southeast-2 のため。他 Region では明示指定）。
+#                       Bedrock model ID for G1-G4/G6 (default: see below.
+#                       Currently defaults to au.anthropic.claude-sonnet-5
+#                       since the worker machine is in AU/ap-southeast-2;
+#                       pass explicitly for other regions).
 #   --mantle            任意バリアント G5（bedrock-mantle 経由）も実行する。
 #                       Also run the optional G5 variant (via bedrock-mantle).
 #   --with-websearch    任意バリアント H1（WebSearch ツール許可）も実行する。
@@ -853,7 +863,19 @@ elif [ -n "$FILE_REGION" ]; then
   REGION="$FILE_REGION"
 fi
 
-MODEL_ID="us.anthropic.claude-sonnet-5"
+# 既定は au.（Geo prefix はソース Region に対応するものが必須。サブ機は
+# AU〈AWS Region ap-southeast-2 / Sydney〉のため au. を既定にする。他
+# Region で実行する場合は --model で us./eu./global. を明示指定すること。
+# 一次情報: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
+# （Programmatic Access 表・Regional Availability 表。ap-southeast-2 は
+# Geo(au.)/Global のみ利用可・In-Region 不可。2026-09-04 本人実測+裏取り）。
+# Default is au. — the Geo prefix must match the source region. The worker
+# machine is in AU (AWS region ap-southeast-2 / Sydney), so au. is the
+# default here. Pass --model explicitly (us./eu./global.) when running from
+# a different region. Source: AWS's official model card page above
+# (Programmatic Access / Regional Availability tables; ap-southeast-2 only
+# supports Geo(au.)/Global, not In-Region; verified 2026-09-04).
+MODEL_ID="au.anthropic.claude-sonnet-5"
 if [ -n "$CLI_MODEL" ]; then
   MODEL_ID="$CLI_MODEL"
 elif [ -n "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}" ]; then
