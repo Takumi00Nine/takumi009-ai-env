@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
-# 使い捨て実験スクリプト（2026-09-02 作成 / 2026-09-03 拡張×2）検証後に削除すること。
+# 使い捨て実験スクリプト（2026-09-02 作成 / 2026-09-03 拡張×2 / 2026-09-04
+# 拡張×2〈AU既定モデルID・G系400切り分け変種〉）検証後に削除すること。
 # Throwaway experiment script (created 2026-09-02, extended twice on
-# 2026-09-03) — delete after verification is done.
+# 2026-09-03, twice more on 2026-09-04 — AU default model ID, then variants
+# to isolate the G-family 400s) — delete after verification is done.
 #
 # 目的（JA）:
 #   EXP-3: Bedrock 経由で起動しているリーダーセッション（環境に
@@ -37,6 +39,19 @@
 #   generated locally from that profile via AWS's own
 #   aws-bedrock-token-generator (--token-from-profile / G6).
 #   Both probes are read-only and do not modify anything.
+#   EXP-1追加（2026-09-04）: G1〜G4/G6/H1が(F1〜F3のcurl直叩きは通るのに)
+#   全変種400 "Request metadata contains a value that violates the regular
+#   expression"で落ちる原因を切り分けるため、F4〜F6(curlのbodyへmetadataを
+#   足して受理条件を探る)・X1(実AWSを呼ばずローカルHTTPサーバーでclaude -pの
+#   生リクエストを捕捉する)・G7/G8(claude起動時のbeta/attributionヘッダを
+#   抑止する既知の環境変数を試す)を追加。
+#   Added 2026-09-04: to isolate why G1-G4/G6/H1 all fail with a 400
+#   "Request metadata contains a value that violates the regular expression"
+#   (while F1-F3's plain curl succeeds), added F4-F6 (add a metadata field to
+#   curl's body to probe what's accepted), X1 (a local HTTP server that
+#   never calls AWS, capturing the raw request `claude -p` actually builds),
+#   and G7/G8 (try known env vars that suppress claude's beta/attribution
+#   headers).
 #
 # 一次情報（WebFetchで確認済み） / Sources verified via WebFetch:
 #   - bedrock-runtime + Bedrock API key（2026-09-03確認）:
@@ -65,6 +80,18 @@
 #     Global は global.anthropic.claude-sonnet-5。ap-southeast-2 は
 #     Geo(au.)/Global のみ利用可（In-Region 不可）。
 #     https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5.html
+#   - G系400切り分け(F4〜F6/X1/G7/G8)の根拠（2026-09-04確認）:
+#     AWS公式の/anthropic Messages APIスキーマに`metadata`フィールドは無い
+#     （公式gateway互換ガイド）。ANTHROPIC_BASE_URL経由でclaude -pがAPI互換
+#     エンドポイントへ送る内容は、api.anthropic.com向けの全bodyフィールド
+#     （metadataを含むと推定）をそのまま送ると記載:
+#     https://code.claude.com/docs/en/llm-gateway-protocol
+#     CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS/CLAUDE_CODE_ATTRIBUTION_HEADER
+#     は公式ドキュメントページには未掲載(2026-09-04時点)だが、複数の独立した
+#     GitHub Issue・コミュニティ記事で存在・効果が確認できる(1次情報ほど
+#     確度は高くないため、G7/G8の結果は「決定的」ではなく「参考」として扱う):
+#     https://github.com/anthropics/claude-code/issues/20031
+#     https://github.com/anthropics/claude-code/issues/50085
 #
 # 使い方（JA） / Usage (EN):
 #   git pull 後に、このリポジトリのルートから実行する:
@@ -167,6 +194,61 @@
 #       removed (this can't be determined without hitting the real API, so
 #       it's left as a note rather than automated).
 #
+#   [G系400の原因切り分け追加変種（2026-09-04追加・既定では実行しない。
+#    --only で明示指定した場合のみ実行される） /
+#    Additional variants to isolate the G-family 400s (added 2026-09-04, not
+#    in the default set — only run when named explicitly via --only)]
+#   F4) curl metadata短い値  : F1のbodyに`metadata:{user_id:"probe-user"}`を追加
+#   F5) curl metadata Claude Code類似 : `metadata.user_id`をuser_<64桁hex>_
+#                              account_<uuid>_session_<uuid>形式(英数・_・-の
+#                              み)の固定ダミー値にして送る
+#   F6) curl metadata JSON文字列値 : `metadata.user_id`の値そのものを
+#                              {"device_id":...,"account_uuid":...,
+#                              "session_id":...}形式のJSON文字列(波括弧・
+#                              引用符を含む)にして送る
+#      F4〜F6はいずれもF1と同じx-api-key認証・POST /v1/messagesで、
+#      httpコードとエラー本文の要旨(error.type/error.message先頭120字)を
+#      1行サマリに出す。
+#   X1) ローカル捕捉（実AWS不要）: 127.0.0.1の空きポートに最小HTTPサーバーを
+#                              立て、ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
+#                              (ダミー値)をそこへ向けたclaude -p(G2相当)を
+#                              実行し、実際に届いたリクエストのbodyトップ
+#                              レベルキー一覧・metadataフィールドのJSON全文・
+#                              anthropic-betaヘッダ・model値だけを記録する
+#                              (system prompt・messages本文・Authorization
+#                              ヘッダは一切記録しない)。何を受けても400を
+#                              返して打ち切る(HEAD warm-upやcount_tokensが
+#                              先に来る場合を考慮し最大3リクエストまで待つ)。
+#   G7) G2 + no-experimental-betas : G2に
+#                              CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1を追加
+#   G8) G2 + no-attribution-header : G2に
+#                              CLAUDE_CODE_ATTRIBUTION_HEADER=0を追加
+#
+#   F4) curl, short metadata value: same POST as F1 with
+#       `metadata:{user_id:"probe-user"}` added to the body.
+#   F5) curl, Claude-Code-like metadata: same, but `metadata.user_id` is a
+#       fixed dummy value shaped like user_<64-hex>_account_<uuid>_
+#       session_<uuid> (alnum/underscore/hyphen only).
+#   F6) curl, JSON-string metadata value: same, but `metadata.user_id`'s
+#       value is itself a JSON-formatted string (containing braces/quotes)
+#       like {"device_id":...,"account_uuid":...,"session_id":...}.
+#      F4-F6 all reuse F1's x-api-key auth against POST /v1/messages, and
+#      report the http code plus an error-body summary (error.type /
+#      error.message, first 120 chars) as a one-line summary.
+#   X1) Local capture (no real AWS call): spins up a minimal HTTP server on
+#       a free 127.0.0.1 port, points ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
+#       (a dummy value) at it, runs `claude -p` (G2-equivalent) against it,
+#       and records only the actual request's body top-level keys, the full
+#       JSON text of the metadata field, the anthropic-beta header, and the
+#       model value (never the system prompt, message content, or
+#       Authorization header). Always answers 400 regardless of what it
+#       receives (waits up to 3 requests to account for a possible HEAD
+#       warm-up or an early count_tokens call).
+#   G7) G2 + no-experimental-betas: G2 with
+#       CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 added.
+#   G8) G2 + no-attribution-header: G2 with
+#       CLAUDE_CODE_ATTRIBUTION_HEADER=0 added.
+#
 # 安全のための制約（JA）:
 #   - 各バリアントに 90 秒のタイムアウト（macOS 標準 bash には timeout/gtimeout が
 #     無い前提で、プロセスグループごと kill する実装。参考:
@@ -262,7 +344,7 @@ set +x
 TIMEOUT_SECS=90
 PROMPT="Reply with exactly: OK"
 
-KNOWN_VARIANTS="A B C D E F1 F2 F3 G1 G2 G3 G4 G5 G6 H1"
+KNOWN_VARIANTS="A B C D E F1 F2 F3 F4 F5 F6 X1 G1 G2 G3 G4 G5 G6 G7 G8 H1"
 DEFAULT_VARIANTS="A B C D E F1 F2 F3 G1 G2 G3 G4"
 
 ONLY_LIST=""
@@ -934,6 +1016,31 @@ REQ_BODY=$(jq -n --arg model "$MODEL_ID" --arg prompt "$PROMPT" \
 COUNT_BODY=$(jq -n --arg model "$MODEL_ID" --arg prompt "$PROMPT" \
   '{model:$model, messages:[{role:"user", content:$prompt}]}')
 
+# --- F4/F5/F6用: metadata.user_idの固定ダミー値 ---
+# --- For F4/F5/F6: fixed dummy values for metadata.user_id ---
+# 実在のdevice/account/sessionではない、構造だけを模したプレースホルダ
+# （毎回同じ固定値。Claude Code自体がbodyへ組み込むuser_idの実際の形式は
+# 未確認のため、F5は「英数・アンダースコア・ハイフンのみの長い値」という
+# 仮説形状、F6は「値自体がJSON文字列」という別仮説を検証する）。
+# Not a real device/account/session — a structural placeholder only (always
+# the same fixed value). The actual shape of the user_id Claude Code itself
+# embeds is unconfirmed, so F5 probes the hypothesis "a long value using
+# only alnum/underscore/hyphen", and F6 probes the separate hypothesis "the
+# value itself is a JSON string".
+DUMMY_DEVICE_HEX="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+DUMMY_ACCOUNT_UUID="12345678-90ab-cdef-1234-567890abcdef"
+DUMMY_SESSION_UUID="abcdef12-3456-7890-abcd-ef1234567890"
+F5_METADATA_USER_ID="user_${DUMMY_DEVICE_HEX}_account_${DUMMY_ACCOUNT_UUID}_session_${DUMMY_SESSION_UUID}"
+F6_METADATA_USER_ID=$(jq -nc --arg d "$DUMMY_DEVICE_HEX" --arg a "$DUMMY_ACCOUNT_UUID" --arg s "$DUMMY_SESSION_UUID" \
+  '{device_id:$d, account_uuid:$a, session_id:$s}')
+
+REQ_BODY_F4=$(jq -n --arg model "$MODEL_ID" --arg prompt "$PROMPT" --arg uid "probe-user" \
+  '{model:$model, max_tokens:8, messages:[{role:"user", content:$prompt}], metadata:{user_id:$uid}}')
+REQ_BODY_F5=$(jq -n --arg model "$MODEL_ID" --arg prompt "$PROMPT" --arg uid "$F5_METADATA_USER_ID" \
+  '{model:$model, max_tokens:8, messages:[{role:"user", content:$prompt}], metadata:{user_id:$uid}}')
+REQ_BODY_F6=$(jq -n --arg model "$MODEL_ID" --arg prompt "$PROMPT" --arg uid "$F6_METADATA_USER_ID" \
+  '{model:$model, max_tokens:8, messages:[{role:"user", content:$prompt}], metadata:{user_id:$uid}}')
+
 # --- --token-from-profile / G6 用: aws-bedrock-token-generator (venv) ---
 # --- For --token-from-profile / G6: aws-bedrock-token-generator (venv) ---
 # 本人裁定(2026-09-03): Bedrock資格情報はプロファイル(アクセスキー+シークレット)の
@@ -1234,6 +1341,15 @@ can_execute_g6() {
   resolve_token_venv_python
 }
 
+# X1 は BEARER_TOKEN も AWS も一切使わない(127.0.0.1のローカルサーバーへ
+# claude -pを向けるだけ)ため、python3の有無だけを見る。
+# X1 never uses BEARER_TOKEN or AWS at all (it just points `claude -p` at a
+# local 127.0.0.1 server), so it only needs python3 to be present.
+can_execute_x1() {
+  [ "$DRY_RUN" -eq 1 ] && return 0
+  command -v python3 >/dev/null 2>&1
+}
+
 echo "=== 関連env変数の有無（名前のみ・値は非表示） / relevant env vars presence (names only, no values) ==="
 # 注意: AWS_BEARER_TOKEN_BEDROCK はこの時点で既に unset 済み(子プロセスへ
 # 継承させないため、値をBEARER_TOKENへ取り込んだ直後にunsetしている)。
@@ -1325,7 +1441,7 @@ echo "=== Bedrock via ANTHROPIC_BASE_URL probe (EXP-1, timeout ${TIMEOUT_SECS}s 
 # selecting only G6 doesn't needlessly attempt token generation or
 # misleadingly claim "F/G/H skipped" while G6 actually runs.
 ANY_TOKEN_DEPENDENT_SELECTED=0
-for v in F1 F2 F3 G1 G2 G3 G4 G5 H1; do
+for v in F1 F2 F3 F4 F5 F6 G1 G2 G3 G4 G5 G7 G8 H1; do
   if should_run "$v"; then
     ANY_TOKEN_DEPENDENT_SELECTED=1
     break
@@ -1397,7 +1513,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
 fi
 
 if [ "$ANY_TOKEN_DEPENDENT_SELECTED" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && [ -z "$BEARER_TOKEN" ]; then
-  echo "SKIP F1-F3/G1-G5/H1: AWS_BEARER_TOKEN_BEDROCK が見つかりません(環境変数・${BEDROCK_ENV_FILE}・--token-from-profileのいずれからも取得できませんでした。G6のみを選んだ場合はこのメッセージが出ても正常です)。 / Skipping F1-F3/G1-G5/H1: AWS_BEARER_TOKEN_BEDROCK could not be obtained (from env, ${BEDROCK_ENV_FILE}, or --token-from-profile). This message is expected/harmless if you only selected G6."
+  echo "SKIP F1-F3,F4-F6/G1-G5,G7-G8/H1: AWS_BEARER_TOKEN_BEDROCK が見つかりません(環境変数・${BEDROCK_ENV_FILE}・--token-from-profileのいずれからも取得できませんでした。G6・X1のみを選んだ場合はこのメッセージが出ても正常です)。 / Skipping F1-F3,F4-F6/G1-G5,G7-G8/H1: AWS_BEARER_TOKEN_BEDROCK could not be obtained (from env, ${BEDROCK_ENV_FILE}, or --token-from-profile). This message is expected/harmless if you only selected G6 and/or X1."
 fi
 
 CURL_BODY_F1="$OUTDIR/body_F1.json"
@@ -1443,6 +1559,57 @@ if should_run "F3" && can_execute_fg; then
   fi
 fi
 
+# --- F4/F5/F6: G系400("metadataがregexに違反")の原因切り分け(2026-09-04追加) ---
+# --- F4/F5/F6: isolate the cause of the G-family 400s ("metadata violates
+#     the regex"), added 2026-09-04 ---
+# F1と同じx-api-key認証・POST /v1/messagesへ、bodyにmetadata.user_idだけを
+# 足して送る。F1(metadata無し)は通る実測があるため、metadataフィールド自体・
+# その形式のどちらが拒否原因かをここで切り分ける。
+# Same x-api-key auth and POST /v1/messages as F1, only adding
+# metadata.user_id to the body. F1 (no metadata) is known to succeed, so
+# this isolates whether the metadata field itself, or its particular shape,
+# is what gets rejected.
+CURL_BODY_F4="$OUTDIR/body_F4.json"
+CURL_BODY_F5="$OUTDIR/body_F5.json"
+CURL_BODY_F6="$OUTDIR/body_F6.json"
+CURL_ERR_F4="$OUTDIR/f4.stderr"
+CURL_ERR_F5="$OUTDIR/f5.stderr"
+CURL_ERR_F6="$OUTDIR/f6.stderr"
+
+variant_F4() {
+  curl -sS --max-time 60 --connect-timeout 15 -K "$CFG_XAPIKEY" -X POST "$BEDROCK_RUNTIME_MSG_URL" \
+    -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" \
+    -d "$REQ_BODY_F4" -o "$CURL_BODY_F4" -w '%{http_code}' 2>"$CURL_ERR_F4"
+}
+variant_F5() {
+  curl -sS --max-time 60 --connect-timeout 15 -K "$CFG_XAPIKEY" -X POST "$BEDROCK_RUNTIME_MSG_URL" \
+    -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" \
+    -d "$REQ_BODY_F5" -o "$CURL_BODY_F5" -w '%{http_code}' 2>"$CURL_ERR_F5"
+}
+variant_F6() {
+  curl -sS --max-time 60 --connect-timeout 15 -K "$CFG_XAPIKEY" -X POST "$BEDROCK_RUNTIME_MSG_URL" \
+    -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" \
+    -d "$REQ_BODY_F6" -o "$CURL_BODY_F6" -w '%{http_code}' 2>"$CURL_ERR_F6"
+}
+
+if should_run "F4" && can_execute_fg; then
+  if ! maybe_dry_run_or "F4" "curl -X POST $BEDROCK_RUNTIME_MSG_URL -H 'x-api-key: ***' -H 'anthropic-version: 2023-06-01' -d '{model,max_tokens:8,messages,metadata:{user_id:\"probe-user\"}}'"; then
+    run_curl_variant "F4: curl metadata short" "POST anthropic/v1/messages (metadata.user_id=short)" "$CURL_BODY_F4" "$CURL_ERR_F4" variant_F4
+  fi
+fi
+
+if should_run "F5" && can_execute_fg; then
+  if ! maybe_dry_run_or "F5" "curl -X POST $BEDROCK_RUNTIME_MSG_URL -H 'x-api-key: ***' -H 'anthropic-version: 2023-06-01' -d '{model,max_tokens:8,messages,metadata:{user_id:\"user_<hex>_account_<uuid>_session_<uuid>\"}}'"; then
+    run_curl_variant "F5: curl metadata claude-like" "POST anthropic/v1/messages (metadata.user_id=claude-code-like)" "$CURL_BODY_F5" "$CURL_ERR_F5" variant_F5
+  fi
+fi
+
+if should_run "F6" && can_execute_fg; then
+  if ! maybe_dry_run_or "F6" "curl -X POST $BEDROCK_RUNTIME_MSG_URL -H 'x-api-key: ***' -H 'anthropic-version: 2023-06-01' -d '{model,max_tokens:8,messages,metadata:{user_id:\"{\\\"device_id\\\":...}\"}}'"; then
+    run_curl_variant "F6: curl metadata JSON-string" "POST anthropic/v1/messages (metadata.user_id=JSON-string value)" "$CURL_BODY_F6" "$CURL_ERR_F6" variant_F6
+  fi
+fi
+
 # --safe-mode: CLAUDE.md/skills/plugins/hooks/MCPサーバ等を無効化し、export した
 # 秘密がそれら経由で外部へ渡る余地を減らす(Codexレビュー指摘への対応・2026-09-03)。
 # --settings によるenvオーバーライドは --safe-mode 下でも効くことを本機の
@@ -1464,7 +1631,16 @@ fi
 # Opus 5 review, 2026-09-03); sharing this array prevents that recurring.
 G_BASE_ARGS=(--output-format stream-json --verbose --permission-mode plan --safe-mode)
 G_COMMON_ARGS=(-p "$PROMPT" "${G_BASE_ARGS[@]}" --allowedTools "" --tools "")
-G_UNSET_NOTE="unset: CLAUDE_CODE_USE_BEDROCK,CLAUDE_CODE_USE_MANTLE,AWS_PROFILE,AWS_REGION,ANTHROPIC_API_KEY,ANTHROPIC_AUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN"
+# reset_auth_env() が実際にunsetする変数と一致させる(表示用ノートが実挙動と
+# ズレないように。2026-09-04にCLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS/
+# CLAUDE_CODE_ATTRIBUTION_HEADERを追加した際、reset_auth_env側だけ更新して
+# ここを更新し忘れると表示と実際の挙動が食い違うため)。
+# Kept in sync with what reset_auth_env() actually unsets (so this display
+# note doesn't drift from real behavior; when
+# CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS/CLAUDE_CODE_ATTRIBUTION_HEADER were
+# added to reset_auth_env on 2026-09-04, forgetting to update this string
+# too would have made the note misleading).
+G_UNSET_NOTE="unset: CLAUDE_CODE_USE_BEDROCK,CLAUDE_CODE_USE_MANTLE,AWS_PROFILE,AWS_REGION,ANTHROPIC_API_KEY,ANTHROPIC_AUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS,CLAUDE_CODE_ATTRIBUTION_HEADER"
 
 # 各 variant_G*/H1 の冒頭で、Bedrock関連envに加えて資格情報系の変数
 # (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN)を
@@ -1477,9 +1653,20 @@ G_UNSET_NOTE="unset: CLAUDE_CODE_USE_BEDROCK,CLAUDE_CODE_USE_MANTLE,AWS_PROFILE,
 # this variant is meant to test. Prevents an inherited credential from
 # contaminating the experiment or leaking into an unintended header
 # (per Codex review, 2026-09-03).
+#   2026-09-04追加: CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS/
+#   CLAUDE_CODE_ATTRIBUTION_HEADERも同じ理由でunsetする。呼び出し元シェルに
+#   どちらかが既に設定されていた場合、G7/G8以外の変種(G1〜G6・比較対象の
+#   G2)にまで意図せず継承され、「G2に1つだけ足した変種」という前提が
+#   崩れるのを防ぐため(Codexレビュー指摘・2026-09-04)。
+#   Added 2026-09-04: also unset CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS/
+#   CLAUDE_CODE_ATTRIBUTION_HEADER for the same reason — if either were
+#   already set in the caller's shell, it would unintentionally leak into
+#   every variant other than G7/G8 (including G2, the baseline G7/G8 are
+#   meant to differ from by exactly one var), per Codex review, 2026-09-04.
 reset_auth_env() {
   unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_MANTLE AWS_PROFILE AWS_REGION \
-        ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN 2>/dev/null || true
+        ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN \
+        CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS CLAUDE_CODE_ATTRIBUTION_HEADER 2>/dev/null || true
 }
 
 variant_G1() {
@@ -1633,6 +1820,244 @@ variant_G6() {
   claude "${G_COMMON_ARGS[@]}" --model "$MODEL_ID" --settings "$settings"
 }
 
+# G7/G8: G2にclaude起動時のbeta/attribution関連ヘッダを抑止する既知の
+# 環境変数を1つずつ足しただけの変種(2026-09-04追加)。どちらもAnthropic公式
+# ドキュメントページには未掲載だが、複数のGitHub Issue/コミュニティ記事で
+# 存在・効果(Bedrock 400回避との報告を含む)が確認できる。一次情報は
+# ヘッダの「一次情報」節を参照。
+# G7/G8: G2 with one extra known env var added, each meant to suppress a
+# beta/attribution-related header claude sends (added 2026-09-04). Neither
+# is on Anthropic's official docs page, but both are corroborated by
+# multiple independent GitHub issues/community write-ups (including reports
+# that they avoid Bedrock 400s). See the header's "Sources" section.
+variant_G7() {
+  reset_auth_env
+  export ANTHROPIC_BASE_URL="$BEDROCK_RUNTIME_BASE"
+  export ANTHROPIC_AUTH_TOKEN="$BEARER_TOKEN"
+  export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
+  claude "${G_COMMON_ARGS[@]}" --model "$MODEL_ID" \
+    --settings '{"env":{"CLAUDE_CODE_USE_BEDROCK":"0","CLAUDE_CODE_USE_MANTLE":"0"}}'
+}
+variant_G8() {
+  reset_auth_env
+  export ANTHROPIC_BASE_URL="$BEDROCK_RUNTIME_BASE"
+  export ANTHROPIC_AUTH_TOKEN="$BEARER_TOKEN"
+  export CLAUDE_CODE_ATTRIBUTION_HEADER=0
+  claude "${G_COMMON_ARGS[@]}" --model "$MODEL_ID" \
+    --settings '{"env":{"CLAUDE_CODE_USE_BEDROCK":"0","CLAUDE_CODE_USE_MANTLE":"0"}}'
+}
+
+# --- X1: ローカル捕捉(実AWSを一切呼ばない)(2026-09-04追加) ---
+# --- X1: local capture, never calls real AWS (added 2026-09-04) ---
+# 127.0.0.1の空きポートに最小HTTPサーバーを立て、claude -p(G2相当の設定)を
+# そこへ向けて実行し、実際に送られてきたリクエストのbodyトップレベルキー・
+# metadataフィールドのJSON全文・anthropic-betaヘッダ・model値だけを記録する。
+# system prompt・messages本文・Authorizationヘッダは一切記録しない。
+# 何を受けても400を返す(この400自体には意味を持たせない。目的はBedrockへ
+# 届く前の、claudeが組み立てた生リクエストを観測すること)。
+# Spins up a minimal HTTP server on a free 127.0.0.1 port, points `claude -p`
+# (G2-equivalent settings) at it, and records only the actual request's body
+# top-level keys, the full JSON text of the metadata field, the
+# anthropic-beta header, and the model value — never the system prompt,
+# message content, or Authorization header. Always answers 400 regardless of
+# what it receives (that status carries no meaning here; the point is to
+# observe the raw request claude builds before it would ever reach Bedrock).
+X1_SERVER_SCRIPT="$OUTDIR/x1_capture_server.py"
+X1_PORT_FILE="$OUTDIR/x1_port"
+X1_CAPTURE_FILE="$OUTDIR/x1_capture.json"
+
+write_x1_server() {
+  (
+    umask 077
+    cat <<'PYEOF' > "$X1_SERVER_SCRIPT"
+import http.server
+import json
+import os
+import sys
+
+outdir = sys.argv[1]
+port_file = os.path.join(outdir, "x1_port")
+capture_file = os.path.join(outdir, "x1_capture.json")
+
+captured = {"done": False}
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    # HTTP/1.0にして1接続1リクエストに固定し、HEAD warm-up・count_tokens・
+    # 本命のmessagesが別々のhandle_request()呼び出しとして届くようにする
+    # (keep-aliveだと1接続内で複数リクエストがハンドラの内部ループへ隠れ、
+    # 下のfor文の「最大3リクエスト」カウントと噛み合わなくなるため)。
+    # Force HTTP/1.0 (one request per connection) so a HEAD warm-up,
+    # count_tokens, and the real messages call each arrive as their own
+    # handle_request() call below, instead of being hidden inside one
+    # keep-alive connection's internal request loop.
+    protocol_version = "HTTP/1.0"
+
+    def _send_error(self):
+        payload = json.dumps(
+            {"type": "error", "error": {"type": "invalid_request_error", "message": "probe capture"}}
+        ).encode("utf-8")
+        self.send_response(400)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except Exception:
+            pass
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self):
+        self.do_HEAD()
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length) if length else b""
+        # count_tokensは(捕捉が済むまでは)無視して待つ(F1-F3と同様、
+        # bedrock-runtimeはcount_tokensも/v1/messagesと同じ経路系統に来る)。
+        # Ignore count_tokens until the real capture is done (per F1-F3,
+        # bedrock-runtime routes count_tokens through the same path family
+        # as /v1/messages).
+        if self.path.endswith("/count_tokens") and not captured["done"]:
+            self._send_error()
+            return
+        if not captured["done"]:
+            try:
+                data = json.loads(body) if body else {}
+            except Exception:
+                data = {}
+            if isinstance(data, dict):
+                top_level_keys = sorted(data.keys())
+                metadata = data.get("metadata")
+                model = data.get("model")
+            else:
+                top_level_keys, metadata, model = [], None, None
+            out = {
+                "top_level_keys": top_level_keys,
+                "metadata": metadata,
+                "anthropic_beta": self.headers.get("anthropic-beta", ""),
+                "model": model,
+            }
+            with open(capture_file, "w") as f:
+                json.dump(out, f)
+            captured["done"] = True
+        self._send_error()
+
+    def log_message(self, format, *args):
+        pass
+
+
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+with open(port_file, "w") as f:
+    f.write(str(server.server_address[1]))
+# 自前の保険的タイムアウト: 外側のプロセスグループkillが何らかの理由で
+# 届かなくても、85秒経てば必ず自分で終了する(G6ヘルパーと同じ考え方)。
+# server.timeoutはhandle_request()の1回あたりの上限であり、単純に
+# 固定値へ設定してループするだけだと最大3回×85秒=255秒までかかりうる
+# (Codexレビュー指摘・2026-09-04)。time.monotonic()で絶対デッドラインを
+# 持ち、反復のたびに残り時間をserver.timeoutへ設定して85秒を厳守する。
+# Self-contained safety timeout: even if the outer process-group kill
+# somehow doesn't reach this process, it always exits on its own after 85s
+# (same rationale as the G6 helper's self timeout). server.timeout only
+# bounds a single handle_request() call, so naively setting a fixed value
+# and looping could take up to 3 * 85s = 255s in the worst case (per Codex
+# review, 2026-09-04). Track an absolute deadline via time.monotonic() and
+# set server.timeout to the remaining budget before each iteration so the
+# 85s cap is actually honored.
+import time
+
+deadline = time.monotonic() + 85
+for _ in range(3):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        break
+    server.timeout = remaining
+    server.handle_request()
+    if captured["done"]:
+        break
+PYEOF
+  )
+}
+
+variant_X1() {
+  reset_auth_env
+  # サブシェル包み無しで直接バックグラウンド起動する(G6ヘルパー修正と同じ
+  # 理由: run_with_timeoutが直前にset -mしたジョブ制御が引き継がれた状態で
+  # `( ... ) &` を重ねると、bashのジョブ制御がその子を別プロセスグループへ
+  # 切り離し、外側のグループkillが届かなくなる不具合が実測済みのため)。
+  # 念のためこの関数内でもset +mを明示しておく。
+  # Background directly, without a nested subshell wrapper (same reason as
+  # the G6 helper fix: stacking another `( ... ) &` while job control is
+  # still active from run_with_timeout's own `set -m` would detach this
+  # child into its own process group, breaking the outer group-kill — a bug
+  # already confirmed empirically for G6). `set +m` here makes that
+  # explicit regardless of what was inherited.
+  set +m
+  rm -f "$X1_PORT_FILE" "$X1_CAPTURE_FILE" 2>/dev/null || true
+  python3 "$X1_SERVER_SCRIPT" "$OUTDIR" >"$OUTDIR/x1_server.log" 2>&1 &
+  local server_pid=$! waited=0 port claude_rc=0
+  while [ ! -s "$X1_PORT_FILE" ]; do
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      echo "X1 ERROR: ローカル捕捉サーバーがポート待ち受け前に終了しました / local capture server exited before it could bind a port" >&2
+      return 1
+    fi
+    if [ "$waited" -ge 20 ]; then
+      kill "$server_pid" 2>/dev/null || true
+      echo "X1 ERROR: ローカル捕捉サーバーが20秒以内にポートを報告しませんでした / local capture server did not report a port within 20s" >&2
+      return 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  port=$(cat "$X1_PORT_FILE" 2>/dev/null || true)
+  export ANTHROPIC_BASE_URL="http://127.0.0.1:${port}"
+  export ANTHROPIC_AUTH_TOKEN="dummy"
+  claude "${G_COMMON_ARGS[@]}" --model "$MODEL_ID" \
+    --settings '{"env":{"CLAUDE_CODE_USE_BEDROCK":"0","CLAUDE_CODE_USE_MANTLE":"0"}}' || claude_rc=$?
+  kill "$server_pid" 2>/dev/null || true
+  wait "$server_pid" 2>/dev/null || true
+  return "$claude_rc"
+}
+
+# X1専用: report2(claude側の通常列)に加え、ローカルサーバーが捕捉した
+# リクエストの中身(トップレベルキー・metadata全文・anthropic-beta・model)を
+# 追加の1行(長くなりがちなmetadataだけ別行)として出す。
+# X1-specific: on top of report2's usual claude-side columns, also print the
+# captured request's contents (top-level keys, full metadata, anthropic-beta,
+# model) as an extra line (metadata, which tends to be long, gets its own
+# line).
+report_x1_capture() {
+  local capfile="$X1_CAPTURE_FILE" keys metadata beta model
+  if [ -s "$capfile" ]; then
+    keys=$( (jq -r '(.top_level_keys // []) | join(",")' "$capfile" 2>/dev/null) || true )
+    metadata=$( (jq -c '.metadata' "$capfile" 2>/dev/null) || true )
+    beta=$( (jq -r '.anthropic_beta // ""' "$capfile" 2>/dev/null) || true )
+    model=$( (jq -r '.model // "?"' "$capfile" 2>/dev/null) || true )
+  fi
+  [ -z "$keys" ] && keys="(no request captured / リクエスト未捕捉)"
+  [ -z "$metadata" ] && metadata="null"
+  [ "$metadata" = "null" ] && metadata="(none)"
+  [ -z "$model" ] && model="?"
+  keys=$(redact "$keys")
+  metadata=$(redact "$metadata")
+  beta=$(redact "$beta")
+  model=$(redact "$model")
+  printf '%-26s topLevelKeys=%-42s model=%-24s anthropic-beta=%s\n' \
+    "X1-capture" "$keys" "$model" "${beta:--}"
+  printf '%-26s metadata=%s\n' "" "$metadata"
+  record_summary "X1-capture" "n/a" "topLevelKeys=$keys model=$model anthropic-beta=${beta:--} metadata=$metadata"
+}
+
+report_x1() {
+  local name="$1" outfile="$2" rc="$3" timed_out="$4"
+  report2 "$name" "$outfile" "$rc" "$timed_out"
+  report_x1_capture
+}
+
 H1_PROMPT="Use the WebSearch tool to find the title of https://code.claude.com/docs/en/amazon-bedrock and reply with the title only."
 variant_H1() {
   reset_auth_env
@@ -1690,6 +2115,29 @@ if should_run "G6"; then
       echo "SKIP G6: venv/module が見つかりません ($TOKEN_VENV)。 / SKIP G6: venv/module not found ($TOKEN_VENV)."
       echo "セットアップ / setup:"
       print_token_venv_setup_instructions
+    fi
+  fi
+fi
+
+if should_run "G7" && can_execute_fg; then
+  if ! maybe_dry_run_or "G7" "$G_UNSET_NOTE / export ANTHROPIC_BASE_URL=$BEDROCK_RUNTIME_BASE ANTHROPIC_AUTH_TOKEN=*** CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 / claude ${G_COMMON_ARGS[*]} --model $MODEL_ID --settings '{...}'"; then
+    run_variant_ext report2 "G7: G2+no-experimental-betas" variant_G7
+  fi
+fi
+
+if should_run "G8" && can_execute_fg; then
+  if ! maybe_dry_run_or "G8" "$G_UNSET_NOTE / export ANTHROPIC_BASE_URL=$BEDROCK_RUNTIME_BASE ANTHROPIC_AUTH_TOKEN=*** CLAUDE_CODE_ATTRIBUTION_HEADER=0 / claude ${G_COMMON_ARGS[*]} --model $MODEL_ID --settings '{...}'"; then
+    run_variant_ext report2 "G8: G2+no-attribution-header" variant_G8
+  fi
+fi
+
+if should_run "X1"; then
+  if ! maybe_dry_run_or "X1" "local python3 HTTP server on 127.0.0.1:<port> (no AWS call) captures 1 request's body top-level keys/metadata + anthropic-beta header / export ANTHROPIC_BASE_URL=http://127.0.0.1:<port> ANTHROPIC_AUTH_TOKEN=dummy / claude ${G_COMMON_ARGS[*]} --model $MODEL_ID --settings '{...}'"; then
+    if can_execute_x1; then
+      write_x1_server
+      run_variant_ext report_x1 "X1: local capture" variant_X1
+    else
+      echo "SKIP X1: python3 が見つかりません(PATHを確認してください) / SKIP X1: python3 not found in PATH"
     fi
   fi
 fi
