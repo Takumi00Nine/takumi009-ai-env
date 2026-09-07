@@ -95,23 +95,30 @@ BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 # S10/S11/S16対応（check_leader_settings_drift参照）の比較先として読むだけ
 # ＝副作用ゼロ。
 : "${AIENV_SETTINGS_JSON_FILE:=$HOME/.claude/settings.json}"
-# 最小能力表の7キー（§3.3.0）。ここに列挙した7つが「今のスキーマが要求する
+# 最小能力表の8キー（§3.3.0）。ここに列挙した8つが「今のスキーマが要求する
 # キー」＝これが欠けていれば§9.0 A-1最低契約④⑤どおり最小能力+⚠️へ倒す
-# （T5＝既存キー欠落）。逆にfrontmatterにこの7つ以外の見慣れないキーが
+# （T5＝既存キー欠落）。逆にfrontmatterにこの8つ以外の見慣れないキーが
 # 有っても、それは「まだこのコードが追随していない新しいキー」とみなし
 # unknown扱いで無視するだけに留め、最小能力へは倒さない（T4＝新キー未追随。
 # schema_version／版管理を作らない以上、キー集合の前方互換をこの非対称な
 # 扱いで担保する＝リーダー指示）。
+# 2026-09-05 P3段階4差し戻し対応: profile_resolve.py（v2）のCAPABILITY_KEYSへ
+# no_read_pathsを追加したのに合わせてこちら（v1・第2正本）にも追加した
+# （両者は歴史的に同一集合を保つ運用＝片方だけ増減するとドリフトになる）。
+# 2026-09-07 3モード体制対応（3モード体制-設計-2026-09-06.md §4.3(a)）:
+# profile_resolve.pyのCAPABILITY_KEYSから`reviewer`を削り`team_mode`を
+# 同じ位置に足したのに合わせて、こちら（v1・第2正本）も同じ位置で差し替えた。
 LOCAL_PROFILE_KNOWN_KEYS=(
   "inventory_source"
-  "reviewer"
+  "team_mode"
   "vault_write"
   "vault_scope"
   "ui.user_call"
   "git_role"
   "web_verification"
+  "no_read_paths"
 )
-# テスト専用: BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1のとき、最小能力表7キー
+# テスト専用: BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1のとき、最小能力表8キー
 # （LOCAL_PROFILE_KNOWN_KEYS）を1行1キーで標準出力へ返して即終了する。
 # stdin JSON読み込み・ヘルス行計算等の本処理には一切進まない。本番では
 # 未設定のため無効（2026-08-30追加・MINOR-D対応: test-core-docs-placeholder-
@@ -119,6 +126,57 @@ LOCAL_PROFILE_KNOWN_KEYS=(
 # ハードコードの代わりにこの実行時ソースを参照させる）。
 if [ "${BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY:-0}" = "1" ]; then
   printf '%s\n' "${LOCAL_PROFILE_KNOWN_KEYS[@]}"
+  exit 0
+fi
+
+# 3モード体制（3モード体制-設計-2026-09-06.md §4.3(b)）: team_mode能力軸の値
+# （solo|lean|full|unknown）から開幕1行の文面を組み立てる。builtinだけで書き
+# （外部プロセスを起こさない＝§10.5・NFR-4）、結果は $TEAM_MODE_LINE へ入れる。
+# ⚠️ 3本＋未確定行の正本はPreferences/core-conduct.md §1（規範）。本関数は
+# それを実装として複製する（両者の一致は静的テストが機械検証する＝§10.3-10）。
+compose_team_mode_line() {   # $1 = solo|lean|full|unknown
+  case "$1" in
+    solo) TEAM_MODE_LINE='🧭 現在＝単独モード（リーダーが全工程を自分で行います。第三者検証はありません）。他のモード＝軽量／フル。切り替えたいときは言ってください' ;;
+    lean) TEAM_MODE_LINE='🧭 現在＝軽量モード（実装者と検証職を置き、適用工程ごとに1巡で回します）。他のモード＝単独／フル。切り替えたいときは言ってください' ;;
+    full) TEAM_MODE_LINE='🧭 現在＝フルモード（職種ごとに担当を立て、指摘が収まるまで検証を回します）。他のモード＝単独／軽量。切り替えたいときは言ってください' ;;
+    *)    TEAM_MODE_LINE='🧭 現在＝モード未確定（配役表の team_mode が読めません）。委任の前に本人へ確認します。' ;;
+  esac
+}
+
+# 3モード体制（§4.3(e)）: DIRECTIVE ⑤（オーケストレーター行動則）をモード別に
+# 組み立てる。結果は $TEAM_MODE_DIRECTIVE5 へ入れる（先頭に「⑤ 」を含む）。
+compose_team_mode_directive5() {   # $1 = solo|lean|full|unknown
+  local base5='⑤ オーケストレーター行動則（詳細＝Preferences/core-workflow.md §1・§2）: 「作る工程」は自分でやらず委任し、成果物の修正はリーダーが直接行わず作成元ロールへ差し戻す。⚠️ リーダー自身の Edit/Write が正当なのは、~/.claude・scratchpad・リーダー自身の成果物への軽微な修正・ユーザーの直接作業指示のみ（Vault は含まない）。許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。'
+  case "$1" in
+    solo)
+      TEAM_MODE_DIRECTIVE5='⑤ ⚠️ 単独モードでは全工程をリーダー自身が行い、他の職種を1つも立てない（検証職も立てない）。工程は飛ばさず『専任なし』を明記する。許可パス外の直接編集は、単独モードであることを理由として本人への応答で明示してから touch $MARKER_DIR/claude-direct-edit-ok-<session_id> して再試行する。⚠️ Vault の AI 向け6フォルダは対象外——solo でもリーダーは直筆せず『Vault記録候補:』で申告する。'
+      ;;
+    lean)
+      TEAM_MODE_DIRECTIVE5="${base5} ⚠️ 軽量モードでは要件定義と設計はリーダー自身が行う。実装は implementer へ委任し、適用工程ごとに検証職を1巡だけ回す。requirements-analyst・system-designer・researcher・adoption-critic・operator は立てず『専任なし』を明記する。"
+      ;;
+    full)
+      TEAM_MODE_DIRECTIVE5="$base5"
+      ;;
+    *)
+      TEAM_MODE_DIRECTIVE5="${base5} ⚠️ モードが未確定なので、委任の前に本人へ確認する。"
+      ;;
+  esac
+}
+
+# テスト専用: BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY=1のとき、4本の開幕1行
+# （solo/lean/full/未確定）をcompose_team_mode_line()で組み立てて1行1本、
+# 標準出力へ返して即終了する（BOOTSTRAP_PRINT_KNOWN_KEYS_ONLYと同型）。
+# stdin JSON読み込み・resolve呼び出し等の本処理には一切進まない。本番では
+# 未設定のため無効。⚠️ この口が測るのは compose_team_mode_line()（文面の
+# 組み立て）だけがbuiltinで書けているか（§10.5⑦の0件検査）と、
+# core-conduct.md正本との文面一致（§10.3-10）の2つ。「TEAM_MODE:値の
+# 取り出し」自体（このifより後段のDIRECTIVE組み立て内）はこの口を通らない
+# ——そちらの外部プロセス非増加はAC-1②（SessionStart全体の実走）が担保する。
+if [ "${BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY:-0}" = "1" ]; then
+  for _tm_mode in solo lean full unknown; do
+    compose_team_mode_line "$_tm_mode"
+    printf '%s\n' "$TEAM_MODE_LINE"
+  done
   exit 0
 fi
 # 未記入のまま残っていると壊れているのと同じ扱いにする印（T2-MINIMAL。
@@ -255,7 +313,10 @@ is_v2_resolve_output_well_formed() {
   case "$s" in
     OK"$tab"*)
       [ "$rc" = "0" ] || return 1
-      local re="^OK${tab}schema_version=[0-9]+(${tab}FALLBACK:${name}(,${name})*)?(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${code}(,${code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
+      # ⚠️ TEAM_MODE:はschema_version=<N>の直後・必須（3モード体制-設計-
+      # 2026-09-06.md §4.2）。任意にすると「TEAM_MODEもUNKNOWN_EXTRAも無い行」
+      # を文法が受理してしまい、位置が一意に決まらなくなる。
+      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)(${tab}FALLBACK:${name}(,${name})*)?(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${code}(,${code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
       [[ "$s" =~ $re ]]
       ;;
     MINIMAL"$tab"*)
@@ -826,8 +887,12 @@ else
   # 段階で実施＝§7.3③「移送先が必読として読まれる状態になってから移送元を
   # 外す」）: `Knowledge/mistakes.md` を必読から除去し、代わりに
   # `Preferences/core-conduct.md`・`Preferences/core-workflow.md` を追加した
-  # （§9.3 P2受入①）。`coding-delegation.md`・`profile.md` はこの段では外さない
-  # （移送先未作成のためP3で外す＝設計書のP2/P3段階分けどおり）。
+  # （§9.3 P2受入①）。
+  # 2026-09-05 §9.3 P3段階4対応（Decisions/2026-09-03-p3-staged-execution
+  # 段階2で移送・段階3で配布済みを受けての段階4実施）: `Preferences/
+  # coding-delegation.md`・`Preferences/profile.md` を必読から外した
+  # （応対規則・工程規範はcore-conduct.md/core-workflow.mdへ移送済み。
+  # 残る手順・経緯は必要時に読む＝必読からは外れるだけでノート自体は残る）。
   # ⚠️ サブ機/メイン機で別配列に分岐させていない——サブ機（private層を持たない
   # 環境）での欠落判定は下のfor文の存在確認（`-f`）だけで行われ、
   # core-conduct.md・core-workflow.mdはいずれもPreferences配下＝vault-public
@@ -838,9 +903,7 @@ else
     "Preferences/absolute-rules.md"
     "Preferences/core-conduct.md"
     "Preferences/core-workflow.md"
-    "Preferences/profile.md"
     "Personal/profile-personal.md"
-    "Preferences/coding-delegation.md"
     "Preferences/vault-operation.md"
   )
   # 意図的にサブ機へ配らない（private層）ファイル。FILES配列のうちこれ**だけ**が
@@ -868,7 +931,9 @@ else
   # サブ機（private層を持たない環境）では Personal/profile-personal.md が
   # 存在しないため、「見つかりません」と毎回警告するのではなく
   # **存在するファイルだけを必読リストに載せる**（2026-07-08 リーダー指示・install-sub.sh対応）。
-  # メイン機（全7ファイルが揃う環境）の挙動は変わらない＝7ファイル全部が列挙される。
+  # メイン機（全5ファイルが揃う環境）の挙動は変わらない＝5ファイル全部が列挙される
+  # （ローカル実体プロファイルは別枠でこの後さらに1件追加され、メイン機の
+  # present_countは合計6・サブ機は5になる＝共通コア分離-設計 §9.3 の最終形）。
   list=""
   present_count=0
   missing_count=0
@@ -911,6 +976,10 @@ else
   # 短い注記だけを list に載せ、全文は読ませない（AI側は最小能力として振る舞う。
   # 機械側の解決可否とは独立＝§4a表の「機械は既知キー部分が有効でもAIは除外」）。
   LOCAL_PROFILE_WARNING=""
+  # 3モード体制（§4.3(c)）: profile_kindは現行ではこのブロックの中でしか
+  # 代入されない。TEAM_MODE:の取り出しはブロックの外でも動く必要があるので、
+  # ここで明示的に初期化する（初期化しないと将来の改修で未定義参照になる）。
+  profile_kind=""
   if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
     # resolve_local_profile()自身がsymlink拒否(SYMLINK)・不在(T1)を含めた
     # 全状態を返すため、必読リスト表示側で-L/-fを個別に再判定しない
@@ -952,9 +1021,9 @@ else
       profile_reason_code="${profile_rest%%$'\t'*}"
       profile_reason_msg="${profile_rest#*$'\t'}"
       if [ "$profile_reason_code" = "T11" ]; then
-        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})に認証情報らしいキー名があります（${profile_reason_msg}）。該当行を削除してください。認証情報は専用の資格情報機構（AWS CLI/SSO等）へ置いてください。bedrock.envに置いてよいのは認証情報ではないモデルのピン留め値だけです。最小能力（reviewer等の各キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。"
+        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})に認証情報らしいキー名があります（${profile_reason_msg}）。該当行を削除してください。認証情報は専用の資格情報機構（AWS CLI/SSO等）へ置いてください。bedrock.envに置いてよいのは認証情報ではないモデルのピン留め値だけです。最小能力（各能力軸キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。"
       else
-        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})を解決できません（${profile_reason_code}: ${profile_reason_msg}）。最小能力（reviewer等の各キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。既定値を発明しない。"
+        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})を解決できません（${profile_reason_code}: ${profile_reason_msg}）。最小能力（各能力軸キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。既定値を発明しない。"
       fi
     elif [ "$profile_has_unknown_extra" = "1" ]; then
       # T9'（U-8裁定）: 未知キーの「値」にV15では検出できない秘密が
@@ -996,11 +1065,32 @@ ${leader_settings_drift_warning}"
     fi
   fi
 
+  # 3モード体制（3モード体制-設計-2026-09-06.md §4.3(c)）: OK行の
+  # TEAM_MODE:フィールドから値を取り出す（外部プロセスを起こさない＝
+  # bashのパラメータ展開だけで行う＝NFR-4）。⚠️ `"$(printf '\t')"`は
+  # command substitutionでありbuiltinのみでもsubshellを1つ増やすため、
+  # ANSI-Cクォート`$'\t'`で代入する（Codex一次レビュー指摘・MAJOR対応。
+  # bash 3.2でも動作確認済み）。
+  tm_tab=$'\t'
+  tm_pat="${tm_tab}TEAM_MODE:"
+  team_mode=""
+  if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
+    tm_rest="${profile_status#*"$tm_pat"}"
+    [ "$tm_rest" != "$profile_status" ] && team_mode="${tm_rest%%"$tm_tab"*}"
+  fi
+  case "$team_mode" in solo|lean|full) : ;; *) team_mode="unknown" ;; esac
+  compose_team_mode_line "$team_mode"
+  compose_team_mode_directive5 "$team_mode"
+
   # 外部脳ヘルス行（fail-open: 失敗してもブートストラップ本文は必ず出す）。
   HEALTH_LINES="$(compute_health_lines 2>/dev/null)" || HEALTH_LINES=""
 
   read -r -d '' DIRECTIVE <<EOF
 【セッション開始ブートストラップ｜ハーネス強制注入】
+
+【開幕1行】最初の応答の冒頭に、次の1行をそのまま転記する（1行だけ・要約しない）:
+${TEAM_MODE_LINE}
+⚠️ この依頼に本人のモード指定が含まれていたら、上の行ではなく指定後のモードの行を1行だけ出す（2行出さない）。モードを変えられるのは本人だけ。
 
 重要: 必読ノートの全文はこのメッセージには注入されていない。
 あなたは下記ファイルをまだ読んでいない。プレビューや要約で読んだ気にならないこと。
@@ -1010,8 +1100,8 @@ $list
 
 ② 上記を読み終えるまで、ユーザー依頼の実作業（調査・検索・コード変更・委任を含む）に着手しない。
 ③ ユーザーの質問に関連するキーワードで Vault($VAULT) を Read/Grep/Glob で検索し、ヒットしたノートを読んでから回答する(obsidian-mcp は使わない)。
-④ 新たな知見・判断・好み・プロジェクト変化が出たら、その場で Vault へ記録する。決定者はリーダー・執筆は常駐チームメイト vault-scribe へ委任（リーダー直筆は禁止＝delegation-gate が deny。2026-08-12 本人指示で「軽い1件は直筆可」の例外撤廃）。vault-scribe 不在なら起動してから振る（Task tool の subagent_type は必ず"vault-scribe"を使う＝"scribe"という省略形は職種名・エージェント定義ファイル名のいずれとも一致せずspawn失敗する。2026-09-03 実機で発生した実害の再発防止）。他ワーカー/Codex は「Vault記録候補:」で申告。フロントマター必須。
-⑤ オーケストレーター行動則: 実装・調査・テスト等の「作る工程」は自分でやらず、着手前にチームメイト/Agentワーカーへ委任する（Preferences/coding-delegation）。リーダー自身の Edit/Write が正当なのは、~/.claude・scratchpad・リーダー自身の成果物への軽微な修正・ユーザーの直接作業指示のみ（Vault は含まない＝執筆は vault-scribe へ委任・直筆はフックが deny）。ワーカー/チームメイトが作成した成果物（要件定義書・設計書・コード等）への修正（レビュー指摘の反映含む）はリーダーが直接行わず、作成元ロールへ差し戻す。作成個体が停止済み・別セッションなら同ロールのチームメイトを再起動して委任する（Decisions/2026-08-14-deliverable-revision-by-creator）。許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。
+④ 新たな知見・判断・好み・プロジェクト変化が出たら、その場で Vault へ記録する。決定者・委任・空席時の申告の型は Preferences/core-workflow.md §4・§7 のとおりに従う（リーダー直筆は禁止＝delegation-gate が deny）。⚠️ vault-scribe の起動は Task tool の subagent_type に必ず"vault-scribe"を渡す（"scribe"という省略形は職種名・エージェント定義ファイル名のいずれとも一致せず spawn 失敗する。2026-09-03 実機で発生した実害の再発防止）。vault-scribe 不在なら起動してから振る。
+${TEAM_MODE_DIRECTIVE5}
 ${HEALTH_LINES:+
 【外部脳ヘルス】（scripts/check-drift.sh ⑥の簡易版。詳細確認は本体を実行）
 $HEALTH_LINES}

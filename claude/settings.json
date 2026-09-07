@@ -4,12 +4,11 @@
   },
   "permissions": {
     "allow": [
-      "mcp__codex__codex",
-      "mcp__codex__codex-reply",
       "WebSearch",
       "WebFetch(domain:*)",
       "Edit(~/Data/**)",
       "Read(~/.config/takumi009-ai-env/profile.md)",
+      "Bash(~/work/takumi009-ai-env/scripts/codex-exec.sh:*)",
       "Skill(schedule)",
       "Skill(update-config)",
       "Skill(claude-api)"
@@ -209,16 +208,6 @@
         ]
       },
       {
-        "matcher": "mcp__codex__codex",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.prompt // \"\"'); if ! printf '%s' \"$cmd\" | grep -q 'absolute-rules'; then printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' 'Codex委任プロンプトに絶対厳守ルールノートの参照がありません。プロンプトに Preferences/absolute-rules.md（[[Preferences/absolute-rules]]）を読むよう明記してください（absolute-rulesルール）。'; exit 0; fi",
-            "statusMessage": "絶対ルール参照ガード確認中"
-          }
-        ]
-      },
-      {
         "matcher": "Edit|Write|NotebookEdit",
         "hooks": [
           {
@@ -226,16 +215,6 @@
             "command": "$HOME/.claude/hooks/delegation-gate-v2.sh",
             "timeout": 10,
             "statusMessage": "委任ゲート確認中"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__codex__codex-reply",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.prompt // \"\"'); if ! printf '%s' \"$cmd\" | grep -q 'absolute-rules'; then printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' '継続(codex-reply)プロンプトに絶対厳守ルールノートの参照がありません。継続スレッドでも各プロンプトに Preferences/absolute-rules.md（[[Preferences/absolute-rules]]）への参照を含めてください（absolute-rulesルール）。'; exit 0; fi",
-            "statusMessage": "絶対ルール参照ガード確認中(継続)"
           }
         ]
       }

@@ -39,22 +39,34 @@ from typing import Optional
 # 継承環境の値で動かせる穴を作らない＝Codexレビュー指摘・Major対応。以前は
 # テスト専用の環境変数オーバーライドを持たせていたが、本番プロセスの継承
 # 環境に紛れ込んだ場合にresolver・bootstrap・known-keys全てのexpected版が
-# 静かに変わってしまうため撤去した。T4＝declared<EXPECTED_SCHEMA_VERSIONの
-# 仮想補完分岐は現行のEXPECTED=2かつv2分類の下限が2のため実運用では到達
-# しない。テストで到達させたい場合はサブプロセス内でモジュール属性
+# 静かに変わってしまうため撤去した。テストで仮想補完分岐に到達させたい
+# 場合はサブプロセス内でモジュール属性
 # `profile_resolve.EXPECTED_SCHEMA_VERSION`を直接上書きしてから呼ぶこと
 # （本番の起動経路には一切影響しない）。
-EXPECTED_SCHEMA_VERSION = 2
+# 2026-09-05 P3段階4対応（Decisions/2026-09-03-p3-staged-execution 段階2の
+# 裁定＝`{{no_read_paths}}`スロット方式を採用）: 能力軸へ`no_read_paths`を
+# 新設するのに合わせて2→3へ引き上げた。既存の実体（declared=2）は
+# reconcile_schema_version()のT4仮想補完分岐（declared<EXPECTED）に入り、
+# `no_read_paths`をunknown状態で仮想補完してT4 advisoryを出す＝実体の
+# 書き換えを強制しない後方互換の入口（この分岐は元々将来のキー追加に
+# 備えて実装済みだった。今回で初めて実運用に到達する）。
+# 2026-09-07 3モード体制対応（3モード体制-設計-2026-09-06.md §4.1）: 能力軸
+# `reviewer`を`team_mode`へ差し替えるのに合わせて3→4へ引き上げた。enumの
+# 廃止値も同時に変わる（executionの旧MCP経路の値→CLI経路の値）ため固定キー・
+# 文法・enumが変わったときだけ版を上げる規約どおり1回で版上げする
+# （同設計§4.1a。⚠️ 廃止値の文字列そのものはこのファイルへ残さない＝AC-11）。
+EXPECTED_SCHEMA_VERSION = 4
 
 META_KEYS = ("schema_version", "profile_slug")
 CAPABILITY_KEYS = (
     "inventory_source",
-    "reviewer",
+    "team_mode",
     "vault_write",
     "vault_scope",
     "ui.user_call",
     "git_role",
     "web_verification",
+    "no_read_paths",
 )
 EXTRA_FIXED_KEYS = ("excluded_models",)
 FIXED_KEYS_ORDERED = META_KEYS + CAPABILITY_KEYS + EXTRA_FIXED_KEYS  # 宣言順（known-keysの決定的出力用）
@@ -69,7 +81,7 @@ PROFILE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 ROLE_STATES = frozenset({"configured", "unavailable", "not_adopted", "unknown"})
 CAPABILITY_STATES = frozenset({"configured", "unavailable", "unknown"})
 PROVIDERS = frozenset({"anthropic-api", "bedrock", "bedrock-mantle", "external"})
-EXECUTIONS = frozenset({"subagent", "external-mcp", "external-api"})
+EXECUTIONS = frozenset({"subagent", "external-cli", "external-api"})
 ROLE_ATTR_NAMES = frozenset({"provider", "model", "execution", "effort"})
 CAPABILITY_ATTR_NAMES = frozenset({"value"})
 
@@ -92,7 +104,7 @@ BEDROCK_DISALLOWED_MODEL_PREFIXES = ("us.", "eu.", "global.", "arn:")
 # subagent実行は経路そのものがTask toolのspawnであり写像は不要＝常に①を満たす）。
 IMPLEMENTED_HANDLERS = frozenset(
     {
-        ("external", "external-mcp", "codex-review-default"),
+        ("external", "external-cli", "codex-review-default"),
     }
 )
 
@@ -102,7 +114,9 @@ _REPO_SCOPE = r"[a-z0-9][a-z0-9-]{0,31}"
 _GIT_STANCE = r"(?:push|commit|pull-only|ask)"
 CAPABILITY_VALUE_PATTERNS = {
     "inventory_source": re.compile(rf"^{_TOKEN}(,{_TOKEN}){{0,7}}$"),
-    "reviewer": re.compile(r"^(codex-mcp|peer-claude)$"),
+    # team_mode: この案件をどの体制で回すかの既定値（3モード体制-設計-2026-09-06.md
+    # §4.1a）。solo|lean|fullの1語のみ。
+    "team_mode": re.compile(r"^(?:solo|lean|full)$"),
     "vault_write": re.compile(r"^(via-scribe|direct)$"),
     "vault_scope": re.compile(r"^(full|[A-Z][A-Za-z0-9]{0,31}(,[A-Z][A-Za-z0-9]{0,31}){0,15})$"),
     "ui.user_call": re.compile(
@@ -110,6 +124,12 @@ CAPABILITY_VALUE_PATTERNS = {
     ),
     "git_role": re.compile(rf"^{_REPO_SCOPE}:{_GIT_STANCE}(,{_REPO_SCOPE}:{_GIT_STANCE})*$"),
     "web_verification": re.compile(r"^(websearch|webfetch)(,(websearch|webfetch)){0,1}$"),
+    # no_read_paths: inventory_sourceと同型の自由記述トークン列（固定enumでは
+    # なく、退避済み旧資料の置き場は機体ごとに増減しうるため）。トークンは
+    # 実際のパスではなくenum風の短い別名（例: work-old = ~/work/old/）。
+    # 別名→実パスの対応はコード側で解決しない（core-conduct.md §2の
+    # `{{no_read_paths}}`本文・profile-sample.md側の注記が正本）。
+    "no_read_paths": re.compile(rf"^{_TOKEN}(,{_TOKEN}){{0,7}}$"),
 }
 # excluded_modelsのvalue検査は_validate_capability_value()内で要素ごとに
 # provider(PROVIDERS)・model(MODEL_PATTERNS)を直接検査する（単純な正規表現1本
@@ -129,7 +149,7 @@ CAPABILITY_VALUE_PATTERNS = {
 # 走査で自動的に職種名"vault-scribe"としてマニフェストへ入る＝下記
 # role_and_core_manifest_diff()参照）。
 CORE_ROLES_WITHOUT_REPO_AGENT_FILE = frozenset(
-    {"leader", "navi", "primary-reviewer", "ja-doc"}
+    {"leader", "navi", "ja-doc"}
 )
 # leaderはspawn対象外なのでV1-bの対象から無条件除外する。
 ROLE_EXEMPT_FROM_DEFINITION_CHECK = frozenset({"leader"})
@@ -339,7 +359,7 @@ def parse_v2(path: str) -> ParsedProfile:
             parsed.meta_lineno[key] = lineno
             continue
 
-        # 状態＋属性を持つ行（role./fallback./能力軸7キー/excluded_models）。
+        # 状態＋属性を持つ行（role./fallback./能力軸8キー/excluded_models）。
         tokens = rest.split()
         state = tokens[0] if tokens else ""
         attr_tokens = tokens[1:]
@@ -439,9 +459,11 @@ def reconcile_schema_version(parsed: ParsedProfile, declared: int) -> list[str]:
     elif declared > EXPECTED_SCHEMA_VERSION:
         warnings.append("T4-PRIME:このマシンのコードが古い可能性があります（版がコードの期待より新しい）")
     else:
-        # declared < EXPECTED_SCHEMA_VERSION（現行のEXPECTED=2かつv2分類の下限が2
-        # のため通常到達しないが、将来EXPECTEDが3以上になった時のための入口を
-        # 実装しておく）。欠落した固定キーだけをunknownで仮想補完し、止めない。
+        # declared < EXPECTED_SCHEMA_VERSION（2026-09-05 P3段階4でno_read_paths
+        # 追加に伴いEXPECTED=3へ引き上げたため、schema_version:2のまま
+        # no_read_pathsを持たない既存v2実体がこの分岐へ実際に到達する本番の
+        # 後方互換経路になった）。欠落した固定キーだけをunknownで仮想補完し、
+        # 止めない。
         missing = sorted(k for k in FIXED_KEYS if k not in known_present)
         if missing:
             for k in missing:
@@ -617,7 +639,7 @@ def validate_role_line_format(line: RoleLine) -> None:
 
     if effort is not None:
         if provider == "external":
-            if (provider, execution, model) == ("external", "external-mcp", "codex-review-default"):
+            if (provider, execution, model) == ("external", "external-cli", "codex-review-default"):
                 allowed_effort = EFFORT_CODEX
             else:
                 raise _fail(
@@ -1042,6 +1064,20 @@ def model_effort_advisory(provider: str, model: str, effort: Optional[str]) -> O
 # ============================================================
 
 
+def determine_team_mode(parsed: ParsedProfile) -> str:
+    """team_mode能力軸から`TEAM_MODE:`へ出す値を決める（3モード体制-設計-
+    2026-09-06.md §4.1の表）。`configured value=<solo|lean|full>`のときだけ
+    その値を返し、それ以外（unavailable/unknown/欠落からの仮想補完）は
+    "unknown"を返す。⚠️ 新しい検査規則は作らない（FR-8）——ここに来る時点で
+    validate_capability_keys()のV7/V8-bを通過済みなので、configuredの
+    valueは既にsolo|lean|fullのいずれかであることが保証されている。
+    """
+    line = parsed.capability.get("team_mode")
+    if line is not None and line.state == "configured":
+        return line.attrs.get("value", "unknown")
+    return "unknown"
+
+
 def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str]) -> tuple[str, int]:
     """戻り値: (標準出力へ書く1行, exit code)。"""
     forbidden_hits = preflight_forbidden_keys(path)
@@ -1126,7 +1162,8 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
             if adv:
                 advisory_codes.append(adv)
 
-    fields = [f"OK\tschema_version={declared}"]
+    team_mode = determine_team_mode(parsed)
+    fields = [f"OK\tschema_version={declared}", f"TEAM_MODE:{team_mode}"]
     if fallback_roles:
         fields.append("FALLBACK:" + ",".join(sorted(fallback_roles)))
     if vacant_roles:

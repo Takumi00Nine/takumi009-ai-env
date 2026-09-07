@@ -258,7 +258,13 @@ log "promote: staging -> $VAULT_PUBLIC"
 rsync -a --delete "$STAGING_DIR/" "$VAULT_PUBLIC/"
 
 # --- 5. 全チェック通過・昇格後のみ git add/commit（push はしない） ---
-if [[ ! -d "$AIENV_REPO/.git" ]]; then
+# repo判定は「.git がディレクトリか」ではなく「git の作業ツリーとして機能するか」で行う
+# （前提修正 P-1・1-a）。linked worktree（`git worktree add`）では .git はファイル
+# （gitdir: <path> の1行）であり、旧来の `[[ ! -d "$AIENV_REPO/.git" ]]` は常に真になる
+# ため、worktree を AIENV_REPO に指定すると worktree の中へ入れ子の git repo を
+# 作ってしまっていた（静かに壊れる欠陥・設計§1 1-a）。`git rev-parse
+# --is-inside-work-tree` は通常 repo・linked worktree のどちらでも正しく判定する。
+if ! git -C "$AIENV_REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   log "AIENV_REPO が git repo ではないため git init します（ローカルのみ・リモートは設定しない）: $AIENV_REPO"
   git -C "$AIENV_REPO" init -q
 fi
@@ -274,7 +280,11 @@ else
   if ! git -C "$AIENV_REPO" var GIT_AUTHOR_IDENT >/dev/null 2>&1; then
     fail "git commit 用の identity が未設定です。'git config user.name' / 'git config user.email' を設定してください（--global または $AIENV_REPO 内で --local）"
   fi
-  git -C "$AIENV_REPO" commit -q -m "chore: export public vault snapshot ($(date +%Y-%m-%d))"
+  # -- vault-public でパス指定する（前提修正 P-1・1-b）。旧来はパス指定が無く、
+  # 実行時にたまたま stage 済みだった他の差分まで同じコミットへ巻き込んでいた
+  # （ロールバック時に「コードのコミットだけを戻す」という分離を壊す欠陥・設計§1 1-b）。
+  # stage したままの他パスの差分は index に残り、このコミットには含まれない。
+  git -C "$AIENV_REPO" commit -q -m "chore: export public vault snapshot ($(date +%Y-%m-%d))" -- vault-public
   log "commit しました（push は別の明示コマンドで行うこと）"
 fi
 

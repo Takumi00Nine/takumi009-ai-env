@@ -76,15 +76,17 @@ SCAN_DIRS = ("Knowledge", "Preferences", "Decisions", "Projects", "Personal")
 # 指摘・MAJOR-4対応）。⚠️ Knowledge/mistakes.mdの除外は維持する
 # （H19未決＝退役後に想起で拾えるようにするかは別途裁定が要るため、
 # 現状維持のまま除外し続ける）。
+# 2026-09-05 §9.3 P3段階4対応: bootstrap-vault.shのFILES配列から
+# Preferences/profile.md・Preferences/coding-delegation.mdを外した（必読から
+# 除外＝コアへの移送完了）のに合わせて、想起除外集合からも同じ2件を外す
+# （必読でなくなった以上、想起で拾えないままにする理由が無いため）。
 EXCLUDE_RELPATHS = (
     "Knowledge/mistakes.md",
     "Preferences/absolute-rules.md",
     "Preferences/core-conduct.md",
     "Preferences/core-workflow.md",
-    "Preferences/profile.md",
-    "Preferences/coding-delegation.md",
-    "Preferences/vault-operation.md",
     "Personal/profile-personal.md",
+    "Preferences/vault-operation.md",
 )
 
 # 一致キー1件あたりのスコア（legacy版のKEY_SCORE_FULL/KEY_SCORE_PARTIALと同じ値・同じ意味）。

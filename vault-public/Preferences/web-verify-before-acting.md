@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-07-23
+updated: 2026-09-05
 tags: [preference, rule, strict, absolute, web-research, verification]
 project: meta
 related:
@@ -34,3 +34,5 @@ aliases:
 **Why:** 自己判断のまま進めると正しい方法を外していても気づけない。一次情報での裏取りを毎回挟めば、誤った前提で実装/断言する事故を防げる（具体例＝[[Knowledge/mistakes]]）。**裏取り自体の省略は引き続き不可**。一方で軽い確認まで毎回 Codex に委任すると MCP往復のぶん遅く割に合わないため、担当を軽重で分けた。
 
 **How to apply:** 実装・回答・設定変更の前に、まず裏取り→根拠を得てから着手。軽い確認は Claude 本体が WebFetch で直接、重い・多方面調査は Claude ワーカー（または Codex）へ委任。テキストルールなので強制フックは効かない（未裏取りを物理的に止める手段がない）＝意識的に毎回守る。
+
+`openai.com/index/` 配下・`help.openai.com` は WebFetch が常に 403（2026-07 GPT-5.6・2026-09 GPT-6 で再現）。web.archive.org もツール側で取得不可。→ 二次情報を複数系統（報道・第三者ベンチ機関・有識者ブログ）で突合し「一次未確認」を明記して確度を下げる。

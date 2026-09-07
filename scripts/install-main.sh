@@ -118,12 +118,6 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${DOTFILES_DIR:=$HOME/work/dotfiles}"
 : "${DOTFILES_REPO_URL:=https://github.com/Takumi00Nine/dotfiles}"
-# テスト専用: "1" にすると scripts/setup-codex-mcp.sh の呼び出し自体をskipする
-# （既定0）。setup-codex-mcp.sh は実 claude/codex CLI を呼びうるため、それらが
-# 実際にPATH上にある開発機でテストを走らせると、HOMEをfixtureへ差し替えていても
-# 実システムのMCP登録に触れてしまう恐れがある（Codexレビュー指摘・Major。
-# scripts/install-sub.sh の SKIP_LAUNCHCTL と同じ考え方の対策）。
-: "${SKIP_CODEX_MCP:=0}"
 # テスト専用: "1" にすると launchctl への実操作（bootout/bootstrap/enable）だけを
 # skipし、plist生成（プレースホルダ置換）はそのまま行う（週次drift通知LaunchAgentの
 # 設置に使用。scripts/install-sub.sh の SKIP_LAUNCHCTL と同じ考え方・同じ変数名。
@@ -166,7 +160,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${AIENV_LEADER_DIALOG_TIMEOUT:=60}"
 # テスト専用: "1" にすると `[ -t 0 ]` の判定結果によらず対話可能とみなす
 # （§3.9の対話フローを実TTY無しで決定的に検証するためのテスト用エスケープ
-# ハッチ。SKIP_LAUNCHCTL/SKIP_CODEX_MCPと同じ「テスト専用変数」の流儀。
+# ハッチ。SKIP_LAUNCHCTLと同じ「テスト専用変数」の流儀。
 # --non-interactiveが指定されていれば引き続きそちらが優先する）。
 : "${AIENV_FORCE_TTY_FOR_TEST:=0}"
 # Bedrock env ファイルから settings.json の "env" ブロックへ取り込んでよい
@@ -671,9 +665,9 @@ with open(outpath, 'w', encoding='utf-8') as f:
   # ⚠️ ベストエフォート（既存モード/所有者の維持は§3.9の望ましい振る舞いで
   # あって必須要件ではない）。`A && B`は`B`が失敗すると複合コマンド全体の
   # 終了ステータスが非0になり、素の文として書くと`set -e`でここが即終了して
-  # しまう（2026-09-01 実測: `chown`は`/usr/sbin/`にありPATHが絞られた環境
-  # 〈tests/test-install-main-codex-mcp.sh〉ではcommand not found=127になり、
-  # role.leaderの書込み自体が中断していた）。`|| true`で必ず後続へ進める。
+  # しまう（2026-09-01 実測: `chown`は`/usr/sbin/`にありPATHが絞られたテスト
+  # 環境ではcommand not found=127になり、role.leaderの書込み自体が中断して
+  # いた）。`|| true`で必ず後続へ進める。
   if [ -n "$orig_mode" ]; then
     chmod "$orig_mode" "$tmp" 2>/dev/null || true
   fi
@@ -1837,12 +1831,51 @@ link claude/hooks/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
 # scripts/check-drift.sh側にも追加している＝§9.0 A-0-2）。
 link claude/hooks/context-size-warn.sh "$HOME/.claude/hooks/context-size-warn.sh"
 
-[ -d "$DIR/claude/agents" ] || fail "リポジトリのディレクトリが見つかりません（checkout破損の可能性）: $DIR/claude/agents"
-for f in "$DIR"/claude/agents/*.md; do
+# 前提修正 P-2（設計§2）: 職種定義の配布結果を必ず報告する。
+# ①新しく配置した定義（初回未配置）②repoから消えた定義へのdangling symlinkの
+# 2つを固定文（§2.1）で報告し、②が1件でもあれば非0終了する（①は終了コードに
+# 影響しない）。⚠️ dangling は削除しない（削除は本人判断という既存方針を
+# 変えない）。
+AGENTS_SRC_DIR="$DIR/claude/agents"
+AGENTS_DEST_DIR="$HOME/.claude/agents"
+[ -d "$AGENTS_SRC_DIR" ] || fail "リポジトリのディレクトリが見つかりません（checkout破損の可能性）: $AGENTS_SRC_DIR"
+AGENTS_NEWLY_PLACED=()
+for f in "$AGENTS_SRC_DIR"/*.md; do
   [ -e "$f" ] || fail "claude/agents/ 配下に .md が1つもありません（checkout破損の可能性）"
   name="$(basename "$f")"
-  link "claude/agents/$name" "$HOME/.claude/agents/$name"
+  dest="$AGENTS_DEST_DIR/$name"
+  # dry-run では何も作らないため判定しない。symlink・実ファイルいずれの形でも
+  # 一切存在しなかったものだけを「初回未配置」として数える（既存の名前を
+  # 張り替えたケースは対象外＝設計§2.1「新しい定義を配置した」）。
+  if [ "$DRY_RUN" != "1" ] && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+    AGENTS_NEWLY_PLACED+=("${name%.md}")
+  fi
+  link "claude/agents/$name" "$dest"
 done
+
+if [ "$DRY_RUN" != "1" ]; then
+  if [ "${#AGENTS_NEWLY_PLACED[@]}" -gt 0 ]; then
+    log "AGENTS: 初回未配置 ${#AGENTS_NEWLY_PLACED[@]}件（正常・配置しました）: $(IFS=,; echo "${AGENTS_NEWLY_PLACED[*]}")"
+  fi
+
+  # dangling 検出: aienv管理下（$AGENTS_SRC_DIR配下を指す）symlinkに限定して
+  # 検査する（本スクリプトが関与しない他アプリ由来のsymlinkを誤検知しないため。
+  # update-sub.shの既存2c実装と同じ様式）。削除はしない。
+  AGENTS_DANGLING=()
+  for existing in "$AGENTS_DEST_DIR"/*.md; do
+    [ -L "$existing" ] || continue
+    target="$(readlink "$existing")"
+    case "$target" in
+      "$AGENTS_SRC_DIR"/*)
+        [ -e "$target" ] || AGENTS_DANGLING+=("$(basename "$existing" .md)")
+        ;;
+    esac
+  done
+  if [ "${#AGENTS_DANGLING[@]}" -gt 0 ]; then
+    log "AGENTS: dangling ${#AGENTS_DANGLING[@]}件（異常・repo から消えた定義のリンクが残っています。削除は本人が判断）: $(IFS=,; echo "${AGENTS_DANGLING[*]}")"
+    AIENV_DEFERRED_EXIT_CODE=1
+  fi
+fi
 
 if [ "$DRY_RUN" != "1" ]; then
   chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh" \
@@ -1856,24 +1889,12 @@ link codex/AGENTS.md   "$HOME/.codex/AGENTS.md"
 link codex/hooks.json  "$HOME/.codex/hooks.json"
 generate_config_toml codex/config.toml "$HOME/.codex/config.toml"
 
-# --- codex MCP登録（scripts/setup-codex-mcp.sh）。install-sub.shはこのスクリプトへ
-#     委譲しているため自動的に恩恵を受ける。Claude Code未導入環境でも installer 全体を
-#     落とさないよう、失敗はWARNに留めて続行する（2026-07-08 設計判断）。 ---
-if [ "$SKIP_CODEX_MCP" = "1" ]; then
-  log "SKIP_CODEX_MCP=1 のため codex MCP 登録はskipします（テスト用）"
-elif [ "$DRY_RUN" = "1" ]; then
-  log "[dry-run] would run: $DIR/scripts/setup-codex-mcp.sh"
-else
-  if [ -x "$DIR/scripts/setup-codex-mcp.sh" ]; then
-    if "$DIR/scripts/setup-codex-mcp.sh"; then
-      :
-    else
-      warn "codex MCP の登録に失敗しました（Claude Code未導入等の可能性）。手動で確認してください: scripts/setup-codex-mcp.sh"
-    fi
-  else
-    warn "scripts/setup-codex-mcp.sh が見つかりません（checkout破損の可能性）"
-  fi
-fi
+# Codex呼び出し経路のMCPサーバー登録ステップは2026-09-06 codex exec一本化に
+# 伴い廃止した（Claude Code側からのMCP経由呼び出しをやめ、Bash経由の
+# scripts/codex-exec.sh に一本化。詳細は
+# docs/core-split/codex-exec-only-検討経緯-2026-09-06.md）。Codex呼び出しは
+# 各ワーカーが scripts/codex-exec.sh を直接叩く方式になったため、インストーラ側の
+# 自動登録ステップは不要になった。
 
 # 週次drift通知LaunchAgent（com.takumi009.drift-check.plist・scripts/drift-notify.sh）は
 # 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で撤去した。
@@ -1934,7 +1955,11 @@ elif [ "$AIENV_DEFERRED_EXIT_CODE" != "0" ]; then
   if [ ! -e "$HOME/.claude/settings.json" ]; then
     warn "他の配置処理は完了しましたが、settings.jsonの生成に失敗したため非0終了します（NO_GENERATED_FILE: settings.jsonが一度も生成されていません。詳細は上記のWARNを参照してください）。"
   else
-    warn "他の配置処理は完了しましたが、settings.jsonの生成に失敗したため非0終了します（詳細は上記のWARNを参照してください）。"
+    # 前提修正 P-2: AIENV_DEFERRED_EXIT_CODE は settings.json 生成失敗以外
+    # （AGENTS: dangling 等）でも立つようになったため、settings.json 側の
+    # 失敗だと断定しない汎用文言にする（settings.json 自体は存在＝生成は
+    # 成功している）。詳細は上記の各 WARN／AGENTS: 行を参照させる。
+    warn "他の配置処理は完了しましたが、一部の処理で異常があったため非0終了します（詳細は上記のWARN／AGENTS: 行を参照してください）。"
   fi
 else
   log "done."

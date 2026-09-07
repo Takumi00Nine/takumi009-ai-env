@@ -43,7 +43,7 @@ takumi009-ai-env/
 │   ├── install-sub.sh           # Installer for the sub environment (sets up the Vault skeleton, then delegates to install-main.sh)
 │   ├── install-backup.sh        # Installer for the Vault-backup LaunchAgent
 │   ├── install-maintenance.sh   # Installer for the weekly maintenance-runner LaunchAgent (main only)
-│   ├── setup-codex-mcp.sh       # Registers the codex MCP with Claude Code (auto-run by install-main.sh)
+│   ├── codex-exec.sh            # The sole entry point for invoking Codex (wraps `codex exec`; replaces the old MCP registration)
 │   ├── backup-vault.sh          # Periodically git commits (+pushes) the Vault
 │   ├── maintenance.sh           # Weekly maintenance runner (backup snapshot + detection + headless-Claude apply + summary; main only)
 │   ├── update-sub.sh            # Manually-run command that refreshes the sub's rules (sub only; invoked on demand from the check-sub-update.sh SessionStart hook's guidance)
@@ -66,8 +66,8 @@ takumi009-ai-env/
 `claude/agents/` and this environment's workflow are built around three role words:
 
 - **Orchestrator (leader)**: The main Claude Code session. It makes decisions, talks with the user, and directs the overall workflow — it delegates implementation/investigation/testing to workers rather than doing them itself.
-- **Worker**: A subagent launched from one of the 7 role definitions under `claude/agents/` — requirements-analyst, system-designer, implementer, tester, researcher, operator, adoption-critic.
-- **Codex**: The dedicated first-pass reviewer (via the `mcp__codex__codex`/`codex-reply` MCP tools). Workers call it to review their own output before reporting back to the orchestrator.
+- **Worker**: A subagent launched from one of the 7 role definitions under `claude/agents/` — requirements-analyst, system-designer, implementer, verifier, researcher, operator, adoption-critic.
+- **Codex**: The default cast for the verifier role, invoked via `scripts/codex-exec.sh` (a Bash wrapper around `codex exec`; continuation of a review thread uses the wrapper's `--resume` flag). Workers don't invoke it themselves — the orchestrator starts verification once a stage's deliverable is complete, and workers only apply the resulting findings.
 
 ### About vault-public/
 
@@ -102,7 +102,7 @@ scripts/install-maintenance.sh   # Installs the weekly maintenance-runner Launch
 - `install-main.sh` moves any existing real file to `<dest>.pre-aienv.bak` only the first time before replacing it with a symlink (safe to re-run = idempotent). Use the `--dry-run` option to preview the plan only.
 - `codex/config.toml` and `claude/settings.json` are generated as real files — not symlinks. `config.toml`'s placeholder (`__AIENV_HOME__`) is replaced by the actual home path (plain TOML doesn't support shell variable expansion). `settings.json`'s placeholder (`__AIENV_MODEL__`) is replaced by the model appropriate for the machine — `claude-fable-5[1m]` on the main environment (direct `install-main.sh` run), `claude-opus-5` on the sub environment (the sub's Pro plan doesn't support Fable 5; `install-sub.sh` delegates to `install-main.sh` with `--sub-delegate`, which is what selects this value — it does not re-read the machine-role marker). Generating rather than symlinking `settings.json` also avoids a side effect where running `/model` interactively rewrites the *repository's* `claude/settings.json` in place (Claude Code writes its saved model choice into the live user settings file, which used to be a symlink straight into this repo).
 - Both `install-backup.sh` and `install-maintenance.sh` only place the LaunchAgents (bootstrap+enable) — they do **not** trigger an immediate run (kickstart) (because initializing the Vault as a Git repository for the first time is meant to be a staged rollout. Either wait for the next scheduled run, or once you're ready, run `launchctl kickstart -k` manually).
-- At the end, `install-main.sh` automatically runs `scripts/setup-codex-mcp.sh`, which **auto-registers the codex MCP** (`mcp__codex__codex`/`codex-reply`, the core of the review setup) (`claude mcp add codex -s user -- <absolute path to codex> mcp-server`; skipped/idempotent if already registered). On environments where Claude Code / the codex command aren't installed, registration fails, but the installer as a whole still continues with a WARN rather than stopping. To register manually, run `scripts/setup-codex-mcp.sh` standalone, or run the suggested `claude mcp add` command directly.
+- Codex is invoked exclusively through `scripts/codex-exec.sh` (a wrapper around `codex exec`, i.e. the CLI, not an MCP server). There is no registration step for `install-main.sh` to run: as long as `codex` is on `PATH`, the wrapper works. The wrapper enforces reading the Vault's `Preferences/absolute-rules.md` note (it refuses to run — exit code 2 — if the request text doesn't reference it), which used to be enforced by a Claude Code PreToolUse hook on the old MCP tools; see `Preferences/codex-exec-worker.md` in the Vault for the invocation pattern.
 - The weekly drift-notification LaunchAgent (`com.takumi009.drift-check.plist` / `scripts/drift-notify.sh`) that `install-main.sh` used to install, and the standalone Vault-cultivation LaunchAgents (`vault-inventory`/`fragments-log`/`knowledge-merge-detect`) formerly installed by `install-vault-agents.sh`, were all removed/consolidated on 2026-07-16 (see [[Decisions/2026-07-16-nightly-batch-direct-write]] in the Vault). `install-maintenance.sh` migrates any of these 4 retired LaunchAgent labels still loaded on the machine (bootout + remove) before installing the new `com.takumi009.maintenance` LaunchAgent. The unattended weekly path now lives entirely in the new `maintenance.sh` runner.
 - On the main environment, a **private patch (a separate private repository)** is layered on top of this base package. The private patch contains the Vault's substance (`~/Data/obsidian`) and settings that cannot be made public. See that repository's own documentation for its setup steps.
 
@@ -213,8 +213,7 @@ bash tests/test-install-backup.sh
 bash tests/test-install-maintenance.sh
 bash tests/test-with-dotfiles.sh
 bash tests/test-check-drift.sh
-bash tests/test-setup-codex-mcp.sh
-bash tests/test-install-main-codex-mcp.sh
+bash tests/test-codex-exec.sh
 bash tests/test-update-sub.sh
 bash tests/test-check-sub-update.sh
 bash tests/test-audit.sh
@@ -266,7 +265,7 @@ takumi009-ai-env/
 │   ├── install-sub.sh           # サブ環境用インストーラ（Vault骨格配置＋install-main.shへ委譲）
 │   ├── install-backup.sh        # Vaultバックアップ用LaunchAgentのインストーラ
 │   ├── install-maintenance.sh   # 週次メンテナンスランナー用LaunchAgentのインストーラ（メイン専用）
-│   ├── setup-codex-mcp.sh       # codex MCPをClaude Codeへ登録するスクリプト（install-main.shが自動実行）
+│   ├── codex-exec.sh            # Codexを呼び出す唯一の口（`codex exec`のラッパー。旧MCP登録に代わるもの）
 │   ├── backup-vault.sh          # Vaultを定期的にgit commit（+push）するスクリプト
 │   ├── maintenance.sh           # 週次メンテナンスランナー（バックアップ＋検出＋ヘッドレスClaude適用＋サマリ。メイン専用）
 │   ├── update-sub.sh            # サブのルールを最新化する手動実行コマンド（サブ専用。check-sub-update.shの案内から本人が実行）
@@ -290,7 +289,7 @@ takumi009-ai-env/
 
 - **リーダー（orchestrator）**: メインの Claude Code セッション。意思決定・ユーザー対話・工程全体の采配を行い、実装/調査/テストは自分でやらずワーカーへ委任します。
 - **ワーカー（worker）**: `claude/agents/` 配下の7つの役割定義（要件定義・設計・実装・テスト・調査・運用・採用判定）で起動されるサブエージェントです。
-- **Codex**: 一次レビュアー専任（`mcp__codex__codex`/`codex-reply` MCPツール経由）。ワーカーがリーダーへ報告する前に、自分の成果物のレビューを依頼する相手です。
+- **Codex**: 一次レビュアー専任（`scripts/codex-exec.sh`＝`codex exec`のBashラッパー経由。レビュースレッドの継続はラッパーの`--resume`で行う）。ワーカーがリーダーへ報告する前に、自分の成果物のレビューを依頼する相手です。
 
 ### vault-public/ について
 
@@ -325,7 +324,7 @@ scripts/install-maintenance.sh   # 週次メンテナンスランナー用Launch
 - `install-main.sh` は既存の実ファイルを初回だけ `<dest>.pre-aienv.bak` に退避してから symlink に置き換えます（再実行しても安全＝冪等）。`--dry-run` オプションで計画だけを確認できます。
 - `codex/config.toml`・`claude/settings.json` は symlink ではなく実ファイルとして生成されます。`config.toml` はプレースホルダ（`__AIENV_HOME__`）を実ホームパスへ置換します（plain TOML はシェル変数展開されないため）。`settings.json` はプレースホルダ（`__AIENV_MODEL__`）をマシンに応じたmodel値へ置換します — メイン環境（`install-main.sh` 直接実行）は `claude-fable-5[1m]`、サブ環境（`install-sub.sh` が `--sub-delegate` 付きで `install-main.sh` へ委譲。サブはProプランでFable 5非対応）は `claude-opus-5`（この値の決定は委譲経路そのものから直接行われ、machine-roleマーカーの読み返しには依存しません）。symlinkではなく生成にしているのは、symlinkのままだとセッション内で `/model` を実行した際にClaude Code自身がユーザー設定ファイルへ保存した選択を書き込む仕様により、symlink先＝このリポジトリの `claude/settings.json` が直接書き換わってしまう副作用を避けるためでもあります。
 - `install-backup.sh`・`install-maintenance.sh` はどちらも LaunchAgent の配置（bootstrap+enable）までを行い、**即時実行（kickstart）はしません**（Vault の初回git化は段階的ロールアウトが前提のため。初回実行は次回の定期発火を待つか、準備が整ってから手動で `launchctl kickstart -k` してください）。
-- `install-main.sh` は末尾で `scripts/setup-codex-mcp.sh` を自動実行し、**codex MCP（`mcp__codex__codex`/`codex-reply`、レビュー体制の中核）を自動登録**します（`claude mcp add codex -s user -- <codexの絶対パス> mcp-server`。既に登録済みならskip・冪等）。Claude Code / codex コマンドが未導入の環境では登録に失敗しますが、その場合も installer 全体は止まらず WARN で続行します。手動で登録する場合は `scripts/setup-codex-mcp.sh` を単体実行するか、案内される `claude mcp add` コマンドを直接実行してください。
+- Codexは `scripts/codex-exec.sh`（`codex exec`＝CLIのラッパーであり、MCPサーバーではない）を通じてのみ呼び出します。`codex` がPATH上にありさえすれば動くため、`install-main.sh` 側に登録ステップはありません。ラッパー自身がVaultの `Preferences/absolute-rules.md` 参照を強制します（依頼文にその参照が無ければ実行せずexit code 2で終了する。旧MCPツールに対するClaude CodeのPreToolUseフックが担っていた検査をこちらへ移したもの）。起動の型はVaultの `Preferences/codex-exec-worker.md` を参照してください。
 - `install-main.sh` が配置していた**週次drift通知LaunchAgent**（`com.takumi009.drift-check.plist`／`scripts/drift-notify.sh`）と、`install-vault-agents.sh`（撤去済み）が配置していたVault育成系LaunchAgent3種（`vault-inventory`／`fragments-log`／`knowledge-merge-detect`）は、いずれも2026-07-16の簡素化で撤去・統合しました（Vault内 `Decisions/2026-07-16-nightly-batch-direct-write` 参照）。`install-maintenance.sh` はこの旧4ラベルがまだマシンに残っていれば移行（bootout＋削除）してから新設の `com.takumi009.maintenance` LaunchAgentを設置します。週次無人実行の経路は新設の `maintenance.sh` ランナーへ完全に移りました。
 - メイン環境では、この基本パッケージの上に**私的パッチ（別のprivateリポジトリ）**を重ねます。私的パッチには Vault の実体（`~/Data/obsidian`）や、公開できない設定が含まれます。私的パッチの導入手順は当該リポジトリ側のドキュメントを参照してください。
 
@@ -436,8 +435,7 @@ bash tests/test-install-backup.sh
 bash tests/test-install-maintenance.sh
 bash tests/test-with-dotfiles.sh
 bash tests/test-check-drift.sh
-bash tests/test-setup-codex-mcp.sh
-bash tests/test-install-main-codex-mcp.sh
+bash tests/test-codex-exec.sh
 bash tests/test-update-sub.sh
 bash tests/test-check-sub-update.sh
 bash tests/test-audit.sh

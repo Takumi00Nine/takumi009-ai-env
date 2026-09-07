@@ -55,11 +55,14 @@ d_date() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%F; }
 # 揺れで日付境界をまたいで丸め誤差が出ないようにする。
 d_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%Y-%m-%dT12:00:00; }
 
-# 必読7ファイル＋4フォルダのREADME.mdを作る（無いとスクリプトがFileNotFoundErrorで落ちる）。
+# 必読5ファイル＋4フォルダのREADME.mdを作る（無いとスクリプトがFileNotFoundErrorで落ちる）。
 # 2026-08-30 §9.0 A-1-3波及改修（本人承認済み・リーダー裁定でvault_inventory.py
 # 側BOOTSTRAP_FILESの同期対応の一部）: Knowledge/mistakes.mdを除去し
 # Preferences/core-conduct.md・Preferences/core-workflow.mdを追加した
 # vault_inventory.pyのBOOTSTRAP_FILES最終形に合わせてfixtureも更新した。
+# 2026-09-05 §9.3 P3段階4対応: Preferences/profile.md・
+# Preferences/coding-delegation.mdがBOOTSTRAP_FILESから外れたため7→5ファイルへ
+# 縮小した。
 make_base_vault() {
   local vault="$1"
   # Personal/はvault_inventory.pyのBOOTSTRAP_FILES（§5注入サイズ監視）に元々
@@ -71,8 +74,7 @@ make_base_vault() {
   mkdir -p "$vault/Knowledge" "$vault/Preferences" "$vault/Decisions" "$vault/Projects" \
            "$vault/Personal" "$vault/Fragments"
   for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
-           "Preferences/profile.md" "Preferences/coding-delegation.md" "Preferences/vault-operation.md" \
-           "Personal/profile-personal.md"; do
+           "Preferences/vault-operation.md" "Personal/profile-personal.md"; do
     printf -- '---\ndate: 2026-01-01\n---\n\ndummy\n' > "$vault/$f"
   done
   for d in Knowledge Preferences Decisions Projects Personal; do
@@ -80,7 +82,7 @@ make_base_vault() {
   done
 }
 
-# make_base_vault に加え、必読7ファイルの updated/aliases 欠落（§1・§9）と
+# make_base_vault に加え、必読5ファイルの updated/aliases 欠落（§1・§9）と
 # Fragments capture停止疑い（§8）を解消し、要確認件数(n_issues)が0件になる
 # 「クリーンな」Vaultを作る。要確認件数への各警告種別の算入テスト（32番台）で
 # 「対象の警告だけを単独で発生させて差分を見る」ための土台として使う
@@ -89,8 +91,7 @@ make_clean_vault() {
   local vault="$1"
   make_base_vault "$vault"
   for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
-           "Preferences/profile.md" "Preferences/coding-delegation.md" "Preferences/vault-operation.md" \
-           "Personal/profile-personal.md"; do
+           "Preferences/vault-operation.md" "Personal/profile-personal.md"; do
     printf -- '---\ndate: 2026-01-01\nupdated: 2026-01-01\naliases: [clean-vault-alias-%s]\n---\n\ndummy\n' \
       "$(basename "$f" .md)" > "$vault/$f"
   done
@@ -537,11 +538,10 @@ echo "=== 12. 既存§1-8のリグレッション: 空Vaultでも例外なく完
 
   out="$(run_inventory "$VAULT_HOME")"
   # 見出しはBOOTSTRAP_FILES件数から動的生成される（vault_inventory.py:575）。
-  # 2026-08-30 §9.0 A-1-3波及改修（本人承認済み・リーダー裁定）でBOOTSTRAP_FILESが
-  # Knowledge/mistakes.mdを除去しPreferences/core-conduct.md・
-  # Preferences/core-workflow.mdを追加した結果、bootstrap-vault.shのFILES配列
-  # 最終形と同じ7件になった。
-  assert_contains "既存の必読7ファイルサイズ監視セクションは健在" "$out" "## 5. 必読7ファイルの注入サイズ"
+  # 2026-09-05 §9.3 P3段階4対応でBOOTSTRAP_FILESからPreferences/profile.md・
+  # Preferences/coding-delegation.mdが外れた結果、bootstrap-vault.shのFILES配列
+  # 最終形と同じ5件になった。
+  assert_contains "既存の必読5ファイルサイズ監視セクションは健在" "$out" "## 5. 必読5ファイルの注入サイズ"
   assert_contains "既存のFragmentsセクションは健在" "$out" "## 8. Fragments（直近14日）"
   assert_contains "新設セクション9〜12がすべて出る" "$out" "## 9. aliases が無いノート"
   assert_contains "新設セクション10が出る" "$out" "## 10. 汎用すぎる／短すぎる alias"
@@ -1181,7 +1181,7 @@ echo "=== 31. §6b: statusノートのupdated/dateが未来日だと要確認と
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 32. 要確認件数(n_issues): §5個別ファイルのサイズ超過(100行超)が算入される（2026-07-14・Codex指摘の未裏取り分を確認し確定した実バグの修正。2026-08-30 §9.0 A-1-3波及改修に伴う閾値再基準化＝リーダー裁定で40→100行へ引き上げ） ==="
+echo "=== 32. 要確認件数(n_issues): §5個別ファイルのサイズ超過(120行超)が算入される（2026-07-14・Codex指摘の未裏取り分を確認し確定した実バグの修正。2026-09-05 §9.3 P3段階4対応に伴う閾値再基準化＝リーダー裁定で100→120行へ引き上げ） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1189,22 +1189,22 @@ echo "=== 32. 要確認件数(n_issues): §5個別ファイルのサイズ超過
 
   before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
 
-  # Preferences/profile.md をSIZE_LIMIT_LINES(100行)超にする（合計は330行未満の
-  # ままにし、個別ファイル警告だけを単独発生させ、§5合計超過(要確認33)とは
-  # 分離する）
+  # Preferences/vault-operation.md をSIZE_LIMIT_LINES(120行)超にする（合計は
+  # 300行未満のままにし、個別ファイル警告だけを単独発生させ、§5合計超過
+  # (要確認33)とは分離する）
   {
     echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-profile]"; echo "---"; echo
-    for i in $(seq 1 100); do echo "line $i"; done
-  } > "$V/Preferences/profile.md"
+    echo "aliases: [clean-vault-alias-vault-operation]"; echo "---"; echo
+    for i in $(seq 1 120); do echo "line $i"; done
+  } > "$V/Preferences/vault-operation.md"
 
   out_after="$(run_inventory "$VAULT_HOME")"
   after_n="$(extract_n_issues "$out_after")"
 
-  assert_contains "§5に100行超の⚠️が表示される" "$out_after" "\`Preferences/profile.md\` — 106 行"
-  assert_contains "§5に100行超の⚠️マークが付く" "$out_after" "⚠️ 100行超"
+  assert_contains "§5に120行超の⚠️が表示される" "$out_after" "\`Preferences/vault-operation.md\` — 126 行"
+  assert_contains "§5に120行超の⚠️マークが付く" "$out_after" "⚠️ 120行超"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "profile.mdの100行超で要確認件数が0→1に増える（修正前は§5がn_issuesから漏れていた）"
+    pass "vault-operation.mdの120行超で要確認件数が0→1に増える（修正前は§5がn_issuesから漏れていた）"
   else
     fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
   fi
@@ -1212,7 +1212,7 @@ echo "=== 32. 要確認件数(n_issues): §5個別ファイルのサイズ超過
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 32d. 境界値: 個別ファイルがちょうどSIZE_LIMIT_LINES(100行)ならば個別警告(100行超)は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
+echo "=== 32d. 境界値: 個別ファイルがちょうどSIZE_LIMIT_LINES(120行)ならば個別警告(120行超)は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1222,16 +1222,16 @@ echo "=== 32d. 境界値: 個別ファイルがちょうどSIZE_LIMIT_LINES(100�
 
   {
     echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-profile]"; echo "---"; echo
-    for i in $(seq 1 94); do echo "line $i"; done
-  } > "$V/Preferences/profile.md"
+    echo "aliases: [clean-vault-alias-vault-operation]"; echo "---"; echo
+    for i in $(seq 1 114); do echo "line $i"; done
+  } > "$V/Preferences/vault-operation.md"
 
   out_after="$(run_inventory "$VAULT_HOME")"
   after_n="$(extract_n_issues "$out_after")"
 
-  assert_not_contains "ちょうど100行(本文94行+ヘッダ6行=計100行)では100行超の⚠️が出ない" "$out_after" "⚠️ 100行超"
+  assert_not_contains "ちょうど120行(本文114行+ヘッダ6行=計120行)では120行超の⚠️が出ない" "$out_after" "⚠️ 120行超"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 0 ]]; then
-    pass "ちょうど100行では要確認件数が増えない(0→0)"
+    pass "ちょうど120行では要確認件数が増えない(0→0)"
   else
     fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→0)"
   fi
@@ -1239,7 +1239,7 @@ echo "=== 32d. 境界値: 個別ファイルがちょうどSIZE_LIMIT_LINES(100�
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 32e. 境界値: 個別ファイルがSIZE_LIMIT_LINES+1(101行)ならば個別警告(100行超)が出る（32dの対比） ==="
+echo "=== 32e. 境界値: 個別ファイルがSIZE_LIMIT_LINES+1(121行)ならば個別警告(120行超)が出る（32dの対比） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1249,16 +1249,16 @@ echo "=== 32e. 境界値: 個別ファイルがSIZE_LIMIT_LINES+1(101行)なら�
 
   {
     echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-profile]"; echo "---"; echo
-    for i in $(seq 1 95); do echo "line $i"; done
-  } > "$V/Preferences/profile.md"
+    echo "aliases: [clean-vault-alias-vault-operation]"; echo "---"; echo
+    for i in $(seq 1 115); do echo "line $i"; done
+  } > "$V/Preferences/vault-operation.md"
 
   out_after="$(run_inventory "$VAULT_HOME")"
   after_n="$(extract_n_issues "$out_after")"
 
-  assert_contains "101行(本文95行+ヘッダ6行=計101行・境界+1)では100行超の⚠️が出る" "$out_after" "⚠️ 100行超"
+  assert_contains "121行(本文115行+ヘッダ6行=計121行・境界+1)では120行超の⚠️が出る" "$out_after" "⚠️ 120行超"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "101行では要確認件数が0→1に増える"
+    pass "121行では要確認件数が0→1に増える"
   else
     fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→1)"
   fi
@@ -1266,7 +1266,7 @@ echo "=== 32e. 境界値: 個別ファイルがSIZE_LIMIT_LINES+1(101行)なら�
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 33. 要確認件数(n_issues): §5合計サイズ超過（各ファイルは100行以下でも合計330行超）が算入される（2026-08-30 §9.0 A-1-3波及改修に伴う閾値再基準化＝リーダー裁定で150→330行へ引き上げ） ==="
+echo "=== 33. 要確認件数(n_issues): §5合計サイズ超過（各ファイルは120行以下でも合計300行超）が算入される（2026-09-05 §9.3 P3段階4対応に伴う閾値再基準化＝リーダー裁定で330→300行へ引き下げ） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1274,16 +1274,15 @@ echo "=== 33. 要確認件数(n_issues): §5合計サイズ超過（各ファイ
 
   before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
 
-  # 必読7ファイル（BOOTSTRAP_FILES最終形＝2026-08-30 §9.0 A-1-3波及改修後の
-  # 構成）それぞれを本文50行（frontmatter5行+空行1行=計56行・個別上限100行
-  # 未満）にし、合計392行（合計上限330行超）にする
+  # 必読5ファイル（BOOTSTRAP_FILES最終形＝2026-09-05 §9.3 P3段階4後の構成）
+  # それぞれを本文60行（frontmatter5行+空行1行=計66行・個別上限120行未満）にし、
+  # 合計330行（合計上限300行超）にする
   for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
-           "Preferences/profile.md" "Preferences/coding-delegation.md" "Preferences/vault-operation.md" \
-           "Personal/profile-personal.md"; do
+           "Preferences/vault-operation.md" "Personal/profile-personal.md"; do
     {
       echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
       echo "aliases: [clean-vault-alias-$(basename "$f" .md)]"; echo "---"; echo
-      for i in $(seq 1 50); do echo "line $i"; done
+      for i in $(seq 1 60); do echo "line $i"; done
     } > "$V/$f"
   done
 
@@ -1291,7 +1290,7 @@ echo "=== 33. 要確認件数(n_issues): §5合計サイズ超過（各ファイ
   after_n="$(extract_n_issues "$out_after")"
 
   assert_contains "§5に要圧縮の⚠️が表示される" "$out_after" "⚠️ **要圧縮**"
-  assert_not_contains "個別ファイルはいずれも100行以下なので個別警告(100行超)は出ない" "$out_after" "⚠️ 100行超"
+  assert_not_contains "個別ファイルはいずれも120行以下なので個別警告(120行超)は出ない" "$out_after" "⚠️ 120行超"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
     pass "合計サイズ超過のみ(個別超過なし)で要確認件数が0→1に増える"
   else
@@ -1301,7 +1300,7 @@ echo "=== 33. 要確認件数(n_issues): §5合計サイズ超過（各ファイ
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 33d. 境界値: 合計がちょうどSIZE_LIMIT_TOTAL_LINES(330行)ならば合計超過警告は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
+echo "=== 33d. 境界値: 合計がちょうどSIZE_LIMIT_TOTAL_LINES(300行)ならば合計超過警告は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1309,31 +1308,25 @@ echo "=== 33d. 境界値: 合計がちょうどSIZE_LIMIT_TOTAL_LINES(330行)な
 
   before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
 
-  # 6ファイルを本文41行(=計47行)、残り1ファイル(Personal/profile-personal.md)を
-  # 本文42行(=計48行)にする。合計は6*47+48=330行(ちょうど閾値)。個別は
-  # いずれも100行未満のまま。
+  # 5ファイルすべてを本文54行(=計60行)にする。合計は5*60=300行(ちょうど閾値)。
+  # 個別はいずれも120行未満のまま。
   for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
-           "Preferences/profile.md" "Preferences/coding-delegation.md" "Preferences/vault-operation.md"; do
+           "Preferences/vault-operation.md" "Personal/profile-personal.md"; do
     {
       echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
       echo "aliases: [clean-vault-alias-$(basename "$f" .md)]"; echo "---"; echo
-      for i in $(seq 1 41); do echo "line $i"; done
+      for i in $(seq 1 54); do echo "line $i"; done
     } > "$V/$f"
   done
-  {
-    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-profile-personal]"; echo "---"; echo
-    for i in $(seq 1 42); do echo "line $i"; done
-  } > "$V/Personal/profile-personal.md"
 
   out_after="$(run_inventory "$VAULT_HOME")"
   after_n="$(extract_n_issues "$out_after")"
   total_lines_after="$(extract_total_lines "$out_after")"
 
-  assert_eq "合計行数がちょうど330行になっている(fixture計算の前提確認)" "330" "$total_lines_after"
-  assert_not_contains "ちょうど330行では要圧縮の⚠️が出ない" "$out_after" "⚠️ **要圧縮**"
+  assert_eq "合計行数がちょうど300行になっている(fixture計算の前提確認)" "300" "$total_lines_after"
+  assert_not_contains "ちょうど300行では要圧縮の⚠️が出ない" "$out_after" "⚠️ **要圧縮**"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 0 ]]; then
-    pass "ちょうど330行では要確認件数が増えない(0→0)"
+    pass "ちょうど300行では要確認件数が増えない(0→0)"
   else
     fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→0)"
   fi
@@ -1341,7 +1334,7 @@ echo "=== 33d. 境界値: 合計がちょうどSIZE_LIMIT_TOTAL_LINES(330行)な
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 33e. 境界値: 合計がSIZE_LIMIT_TOTAL_LINES+1(331行)ならば合計超過警告が出る（33dの対比） ==="
+echo "=== 33e. 境界値: 合計がSIZE_LIMIT_TOTAL_LINES+1(301行)ならば合計超過警告が出る（33dの対比） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1349,30 +1342,30 @@ echo "=== 33e. 境界値: 合計がSIZE_LIMIT_TOTAL_LINES+1(331行)ならば合�
 
   before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
 
-  # 33dと同じ配分だが最後の1ファイルだけ本文43行(=計49行)にする。
-  # 合計は6*47+49=331行(閾値+1)。個別はいずれも100行未満のまま。
+  # 33dと同じ配分だが最後の1ファイルだけ本文55行(=計61行)にする。
+  # 合計は4*60+61=301行(閾値+1)。個別はいずれも120行未満のまま。
   for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
-           "Preferences/profile.md" "Preferences/coding-delegation.md" "Preferences/vault-operation.md"; do
+           "Preferences/vault-operation.md"; do
     {
       echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
       echo "aliases: [clean-vault-alias-$(basename "$f" .md)]"; echo "---"; echo
-      for i in $(seq 1 41); do echo "line $i"; done
+      for i in $(seq 1 54); do echo "line $i"; done
     } > "$V/$f"
   done
   {
     echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
     echo "aliases: [clean-vault-alias-profile-personal]"; echo "---"; echo
-    for i in $(seq 1 43); do echo "line $i"; done
+    for i in $(seq 1 55); do echo "line $i"; done
   } > "$V/Personal/profile-personal.md"
 
   out_after="$(run_inventory "$VAULT_HOME")"
   after_n="$(extract_n_issues "$out_after")"
   total_lines_after="$(extract_total_lines "$out_after")"
 
-  assert_eq "合計行数がちょうど331行になっている(fixture計算の前提確認)" "331" "$total_lines_after"
-  assert_contains "331行(閾値+1)では要圧縮の⚠️が出る" "$out_after" "⚠️ **要圧縮**"
+  assert_eq "合計行数がちょうど301行になっている(fixture計算の前提確認)" "301" "$total_lines_after"
+  assert_contains "301行(閾値+1)では要圧縮の⚠️が出る" "$out_after" "⚠️ **要圧縮**"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "331行では要確認件数が0→1に増える"
+    pass "301行では要確認件数が0→1に増える"
   else
     fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→1)"
   fi
@@ -1380,7 +1373,7 @@ echo "=== 33e. 境界値: 合計がSIZE_LIMIT_TOTAL_LINES+1(331行)ならば合�
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 33b. 要確認件数(n_issues): §5合計サイズ超過はbytes側(53,500 bytes超)単独でも算入される（2026-08-30 §9.0 A-1-3波及改修に伴う閾値再基準化＝リーダー裁定で20,480→53,500 bytesへ引き上げ） ==="
+echo "=== 33b. 要確認件数(n_issues): §5合計サイズ超過はbytes側(45,500 bytes超)単独でも算入される（2026-09-05 §9.3 P3段階4対応に伴う閾値再基準化＝リーダー裁定で53,500→45,500 bytesへ引き下げ） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1388,23 +1381,21 @@ echo "=== 33b. 要確認件数(n_issues): §5合計サイズ超過はbytes側(53
 
   before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
 
-  # 行数は増やさず(個別100行以下・合計330行以下のまま)、1行を55000文字にして
-  # bytes側(53,500 bytes)だけを合計超過させる（size_over_totalがtotal_linesと
+  # 行数は増やさず(個別120行以下・合計300行以下のまま)、1行を46000文字にして
+  # bytes側(45,500 bytes)だけを合計超過させる（size_over_totalがtotal_linesと
   # total_bytesの両方をorで見ている式のうち、bytes側だけが脱落する回帰を検出する）。
-  # 対象ファイルはBOOTSTRAP_FILES最終形に含まれるPreferences/absolute-rules.md
-  # へ変更した（2026-08-30 §9.0 A-1-3波及改修でKnowledge/mistakes.mdが
-  # BOOTSTRAP_FILESから除去され、この計測対象から外れたため）。
+  # 対象ファイルはBOOTSTRAP_FILES最終形に含まれるPreferences/absolute-rules.md。
   {
     echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
     echo "aliases: [clean-vault-alias-absolute-rules]"; echo "---"; echo
-    printf 'a%.0s' $(seq 1 55000); echo
+    printf 'a%.0s' $(seq 1 46000); echo
   } > "$V/Preferences/absolute-rules.md"
 
   out_after="$(run_inventory "$VAULT_HOME")"
   after_n="$(extract_n_issues "$out_after")"
 
   assert_contains "§5に要圧縮の⚠️が表示される（bytes超過）" "$out_after" "⚠️ **要圧縮**"
-  assert_not_contains "行数は上限内なので個別警告(100行超)は出ない" "$out_after" "⚠️ 100行超"
+  assert_not_contains "行数は上限内なので個別警告(120行超)は出ない" "$out_after" "⚠️ 120行超"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
     pass "bytes側のみの合計超過で要確認件数が0→1に増える"
   else
@@ -1414,7 +1405,7 @@ echo "=== 33b. 要確認件数(n_issues): §5合計サイズ超過はbytes側(53
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 33h. 境界値: 合計bytesがちょうどSIZE_LIMIT_TOTAL(53,500 bytes)ならば合計超過警告は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
+echo "=== 33h. 境界値: 合計bytesがちょうどSIZE_LIMIT_TOTAL(45,500 bytes)ならば合計超過警告は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1422,23 +1413,24 @@ echo "=== 33h. 境界値: 合計bytesがちょうどSIZE_LIMIT_TOTAL(53,500 byte
 
   before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
 
-  # clean_vaultのベースライン合計は662 bytes（実測）。absolute-rules.mdの1行を
-  # 52,837文字のpad行にすると合計は662+52,837+1(改行)=53,500 bytes(ちょうど閾値)
-  # になる（実測で確認済み・行数側は変えないので個別/合計行数は330行以下のまま）。
+  # clean_vault(5ファイル)のベースライン合計は480 bytes（実測）。
+  # absolute-rules.mdの1行を45,025文字のpad行にすると合計は
+  # (480-96)+90+45,025+1(改行)=45,500 bytes(ちょうど閾値)になる
+  # （実測で確認済み・行数側は変えないので個別/合計行数は300行以下のまま）。
   {
     echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
     echo "aliases: [clean-vault-alias-absolute-rules]"; echo "---"; echo
-    printf 'a%.0s' $(seq 1 52837); echo
+    printf 'a%.0s' $(seq 1 45025); echo
   } > "$V/Preferences/absolute-rules.md"
 
   out_after="$(run_inventory "$VAULT_HOME")"
   after_n="$(extract_n_issues "$out_after")"
   total_bytes_after="$(extract_total_bytes "$out_after")"
 
-  assert_eq "合計bytesがちょうど53,500になっている(fixture計算の前提確認)" "53500" "$total_bytes_after"
-  assert_not_contains "ちょうど53,500 bytesでは要圧縮の⚠️が出ない" "$out_after" "⚠️ **要圧縮**"
+  assert_eq "合計bytesがちょうど45,500になっている(fixture計算の前提確認)" "45500" "$total_bytes_after"
+  assert_not_contains "ちょうど45,500 bytesでは要圧縮の⚠️が出ない" "$out_after" "⚠️ **要圧縮**"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 0 ]]; then
-    pass "ちょうど53,500 bytesでは要確認件数が増えない(0→0)"
+    pass "ちょうど45,500 bytesでは要確認件数が増えない(0→0)"
   else
     fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→0)"
   fi
@@ -1446,7 +1438,7 @@ echo "=== 33h. 境界値: 合計bytesがちょうどSIZE_LIMIT_TOTAL(53,500 byte
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 33i. 境界値: 合計bytesがSIZE_LIMIT_TOTAL+1(53,501 bytes)ならば合計超過警告が出る（33hの対比） ==="
+echo "=== 33i. 境界値: 合計bytesがSIZE_LIMIT_TOTAL+1(45,501 bytes)ならば合計超過警告が出る（33hの対比） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1454,22 +1446,22 @@ echo "=== 33i. 境界値: 合計bytesがSIZE_LIMIT_TOTAL+1(53,501 bytes)なら�
 
   before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
 
-  # 33hと同じ配分だがpad行を1文字増やす（52,838文字）。合計は662+52,838+1=53,501
-  # bytes(閾値+1)になる（実測で確認済み）。
+  # 33hと同じ配分だがpad行を1文字増やす（45,026文字）。合計は
+  # (480-96)+90+45,026+1=45,501 bytes(閾値+1)になる（実測で確認済み）。
   {
     echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
     echo "aliases: [clean-vault-alias-absolute-rules]"; echo "---"; echo
-    printf 'a%.0s' $(seq 1 52838); echo
+    printf 'a%.0s' $(seq 1 45026); echo
   } > "$V/Preferences/absolute-rules.md"
 
   out_after="$(run_inventory "$VAULT_HOME")"
   after_n="$(extract_n_issues "$out_after")"
   total_bytes_after="$(extract_total_bytes "$out_after")"
 
-  assert_eq "合計bytesがちょうど53,501になっている(fixture計算の前提確認)" "53501" "$total_bytes_after"
-  assert_contains "53,501 bytes(閾値+1)では要圧縮の⚠️が出る" "$out_after" "⚠️ **要圧縮**"
+  assert_eq "合計bytesがちょうど45,501になっている(fixture計算の前提確認)" "45501" "$total_bytes_after"
+  assert_contains "45,501 bytes(閾値+1)では要圧縮の⚠️が出る" "$out_after" "⚠️ **要圧縮**"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "53,501 bytesでは要確認件数が0→1に増える"
+    pass "45,501 bytesでは要確認件数が0→1に増える"
   else
     fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→1)"
   fi
@@ -1477,7 +1469,7 @@ echo "=== 33i. 境界値: 合計bytesがSIZE_LIMIT_TOTAL+1(53,501 bytes)なら�
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 33c. 要確認件数(n_issues): §5個別超過と合計超過が同時発生すると両方が別々に加算される（2026-08-30 §9.0 A-1-3波及改修に伴う閾値再基準化＝リーダー裁定で個別100行・合計330行へ引き上げ） ==="
+echo "=== 33c. 要確認件数(n_issues): §5個別超過と合計超過が同時発生すると両方が別々に加算される（2026-09-05 §9.3 P3段階4対応に伴う閾値再基準化＝リーダー裁定で個別120行・合計300行へ変更） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1485,18 +1477,17 @@ echo "=== 33c. 要確認件数(n_issues): §5個別超過と合計超過が同�
 
   before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
 
-  # 3ファイルを本文110行(=ファイル計116行・個別上限100行超×3件)にし、残り4ファイルは
-  # make_clean_vaultのデフォルト(ファイル計7行)のまま。合計は3*116+4*7=376行で
-  # 合計上限330行も超える＝個別3件＋合計1件＝計4件が同時に加算されるはず（もし
+  # 3ファイルを本文125行(=ファイル計131行・個別上限120行超×3件)にし、残り2ファイルは
+  # make_clean_vaultのデフォルト(ファイル計7行)のまま。合計は3*131+2*7=407行で
+  # 合計上限300行も超える＝個別3件＋合計1件＝計4件が同時に加算されるはず（もし
   # 実装が size_over_total と size_over_files を`or`でまとめる形に誤って統合
   # されていたら1件にしかならずこの期待値4で検出できる。対象ファイルは
-  # BOOTSTRAP_FILES最終形に含まれる3件へ変更した（2026-08-30 §9.0 A-1-3波及
-  # 改修でKnowledge/mistakes.mdがBOOTSTRAP_FILESから除去されたため）。
-  for f in "Preferences/absolute-rules.md" "Preferences/profile.md" "Preferences/coding-delegation.md"; do
+  # BOOTSTRAP_FILES最終形に含まれる3件（2026-09-05 §9.3 P3段階4後の構成）。
+  for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md"; do
     {
       echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
       echo "aliases: [clean-vault-alias-$(basename "$f" .md)]"; echo "---"; echo
-      for i in $(seq 1 110); do echo "line $i"; done
+      for i in $(seq 1 125); do echo "line $i"; done
     } > "$V/$f"
   done
 
@@ -1504,7 +1495,7 @@ echo "=== 33c. 要確認件数(n_issues): §5個別超過と合計超過が同�
   after_n="$(extract_n_issues "$out_after")"
 
   assert_contains "§5に要圧縮の⚠️が表示される" "$out_after" "⚠️ **要圧縮**"
-  assert_contains "個別超過(100行超)が3件分表示される" "$out_after" "⚠️ 100行超"
+  assert_contains "個別超過(120行超)が3件分表示される" "$out_after" "⚠️ 120行超"
   if [[ "$before_n" -eq 0 && "$after_n" -eq 4 ]]; then
     pass "個別超過3件＋合計超過1件が同時に加算され要確認件数が0→4になる（or統合されていないことを確認）"
   else
@@ -1796,7 +1787,7 @@ echo "=== 44. --json: 標準出力はJSON1行のみ（人間向けメッセー�
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 45. 必読7ファイルのうち1つが欠けてもクラッシュせずwarningとしてレポート§5に載る（tester独立検証で発見・リーダー裁定2026-07-16対応） ==="
+echo "=== 45. 必読5ファイルのうち1つが欠けてもクラッシュせずwarningとしてレポート§5に載る（tester独立検証で発見・リーダー裁定2026-07-16対応） ==="
 {
   # 以前はBOOTSTRAP_FILES内の必読ファイルを無条件でread_text()しており、
   # いずれか1つでも欠けると未処理のFileNotFoundErrorでCLI全体がクラッシュ
@@ -1817,13 +1808,13 @@ echo "=== 45. 必読7ファイルのうち1つが欠けてもクラッシュせ�
   n_before="$(extract_n_issues "$out_before")"
   assert_eq "欠落前はn_issues=0(クリーンなVault)" "0" "$n_before"
 
-  rm -f "$V/Preferences/coding-delegation.md"
+  rm -f "$V/Preferences/vault-operation.md"
 
   rc=0
   out="$(run_inventory "$VAULT_HOME")" || rc=$?
   assert_eq "1ファイル欠落でもクラッシュせずexit 0のまま完走する" "0" "$rc"
-  assert_contains "欠落ファイルがwarningとして§5に載る" "$out" "Preferences/coding-delegation.md\` — ⚠️ ファイルが見つかりません"
-  assert_contains "残り6ファイルの注入サイズ監視は健在（§5見出し自体は変わらない）" "$out" "## 5. 必読7ファイルの注入サイズ"
+  assert_contains "欠落ファイルがwarningとして§5に載る" "$out" "Preferences/vault-operation.md\` — ⚠️ ファイルが見つかりません"
+  assert_contains "残り4ファイルの注入サイズ監視は健在（§5見出し自体は変わらない）" "$out" "## 5. 必読5ファイルの注入サイズ"
   n_after="$(extract_n_issues "$out")"
   assert_eq "欠落後はn_issuesが0→1へ増分する(要確認件数へ正しく加算される)" "1" "$n_after"
 

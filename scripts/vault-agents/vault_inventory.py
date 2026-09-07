@@ -71,13 +71,17 @@ OUT_DIR = pathlib.Path.home() / ".claude" / "logs" / "vault-inventory"
 # （リーダー裁定・mistakes.md現役則「schema・設定のキーやスロットを増減する
 # 時は参照側と必ずセットで直す」該当。放置すると週次メンテの棚卸しが
 # check-drift誤報と同型の恒常ノイズを出すため）。
+# 2026-09-05 P3段階4対応: bootstrap-vault.sh側がPreferences/profile.md・
+# Preferences/coding-delegation.mdを必読FILES配列から外した（コアへの
+# 移送完了・配布済みのため。共通コア分離-設計 §9.3 P3）のに合わせて同期した。
+# ローカル実体プロファイル（$HOME/.config/takumi009-ai-env/profile.md）は
+# Vault外の固定パスであり本リストの対象外のまま（bootstrap-vault.sh側でも
+# BOOTSTRAP_FILES/FILESとは別扱い＝従来どおり）。
 BOOTSTRAP_FILES = [
     "Preferences/absolute-rules.md",
     "Preferences/core-conduct.md",
     "Preferences/core-workflow.md",
-    "Preferences/profile.md",
     "Personal/profile-personal.md",
-    "Preferences/coding-delegation.md",
     "Preferences/vault-operation.md",
 ]
 # 2026-08-30 §9.0 A-1-3波及改修（本人承認済み・リーダー裁定）に伴う再基準化:
@@ -86,14 +90,21 @@ BOOTSTRAP_FILES = [
 # 大きく超過・core-conduct.md単体66行・core-workflow.md単体84行で旧40行
 # 閾値も超過）となり、n_issuesが常時3件以上の恒常ノイズを出していた
 # （check-drift誤報と同型の問題）。裁定＝「予算の再基準化」（コア本文の
-# 圧縮はしない＝採用済み本文のchurn回避・P3で必読2枚〈coding-delegation.md・
-# profile.md〉減の予定もあるため）。閾値は「現必読集合の実測＋20%程度の
-# 余裕」へ引き上げた。P3で必読集合が変わった際は本閾値も再度見直すこと。
-SIZE_LIMIT_LINES = 100        # 1ファイルの目安（旧40。実測最大値
-                               # core-workflow.md 84行 × 約1.2 ≒ 100行）
-SIZE_LIMIT_TOTAL_LINES = 330  # 合計行数（旧150。実測274行 × 約1.2 ≒ 330行）
-SIZE_LIMIT_TOTAL = 53500      # 合計バイト数（旧20,480。実測44,563バイト
-                               # × 約1.2 ≒ 53,500バイト）
+# 圧縮はしない＝採用済み本文のchurn回避）。閾値は「現必読集合の実測＋20%
+# 程度の余裕」へ引き上げた。
+# 2026-09-05 P3段階4で再基準化: Preferences/profile.md・coding-delegation.md
+# をBOOTSTRAP_FILESから外した結果、実測がメイン機で248行/37,911バイトへ
+# 縮小した（内訳: absolute-rules.md 17行/2,502B・core-conduct.md 76行/
+# 13,849B・core-workflow.md 98行/12,819B・profile-personal.md 17行/1,756B・
+# vault-operation.md 40行/6,985B）。同じ「実測＋20%程度の余裕」の基準で
+# 閾値を引き下げる（引き上げっぱなしにすると縮小後もn_issuesが常時0件の
+# まま検出力を失うノイズの逆型になるため）。今後必読集合が変わった際は
+# 本閾値も再度見直すこと。
+SIZE_LIMIT_LINES = 120        # 1ファイルの目安（旧100。実測最大値
+                               # core-workflow.md 98行 × 約1.2 ≒ 120行）
+SIZE_LIMIT_TOTAL_LINES = 300  # 合計行数（旧330。実測248行 × 約1.2 ≒ 300行）
+SIZE_LIMIT_TOTAL = 45500      # 合計バイト数（旧53,500。実測37,911バイト
+                               # × 約1.2 ≒ 45,500バイト）
 
 # 旧方針キーワード（体制が変わったら追記・削除する）
 STALE_PATTERNS = {

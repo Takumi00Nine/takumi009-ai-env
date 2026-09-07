@@ -88,6 +88,18 @@ STALE_LOCK_SECONDS="${STALE_LOCK_SECONDS:-3600}"
 log() { echo "[update-sub] $*"; }
 warn() { echo "[update-sub] WARN: $*" >&2; }
 fail() { echo "[update-sub] FAIL: $*" >&2; exit 1; }
+
+# --resync（前提修正 P-3・3-b・設計§3.1）: HEADが不変でもPreferences再同期
+# （4b相当）だけを強制実行する契約オプション。他の引数と併用しない（1つだけ）。
+# --resync を付けない通常実行の挙動は1文字も変えない（契約5）。
+RESYNC=0
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -eq 1 ] && [ "$1" = "--resync" ]; then
+    RESYNC=1
+  else
+    fail "不正な引数です。受け付けるのは --resync だけです（他の引数と併用もできません）: $*"
+  fi
+fi
 # EXIT_CODE — スクリプト全体の最終終了コード（既定0）。設計書§3.9
 # 「update-sub.shはリーダー行が未確定ならWARN＋非0終了」を満たすための
 # フラグ（Codex一次レビュー指摘・Blocking対応・2026-09-01）。
@@ -265,8 +277,12 @@ else
   pull_rc=0
   git -C "$DIR" pull --ff-only >/dev/null 2>&1 || pull_rc=$?
   if [ "$pull_rc" -ne 0 ]; then
+    # 前提修正 P-3・3-a: 終了コードだけを 0→非0 へ正す（制御の流れ＝後続を
+    # 実行せずその場で抜ける、は現行のまま変えない）。⚠️ 現行は警告して
+    # `exit 0` で終わるため、終了コードが pull の成否を証明しなかった
+    # （「更新できていないのに成功に見える」）。
     warn "git pull --ff-only に失敗しました（ローカル変更との衝突等の可能性。サブは編集しない運用のため通常は起きないはずです）: $DIR"
-    exit 0
+    exit 1
   fi
   after_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
 
@@ -664,11 +680,22 @@ AGENTS_DEST_DIR="$HOME/.claude/agents"
 if [ -d "$AGENTS_SRC_DIR" ]; then
   mkdir -p "$AGENTS_DEST_DIR"
   agents_md_count=0
+  # 前提修正 P-2（設計§2・2-c: update-sub.shにも2-a・2-bを入れる）:
+  # 職種定義の配布結果を必ず報告する。①新しく配置した定義（初回未配置）
+  # ②repoから消えた定義へのdangling symlinkの2つを固定文（§2.1）で報告し、
+  # ②が1件でもあれば非0終了する（①は終了コードに影響しない）。
+  AGENTS_NEWLY_PLACED=()
   for f in "$AGENTS_SRC_DIR"/*.md; do
     [ -e "$f" ] || continue
     agents_md_count=$((agents_md_count + 1))
     name="$(basename "$f")"
     dest="$AGENTS_DEST_DIR/$name"
+    # dest が symlink・実ファイルいずれの形でも一切存在しなかったものだけを
+    # 「初回未配置」として数える（既存の名前を張り替えたケースは対象外＝
+    # 設計§2.1「新しい定義を配置した」）。
+    if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+      AGENTS_NEWLY_PLACED+=("${name%.md}")
+    fi
     if [ -L "$dest" ]; then
       # 既にsymlinkの場合: リンク先が正しければ何もしない（no-op）。違えば
       # （古いrepoパスを指している・danglingを含む）張り直す＝install-main.shの
@@ -686,6 +713,9 @@ if [ -d "$AGENTS_SRC_DIR" ]; then
     ln -sfn "$f" "$dest"
     log "linked: $dest -> $f"
   done
+  if [ "${#AGENTS_NEWLY_PLACED[@]}" -gt 0 ]; then
+    log "AGENTS: 初回未配置 ${#AGENTS_NEWLY_PLACED[@]}件（正常・配置しました）: $(IFS=,; echo "${AGENTS_NEWLY_PLACED[*]}")"
+  fi
   if [ "$agents_md_count" -eq 0 ]; then
     # ⚠️ .mdが0件の場合もcheckout破損の可能性として扱い、以降のdangling走査は
     # 行わない（Codexフォローアップレビュー指摘・Minor対応: ディレクトリ自体は
@@ -695,23 +725,31 @@ if [ -d "$AGENTS_SRC_DIR" ]; then
     # 走査をskipする＝上のディレクトリ丸ごと欠落時の分岐と同じ扱いに揃える）。
     warn "claude/agents/ に .md ファイルが1つもありません（checkout破損の可能性）。roleのsymlink化はskipされました: $AGENTS_SRC_DIR"
   else
-    # repoから削除されたロールのsymlink（dangling）は削除せず警告のみに留める
+    # repoから削除されたロールのsymlink（dangling）は削除せず報告のみに留める
     # （本人指示: 削除は本人判断）。aienv管理下（$AGENTS_SRC_DIR配下を指す）
     # symlinkに限定して検査する＝本スクリプトが関与しない他アプリ由来のsymlinkを
     # 誤検知しないため。⚠️ $AGENTS_SRC_DIR自体が存在しない・中身が空の場合は
     # この走査を行わない（Codex一次・フォローアップレビュー指摘・Minor対応:
     # checkout全体が壊れているケースと個別ロール削除のケースを混同し、既存の
     # 全symlinkを誤って「削除されたロール」として警告してしまう事故を防ぐ）。
+    AGENTS_DANGLING=()
     if [ -d "$AGENTS_DEST_DIR" ]; then
       for existing in "$AGENTS_DEST_DIR"/*.md; do
         [ -L "$existing" ] || continue
         target="$(readlink "$existing")"
         case "$target" in
           "$AGENTS_SRC_DIR"/*)
-            [ -e "$target" ] || warn "repoから削除されたロール定義へのsymlinkが残っています（削除はしません・本人判断）: $existing -> $target"
+            [ -e "$target" ] || AGENTS_DANGLING+=("$(basename "$existing" .md)")
             ;;
         esac
       done
+    fi
+    if [ "${#AGENTS_DANGLING[@]}" -gt 0 ]; then
+      # ⚠️ ここは肯定判定にだけ使う（§2.1）。この行の有無で「他の失敗の
+      # 不在」を推定しない（PA-11・pull失敗・machine-role・--resync等、
+      # update-sub.shの非0経路は他にも複数あるため）。
+      log "AGENTS: dangling ${#AGENTS_DANGLING[@]}件（異常・repo から消えた定義のリンクが残っています。削除は本人が判断）: $(IFS=,; echo "${AGENTS_DANGLING[*]}")"
+      EXIT_CODE=1
     fi
   fi
 else
@@ -723,6 +761,28 @@ fi
 #         agents symlink化は2c.で既に済んでいる＝Codex一次レビュー指摘・
 #         Nit対応の横展開） ---
 if [ "$before_head" = "$after_head" ]; then
+  # --resync（前提修正 P-3・3-b・設計§3.1・契約2）: HEAD不変の場合でも
+  # 4b（Preferences再同期）相当だけを強制実行する。pull は通ったが同期だけ
+  # 失敗した状態から、再実行（--resync無し）では復旧できない欠陥への対策。
+  # ⚠️ 同期元の欠落・rsync自体の失敗のどちらも非0で終わる（契約3・現行4bの
+  # 「WARNして続行」を踏襲しない＝復旧手段が静かに失敗しては意味が無い）。
+  # rsyncの失敗は `rsync ... || fail "..."` で安定した固有メッセージを出して
+  # 明示的に非0終了させる（2026-09-07 Codex一次レビュー2巡目指摘・NIT対応:
+  # 旧コメントは「set -eに任せる」としていたが、PA-10(b)が固有文言を肯定
+  # 確認できるよう明示的なfail()経由へ変更済み）。ローカル実体プロファイルには
+  # 一切触れない（契約4・読むだけ。本ブロックは書込を一切行わない）。--resync
+  # を付けない通常実行はこのif本体に入らず、契約5（1文字も変えない）を満たす。
+  if [ "$RESYNC" = "1" ]; then
+    RESYNC_VP_PREFS="$DIR/vault-public/Preferences"
+    RESYNC_VAULT_PREFS="$VAULT/Preferences"
+    [ -d "$RESYNC_VP_PREFS" ] || fail "--resync: vault-public/Preferences が見つかりません（checkout破損の可能性）: $RESYNC_VP_PREFS"
+    mkdir -p "$RESYNC_VAULT_PREFS"
+    # 安定した固有メッセージで非0終了させる（rsync自身の生stderrに頼らない。
+    # 2026-09-07 Codex一次レビュー指摘・MINOR対応: PA-10(b)がrsync失敗固有の
+    # 文言を肯定確認できるようにするため）。
+    rsync -a --delete "$RESYNC_VP_PREFS/" "$RESYNC_VAULT_PREFS/" || fail "--resync: Preferences の rsync に失敗しました: $RESYNC_VP_PREFS -> $RESYNC_VAULT_PREFS"
+    log "--resync: Preferences を再同期しました: $RESYNC_VP_PREFS -> $RESYNC_VAULT_PREFS"
+  fi
   log "変更なし（repoのHEAD: ${after_head}）。settings.json再生成・agents symlink化のほかは何もしません。"
   # ⚠️ ここで無条件に0終了すると、2b.でEXIT_CODEへ記録したリーダー未確定の
   # 失敗（§3.9）が握り潰される（2026-09-01 Codex一次レビュー指摘・Blocking
@@ -759,14 +819,28 @@ else
 fi
 
 # --- 4b. Preferences をrsyncで再同期する（Preferences以外は絶対に触らない） ---
+# ⚠️ 2026-09-07 Codex一次レビュー指摘・BLOCKING対応: --resync実行中にpullで
+# HEADが実際に進んだ場合、この4bへ普通に到達する（HEAD不変の早期終了経路
+# だけが--resyncの対象ではない）。RESYNC=1のときは、この経路でも同期元
+# 欠落・rsync失敗を非0で終わらせる（設計§3.1契約3。「WARNして続行」を
+# 踏襲しない）。RESYNC=0（--resyncなし通常実行）の挙動は1文字も変えない
+# （契約5＝elseの分岐が旧来のwarn/黙示のset -e依存のまま）。
 VP_PREFS="$DIR/vault-public/Preferences"
 VAULT_PREFS="$VAULT/Preferences"
 if [ -d "$VP_PREFS" ]; then
   mkdir -p "$VAULT_PREFS"
-  rsync -a --delete "$VP_PREFS/" "$VAULT_PREFS/"
+  if [ "$RESYNC" = "1" ]; then
+    rsync -a --delete "$VP_PREFS/" "$VAULT_PREFS/" || fail "--resync: Preferences の rsync に失敗しました: $VP_PREFS -> $VAULT_PREFS"
+  else
+    rsync -a --delete "$VP_PREFS/" "$VAULT_PREFS/"
+  fi
   log "Preferences を再同期しました: $VP_PREFS -> $VAULT_PREFS"
 else
-  warn "vault-public/Preferences が見つかりません（checkout破損の可能性）: $VP_PREFS"
+  if [ "$RESYNC" = "1" ]; then
+    fail "--resync: vault-public/Preferences が見つかりません（checkout破損の可能性）: $VP_PREFS"
+  else
+    warn "vault-public/Preferences が見つかりません（checkout破損の可能性）: $VP_PREFS"
+  fi
 fi
 
 # --- 4c. 新しい骨格フォルダがあれば補充する（既存フォルダには一切触らない） ---

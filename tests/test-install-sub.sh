@@ -8,13 +8,14 @@
 # 注意: install-sub.sh は install-main.sh へ `--sub-delegate` を付けて委譲する。
 # 週次drift通知LaunchAgent（com.takumi009.drift-check.plist）は2026-07-16簡素化で
 # install-main.sh自体から撤去済み（メイン/サブ問わず誰も設置しない。旧・メイン専用
-# skip実装＝H-2は撤去に伴い不要化した）。install-sub.sh は install-main.sh 経由で
-# scripts/setup-codex-mcp.sh も呼ぶため、実 claude/codex CLI がPATH上にある開発機で
-# テストを走らせた場合の実MCP登録への副作用を避けるため SKIP_CODEX_MCP=1 を付ける
-# （Codexレビュー指摘・Major）。SKIP_LAUNCHCTL=1 も一部テストで付けているが、これは
-# 委譲先の install-main.sh 自身が同名の環境変数を宣言しているための互換目的で
-# あり、install-sub.sh 自体は現在launchctlを一切呼び出さない（下記2026-07-23の
-# 変更で撤去済み）。
+# skip実装＝H-2は撤去に伴い不要化した）。旧・codex MCP自動登録ステップ（当時の
+# scripts/内の専用スクリプト）は2026-09-06 codex exec一本化に伴い
+# install-main.sh から撤去済み（既存の呼び出しに残っているSKIP_CODEX_MCP=1
+# 指定は無害な未使用変数。install-main.sh側では読まなくなった）。
+# SKIP_LAUNCHCTL=1 も一部テストで付けて
+# いるが、これは委譲先の install-main.sh 自身が同名の環境変数を宣言している
+# ための互換目的であり、install-sub.sh 自体は現在launchctlを一切呼び出さない
+# （下記2026-07-23の変更で撤去済み）。
 #
 # 2026-07-23: サブ専用の定期更新LaunchAgent（旧com.takumi009.update-sub・1日2回の
 # 無人自動pull）自体を廃止した（SessionStartフックclaude/hooks/check-sub-update.sh
@@ -68,6 +69,39 @@ assert_true() {
   else
     fail_case "$desc"
   fi
+}
+
+# assert_agents_line <desc> <stdout> <kind:初回未配置|dangling> <role> —
+# test-install-main.shと同じ検査（設計§2.1の固定文の型・件数と名前トークン数の
+# 一致・対象ロールの厳密一致）。2026-09-07 Codex一次レビュー指摘・MINOR対応。
+assert_agents_line() {
+  local desc="$1" out="$2" kind="$3" role="$4"
+  local line count names n_names expected_desc
+  case "$kind" in
+    初回未配置) expected_desc='正常・配置しました' ;;
+    dangling) expected_desc='異常・repo から消えた定義のリンクが残っています。削除は本人が判断' ;;
+    *) fail_case "$desc (assert_agents_line: 未知のkind=$kind)"; return ;;
+  esac
+  line="$(printf '%s\n' "$out" | grep "AGENTS: $kind " || true)"
+  if [ -z "$line" ]; then
+    fail_case "$desc (AGENTS: $kind の行自体が無い。out=[$out])"
+    return
+  fi
+  if ! printf '%s' "$line" | grep -qE "AGENTS: ${kind} [0-9]+件（${expected_desc}）: .+"; then
+    fail_case "$desc (固定文の型〈件数・説明文・句読点・コロン〉が一致しない。期待する説明文=[${expected_desc}]。行=[$line])"
+    return
+  fi
+  count="$(printf '%s' "$line" | grep -oE '[0-9]+件' | head -1 | tr -d '件')"
+  names="$(printf '%s' "$line" | sed -E 's/.*[)）]: //')"
+  n_names="$(printf '%s' "$names" | awk -F',' '{print NF}')"
+  if [ "$count" != "$n_names" ]; then
+    fail_case "$desc (件数表記=${count}件と実際の名前トークン数=${n_names}が不一致。行=[$line])"
+    return
+  fi
+  case ",$names," in
+    *",$role,"*) pass "$desc" ;;
+    *) fail_case "$desc (名前一覧に $role が厳密一致で含まれない。行=[$line])" ;;
+  esac
 }
 
 make_fake_home() {
@@ -257,7 +291,7 @@ echo "=== 4e. settings.json生成後も他のキー（permissions等）はテン
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
 
   assert_true "permissions.allowの中身がテンプレ由来のまま含まれている" \
-    "$(grep -q 'mcp__codex__codex' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
+    "$(grep -q 'codex-exec.sh' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
   assert_true "生成物が有効なJSONとしてパースできる" \
     "$(python3 -c "import json; json.load(open('$FAKE_HOME/.claude/settings.json'))" 2>/dev/null && echo 1 || echo 0)"
 
@@ -602,6 +636,105 @@ echo "=== 14. --check-profile --print-schema-version: install-sub.sh経由でも
     "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/machine-role" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
+}
+
+# --- 前提修正 P-2 の回帰テスト（2026-09-07）: install-sub.sh 経由（install-main.sh
+#     への委譲）でも職種定義の配布結果が同じ固定文で報告されることを確認する
+#     （設計§2.2「3本すべて」）。DIR は install-sub.sh 自身の場所から算出され
+#     install-main.sh もそのDIR配下を呼ぶため、TMP_REPO（実repoの丸ごとcopy）を
+#     使えばそのまま install-sub.sh 経由の委譲を検証できる。 ---
+
+echo "=== 15. PA-4: install-sub.sh 経由でも repo に定義を1本足すと symlink ができ、AGENTS: 初回未配置 の固定文に名前が出る（終了コード0） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  TMP_REPO="$(mktemp -d)"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
+  echo "# PA-4 用の追加ロール定義（テスト専用・内容は問わない）" > "$TMP_REPO/claude/agents/test-pa4-role.md"
+
+  rc=0
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" 2>&1)" || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "追加したロールのsymlinkができる" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa4-role.md" ]] && echo 1 || echo 0)"
+  assert_agents_line "AGENTS: 初回未配置 の固定文にtest-pa4-roleが厳密一致で出る（件数・句読点も検査）" \
+    "$out" "初回未配置" "test-pa4-role"
+
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
+}
+
+echo "=== 16. PA-5: install-sub.sh 経由でも repo から定義を1本消すと AGENTS: dangling の固定文に名前が出て終了コードが非0（symlink自体は消えない） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  TMP_REPO="$(mktemp -d)"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
+  echo "# PA-5 用の一時ロール定義（次に削除する）" > "$TMP_REPO/claude/agents/test-pa5-role.md"
+
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null 2>&1
+  assert_true "前提: baseline実行でsymlinkができている" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
+
+  rm -f "$TMP_REPO/claude/agents/test-pa5-role.md"
+
+  rc=0
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" 2>&1)" || rc=$?
+  assert_true "終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_agents_line "AGENTS: dangling の固定文にtest-pa5-roleが厳密一致で出る（件数・句読点も検査）" \
+    "$out" "dangling" "test-pa5-role"
+  assert_true "symlink自体は消えない（本人判断・削除しない方針）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
+}
+
+echo "=== 17. PA-6: install-sub.sh 経由で追加もdanglingも無ければ AGENTS: 行が出ず終了コード0 ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  TMP_REPO="$(mktemp -d)"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
+
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null 2>&1
+
+  rc=0
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" 2>&1)" || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "AGENTS: 行が一切出ない" \
+    "$(echo "$out" | grep -q '\[install-main\] AGENTS:' && echo 0 || echo 1)"
+
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
+}
+
+echo "=== 18. PA-12: install-sub.sh 経由でも追加と削除の複合ケースで両方の固定文が出て新規は配置・旧は残存・終了コード非0 ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  TMP_REPO="$(mktemp -d)"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
+  echo "# PA-12 用の退役予定ロール（1回目は存在・2回目に消す）" > "$TMP_REPO/claude/agents/test-pa12-old-role.md"
+
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null 2>&1
+  assert_true "前提: old-role がbaselineで配置されている" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
+
+  rm -f "$TMP_REPO/claude/agents/test-pa12-old-role.md"
+  echo "# PA-12 用の新設ロール" > "$TMP_REPO/claude/agents/test-pa12-new-role.md"
+
+  rc=0
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" 2>&1)" || rc=$?
+
+  assert_agents_line "① AGENTS: 初回未配置 に new-role が厳密一致で出る" \
+    "$out" "初回未配置" "test-pa12-new-role"
+  assert_agents_line "② AGENTS: dangling に old-role が厳密一致で出る" \
+    "$out" "dangling" "test-pa12-old-role"
+  assert_true "③ new-role のsymlinkが作られている" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-new-role.md" ]] && echo 1 || echo 0)"
+  assert_true "④ old-role のsymlinkは残っている（削除しない）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
+  assert_true "⑤ 終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
 echo

@@ -43,6 +43,39 @@ assert_true() {
   fi
 }
 
+# assert_agents_line <desc> <stdout> <kind:初回未配置|dangling> <role> —
+# test-install-main.shと同じ検査（設計§2.1の固定文の型・件数と名前トークン数の
+# 一致・対象ロールの厳密一致）。2026-09-07 Codex一次レビュー指摘・MINOR対応。
+assert_agents_line() {
+  local desc="$1" out="$2" kind="$3" role="$4"
+  local line count names n_names expected_desc
+  case "$kind" in
+    初回未配置) expected_desc='正常・配置しました' ;;
+    dangling) expected_desc='異常・repo から消えた定義のリンクが残っています。削除は本人が判断' ;;
+    *) fail_case "$desc (assert_agents_line: 未知のkind=$kind)"; return ;;
+  esac
+  line="$(printf '%s\n' "$out" | grep "AGENTS: $kind " || true)"
+  if [ -z "$line" ]; then
+    fail_case "$desc (AGENTS: $kind の行自体が無い。out=[$out])"
+    return
+  fi
+  if ! printf '%s' "$line" | grep -qE "AGENTS: ${kind} [0-9]+件（${expected_desc}）: .+"; then
+    fail_case "$desc (固定文の型〈件数・説明文・句読点・コロン〉が一致しない。期待する説明文=[${expected_desc}]。行=[$line])"
+    return
+  fi
+  count="$(printf '%s' "$line" | grep -oE '[0-9]+件' | head -1 | tr -d '件')"
+  names="$(printf '%s' "$line" | sed -E 's/.*[)）]: //')"
+  n_names="$(printf '%s' "$names" | awk -F',' '{print NF}')"
+  if [ "$count" != "$n_names" ]; then
+    fail_case "$desc (件数表記=${count}件と実際の名前トークン数=${n_names}が不一致。行=[$line])"
+    return
+  fi
+  case ",$names," in
+    *",$role,"*) pass "$desc" ;;
+    *) fail_case "$desc (名前一覧に $role が厳密一致で含まれない。行=[$line])" ;;
+  esac
+}
+
 # 「origin」相当のbare repoと、そこへpushするための作業コピー(SRC)を作る。
 # 最低限の codex/config.toml・vault-public/Preferences/ を持たせる。
 make_origin() {
@@ -138,6 +171,16 @@ run_update() {
   local dir="$1" home="$2" vault="$3" lock="$4"
   make_sub_marker "$home"
   DIR="$dir" HOME="$home" VAULT="$vault" LOCK_FILE="$lock" "$SCRIPT"
+}
+
+# run_update_with_args <dir> <home> <vault> <lock> [extra args...] —
+# run_update() と同じセットアップだが、--resync 等の追加引数を
+# そのままスクリプトへ転送する（前提修正 P-3・3-b の回帰テスト用）。
+run_update_with_args() {
+  local dir="$1" home="$2" vault="$3" lock="$4"
+  shift 4
+  make_sub_marker "$home"
+  DIR="$dir" HOME="$home" VAULT="$vault" LOCK_FILE="$lock" "$SCRIPT" "$@"
 }
 
 # write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
@@ -318,16 +361,19 @@ echo "=== 4. 既存の骨格フォルダは上書きしない（README.md等を�
   rm -rf "$WORK"
 }
 
-echo "=== 5. ff-only不可（サブ側にローカルcommitがある）ならWARNで終了しexit 0 ==="
+echo "=== 5. PA-7: ff-only不可（サブ側にローカルcommitがある）なら非0終了し、後続処理（agents symlink・settings.json・Preferences更新）は一切走らない（前提修正 P-3・3-a） ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  add_agent_role "$SRC" "vault-scribe"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
-  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured provider=anthropic-api model=claude-sonnet-5"
   LOCK="$WORK/lock"
 
   # サブ側でローカルcommitを作る（本来は起きないはずだが、ff不可を人工的に再現）
@@ -335,7 +381,8 @@ echo "=== 5. ff-only不可（サブ側にローカルcommitがある）ならWAR
   git -C "$SUB" add -A
   git -C "$SUB" commit -q -m "unexpected local commit"
 
-  # upstreamにも別の変更をpush（分岐させる）
+  # upstreamにも別の変更をpush（分岐させる。pullが通っていれば後続処理が
+  # 何かしら動くはずの材料を用意しておく＝PA-7②の「副作用まで見る」検査のため）
   echo "# 追加方針" > "$SRC/vault-public/Preferences/rule2.md"
   git -C "$SRC" add -A
   git -C "$SRC" commit -q -m "add rule2"
@@ -343,9 +390,22 @@ echo "=== 5. ff-only不可（サブ側にローカルcommitがある）ならWAR
 
   rc=0
   out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
-  assert_eq "exit code 0（致命的エラーにしない）" "0" "$rc"
+  assert_true "① 終了コードが非0（pullの成否が終了コードに正しく反映される）" \
+    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "ff-only失敗のWARNが出る" \
     "$(echo "$out" | grep -q 'git pull --ff-only に失敗しました' && echo 1 || echo 0)"
+  assert_true "② agents symlinkは作られない（後続処理が走っていない）" \
+    "$([[ ! -e "$FAKE_HOME/.claude/agents/vault-scribe.md" ]] && echo 1 || echo 0)"
+  assert_true "② settings.jsonは生成されない（後続処理が走っていない）" \
+    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
+  assert_true "② Preferencesは更新されない（upstreamのrule2.mdが宛先に現れない）" \
+    "$([[ ! -e "$FAKE_HOME/Data/obsidian/Preferences/rule2.md" ]] && echo 1 || echo 0)"
+  # PA-11: 「AGENTS: が無ければプロファイル検査の失敗」という推定が成り立たない
+  # ことを、pull失敗のケースで実際に示す（pull失敗はagents symlink化〈2c〉に
+  # 到達する前に終了するため、AGENTS:行は出ない＝この不在を他の原因の根拠に
+  # してはいけない）。
+  assert_true "AGENTS: 行は出ない（2cに到達する前にpull失敗で終了しているため）" \
+    "$(echo "$out" | grep -q 'AGENTS:' && echo 0 || echo 1)"
 
   rm -rf "$WORK"
 }
@@ -1149,7 +1209,7 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   write_v2_profile "$FAKE_HOME_INSTALLER/.config/takumi009-ai-env/profile.md" \
     "configured provider=anthropic-api model=claude-sonnet-5" \
     "role.researcher: configured provider=bedrock model=opus" \
-    "role.tester: configured provider=bedrock model=sonnet" \
+    "role.verifier: configured provider=bedrock model=sonnet" \
     "role.operator: configured provider=bedrock model=haiku"
   # 2026-09-01 配役表解凍（設計書§3.9）: v2雛形はrole.leaderがunknownのまま
   # 配布されるが、上記で事前にconfigured済みのプロファイルを置いたため
@@ -1169,7 +1229,7 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   write_v2_profile "$FAKE_HOME_UPDATER/.config/takumi009-ai-env/profile.md" \
     "configured provider=anthropic-api model=claude-sonnet-5" \
     "role.researcher: configured provider=bedrock model=opus" \
-    "role.tester: configured provider=bedrock model=sonnet" \
+    "role.verifier: configured provider=bedrock model=sonnet" \
     "role.operator: configured provider=bedrock model=haiku"
   LOCK="$WORK/lock"
   run_update "$SUB" "$FAKE_HOME_UPDATER" "$FAKE_HOME_UPDATER/Data/obsidian" "$LOCK" >/dev/null
@@ -1551,9 +1611,14 @@ echo "=== 26c. 4d.: repoから削除されたロールへのdangling symlinkは�
   git -C "$SRC" commit -q -m "add rule2"
   git -C "$SRC" push -q origin HEAD:main
 
-  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)
-  assert_true "削除されたロールへのdangling symlink警告が出る" \
-    "$(echo "$out" | grep -q "repoから削除されたロール定義へのsymlinkが残っています" && echo 1 || echo 0)"
+  # 前提修正 P-2（2026-09-07）: dangling は自由文言WARNから固定文
+  # `AGENTS: dangling …` + 非0終了へ変わった（削除しない方針自体は不変）。
+  rc=0
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
+  assert_true "終了コードが非0になる（dangling検出）" \
+    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_agents_line "削除されたロールへのdangling symlink警告（AGENTS: dangling固定文）がretired-roleに厳密一致で出る" \
+    "$out" "dangling" "retired-role"
   assert_true "symlink自体は削除されずに残る" \
     "$([[ -L "$FAKE_HOME/.claude/agents/retired-role.md" ]] && echo 1 || echo 0)"
 
@@ -1705,8 +1770,8 @@ echo "=== 26g. 4d.: claude/agents/ ディレクトリ自体が無い（checkout�
   assert_eq "exit code 0（agentsディレクトリ欠落だけでは致命的エラーにしない）" "0" "$rc"
   assert_true "claude/agents/欠落のWARNが出る" \
     "$(echo "$out" | grep -q 'claude/agents/ が見つかりません' && echo 1 || echo 0)"
-  assert_true "ディレクトリ丸ごと欠落時は個別ロール削除のWARNは出ない（誤発報しない）" \
-    "$(echo "$out" | grep -q '削除されたロール定義へのsymlinkが残っています' && echo 0 || echo 1)"
+  assert_true "ディレクトリ丸ごと欠落時は個別ロール削除の報告（AGENTS: dangling）は出ない（誤発報しない）" \
+    "$(echo "$out" | grep -q 'AGENTS: dangling' && echo 0 || echo 1)"
   assert_true "既存symlinkは削除されずそのまま残る" \
     "$([[ -L "$FAKE_HOME/.claude/agents/old-role.md" ]] && echo 1 || echo 0)"
   assert_true "4a. config.tomlは続行している" \
@@ -1936,6 +2001,373 @@ echo "=== 27b. 自己更新対策: AIENV_UPDATE_SUB_REEXECガードが立って�
     "$orig_head" "$after_head"
   assert_true "自己更新チェックの検知ログ（自身が更新されました）は出ない（ロック確認で拒否されpull自体に到達しないため）" \
     "$(echo "$out" | grep -q 'update-sub.sh自身が更新されました' && echo 0 || echo 1)"
+
+  rm -rf "$WORK"
+}
+
+# --- 前提修正 P-2・P-3 の回帰テスト（2026-09-07）: update-sub.sh にも
+#     職種定義の配布結果の報告（PA-4・PA-5・PA-6・PA-12）と --resync 契約
+#     （PA-8〜PA-11）を追加する（設計§2.2・§3.1）。 ---
+
+echo "=== 30. PA-4: repoに定義を1本足して実行するとsymlinkができ、AGENTS: 初回未配置 の固定文に名前が出る（終了コード0） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  add_agent_role "$SRC" "test-pa4-role"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "追加したロールのsymlinkができる" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa4-role.md" ]] && echo 1 || echo 0)"
+  assert_agents_line "AGENTS: 初回未配置 の固定文にtest-pa4-roleが厳密一致で出る（件数・句読点も検査）" \
+    "$out" "初回未配置" "test-pa4-role"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 31. PA-5: repoから定義を1本消して実行するとAGENTS: dangling の固定文に名前が出て終了コードが非0（symlink自体は消えない） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  # keeper-role は削除しない（claude/agents/ を非空に保つ用）。gitは空ディレクトリを
+  # 追跡しないため、test-pa5-roleだけを消すとclaude/agents/自体がSUB側から消えて
+  # 「ディレクトリ丸ごと欠落」経路に化けてしまい、danglingを検査できなくなる。
+  add_agent_role "$SRC" "keeper-role"
+  add_agent_role "$SRC" "test-pa5-role"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
+  assert_true "前提: baseline実行でsymlinkができている" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
+
+  rm -f "$SRC/claude/agents/test-pa5-role.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "retire test-pa5-role"
+  git -C "$SRC" push -q origin HEAD:main
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+  assert_true "終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_agents_line "AGENTS: dangling の固定文にtest-pa5-roleが厳密一致で出る（件数・句読点も検査）" \
+    "$out" "dangling" "test-pa5-role"
+  assert_true "symlink自体は消えない（本人判断・削除しない方針）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 32. PA-6: 追加もdanglingも無ければ AGENTS: 行が出ず終了コード0（既存の挙動が変わらない） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_agent_role "$SRC" "test-pa6-role"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
+
+  # 2回目: repo・symlinkとも無変更のまま再実行（2cは毎回実行されるが、
+  # 追加もdanglingも無いのでAGENTS:行は出ない）。
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "AGENTS: 行が一切出ない" \
+    "$(echo "$out" | grep -q 'AGENTS:' && echo 0 || echo 1)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 33. PA-12: 追加と削除が同時に起きる複合ケース（verifier追加・tester退役相当）で両方の固定文が出て新規は配置・旧は残存・終了コード非0 ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_agent_role "$SRC" "test-pa12-old-role"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
+  assert_true "前提: old-role がbaselineで配置されている" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
+
+  # 退役（削除）と新設（追加）を同じcommitで同時に起こす。
+  rm -f "$SRC/claude/agents/test-pa12-old-role.md"
+  add_agent_role "$SRC" "test-pa12-new-role"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+
+  assert_agents_line "① AGENTS: 初回未配置 に new-role が厳密一致で出る" \
+    "$out" "初回未配置" "test-pa12-new-role"
+  assert_agents_line "② AGENTS: dangling に old-role が厳密一致で出る" \
+    "$out" "dangling" "test-pa12-old-role"
+  assert_true "③ new-role のsymlinkが作られている" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-new-role.md" ]] && echo 1 || echo 0)"
+  assert_true "④ old-role のsymlinkは残っている（削除しない）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
+  assert_true "⑤ 終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 34. PA-8: HEAD不変で --resync を付けるとPreferencesの再同期が走る（前提修正 P-3・3-b・契約2） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured provider=anthropic-api model=claude-sonnet-5"
+  LOCK="$WORK/lock"
+
+  # 通常実行（--resyncなし）: HEAD不変のため早期終了し、Preferencesは
+  # 一度も同期されない（3.の早期終了。契約5の前提を明示する）。
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
+  assert_true "前提: 通常実行ではPreferencesはまだ同期されていない" \
+    "$([[ ! -e "$FAKE_HOME/Data/obsidian/Preferences/rule1.md" ]] && echo 1 || echo 0)"
+
+  rc=0
+  out="$(run_update_with_args "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" --resync 2>&1)" || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "--resyncのPreferences再同期ログが出る" \
+    "$(echo "$out" | grep -q -- '--resync: Preferences を再同期しました' && echo 1 || echo 0)"
+  assert_true "Preferencesが実際に再同期される（rule1.mdが実転写される）" \
+    "$([[ -f "$FAKE_HOME/Data/obsidian/Preferences/rule1.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 35. PA-9: --resync を付けなければPreferencesの再同期は走らない（現行挙動の回帰ガード・契約5） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "『変更なし』メッセージが出る（HEAD不変の早期終了）" \
+    "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
+  assert_true "--resyncのPreferences再同期ログは出ない" \
+    "$(echo "$out" | grep -q -- '--resync: Preferences' && echo 0 || echo 1)"
+  assert_true "Preferencesは同期されない" \
+    "$([[ ! -e "$FAKE_HOME/Data/obsidian/Preferences/rule1.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 36. PA-10: --resync は同期元の欠落・rsyncの失敗のいずれでも非0で終わり、固有のエラー文で判別できる（契約3） ==="
+{
+  # (a) 同期元（vault-public/Preferences）の欠落
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  rm -rf "$SRC/vault-public/Preferences"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "remove vault-public/Preferences (PA-10a fixture)"
+  git -C "$SRC" push -q origin HEAD:main
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update_with_args "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" --resync 2>&1)" || rc=$?
+  assert_true "(a) 同期元欠落で非0終了する" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "(a) 同期元欠落の固有エラー文が出る" \
+    "$(echo "$out" | grep -q -- '--resync: vault-public/Preferences が見つかりません' && echo 1 || echo 0)"
+  assert_true "(a) AGENTS: 行は出ない（claude/agents自体が無いfixtureのため。PA-11①の一部）" \
+    "$(echo "$out" | grep -q 'AGENTS:' && echo 0 || echo 1)"
+
+  rm -rf "$WORK"
+
+  # (b) rsync自体の失敗（宛先の既存ファイルをmacOSのuser-immutableフラグで
+  # 変更不可にする）。⚠️ 宛先ディレクトリ自体をchmodで書込不可にする方式は
+  # 使わない＝所有者（テスト実行ユーザー）が対象のため、rsync(-a)がディレクトリの
+  # 権限を一時的に緩めてから書き込み、最後に同期元と同じ権限へ戻してしまい
+  # 失敗を再現できなかった（実測で確認）。chflags uchg は所有者でも通常操作では
+  # 解除できないため確実に失敗を再現できる。
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian/Preferences"
+  echo "書き換え不可にする既存ファイル" > "$FAKE_HOME/Data/obsidian/Preferences/rule1.md"
+  chflags uchg "$FAKE_HOME/Data/obsidian/Preferences/rule1.md"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update_with_args "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" --resync 2>&1)" || rc=$?
+  chflags nouchg "$FAKE_HOME/Data/obsidian/Preferences/rule1.md"
+  assert_true "(b) rsync失敗で非0終了する" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "(b) 同期元欠落の文言は出ない（(a)と区別できる＝固有のエラー文で判別できることの確認）" \
+    "$(echo "$out" | grep -q -- 'vault-public/Preferences が見つかりません' && echo 0 || echo 1)"
+  assert_true "(b) rsync失敗固有の安定した文言が出る（2026-09-07 Codex一次レビュー指摘・MINOR対応: 非0＋別文言の否定確認だけでは無関係な理由での非0終了も通ってしまうため、肯定確認を追加）" \
+    "$(echo "$out" | grep -q -- '--resync: Preferences の rsync に失敗しました' && echo 1 || echo 0)"
+  assert_true "(b) AGENTS: 行は出ない（claude/agents自体が無いfixtureのため）" \
+    "$(echo "$out" | grep -q 'AGENTS:' && echo 0 || echo 1)"
+
+  rm -rf "$WORK"
+
+  # (c) HEADがpullで実際に進んだ場合でも、--resync中は同期元欠落を非0で
+  # 終わらせる（2026-09-07 Codex一次レビュー指摘・BLOCKING対応の回帰テスト:
+  # 従来は「HEAD不変」の早期終了経路にしか厳格な--resync処理が無く、pullで
+  # HEADが進んだ場合は既存4bのWARN-continueへ抜けて最終的にexit 0になり
+  # 得た。同期元欠落とHEAD更新が同時に起きるfixtureで、この経路も
+  # fail-closedになっていることを確認する）。
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+
+  # SUBをcloneした"後"にupstreamからvault-public/Preferencesを消してpushする
+  # ＝次のpullでHEADが実際に進み、かつ同期元が欠落した状態が同時に起きる。
+  rm -rf "$SRC/vault-public/Preferences"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "remove vault-public/Preferences (PA-10c fixture)"
+  git -C "$SRC" push -q origin HEAD:main
+
+  rc=0
+  out="$(run_update_with_args "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" --resync 2>&1)" || rc=$?
+  assert_true "(c) HEAD更新を検知したログが出る（前提: HEAD不変の早期終了経路ではないことの確認）" \
+    "$(echo "$out" | grep -q '更新を検知しました' && echo 1 || echo 0)"
+  assert_true "(c) HEAD更新を伴う場合でも同期元欠落で非0終了する（BLOCKING対応）" \
+    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "(c) 同期元欠落の固有エラー文が出る" \
+    "$(echo "$out" | grep -q -- '--resync: vault-public/Preferences が見つかりません' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 37. PA-11: 非0の原因が相互に誤分類されない（プロファイル検査の失敗単独・dangling同時の2ケース） ==="
+{
+  # ① プロファイル検査の失敗単独: agentsは正しく配置済み（新規もdanglingも無い）
+  #    状態でもAGENTS:行は出ない（「AGENTS:が無ければ他の原因」という不在からの
+  #    推定を禁じる規則の裏付け＝pull失敗のケースは PA-7 で確認済み。§2.1）。
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  # keeper-role は削除しない（claude/agents/ を非空に保つ用。PA-5と同じ理由＝
+  # gitは空ディレクトリを追跡しないため、test-pa11-roleだけを消すと
+  # claude/agents/自体が消えて「ディレクトリ丸ごと欠落」経路に化けてしまう）。
+  add_agent_role "$SRC" "keeper-role"
+  add_agent_role "$SRC" "test-pa11-role"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "unknown"
+  LOCK="$WORK/lock"
+
+  # baseline: ロールを正しく配置しておく（このbaseline実行時点ではプロファイルは
+  # unknownのため exit非0になるが、agents symlink化自体は完走する＝2cは
+  # プロファイル検査の成否と独立に実行されるため）。
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null 2>&1 || true
+  assert_true "前提: test-pa11-role が配置済み（新規でもdanglingでもない状態を作る）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa11-role.md" ]] && echo 1 || echo 0)"
+
+  rc=0
+  out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+  assert_true "① 終了コードが非0（プロファイル未確定）" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "① プロファイル検査失敗の固有エラー文（リーダー配役が未確定）が出る" \
+    "$(echo "$out" | grep -q 'リーダー配役が未確定です' && echo 1 || echo 0)"
+  assert_true "① AGENTS: 行は出ない（新規配置もdanglingも無いため。不在から他原因を推定しないことの裏付け）" \
+    "$(echo "$out" | grep -q 'AGENTS:' && echo 0 || echo 1)"
+
+  # ② dangling とプロファイル検査の失敗が同時に起きるケース: 両方の文言が出る。
+  rm -f "$SRC/claude/agents/test-pa11-role.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "retire test-pa11-role"
+  git -C "$SRC" push -q origin HEAD:main
+
+  rc2=0
+  out2="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc2=$?
+  assert_true "② 終了コードが非0" "$([[ "$rc2" -ne 0 ]] && echo 1 || echo 0)"
+  assert_agents_line "② AGENTS: dangling の固定文にtest-pa11-roleが厳密一致で出る（件数・句読点も検査）" \
+    "$out2" "dangling" "test-pa11-role"
+  assert_true "② プロファイル検査失敗の固有エラー文（リーダー配役が未確定）も同時に出る" \
+    "$(echo "$out2" | grep -q 'リーダー配役が未確定です' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 38. 契約1: --resync の引数解析は不正な組み合わせを拒否する（回帰ガード・2026-09-07 Codex一次レビュー指摘・MINOR対応） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(run_update_with_args "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" --unknown-flag 2>&1)" || rc=$?
+  assert_true "未知の引数は非0で拒否される" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "固有のエラー文（不正な引数です）が出る" \
+    "$(echo "$out" | grep -q '不正な引数です' && echo 1 || echo 0)"
+
+  rc=0
+  out="$(run_update_with_args "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" --resync extra 2>&1)" || rc=$?
+  assert_true "--resyncに余分な引数が付くと非0で拒否される（他の引数と併用しない・契約1）" \
+    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "固有のエラー文が出る(2)" \
+    "$(echo "$out" | grep -q '不正な引数です' && echo 1 || echo 0)"
+
+  rc=0
+  out="$(run_update_with_args "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" --resync --resync 2>&1)" || rc=$?
+  assert_true "--resyncの重複指定は非0で拒否される（オプション名は1つだけ・契約1）" \
+    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "固有のエラー文が出る(3)" \
+    "$(echo "$out" | grep -q '不正な引数です' && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }

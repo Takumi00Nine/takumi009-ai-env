@@ -902,6 +902,78 @@ EOF
   rm -rf "$WORK"
 }
 
+# --- 前提修正 P-1 の回帰テスト（2026-09-07）:
+#     1-a) linked worktree を AIENV_REPO に指定しても git init が走らない
+#     1-b) git commit にパス指定（-- vault-public）が付き、他の stage 済み差分を
+#          巻き込まない ---
+
+echo "=== 8. PA-1: linked worktree を AIENV_REPO に指定しても git init が走らない ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  MAIN_REPO="$WORK/main-repo"
+  make_base_vault "$VAULT_DIR"
+  new_repo "$MAIN_REPO"
+  # worktree add には最低1コミットが要るため、ダミーの初期コミットを作る。
+  echo "dummy" > "$MAIN_REPO/README.md"
+  git -C "$MAIN_REPO" add README.md
+  git -C "$MAIN_REPO" commit -q -m "initial commit"
+
+  WT_DIR="$WORK/linked-worktree"
+  git -C "$MAIN_REPO" worktree add -q "$WT_DIR" -b export-test-branch >/dev/null
+
+  # 前提: linked worktree では .git はファイル（.git ディレクトリではない）
+  assert_true "前提: linked worktree の .git はファイル" \
+    "$([[ -f "$WT_DIR/.git" ]] && echo 1 || echo 0)"
+
+  rc=0
+  run_export "$VAULT_DIR" "$WT_DIR" || rc=$?
+  assert_eq "linked worktree を AIENV_REPO にして exit 0" "0" "$rc"
+
+  assert_true "実行後も .git はファイルのまま（ディレクトリ化していない＝git init が走っていない）" \
+    "$([[ -f "$WT_DIR/.git" ]] && echo 1 || echo 0)"
+
+  nested_git_dirs=$(find "$WT_DIR" -type d -name '.git' 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "worktree の中に入れ子の .git ディレクトリが作られていない" "0" "$nested_git_dirs"
+
+  commits=$(git -C "$WT_DIR" log --oneline 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "worktree 上で snapshot commit が作られている（初期commit+1）" "2" "$commits"
+
+  git -C "$MAIN_REPO" worktree remove --force "$WT_DIR" >/dev/null 2>&1 || true
+  rm -rf "$WORK"
+}
+
+echo "=== 9. PA-2: vault-public 以外を stage した状態で実行しても commit は vault-public/ 配下のみ ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  REPO_DIR="$WORK/repo"
+  make_base_vault "$VAULT_DIR"
+  new_repo "$REPO_DIR"
+
+  # vault-public/ と無関係なファイルを stage したままにしておく。
+  echo "unrelated change" > "$REPO_DIR/other-file.txt"
+  git -C "$REPO_DIR" add other-file.txt
+
+  rc=0
+  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+
+  # このコミットは repo 最初の commit（親を持たない root commit）なので、
+  # diff-tree で親との差分を出すには --root が要る（無いと空になる）。
+  changed_paths="$(git -C "$REPO_DIR" diff-tree --no-commit-id --name-only -r --root HEAD)"
+  non_vault_public=$(printf '%s\n' "$changed_paths" | grep -v '^vault-public/' || true)
+  assert_eq "コミットの変更パスは vault-public/ 配下のみ" "" "$non_vault_public"
+  assert_true "vault-public/ 配下の変更が含まれている" \
+    "$(printf '%s\n' "$changed_paths" | grep -q '^vault-public/' && echo 1 || echo 0)"
+
+  staged_status="$(git -C "$REPO_DIR" status --porcelain -- other-file.txt)"
+  assert_eq "stage したままの other-file.txt は index に残っている（A  other-file.txt）" \
+    "A  other-file.txt" "$staged_status"
+
+  rm -rf "$WORK"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

@@ -1413,7 +1413,7 @@ echo "=== 13. ⑤gh コマンドが無い場合はWARN表示のみでdriftにし
   make_git_repo_with_remote "$PRIVATE_REPO" "https://github.com/someone/aienv-private.git"
   # gh は配置しない（見つからない状態を模擬）。外側PATHを継承すると開発機に実ghが
   # 入っている場合に環境依存で結果が変わるため、PATHを固定する
-  # （tests/test-setup-codex-mcp.shのCodexレビュー指摘・Minorと同じ対策）。
+  # （bareコマンド解決に依存するテストで繰り返し採られている対策と同じ）。
 
   out="$(PATH="$REAL_PYTHON3_BIN:/usr/bin:/bin" AIENV_PRIVATE_REPO="$PRIVATE_REPO" run_check "$REPO" "$HOME_DIR")"
   assert_contains "GH-UNAVAILABLE表示（Vault）" "$out" "[GH-UNAVAILABLE] Vaultバックアップ"
@@ -2792,18 +2792,20 @@ echo "=== 70b. ⑧ advisory T4-PRIME（実体の版がコードの期待版よ�
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  # EXPECTED_SCHEMA_VERSION(=2)より新しいschema_versionを書くとT4-PRIME
-  # （このマシンのコードが古い可能性）が発生する（profile_resolve.py
-  # reconcile_schema_version()のdeclared>EXPECTED分岐）。
+  # EXPECTED_SCHEMA_VERSION(=4・3モード体制対応で3→4へ引き上げ済み)より新しい
+  # schema_versionを書くとT4-PRIME（このマシンのコードが古い可能性）が発生する
+  # （profile_resolve.py reconcile_schema_version()のdeclared>EXPECTED分岐。
+  # declared>EXPECTED分岐は固定キーの過不足を検査しないため、no_read_pathsを
+  # 書かなくてもT5にはならない）。
   mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
   cat > "$HOME_DIR/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 3
+schema_version: 5
 profile_slug: test
 role.leader: configured provider=anthropic-api model=claude-sonnet-5
 excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
-reviewer: configured value=codex-mcp
+team_mode: configured value=full
 vault_write: configured value=via-scribe
 vault_scope: configured value=full
 ui.user_call: configured value=send-message

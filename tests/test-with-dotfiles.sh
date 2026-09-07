@@ -5,17 +5,17 @@
 # 実GitHub（Takumi00Nine/dotfiles）には一切依存しない。DOTFILES_REPO_URL を
 # ローカルの使い捨てbare repoへ差し替えてテストする。
 #
-# 注意: install-main.sh は末尾で scripts/setup-codex-mcp.sh（実claude/codex CLIを
-# 呼びうる）のlaunchctl相当処理を行う（週次drift通知LaunchAgent・
-# com.takumi009.drift-check.plistの設置は2026-07-16簡素化で撤去済み）。install-sub.sh
-# は委譲先のinstall-main.sh経由でこれを間接的に呼ぶ（サブ専用の定期更新
-# LaunchAgent自体は2026-07-23廃止済みで、install-sub.shはLaunchAgentを一切
-# 設置・撤去しない＝claude/hooks/check-sub-update.shのSessionStartフックに
-# 置き換え済み）。HOME差し替えでは隔離できない実システムへの副作用になりうる
-# ため、非dry-run呼び出しには必ず SKIP_CODEX_MCP=1 を付ける（Codexレビュー
-# 指摘・Major。tests/test-install-sub.sh と同じ対策。SKIP_LAUNCHCTL=1 は
-# install-main.sh側が同名の環境変数を別目的で宣言しているための互換目的で
-# 一部呼び出しに残しているが、install-sub.sh自体はこれを参照しない）。
+# 注意: 旧・codex MCP自動登録ステップ（実claude/codex CLIを呼びcodex MCPを
+# 登録していた当時の専用スクリプト）は2026-09-06 codex exec一本化に伴い
+# install-main.sh から撤去済み
+# （SKIP_CODEX_MCP環境変数もinstall-main.sh側では読まなくなった。既存の
+# 呼び出しに残っているSKIP_CODEX_MCP=1指定は無害な未使用変数）。install-main.sh
+# は他に週次drift通知LaunchAgent相当のlaunchctl処理も行っていたが、これは
+# 2026-07-16簡素化で撤去済み。install-sub.shはLaunchAgentを一切設置・撤去
+# しない（claude/hooks/check-sub-update.shのSessionStartフックに置き換え済み）。
+# SKIP_LAUNCHCTL=1 は install-main.sh側が同名の環境変数を別目的で宣言している
+# ための互換目的で一部呼び出しに残しているが、install-sub.sh自体はこれを
+# 参照しない。
 #
 # 実行方法: bash tests/test-with-dotfiles.sh
 

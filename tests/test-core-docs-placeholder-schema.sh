@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # vault-public/Preferences/core-conduct.md・core-workflow.md 内の {{…}} プレース
-# ホルダ集合が、最小能力表7キー（§3.3.0）、または設計上認められた文書参照名
+# ホルダ集合が、最小能力表8キー（§3.3.0）、または設計上認められた文書参照名
 # （DOC_REFERENCE_KNOWN_KEYS。2026-09-02追加・配役表解凍-設計-2026-09-01.md
 # §7）の集合に含まれることを機械判定する静的テスト（2026-08-30 工程横断
 # レビュー指摘・MAJOR-3支援）。
@@ -47,7 +47,7 @@ ensure_extract_profile_schema_block_fn() {
   declare -F extract_profile_schema_block >/dev/null 2>&1
 }
 
-# 最小能力表7キー（§3.3.0）。ハードコードで再列挙せず、claude/hooks/
+# 最小能力表8キー（§3.3.0）。ハードコードで再列挙せず、claude/hooks/
 # bootstrap-vault.sh の LOCAL_PROFILE_KNOWN_KEYS（正本）を実行時ソースとして
 # 参照する（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応: 従来はここに独自の
 # 配列を再列挙しており、正本が増減してもこのテストが追随せず気づけない
@@ -77,9 +77,55 @@ DOC_REFERENCE_KNOWN_KEYS=(
   "配役表"
 )
 
+# v2でのみ新設され、v1側にはまだ合流していない能力軸キーを拾う枠
+# （2026-09-05 P3段階4当初はno_read_pathsがここに該当していたが、同日の
+# 差し戻し対応でLOCAL_PROFILE_KNOWN_KEYS（v1・正本）側にもno_read_pathsを
+# 追加し、v1/v2のキー集合を再び1:1に揃えた＝リーダー裁定。これにより
+# no_read_pathsはKNOWN_KEYS側に既に含まれ、以後この配列には合流しなくなった。
+# ⚠️ この裁定はv1互換性とのトレードオフを伴う——v1は元々「必須キーを増やすと
+# 既存のv1実体profile.mdが軒並みT5（既知キー欠落）で壊れる」フォーマットで
+# あり、v2のようなschema_versionによる後方互換の仮想補完機構を持たない。
+# 実際の対象2機（メイン・サブ）は既にv2へ移行済みのため今回は実害が無いが、
+# 将来v1のまま残るマシンが現れた場合、次回SessionStartで無警告に近い形で
+# 最小能力+⚠️へ縮退する（Codex一次レビュー指摘・Major。採否はリーダー）。
+# この枠自体は、今後v1/v2が再び分岐した場合（v2専用の新キーを追加し、v1へは
+# 意図的に合流させない選択をした場合）に備えて残す。profile_resolve.pyの
+# known-keys（正本）から動的に取得し、META_KEYS/EXTRA_FIXED_KEYSを除いた
+# 能力軸部分だけをここに合流させる（ハードコード再列挙しない＝KNOWN_KEYSと
+# 同じ「正本を実行時ソースとして参照する」方針）。
+# ⚠️ KNOWN_KEYS（v1側）に既に存在するキーはここへ入れない（単なる重複除去の
+# ためのフィルタ）。v1/v2のキー集合ドリフトそのものの機械検証は、この配列
+# ではなく後述の section 8（v1/v2の能力軸キー集合の完全一致テスト）が担う。
+PROFILE_RESOLVE_PY_FOR_KEYS="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
+V2_ONLY_CAPABILITY_KEYS=()
+if [ -f "$PROFILE_RESOLVE_PY_FOR_KEYS" ]; then
+  _fixed_line="$(python3 "$PROFILE_RESOLVE_PY_FOR_KEYS" known-keys 2>/dev/null | grep '^FIXED:' || true)"
+  _fixed_line="${_fixed_line#FIXED:}"
+  if [ -n "$_fixed_line" ]; then
+    IFS=',' read -r -a _fixed_keys <<< "$_fixed_line"
+    for _k in "${_fixed_keys[@]}"; do
+      case "$_k" in
+        schema_version|profile_slug|excluded_models) continue ;;
+      esac
+      _already_in_v1=0
+      for _v1k in "${KNOWN_KEYS[@]}"; do
+        [ "$_v1k" = "$_k" ] && { _already_in_v1=1; break; }
+      done
+      [ "$_already_in_v1" = "1" ] && continue
+      V2_ONLY_CAPABILITY_KEYS+=("$_k")
+    done
+  fi
+fi
+
 is_known_key() {
   local target="$1" k
-  for k in "${KNOWN_KEYS[@]}" "${DOC_REFERENCE_KNOWN_KEYS[@]}"; do
+  # ⚠️ V2_ONLY_CAPABILITY_KEYSは要素0件になりうる（no_read_paths追加後、
+  # v1のKNOWN_KEYSとv2のCAPABILITY_KEYSが完全一致した場合等）。macOS既定の
+  # bash 3.2はset -u下で本当に空の配列を"${arr[@]}"展開するとunbound
+  # variableエラーになる既知の癖があるため、install-main.sh/pid-lock.shと
+  # 同じ`"${arr[@]:-}"`回避イディオムを使う（2026-09-05 P3段階4差し戻し対応で
+  # 実際にこのエラーを踏んで判明）。
+  for k in "${KNOWN_KEYS[@]:-}" "${DOC_REFERENCE_KNOWN_KEYS[@]:-}" "${V2_ONLY_CAPABILITY_KEYS[@]:-}"; do
     [ "$k" = "$target" ] && return 0
   done
   return 1
@@ -124,9 +170,13 @@ check_file() {
   while IFS= read -r ph; do
     [ -z "$ph" ] && continue
     if is_known_key "$ph"; then
-      pass "$relpath: {{${ph}}} は最小能力表7キー、または配役表解凍で正当化された参照名に含まれる"
+      pass "$relpath: {{${ph}}} は最小能力表8キー・v2追加の能力軸キー、または配役表解凍で正当化された参照名に含まれる"
     else
-      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表7キー＝${KNOWN_KEYS[*]}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]}）"
+      # ⚠️ is_known_key()と同じ理由（120行目コメント）で`:-`ガードを付ける。
+      # 3モード体制対応で{{reviewer}}が未解決参照になった実例（公開スナップ
+      # ショット未再生成の間）で、ここが無guardのままset -u下でunbound
+      # variableエラーとなりスイート全体を落としていたのを機に追加した。
+      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表8キー＝${KNOWN_KEYS[*]:-}／v2追加の能力軸キー＝${V2_ONLY_CAPABILITY_KEYS[*]:-}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]:-}）"
       unknown=$((unknown + 1))
     fi
   done <<EOF
@@ -134,10 +184,10 @@ $placeholders
 EOF
 }
 
-echo "=== 1. Preferences/core-conduct.md の {{…}} プレースホルダが最小能力表7キー、または設計上認められた文書参照名に含まれる ==="
+echo "=== 1. Preferences/core-conduct.md の {{…}} プレースホルダが最小能力表8キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-conduct.md"
 
-echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表7キー、または設計上認められた文書参照名に含まれる ==="
+echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表8キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-workflow.md"
 
 echo "=== 3. 回帰: プレースホルダが0件のファイルでもset -e下でスクリプト全体が落ちずfail_caseまで到達する（Codex二次レビュー指摘・Minor対応） ==="
@@ -440,6 +490,72 @@ PYEOF
       fi
     fi
   fi
+}
+
+echo "=== 8. 静的: v1能力軸キー集合(bootstrap-vault.shのLOCAL_PROFILE_KNOWN_KEYS)とv2能力軸キー集合(profile_resolve.pyのCAPABILITY_KEYS＝known-keysのFIXEDからメタ2キー・excluded_modelsを除いたもの)が完全一致する（2026-09-05 P3段階4差し戻し対応・リーダー指摘: no_read_paths追加時にv1側だけ更新漏れが起きたため、両者のドリフトを機械的に検知する静的テストを新設） ==="
+{
+  if [ ! -f "$PROFILE_RESOLVE_PY_FOR_KEYS" ]; then
+    fail_case "claude/hooks/lib/profile_resolve.py が見つからないためv1/v2キー集合の突合ができない"
+  else
+    _v2_fixed_line="$(python3 "$PROFILE_RESOLVE_PY_FOR_KEYS" known-keys 2>/dev/null | grep '^FIXED:' || true)"
+    _v2_fixed_line="${_v2_fixed_line#FIXED:}"
+    if [ -z "$_v2_fixed_line" ]; then
+      fail_case "profile_resolve.py known-keys からFIXED行を取得できない"
+    else
+      v1_joined="$(printf '%s,' "${KNOWN_KEYS[@]}")"
+      RESULT8="$(python3 - "$v1_joined" "$_v2_fixed_line" <<'PYEOF'
+import sys
+
+v1_raw, v2_raw = sys.argv[1:3]
+v1_keys = {k for k in v1_raw.split(',') if k}
+v2_all = {k for k in v2_raw.split(',') if k}
+v2_meta_and_extra = {"schema_version", "profile_slug", "excluded_models"}
+v2_capability = v2_all - v2_meta_and_extra
+
+if v1_keys == v2_capability:
+    print(f"PASS\tv1(LOCAL_PROFILE_KNOWN_KEYS)とv2(CAPABILITY_KEYS)の能力軸キー集合が完全一致する（{len(v1_keys)}件）")
+else:
+    only_v1 = sorted(v1_keys - v2_capability)
+    only_v2 = sorted(v2_capability - v1_keys)
+    print(f"FAIL\tv1/v2の能力軸キー集合が不一致（v1のみ: {only_v1} / v2のみ: {only_v2}）")
+PYEOF
+)"
+      IFS=$'\t' read -r _status8 _desc8 <<< "$RESULT8"
+      if [ "$_status8" = "PASS" ]; then
+        pass "$_desc8"
+      else
+        fail_case "$_desc8"
+      fi
+    fi
+  fi
+}
+
+echo "=== 9. AC-14: core-workflow.md §7の統合行がVault正本・公開スナップショットの両方にあり、旧2行と{{reviewer}}が現れない ==="
+{
+  NEW_LINE='**検証職が空席** → リーダー職が受入条件と1対1の最小検証を行い「独立検証なし・リーダー検証のみ」を成果物と報告に明記する'
+  for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/core-workflow.md" \
+                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
+    label="${label_path%%:*}"; f="${label_path#*:}"
+    if [ ! -f "$f" ]; then
+      fail_case "AC-14(${label}): core-workflow.mdが見つからない"
+      continue
+    fi
+    if grep -qF "$NEW_LINE" "$f"; then
+      pass "AC-14(${label}): 統合行（検証職が空席…）がある"
+    else
+      fail_case "AC-14(${label}): 統合行（検証職が空席…）が無い（Vault反映後／export-public-vault.sh再生成後に緑化想定）"
+    fi
+    if grep -qF '一次レビュアー職が空席' "$f" || grep -qF 'tester が空席' "$f"; then
+      fail_case "AC-14(${label}): 旧2行（一次レビュアー職が空席／tester が空席）が残っている"
+    else
+      pass "AC-14(${label}): 旧2行が0行"
+    fi
+    if grep -qF '{{reviewer}}' "$f"; then
+      fail_case "AC-14(${label}): {{reviewer}}が残っている"
+    else
+      pass "AC-14(${label}): {{reviewer}}が現れない"
+    fi
+  done
 }
 
 echo
