@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # vault-public/Preferences/core-conduct.md・core-workflow.md 内の {{…}} プレース
-# ホルダ集合が、最小能力表7キー（§3.3.0）、または設計上認められた文書参照名
+# ホルダ集合が、最小能力表の能力軸3キー（§3.3.0。2026-09-07能力軸整理で
+# 7→3キーへ縮小）、または設計上認められた文書参照名
 # （DOC_REFERENCE_KNOWN_KEYS。2026-09-02追加・配役表解凍-設計-2026-09-01.md
 # §7）の集合に含まれることを機械判定する静的テスト（2026-08-30 工程横断
 # レビュー指摘・MAJOR-3支援）。
@@ -47,7 +48,7 @@ ensure_extract_profile_schema_block_fn() {
   declare -F extract_profile_schema_block >/dev/null 2>&1
 }
 
-# 最小能力表7キー（§3.3.0）。ハードコードで再列挙せず、claude/hooks/
+# 最小能力表の能力軸3キー（§3.3.0）。ハードコードで再列挙せず、claude/hooks/
 # bootstrap-vault.sh の LOCAL_PROFILE_KNOWN_KEYS（正本）を実行時ソースとして
 # 参照する（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応: 従来はここに独自の
 # 配列を再列挙しており、正本が増減してもこのテストが追随せず気づけない
@@ -170,13 +171,13 @@ check_file() {
   while IFS= read -r ph; do
     [ -z "$ph" ] && continue
     if is_known_key "$ph"; then
-      pass "$relpath: {{${ph}}} は最小能力表7キー・v2追加の能力軸キー、または配役表解凍で正当化された参照名に含まれる"
+      pass "$relpath: {{${ph}}} は最小能力表キー・v2追加の能力軸キー、または配役表解凍で正当化された参照名に含まれる"
     else
       # ⚠️ is_known_key()と同じ理由（120行目コメント）で`:-`ガードを付ける。
       # 3モード体制対応で{{reviewer}}が未解決参照になった実例（公開スナップ
       # ショット未再生成の間）で、ここが無guardのままset -u下でunbound
       # variableエラーとなりスイート全体を落としていたのを機に追加した。
-      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表7キー＝${KNOWN_KEYS[*]:-}／v2追加の能力軸キー＝${V2_ONLY_CAPABILITY_KEYS[*]:-}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]:-}）"
+      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表キー＝${KNOWN_KEYS[*]:-}／v2追加の能力軸キー＝${V2_ONLY_CAPABILITY_KEYS[*]:-}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]:-}）"
       unknown=$((unknown + 1))
     fi
   done <<EOF
@@ -184,10 +185,10 @@ $placeholders
 EOF
 }
 
-echo "=== 1. Preferences/core-conduct.md の {{…}} プレースホルダが最小能力表7キー、または設計上認められた文書参照名に含まれる ==="
+echo "=== 1. Preferences/core-conduct.md の {{…}} プレースホルダが最小能力表キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-conduct.md"
 
-echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表7キー、または設計上認められた文書参照名に含まれる ==="
+echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-workflow.md"
 
 echo "=== 3. 回帰: プレースホルダが0件のファイルでもset -e下でスクリプト全体が落ちずfail_caseまで到達する（Codex二次レビュー指摘・Minor対応） ==="
@@ -422,6 +423,23 @@ else:
     prefixes = set(prefixes_line[len('PREFIXES:'):].split(','))
     expected_version = schema_version_line[len('SCHEMA_VERSION:'):].strip()
 
+    # ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 下のサンプルとの
+    # 突合は「両者が互いに一致するか」しか見ておらず、両方が同じ誤った
+    # 6キー集合へ同時に変わっても通ってしまう（要件AC-1が求める「期待6キー」
+    # ではなく「現物同士の一致」しか検査していなかった）。known-keysのFIXED
+    # 集合を、配役表-能力軸整理-要件-2026-09-07.md §7.2 AC-1が定めるリテラル
+    # 6キーと直接比較する検査を独立して追加する。
+    expected_fixed_literal = {
+        'schema_version', 'profile_slug', 'team_mode',
+        'no_read_paths', 'machine_role', 'excluded_models',
+    }
+    if fixed_keys == expected_fixed_literal:
+        results.append(('PASS', 'AC-1: known-keysのFIXED集合が要件の期待6キー(リテラル集合)と完全一致する'))
+    else:
+        only_expected = sorted(expected_fixed_literal - fixed_keys)
+        only_actual = sorted(fixed_keys - expected_fixed_literal)
+        results.append(('FAIL', f'AC-1: known-keysのFIXED集合が期待6キーと不一致（期待のみ: {only_expected} / 実際のみ: {only_actual}）'))
+
     # サンプルブロックの先頭階層キー（コメント行・空行・"---"区切り行を除く）を抽出。
     sample_keys = set()
     sample_schema_version = None
@@ -512,20 +530,39 @@ v2_all = {k for k in v2_raw.split(',') if k}
 v2_meta_and_extra = {"schema_version", "profile_slug", "excluded_models"}
 v2_capability = v2_all - v2_meta_and_extra
 
+results8 = []
 if v1_keys == v2_capability:
-    print(f"PASS\tv1(LOCAL_PROFILE_KNOWN_KEYS)とv2(CAPABILITY_KEYS)の能力軸キー集合が完全一致する（{len(v1_keys)}件）")
+    results8.append(("PASS", f"v1(LOCAL_PROFILE_KNOWN_KEYS)とv2(CAPABILITY_KEYS)の能力軸キー集合が完全一致する（{len(v1_keys)}件）"))
 else:
     only_v1 = sorted(v1_keys - v2_capability)
     only_v2 = sorted(v2_capability - v1_keys)
-    print(f"FAIL\tv1/v2の能力軸キー集合が不一致（v1のみ: {only_v1} / v2のみ: {only_v2}）")
+    results8.append(("FAIL", f"v1/v2の能力軸キー集合が不一致（v1のみ: {only_v1} / v2のみ: {only_v2}）"))
+
+# ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 上の比較は「v1とv2が
+# 互いに一致するか」しか見ておらず、両方が同じ誤った3キーへ同時に変わっても
+# 通る。要件AC-1の期待6キーからメタ2キー・excluded_modelsを除いた期待能力軸
+# 3キー（team_mode・no_read_paths・machine_role）のリテラル集合とv2を独立に
+# 比較する。
+expected_capability_literal = {"team_mode", "no_read_paths", "machine_role"}
+if v2_capability == expected_capability_literal:
+    results8.append(("PASS", "AC-1: v2(CAPABILITY_KEYS)が要件の期待能力軸3キー(リテラル集合)と完全一致する"))
+else:
+    only_expected = sorted(expected_capability_literal - v2_capability)
+    only_actual = sorted(v2_capability - expected_capability_literal)
+    results8.append(("FAIL", f"AC-1: v2(CAPABILITY_KEYS)が期待3キーと不一致（期待のみ: {only_expected} / 実際のみ: {only_actual}）"))
+
+for status, desc in results8:
+    print(f"{status}\t{desc}")
 PYEOF
 )"
-      IFS=$'\t' read -r _status8 _desc8 <<< "$RESULT8"
-      if [ "$_status8" = "PASS" ]; then
-        pass "$_desc8"
-      else
-        fail_case "$_desc8"
-      fi
+      while IFS=$'\t' read -r _status8 _desc8; do
+        [ -z "$_status8" ] && continue
+        if [ "$_status8" = "PASS" ]; then
+          pass "$_desc8"
+        else
+          fail_case "$_desc8"
+        fi
+      done <<< "$RESULT8"
     fi
   fi
 }
@@ -555,6 +592,179 @@ echo "=== 9. AC-14: core-workflow.md §7の統合行がVault正本・公開ス�
     else
       pass "AC-14(${label}): {{reviewer}}が現れない"
     fi
+  done
+}
+
+echo "=== 10. AC-5: 廃止した能力軸・マーカー・別名トークンがrepoに残っていない（配役表-能力軸整理-設計-2026-09-07.md §6。本人決定＝Decisions/2026-09-07-profile-axes-consolidation） ==="
+{
+  # ⚠️ 語をそのまま書かない（この検査自身が0件検査へ一致してしまうため）。
+  # 実行時に連結して組み立てる（設計書§6.2）。
+  _u='_'; _h='-'
+  RETIRED_PAT="git${_u}role|web${_u}verification|inventory${_u}source|ui\\.user${_u}call|vault${_u}write|machine${_h}role|work${_h}old"
+
+  # ① 除外つき検索が0行（exit 1）＝廃止済みの生語がAC5-ALLOWタグ・決定ノート
+  # リンク行を除いてrepoのどこにも残っていない。
+  rc1=0
+  out1="$(git -C "$REPO_ROOT" grep -nE -e "$RETIRED_PAT" \
+    --and --not -e 'AC5-ALLOW' \
+    --and --not -e 'Decisions/[0-9]{4}-[0-9]{2}-[0-9]{2}-' -- . 2>&1)" || rc1=$?
+  if [ "$rc1" -eq 1 ] && [ -z "$out1" ]; then
+    pass "①除外つき検索が0行（廃止語の残存なし）"
+  else
+    fail_case "①除外つき検索が0行ではない（rc=${rc1}）: ${out1}"
+  fi
+
+  # ② 許可タグ（AC5-ALLOW）を含むファイルがtests/配下だけにある。
+  rc2=0
+  tagged_files="$(git -C "$REPO_ROOT" grep -l 'AC5-ALLOW' -- . 2>&1)" || rc2=$?
+  if [ "$rc2" -ne 0 ]; then
+    fail_case "②AC5-ALLOWタグの検索自体が失敗した（rc=${rc2}）: ${tagged_files}"
+  else
+    outside_tests=0
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      case "$f" in
+        tests/*) : ;;
+        *) outside_tests=$((outside_tests + 1)); fail_case "②AC5-ALLOWタグがtests/の外にある: $f" ;;
+      esac
+    done <<< "$tagged_files"
+    [ "$outside_tests" -eq 0 ] && pass "②AC5-ALLOWタグはtests/配下だけにある"
+  fi
+
+  # ③ 各タグの<名前>が明示リスト（要件§6のfixture ID＝FX-P7・FX-M1、および
+  # 旧版コード再現fixtureの汎用タグ＝FXP0）に一致する。
+  # ⚠️ Codex一次レビュー指摘（MAJOR-3・2026-09-07）対応: 従来は
+  # `FX-P[0-9]{1,2}`／`FX-M[0-9]{1,2}`という開いた数字レンジを許可しており、
+  # 要件§6に無い任意の番号（例=FX-P12）でも構文だけ一致すれば通ってしまい、
+  # 現行resolverに旧入力を渡すだけの通常回帰テストが「旧版コード再現」を
+  # 僭称できてしまっていた。名前ごとの明示リストへ絞り、新しい許可名を
+  # 増やしたい場合は本リストとAC-5③の記述を同じ巡で変更する規約にする。
+  rc3=0
+  all_tags="$(git -C "$REPO_ROOT" grep -ohE 'AC5-ALLOW:[A-Za-z0-9-]+' -- tests/ 2>&1)" || rc3=$?
+  if [ "$rc3" -ne 0 ] || [ -z "$all_tags" ]; then
+    fail_case "③AC5-ALLOWタグが1件も見つからない（想定外・rc=${rc3}）"
+  else
+    bad_names=0
+    while IFS= read -r tag; do
+      [ -z "$tag" ] && continue
+      name="${tag#AC5-ALLOW:}"
+      if [[ "$name" == "FX-P7" || "$name" == "FX-M1" || "$name" == "FXP0" ]]; then
+        :
+      else
+        bad_names=$((bad_names + 1))
+        fail_case "③タグ名が明示リスト（FX-P7／FX-M1／FXP0）に一致しない: ${tag}"
+      fi
+    done <<< "$(printf '%s\n' "$all_tags" | sort -u)"
+    [ "$bad_names" -eq 0 ] && pass "③全タグの名前が明示リスト（FX-P7／FX-M1／FXP0）に一致する（$(printf '%s\n' "$all_tags" | sort -u | wc -l | tr -d ' ')種）"
+  fi
+}
+
+echo "=== 11. AC-2: known-keysの3行目がSCHEMA_VERSION:5に完全一致する（配役表-能力軸整理-要件-2026-09-07.md §7.2） ==="
+{
+  PROFILE_RESOLVE_PY_AC2="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
+  if [ ! -f "$PROFILE_RESOLVE_PY_AC2" ]; then
+    fail_case "claude/hooks/lib/profile_resolve.py が見つからない"
+  else
+    kk_ac2="$(python3 "$PROFILE_RESOLVE_PY_AC2" known-keys)"
+    line3="$(printf '%s\n' "$kk_ac2" | sed -n '3p')"
+    if [ "$line3" = "SCHEMA_VERSION:5" ]; then
+      pass "known-keysの3行目がSCHEMA_VERSION:5に完全一致する"
+    else
+      fail_case "known-keysの3行目がSCHEMA_VERSION:5に完全一致しない（実際: ${line3}）"
+    fi
+  fi
+}
+
+echo "=== 12. AC-7: プレースホルダ{{廃止5キー}}がVault正本・公開スナップショットの両方に0件（core-conduct.md・core-workflow.md。⚠️ 段階2〈vault-scribeによるVault正本改訂＋公開スナップショット再生成〉が終わるまでは公開スナップショット側が赤で正常＝設計書§9.1） ==="
+{
+  # ⚠️ 廃止キー名をソースへ直接書かない（本ファイル自身がAC-5の0件検査
+  # 対象＝tests/配下のため、自分自身が引っかからないよう実行時に組み立てる）。
+  _u12='_'
+  RETIRED_PLACEHOLDER_PAT="\\{\\{(inventory${_u12}source|vault${_u12}write|ui\\.user${_u12}call|git${_u12}role|web${_u12}verification)\\}\\}"
+  for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/core-conduct.md" \
+                     "Vault正本:$HOME/Data/obsidian/Preferences/core-workflow.md" \
+                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-conduct.md" \
+                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
+    label="${label_path%%:*}"; f="${label_path#*:}"
+    fname="$(basename "$f")"
+    if [ ! -f "$f" ]; then
+      fail_case "AC-7(${label}:${fname}): ファイルが見つからない"
+      continue
+    fi
+    rc=0
+    hit="$(grep -nE "$RETIRED_PLACEHOLDER_PAT" "$f" 2>&1)" || rc=$?
+    if [ "$rc" -eq 1 ] && [ -z "$hit" ]; then
+      pass "AC-7(${label}:${fname}): 廃止5キーのプレースホルダが0件"
+    else
+      fail_case "AC-7(${label}:${fname}): 廃止5キーのプレースホルダが残っている: ${hit}"
+    fi
+  done
+}
+
+echo "=== 13. AC-10: core-workflow.md §5について、廃止済みgit上の立場プレースホルダが0件・machine_roleが1件以上（Vault正本・公開スナップショットの両方。⚠️ 段階2が終わるまでは公開スナップショット側が赤で正常） ==="
+{
+  # ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 従来はファイル全体を
+  # 検索しており、machine_roleが§5以外の別節に残っているだけでも通ってしまう
+  # （要件AC-10は「§5について」と節を明示している）。§5見出し（`## 5. `）から
+  # 次の`## `見出しの直前までを抽出してから検査する。
+  _u13='_'
+  legacy_placeholder_13="{{git${_u13}role}}"
+  for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/core-workflow.md" \
+                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
+    label="${label_path%%:*}"; f="${label_path#*:}"
+    if [ ! -f "$f" ]; then
+      fail_case "AC-10(${label}): core-workflow.mdが見つからない"
+      continue
+    fi
+    section5="$(awk '/^## 5\. /{flag=1; print; next} /^## [0-9]+\. /{flag=0} flag' "$f")"
+    if [ -z "$section5" ]; then
+      fail_case "AC-10(${label}): §5見出し（## 5. ）が見つからず抽出できない"
+      continue
+    fi
+    rc=0
+    hit="$(printf '%s\n' "$section5" | grep -nF "$legacy_placeholder_13" 2>&1)" || rc=$?
+    if [ "$rc" -eq 1 ] && [ -z "$hit" ]; then
+      pass "AC-10(${label}): §5内で廃止済みプレースホルダが0件"
+    else
+      fail_case "AC-10(${label}): §5内に廃止済みプレースホルダが残っている: ${hit}"
+    fi
+    rc2=0
+    hit2="$(printf '%s\n' "$section5" | grep -nF 'machine_role' 2>&1)" || rc2=$?
+    if [ "$rc2" -eq 0 ] && [ -n "$hit2" ]; then
+      pass "AC-10(${label}): §5内にmachine_roleが1件以上"
+    else
+      fail_case "AC-10(${label}): §5内にmachine_roleが1件も無い"
+    fi
+  done
+}
+
+echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃止済みの旧マーカー語が0件・machine_roleが1件以上（Vault正本・公開スナップショットの両方。⚠️ 段階2が終わるまでは公開スナップショット側が赤で正常） ==="
+{
+  for name in "vault-operation.md" "core-workflow.md"; do
+    for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/${name}" \
+                       "公開スナップショット:$REPO_ROOT/vault-public/Preferences/${name}"; do
+      label="${label_path%%:*}"; f="${label_path#*:}"
+      if [ ! -f "$f" ]; then
+        fail_case "AC-12①(${label}:${name}): ファイルが見つからない"
+        continue
+      fi
+      _h2='-'
+      legacy_word="machine${_h2}role"
+      rc=0
+      hit="$(grep -nF "$legacy_word" "$f" 2>&1)" || rc=$?
+      if [ "$rc" -eq 1 ] && [ -z "$hit" ]; then
+        pass "AC-12①(${label}:${name}): 廃止済みの旧マーカー語が0件"
+      else
+        fail_case "AC-12①(${label}:${name}): 廃止済みの旧マーカー語が残っている: ${hit}"
+      fi
+      rc2=0
+      hit2="$(grep -nF 'machine_role' "$f" 2>&1)" || rc2=$?
+      if [ "$rc2" -eq 0 ] && [ -n "$hit2" ]; then
+        pass "AC-12①(${label}:${name}): machine_roleが1件以上"
+      else
+        fail_case "AC-12①(${label}:${name}): machine_roleが1件も無い"
+      fi
+    done
   done
 }
 

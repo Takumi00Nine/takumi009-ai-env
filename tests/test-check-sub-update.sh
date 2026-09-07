@@ -6,11 +6,17 @@
 # 対してフックを実行する（tests/test-update-sub.shと同じ考え方）。
 #
 # 2026-07-24: メイン/サブ判定をVaultのprivate層ファイル不在（否定証明）から
-# machine-roleマーカーファイル（積極的な証明。既定値はscripts/install-sub.sh・
+# 旧マーカーファイル（積極的な証明。既定値はscripts/install-sub.sh・
 # scripts/update-sub.shと共有）方式へ変更した（リーダー裁定・Codex一次レビュー
 # 指摘Major対応）。旧1〜2番（private層ファイル存在によるメイン機判定）は
 # マーカー方式の1〜2番へ差し替えた。CHECK_SUB_UPDATE_VAULTはもう使われないため
 # run_hook()から除去し、AIENV_MACHINE_ROLE_MARKERへ差し替えた。
+#
+# 2026-09-07: 判定元を旧マーカーファイルから配役表の能力軸`machine_role`へ
+# 変更した（配役表-能力軸整理-設計-2026-09-07.md §2。AIENV_MACHINE_ROLE_MARKER
+# はもう使われないためrun_hook()から除去し、AIENV_LOCAL_PROFILE_PATHへ
+# 差し替えた。マーカーのtrimを見ていた観点（2c・2e）は、値の形式検査
+# （V8-b・T6）が担う陰性へ読み替えた。
 #
 # 実行方法: bash tests/test-check-sub-update.sh
 
@@ -73,117 +79,192 @@ make_sub_clone() {
   git -C "$sub" config user.email test@example.invalid
 }
 
-# machine-roleマーカーファイルを作る（既定content="sub"）。
-make_sub_marker() {
-  local marker="$1" content="${2:-sub}"
-  mkdir -p "$(dirname "$marker")"
-  printf '%s\n' "$content" > "$marker"
+# ローカル実体プロファイル（schema 5・新3キー）を作る。$2はmachine_role行の
+# 状態＋属性部分（既定 "configured value=sub"）。配役表-能力軸整理-設計-
+# 2026-09-07.md §6.1のFX-P1と同型の共通ベースを使う。
+write_profile() {
+  local path="$1" mr="${2:-configured value=sub}"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<EOF
+---
+schema_version: 5
+profile_slug: test-check-sub-update-machine
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: ${mr}
+excluded_models: configured value=none
+role.leader: configured provider=anthropic-api model=claude-sonnet-5
+---
+EOF
 }
 
-# フックを実行し、標準出力(additionalContext抽出済み)を返す。
+# フックを実行し、標準出力(additionalContext抽出済み)を返す。$2はローカル実体
+# プロファイルのパス（無ければ「解決失敗」＝メイン機扱いのfail-closed経路）。
+# AIENV_BEDROCK_ENV_FILEは実行機のホームを参照させないようWORK配下の
+# 実在しないパスへ固定する（テストのhermeticity）。
 run_hook() {
-  local dir="$1" marker="$2" log="$3" timeout_secs="${4:-5}" stdin_json="${5:-\{\}}"
+  local dir="$1" profile="$2" log="$3" timeout_secs="${4:-5}" stdin_json="${5:-\{\}}"
   printf '%s' "$stdin_json" \
-    | CHECK_SUB_UPDATE_DIR="$dir" AIENV_MACHINE_ROLE_MARKER="$marker" \
+    | CHECK_SUB_UPDATE_DIR="$dir" AIENV_LOCAL_PROFILE_PATH="$profile" \
+      AIENV_BEDROCK_ENV_FILE="$(dirname "$log")/nonexistent-bedrock.env" \
       CHECK_SUB_UPDATE_LOG="$log" CHECK_SUB_UPDATE_TIMEOUT="$timeout_secs" "$SCRIPT"
 }
 
-echo "=== 1. メイン機判定: machine-roleマーカーが存在しなければ無出力・exit 0(fail-closed) ==="
+# run_hook_home <dir> <profile> <log> <home> — run_hook()と同じだがHOMEを
+# 明示的に切り替える（配役表-能力軸整理-設計-2026-09-07.md §10.1・
+# FX-M1/FX-M2用。本番と同じ場所（$HOME/.config/takumi009-ai-env/配下）に
+# 置いた廃止済みの旧マーカーファイルが読まれないことを証明するために使う）。
+run_hook_home() {
+  local dir="$1" profile="$2" log="$3" home="$4" timeout_secs="${5:-5}" stdin_json="${6:-\{\}}"
+  printf '%s' "$stdin_json" \
+    | HOME="$home" CHECK_SUB_UPDATE_DIR="$dir" AIENV_LOCAL_PROFILE_PATH="$profile" \
+      AIENV_BEDROCK_ENV_FILE="$(dirname "$log")/nonexistent-bedrock.env" \
+      CHECK_SUB_UPDATE_LOG="$log" CHECK_SUB_UPDATE_TIMEOUT="$timeout_secs" "$SCRIPT"
+}
+
+echo "=== 1. メイン機判定: 配役表が解決できなければ無出力・exit 0(fail-closed) ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"; SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/nonexistent-marker-dir/machine-role"
+  PROFILE="$WORK/nonexistent-profile-dir/profile.md"
   # upstreamに変更をpushして「本来なら通知が出るはず」の状況を作る
   echo "追加" >> "$SRC/README.md"
   git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update" && git -C "$SRC" push -q origin HEAD:main
 
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")" || rc=$?
   assert_eq "exit 0" "0" "$rc"
-  assert_eq "マーカー無しは無出力" "" "$out"
+  assert_eq "プロファイル無しは無出力" "" "$out"
 
   rm -rf "$WORK"
 }
 
-echo "=== 2. メイン機判定: machine-roleマーカーの中身が「sub」以外(例: main)なら無出力・exit 0 ==="
+echo "=== 2. メイン機判定: machine_roleが「sub」以外(例: main)なら無出力・exit 0 ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"; SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER" "main"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE" "configured value=main"
   echo "追加" >> "$SRC/README.md"
   git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update" && git -C "$SRC" push -q origin HEAD:main
 
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")" || rc=$?
   assert_eq "exit 0" "0" "$rc"
-  assert_eq "中身がmainなら無出力" "" "$out"
+  assert_eq "値がmainなら無出力" "" "$out"
 
   rm -rf "$WORK"
 }
 
-echo "=== 2b. メイン機判定: machine-roleマーカーの中身が空文字列でも無出力・exit 0 ==="
+echo "=== 2b. メイン機判定: machine_roleがunknownでも無出力・exit 0 ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"; SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  : > "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE" "unknown"
   echo "追加" >> "$SRC/README.md"
   git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update" && git -C "$SRC" push -q origin HEAD:main
 
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")" || rc=$?
   assert_eq "exit 0" "0" "$rc"
-  assert_eq "中身が空なら無出力" "" "$out"
+  assert_eq "値がunknownなら無出力" "" "$out"
 
   rm -rf "$WORK"
 }
 
-echo "=== 2c. サブ機判定: machine-roleマーカーの中身が前後空白付きの「sub」でも正常動作する(trim確認) ==="
+echo "=== 2c. サブ機判定: MACHINE_ROLE:がOK行の最終フィールドでも正常に取り出せる ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"; SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  printf '  sub  \n' > "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE" "configured value=sub"
   echo "追加1" >> "$SRC/README.md"
   git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update1" && git -C "$SRC" push -q origin HEAD:main
 
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")"
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")"
   ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')"
-  assert_true "前後空白付きでも遅れ1コミットの案内が出る" \
+  assert_true "サブ機として正しく判定され遅れ1コミットの案内が出る" \
     "$(printf '%s' "$ctx" | grep -q '1 コミット遅れ' && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
 
-echo "=== 2e. メイン機判定: machine-roleマーカーの中身が「s u b」(内部に空白を含む)なら「sub」と誤認せず無出力(Codex再レビュー指摘Minor対応: tr -d '[:space:]'は内部の空白も消してしまう穴があった) ==="
+echo "=== 2e. メイン機判定: machine_roleの値に内部空白があると属性の形式検査(T6)で解決失敗し無出力(値の形式検査が旧trim観点を引き継ぐ) ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"; SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  printf 's u b\n' > "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE" "configured value=s u b"
   echo "追加" >> "$SRC/README.md"
   git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update" && git -C "$SRC" push -q origin HEAD:main
 
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")" || rc=$?
   assert_eq "exit 0" "0" "$rc"
-  assert_eq "内部に空白を含む中身は「sub」と誤認されず無出力" "" "$out"
+  assert_eq "値に内部空白を含む行は解決失敗し無出力" "" "$out"
+  assert_true "解決失敗がログに残る(無言のfail-openにはしない)" \
+    "$([[ -s "$WORK/log.txt" ]] && grep -q 'machine_roleを解決できません' "$WORK/log.txt" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 2f. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=main・本番と同じ場所に旧マーカー(sub)を併設しても無視され無出力のまま ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"; SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE" "configured value=main"
+  FAKE_HOME_M1="$WORK/fake-home"
+  mkdir -p "$FAKE_HOME_M1/.config/takumi009-ai-env"
+  printf 'sub\n' > "$FAKE_HOME_M1/.config/takumi009-ai-env/machine-role"  # AC5-ALLOW:FX-M1
+  echo "追加" >> "$SRC/README.md"
+  git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update" && git -C "$SRC" push -q origin HEAD:main
+
+  rc=0
+  out="$(run_hook_home "$SUB" "$PROFILE" "$WORK/log.txt" "$FAKE_HOME_M1")" || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  assert_eq "FX-M1: machine_role=mainでは旧マーカーがsubでも無出力のまま" "" "$out"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 2g. FX-M2(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=sub・旧マーカー無しで通常どおり案内メッセージが出る ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"; SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE" "configured value=sub"
+  FAKE_HOME_M2="$WORK/fake-home"
+  mkdir -p "$FAKE_HOME_M2/.config/takumi009-ai-env"
+  echo "追加" >> "$SRC/README.md"
+  git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update" && git -C "$SRC" push -q origin HEAD:main
+
+  out="$(run_hook_home "$SUB" "$PROFILE" "$WORK/log.txt" "$FAKE_HOME_M2")"
+  ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')"
+  assert_true "FX-M2: machine_role=sub・旧マーカー無しで遅れ1コミットの文言が出る" \
+    "$(printf '%s' "$ctx" | grep -q '1 コミット遅れ' && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
@@ -195,13 +276,13 @@ echo "=== 3. ワーカー/サブエージェント起動時(agent_type付き)は
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
   echo "追加" >> "$SRC/README.md"
   git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update" && git -C "$SRC" push -q origin HEAD:main
 
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt" 5 '{"agent_type":"worker"}')" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt" 5 '{"agent_type":"worker"}')" || rc=$?
   assert_eq "exit 0" "0" "$rc"
   assert_eq "ワーカー起動時は無出力" "" "$out"
 
@@ -215,11 +296,11 @@ echo "=== 4. サブ機・最新(遅れ0件): 無出力・exit 0 ==="
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
 
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")" || rc=$?
   assert_eq "exit 0" "0" "$rc"
   assert_eq "最新なら無出力" "" "$out"
 
@@ -233,12 +314,12 @@ echo "=== 5. サブ機・1コミット遅れ: 案内メッセージが出る ===
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
   echo "追加1" >> "$SRC/README.md"
   git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update1" && git -C "$SRC" push -q origin HEAD:main
 
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")"
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")"
   ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')"
   assert_true "SessionStartのhookEventNameが正しい" \
     "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName' | grep -q '^SessionStart$' && echo 1 || echo 0)"
@@ -259,15 +340,15 @@ echo "=== 6. サブ機・3コミット遅れ: 件数が正しく反映される 
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
   for i in 1 2 3; do
     echo "追加$i" >> "$SRC/README.md"
     git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update$i"
   done
   git -C "$SRC" push -q origin HEAD:main
 
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")"
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")"
   ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')"
   assert_true "遅れ3コミットの文言が出る" \
     "$(printf '%s' "$ctx" | grep -q '3 コミット遅れ' && echo 1 || echo 0)"
@@ -280,11 +361,11 @@ echo "=== 7. リポジトリが無い(.git無し): 無出力・exit 0 ==="
   WORK="$(mktemp -d)"
   NOREPO="$WORK/norepo"
   mkdir -p "$NOREPO"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
 
   rc=0
-  out="$(run_hook "$NOREPO" "$MARKER" "$WORK/log.txt")" || rc=$?
+  out="$(run_hook "$NOREPO" "$PROFILE" "$WORK/log.txt")" || rc=$?
   assert_eq "exit 0" "0" "$rc"
   assert_eq "リポジトリが無ければ無出力" "" "$out"
 
@@ -299,11 +380,11 @@ echo "=== 8. fetch失敗(存在しないremote): 静かにexit 0・失敗はロ�
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
   git -C "$SUB" remote set-url origin "https://127.0.0.1:1/does-not-exist.git"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
 
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt" 3)" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt" 3)" || rc=$?
   assert_eq "exit 0(fail-open)" "0" "$rc"
   assert_eq "fetch失敗時は無出力" "" "$out"
   assert_true "失敗がログファイルに記録される(無言のfail-openにはしない)" \
@@ -333,8 +414,8 @@ echo "=== 9. fetchが応答しない(決定的fixture): 設定タイムアウト
   git init -q --bare "$BARE"
   SUB="$WORK/sub"
   git clone -q "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
 
   REAL_GIT="$(command -v git)"
   STUB_BIN="$(mktemp -d)"
@@ -357,7 +438,7 @@ EOF
   TIMEOUT_SECS=2
   START=$(date +%s)
   rc=0
-  out="$(printf '%s' '{}' | PATH="$STUB_BIN:$PATH" CHECK_SUB_UPDATE_DIR="$SUB" AIENV_MACHINE_ROLE_MARKER="$MARKER" \
+  out="$(printf '%s' '{}' | PATH="$STUB_BIN:$PATH" CHECK_SUB_UPDATE_DIR="$SUB" AIENV_LOCAL_PROFILE_PATH="$PROFILE" \
     CHECK_SUB_UPDATE_LOG="$WORK/log.txt" CHECK_SUB_UPDATE_TIMEOUT="$TIMEOUT_SECS" "$SCRIPT")" || rc=$?
   END=$(date +%s)
   ELAPSED=$((END - START))
@@ -406,13 +487,13 @@ echo "=== 9b. fetchが応答しない(実ネットワーク・補助的スモー
   SUB="$WORK/sub"
   git clone -q "$BARE" "$SUB"
   git -C "$SUB" remote set-url origin "https://10.255.255.1/blackhole.git"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
 
   TIMEOUT_SECS=3
   START=$(date +%s)
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt" "$TIMEOUT_SECS")" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt" "$TIMEOUT_SECS")" || rc=$?
   END=$(date +%s)
   ELAPSED=$((END - START))
 
@@ -441,11 +522,11 @@ echo "=== 10. origin/mainが存在しない(既定ブランチ名が違う等): 
   git -C "$SRC" push -q origin HEAD:trunk
   SUB="$WORK/sub"
   git clone -q "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
 
   rc=0
-  out="$(run_hook "$SUB" "$MARKER" "$WORK/log.txt")" || rc=$?
+  out="$(run_hook "$SUB" "$PROFILE" "$WORK/log.txt")" || rc=$?
   assert_eq "exit 0(fail-open)" "0" "$rc"
   assert_eq "origin/mainが無ければ無出力" "" "$out"
   assert_true "判定不能の旨がログに残る" \
@@ -461,8 +542,8 @@ echo "=== 11. jqが最終出力生成に失敗(非0終了しつつ何らかの�
   make_origin "$BARE" "$SRC"
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
-  MARKER="$WORK/marker"
-  make_sub_marker "$MARKER"
+  PROFILE="$WORK/profile.md"
+  write_profile "$PROFILE"
   echo "追加" >> "$SRC/README.md"
   git -C "$SRC" add -A && git -C "$SRC" commit -q -m "update" && git -C "$SRC" push -q origin HEAD:main
 
@@ -482,7 +563,7 @@ EOF
   chmod +x "$STUB_BIN/jq"
 
   rc=0
-  out="$(printf '%s' '{}' | PATH="$STUB_BIN:$PATH" CHECK_SUB_UPDATE_DIR="$SUB" AIENV_MACHINE_ROLE_MARKER="$MARKER" \
+  out="$(printf '%s' '{}' | PATH="$STUB_BIN:$PATH" CHECK_SUB_UPDATE_DIR="$SUB" AIENV_LOCAL_PROFILE_PATH="$PROFILE" \
     CHECK_SUB_UPDATE_LOG="$WORK/log.txt" "$SCRIPT")" || rc=$?
   assert_eq "exit 0(fail-open)" "0" "$rc"
   assert_eq "jq異常終了時は(壊れた出力ではなく)無出力" "" "$out"

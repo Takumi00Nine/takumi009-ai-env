@@ -89,9 +89,12 @@ make_full_vault() {
 # ディレクトリの直接スキャン方式へ変更したため、5番目の引数は
 # pending_file(単一ファイル)からproposals_dir(ディレクトリ)へ変わった。
 # last-run.jsonの死活検知（6番目の引数）も同時に追加した。
-# 7番目の引数はmachine-roleマーカーファイルのパス（既定は存在しないパス＝
-# マーカー無し。中身が厳密に"sub"のときだけ④死活検知をスキップする挙動の
-# テスト用に2026-08-06追加）。
+# 2026-09-07 配役表-能力軸整理対応: ④死活検知のサブ機スキップ判定は
+# 旧マーカーファイルから配役表の能力軸`machine_role`へ移った
+# （配役表-能力軸整理-設計-2026-09-07.md §4.2・§4.3）。本ヘルパーは
+# BOOTSTRAP_ENABLE_LOCAL_PROFILE=0固定のため機役割は常にunknown（=サブ機
+# ではない）扱いになる。④の機役割別の振る舞いを検証するテストは
+# run_bootstrap_health4()を使う。
 # 2026-09-02: BOOTSTRAP_ENABLE_LOCAL_PROFILEのコード側既定値が0→1へ変更された
 # （案A採用・rollout-runbook.md現行トラック§7）。本ヘルパーはP1機構（ローカル
 # 実体プロファイル）を検証しない大多数のテストで使われるため、既定値の変更に
@@ -106,14 +109,12 @@ run_bootstrap() {
   local inv_log_dir="${4:-/nonexistent-dir/vault-inventory}"
   local proposals_dir="${5:-/nonexistent-dir/preferences-proposals}"
   local last_run_file="${6:-/nonexistent-dir/last-run.json}"
-  local role_marker="${7:-/nonexistent-dir/machine-role}"
   echo '{"session_id":"test-session-0000"}' \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="$reads_log" VAULT_RECALL_LOG="$recall_log" \
       VAULT_INVENTORY_LOG_DIR="$inv_log_dir" \
       PREFERENCES_PROPOSALS_DIR="$proposals_dir" \
       MAINTENANCE_LAST_RUN_FILE="$last_run_file" \
-      AIENV_MACHINE_ROLE_MARKER="$role_marker" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
@@ -136,27 +137,65 @@ run_bootstrap_with_profile() {
       VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
       PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
       MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
-      AIENV_MACHINE_ROLE_MARKER="/nonexistent-dir/machine-role" \
       AIENV_SETTINGS_JSON_FILE="$settings_json" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 
-# 最小能力表7キーすべてに実運用値を入れた「壊れていない」profile.mdを作る。
-# 2026-09-05 P3段階4差し戻し対応: no_read_pathsをLOCAL_PROFILE_KNOWN_KEYSへ
-# 追加したのに合わせてfixtureも8キーへ更新した（2026-09-07 能力軸1つ撤去で7キーへ）。
+# run_bootstrap_health4 <vault> <machine_role_line> [legacy_marker_content] [inv_dir] [proposals_dir] —
+# 外部脳ヘルス行④の機役割判定（配役表の能力軸`machine_role`由来）を検証する
+# 専用ヘルパー（配役表-能力軸整理-設計-2026-09-07.md §10.1・FX-M1/FX-M2）。
+# fake HOME配下に有効なschema 5の実体を置き、HOMEを切り替えてbootstrap-
+# vault.shを実行する。legacy_marker_content（省略可）を渡すと同じfake HOME
+# 配下の本番と同じ場所（$HOME/.config/takumi009-ai-env/配下・廃止済みの
+# 旧マーカーファイル名）へ旧マーカーを併設する（本番と同じ場所に置いても
+# 読まれないことの証明＝FX-M1）。MAINTENANCE_LAST_RUN_FILEは既定で不在固定
+# （FX-M1/FX-M2はmachine_role以外の環境をすべて揃える＝両方とも不在で
+# 統一する）。
+run_bootstrap_health4() {
+  local vault="$1" machine_role_line="$2" legacy_marker="${3:-}"
+  local inv_dir="${4:-/nonexistent-dir/vault-inventory}" proposals_dir="${5:-/nonexistent-dir/preferences-proposals}"
+  local fake_home profile_path
+  fake_home="$(mktemp -d)"
+  profile_path="$fake_home/.config/takumi009-ai-env/profile.md"
+  mkdir -p "$(dirname "$profile_path")"
+  {
+    echo "---"
+    echo "schema_version: 5"
+    echo "profile_slug: authoring"
+    echo "team_mode:        configured value=full"
+    echo "no_read_paths:    unavailable"
+    echo "machine_role:     ${machine_role_line}"
+    echo "excluded_models: configured value=none"
+    echo "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    echo "---"
+  } > "$profile_path"
+  if [ -n "$legacy_marker" ]; then
+    printf '%s\n' "$legacy_marker" > "$fake_home/.config/takumi009-ai-env/machine-role"  # AC5-ALLOW:FX-M1
+  fi
+  echo '{"session_id":"test-session-0000"}' \
+    | HOME="$fake_home" BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
+      VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+      VAULT_INVENTORY_LOG_DIR="$inv_dir" \
+      PREFERENCES_PROPOSALS_DIR="$proposals_dir" \
+      MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
+      BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" "$SCRIPT" \
+    | jq -r '.hookSpecificOutput.additionalContext'
+  rm -rf "$fake_home"
+}
+
+# 最小能力表の能力軸3キー（team_mode・no_read_paths・machine_role）すべてに
+# 実運用値を入れた「壊れていない」profile.mdを作る（2026-09-07能力軸整理で
+# 廃止5キーを撤去しmachine_roleを新設・3キーへ整理＝配役表-能力軸整理-
+# 設計-2026-09-07.md §3・§4.1。整理前の中間状態の経緯はgit履歴を参照）。
 make_ok_profile() {
   local path="$1"
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<'EOF'
 ---
-inventory_source: Vault(Preferences/Knowledge直下)
 team_mode: 本人
-vault_write: configured(vault-scribe)
-ui.user_call: SendMessage(to: main)
-git_role: push可(takumi009-ai-env repo限定)
-web_verification: WebSearch/WebFetch
-no_read_paths: work-old(~/work/old/)
+no_read_paths: ~/work/old
+machine_role: 本人
 ---
 EOF
 }
@@ -657,11 +696,11 @@ echo "=== 7l5. 外部脳ヘルス行④(b): last_success_atキーは実在する
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR_EMPTY" "$LAST_RUN_DIR_NULL" "$LAST_RUN_DIR_STARTED_EMPTY"
 }
 
-echo "=== 7m. 外部脳ヘルス行④: machine-roleマーカーが\"sub\"かつlast-run.json不在でも④の警告は出ない（サブ機はmaintenance.sh非搭載＝2026-08-06対応、本人報告・実害中の解消） ==="
+echo "=== 7m. 外部脳ヘルス行④: 配役表のmachine_roleが\"sub\"かつlast-run.json不在でも④の警告は出ない（サブ機はmaintenance.sh非搭載＝2026-08-06対応、本人報告・実害中の解消。2026-09-07で判定元を旧マーカーから配役表へ移行＝FX-M2相当） ==="
 {
   # maintenance.sh(週次メンテ)・LaunchAgentはメイン機専用機能でサブ機には
-  # 存在しないため、④の警告は毎セッション必ず出続けていた（実害）。マーカーが
-  # 厳密に"sub"のときだけ④のみをスキップし、①②等の他セクションには影響しない
+  # 存在しないため、④の警告は毎セッション必ず出続けていた（実害）。machine_role
+  # が厳密に"sub"のときだけ④のみをスキップし、①②等の他セクションには影響しない
   # ことも合わせて確認する。
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
@@ -671,57 +710,48 @@ echo "=== 7m. 外部脳ヘルス行④: machine-roleマーカーが\"sub\"かつ
 EOF
   PROPOSALS_DIR="$(mktemp -d)"
   echo "下書き本文" > "$PROPOSALS_DIR/x.md"
-  ROLE_DIR="$(mktemp -d)"
-  ROLE_FILE="$ROLE_DIR/machine-role"
-  printf 'sub\n' > "$ROLE_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR" "$PROPOSALS_DIR" "/nonexistent-dir/last-run.json" "$ROLE_FILE")"
-  assert_not_contains "marker=sub・last-run.json不在では状態記録の警告が出ない" "$ctx" "週次メンテの状態記録が無い/壊れています"
-  assert_not_contains "marker=sub・last-run.json不在では動いていない系の警告も出ない" "$ctx" "週次メンテが"
+  ctx="$(run_bootstrap_health4 "$VAULT_DIR" "configured value=sub" "" "$INV_DIR" "$PROPOSALS_DIR")"
+  assert_not_contains "machine_role=sub・last-run.json不在では状態記録の警告が出ない" "$ctx" "週次メンテの状態記録が無い/壊れています"
+  assert_not_contains "machine_role=sub・last-run.json不在では動いていない系の警告も出ない" "$ctx" "週次メンテが"
   assert_contains "④以外(①棚卸し)は影響を受けず出る" "$ctx" "棚卸し最新"
   assert_contains "④以外(②Preferences提案)は影響を受けず出る" "$ctx" "夜間バッチで運用ルールの昇格提案"
   assert_contains "ヘルス見出し自体は①②があるので出る" "$ctx" "【外部脳ヘルス】"
 
-  rm -rf "$VAULT_DIR" "$INV_DIR" "$PROPOSALS_DIR" "$ROLE_DIR"
+  rm -rf "$VAULT_DIR" "$INV_DIR" "$PROPOSALS_DIR"
 }
 
-echo "=== 7m2. 外部脳ヘルス行④: machine-roleマーカーが\"main\"の場合は従来どおり警告が出る ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  ROLE_DIR="$(mktemp -d)"
-  ROLE_FILE="$ROLE_DIR/machine-role"
-  printf 'main\n' > "$ROLE_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "/nonexistent-dir/last-run.json" "$ROLE_FILE")"
-  assert_contains "marker=mainでは従来どおりlast-run.json不在の警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
-
-  rm -rf "$VAULT_DIR" "$ROLE_DIR"
-}
-
-echo "=== 7m3. 外部脳ヘルス行④: machine-roleマーカーが無い（ファイル不在）場合は従来どおり警告が出る（fail-closed） ==="
+echo "=== 7m2. 外部脳ヘルス行④: 配役表のmachine_roleが\"main\"の場合は従来どおり警告が出る。同じ場所に置いた旧マーカー(\"sub\")は読まれない（FX-M1相当・読んでいないことの証明） ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "/nonexistent-dir/last-run.json" "/nonexistent-dir/machine-role")"
-  assert_contains "marker不在では従来どおりlast-run.json不在の警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
+  ctx="$(run_bootstrap_health4 "$VAULT_DIR" "configured value=main" "sub")"
+  assert_contains "machine_role=mainでは従来どおりlast-run.json不在の警告が出る（旧マーカーがsubでも無視される）" "$ctx" "週次メンテの状態記録が無い/壊れています"
 
   rm -rf "$VAULT_DIR"
 }
 
-echo "=== 7m4. 外部脳ヘルス行④: machine-roleマーカーの中身が「s u b」(内部に空白を含む非厳密一致)の場合は従来どおり警告が出る（fail-closed。前後空白はtrimするが内部の空白まで削っては誤って一致してしまうためtest-check-sub-update.sh 2eと同じ観点を踏襲） ==="
+echo "=== 7m3. 外部脳ヘルス行④: 実体プロファイルが無い（fail-closed）場合は従来どおり警告が出る ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
-  ROLE_DIR="$(mktemp -d)"
-  ROLE_FILE="$ROLE_DIR/machine-role"
-  printf 's u b\n' > "$ROLE_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "/nonexistent-dir/last-run.json" "$ROLE_FILE")"
-  assert_contains "marker中身が\"s u b\"(内部空白)では\"sub\"と誤認されず従来どおり警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "/nonexistent-dir/profile.md")"
+  assert_contains "実体プロファイル不在では従来どおりlast-run.json不在の警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
 
-  rm -rf "$VAULT_DIR" "$ROLE_DIR"
+  rm -rf "$VAULT_DIR"
+}
+
+echo "=== 7m4. 外部脳ヘルス行④: machine_roleの値に内部空白を含む「s u b」(属性の形式検査(T6)で解決失敗)の場合は従来どおり警告が出る（fail-closed。前後空白はtrimするが内部の空白まで削っては誤って一致してしまうためtest-check-sub-update.sh 2eと同じ観点を踏襲） ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  make_full_vault "$VAULT_DIR"
+
+  ctx="$(run_bootstrap_health4 "$VAULT_DIR" "configured value=s u b")"
+  assert_contains "machine_roleの値に内部空白を含む場合は\"sub\"と誤認されず従来どおり警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
+
+  rm -rf "$VAULT_DIR"
 }
 
 echo "=== 7n. 外部脳ヘルス行: last_result=warnなら警告要旨つきで⚠️1行が出る（旧D4・2026-08-10・[[Decisions/2026-08-10-round6-rulings]]決定1のセット条件） ==="
@@ -931,13 +961,9 @@ echo "=== 13. P1機構 T2-MINIMAL(未記入sentinel): 最小能力+⚠️にな�
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-inventory_source: Vault
 team_mode: <fill-in>
-vault_write: configured
-ui.user_call: SendMessage
-git_role: pull専用
-web_verification: WebSearch
-no_read_paths: work-old
+no_read_paths: ~/work/old
+machine_role: 本人
 ---
 EOF
 
@@ -954,24 +980,20 @@ echo "=== 14. P1機構 T5(既存キー欠落): 最小能力+⚠️になる ==="
   make_full_vault "$VAULT_DIR"
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
-  # git_role キーだけを欠落させる（2026-09-05 P3段階4差し戻し対応でno_read_paths
-  # を追加したため、この行にも書いて「欠落は git_role の1件だけ」という
-  # 回帰テストの意図を保つ＝Codex一次レビュー指摘・Minor対応）。
+  # machine_role キーだけを欠落させる（2026-09-05 P3段階4差し戻し対応でno_read_paths
+  # を追加したため、この行にも書いて「欠落は machine_role の1件だけ」という
+  # 回帰テストの意図を保つ＝Codex一次レビュー指摘・Minor対応の型を継承）。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-inventory_source: Vault
 team_mode: 本人
-vault_write: configured
-ui.user_call: SendMessage
-web_verification: WebSearch
-no_read_paths: work-old
+no_read_paths: ~/work/old
 ---
 EOF
 
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
   assert_contains "T5: 最小能力+⚠️の警告が出る" "$ctx" "最小能力"
   assert_contains "T5: 既存キー欠落の理由が出る" "$ctx" "T5"
-  assert_contains "T5: 欠落キー名が出る" "$ctx" "git_role"
+  assert_contains "T5: 欠落キー名が出る" "$ctx" "machine_role"
 
   rm -rf "$VAULT_DIR" "$PROFILE_DIR"
 }
@@ -985,7 +1007,6 @@ echo "=== 15. P1機構 T6(YAML破損): 最小能力+⚠️になる ==="
   # frontmatterの終端区切りが無い壊れたファイル。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-inventory_source: Vault
 team_mode: 本人
 EOF
 
@@ -1002,16 +1023,12 @@ echo "=== 16. P1機構 T9'(UNKNOWN_EXTRA): 機械側は既知キー部分が有�
   make_full_vault "$VAULT_DIR"
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
-  # 既知の7キーはすべて揃えたうえで、将来のスキーマ拡張を想定した未知キーを追加する。
+  # 既知の3キーはすべて揃えたうえで、将来のスキーマ拡張を想定した未知キーを追加する。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-inventory_source: Vault
 team_mode: 本人
-vault_write: configured
-ui.user_call: SendMessage
-git_role: pull専用
-web_verification: WebSearch
-no_read_paths: work-old
+no_read_paths: ~/work/old
+machine_role: 本人
 future_new_key: 未来のスキーマが追加した値
 ---
 EOF
@@ -1089,13 +1106,9 @@ echo "=== 18. resolve_local_profile(): 値が空(\`key:\`のみ)のキーはOK�
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-inventory_source: Vault
 team_mode:
-vault_write: configured
-ui.user_call: SendMessage
-git_role: pull専用
-web_verification: WebSearch
-no_read_paths: work-old
+no_read_paths: ~/work/old
+machine_role: 本人
 ---
 EOF
 
@@ -1113,13 +1126,9 @@ echo "=== 19. resolve_local_profile(): 空白のみの値も\"unknown\"へ正規
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   {
     echo "---"
-    echo "inventory_source: Vault"
     printf 'team_mode:   \n'
-    echo "vault_write: configured"
-    echo "ui.user_call: SendMessage"
-    echo "git_role: pull専用"
-    echo "web_verification: WebSearch"
-    echo "no_read_paths: work-old"
+    echo "no_read_paths: ~/work/old"
+    echo "machine_role: 本人"
     echo "---"
   } > "$PROFILE_PATH"
 
@@ -1136,18 +1145,14 @@ echo "=== 20. resolve_local_profile(): 値が空でも他のキーの値は変�
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-inventory_source: Vault
 team_mode:
-vault_write: configured(vault-scribe)
-ui.user_call: SendMessage
-git_role: pull専用
-web_verification: WebSearch
-no_read_paths: work-old
+no_read_paths: ~/work/old(vault-scribe)
+machine_role: 本人
 ---
 EOF
 
   out="$(run_resolve_local_profile "$PROFILE_PATH")"
-  assert_contains "team_mode以外(vault_write)の値は空値正規化の影響を受けない" "$out" "vault_write=configured(vault-scribe)"
+  assert_contains "team_mode以外(no_read_paths)の値は空値正規化の影響を受けない" "$out" "no_read_paths=~/work/old(vault-scribe)"
 
   rm -rf "$PROFILE_DIR"
 }
@@ -1185,23 +1190,24 @@ resolve_leader_v2() {
   python3 "$PROFILE_LIB" resolve-leader "$path" --bedrock-env "$bedrock_env" --agents-dir "$agents_dir"
 }
 
-# v2の全10固定キー(メタ2+能力軸7+excluded_models)をすべて満たした最小の
+# v2の全6固定キー(メタ2+能力軸3+excluded_models)をすべて満たした最小の
 # base雛形。呼び出し側がrole./fallback.行だけを足して各シナリオを作る。
 # 2026-09-05 P3段階4対応: EXPECTED_SCHEMA_VERSIONを2→3へ引き上げ、能力軸に
 # no_read_pathsを追加した（profile_resolve.py側）のに合わせてbaseも更新した。
 # 2026-09-07 3モード体制対応: EXPECTED_SCHEMA_VERSIONを3→4へ引き上げ、能力軸
 # reviewerをteam_modeへ差し替えた（3モード体制-設計-2026-09-06.md §4.1）のに
 # 合わせてbaseも更新した。
+# 2026-09-07 配役表-能力軸整理対応: 廃止対象5キーを撤去しmachine_roleを新設・
+# no_read_pathsを実パス書式へ・EXPECTED_SCHEMA_VERSIONを4→5へ引き上げた
+# （配役表-能力軸整理-設計-2026-09-07.md §3・§10.1）のに合わせてbaseも更新した。
+# ⚠️ team_mode:の行末揃え（8スペース）は下部のsed置換が字面で参照するため
+# 崩さないこと。
 V2_BASE='---
-schema_version: 4
+schema_version: 5
 profile_slug: authoring
-inventory_source: configured value=work-tools-dir
 team_mode:        configured value=full
-vault_write:      configured value=via-scribe
-ui.user_call:     configured value=send-message
-git_role:         configured value=aienv-repo:commit
-web_verification: configured value=websearch
-no_read_paths:    configured value=work-old
+no_read_paths:    unavailable
+machine_role:     configured value=main
 excluded_models: configured value=none'
 
 make_v2_profile() {
@@ -1223,12 +1229,12 @@ echo "=== 22. classify(): v1/v2/混在の3分岐 ==="
 
   V2_PATH="$(mktemp -d)/v2.md"
   make_v2_profile "$V2_PATH" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  assert_eq "v2: schema_version:2かつ動的行あり" "v2" "$(classify_v2 "$V2_PATH")"
+  assert_eq "v2: schema_versionありかつ動的行あり" "v2" "$(classify_v2 "$V2_PATH")"
 
   MIXED_PATH="$(mktemp -d)/mixed.md"
   cat > "$MIXED_PATH" <<'EOF'
 ---
-inventory_source: Vault
+team_mode: 本人
 role.leader: configured provider=anthropic-api model=claude-opus-5
 ---
 EOF
@@ -1527,16 +1533,13 @@ echo "=== 35. V15/T11: 禁止キー名はv1/v2どちらの分類でもpreflight�
   # frontmatter終端---の後ろに付けると構文が壊れるので、専用のfixtureを作り直す。
   cat > "$V15_V2" <<'EOF'
 ---
-schema_version: 2
+schema_version: 5
 profile_slug: authoring
 role.leader: configured provider=anthropic-api model=claude-opus-5
 api_key: configured value=xyz
-inventory_source: configured value=work-tools-dir
-reviewer:         configured value=codex-mcp
-vault_write:      configured value=via-scribe
-ui.user_call:     configured value=send-message
-git_role:         configured value=aienv-repo:commit
-web_verification: configured value=websearch
+team_mode:        configured value=full
+no_read_paths:    unavailable
+machine_role:     configured value=main
 excluded_models: configured value=none
 ---
 EOF
@@ -1550,12 +1553,8 @@ EOF
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-inventory_source: Vault
 team_mode: 本人
-vault_write: configured
-ui.user_call: SendMessage
-git_role: pull専用
-web_verification: WebSearch
+no_read_paths: ~/work/old
 auth_token: should-not-be-here
 ---
 EOF
@@ -1728,7 +1727,7 @@ echo "=== 42. §3.4 T4'(実体の版>コードの版): 未知キーを無視しA
   T4PRIME="$(mktemp -d)/t4prime.md"
   make_v2_profile "$T4PRIME" \
     "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' 's/schema_version: 4/schema_version: 5/' "$T4PRIME"
+  sed -i '' 's/schema_version: 5/schema_version: 6/' "$T4PRIME"
   # ---の直前に未知キーを挿入する。
 
   python3 - "$T4PRIME" <<'PYEOF'
@@ -1750,53 +1749,60 @@ echo "=== 43. §3.4 T4(実体の版<コードの版): 欠落した固定キー�
   T4="$(mktemp -d)/t4.md"
   make_v2_profile "$T4" \
     "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  # web_verificationキーを欠落させる（EXPECTED=4のときだけT5にせずT4で仮想補完される）。
+  # machine_roleキーを欠落させる（EXPECTED=4のときだけT5にせずT4で仮想補完される）。
   python3 - "$T4" <<'PYEOF'
 import sys
 path = sys.argv[1]
-lines = [l for l in open(path).read().splitlines() if not l.startswith("web_verification:")]
+lines = [l for l in open(path).read().splitlines() if not l.startswith("machine_role:")]
 open(path, "w").write("\n".join(lines) + "\n")
 PYEOF
   out_normal="$(resolve_v2 "$T4")"  || true
-  assert_contains "EXPECTED=4(現行)のままなら欠落はT5でMINIMALになる（回帰確認）" "$out_normal" "MINIMAL	T5"
+  assert_contains "EXPECTED=5(現行)のままなら欠落はT5でMINIMALになる（回帰確認）" "$out_normal" "MINIMAL	T5"
 
   out_override="$(python3 - "$T4" "$AGENTS_DIR" <<PYEOF
 import sys
 sys.path.insert(0, "$REPO_ROOT/claude/hooks/lib")
 import profile_resolve as pr
-pr.EXPECTED_SCHEMA_VERSION = 5
+pr.EXPECTED_SCHEMA_VERSION = 6
 line, code = pr.do_resolve(sys.argv[1], None, sys.argv[2])
 print(line)
 PYEOF
 )"
-  assert_contains "EXPECTED=5に差し替えるとT4で仮想補完されOKになる" "$out_override" "OK"
+  assert_contains "EXPECTED=6に差し替えるとT4で仮想補完されOKになる" "$out_override" "OK"
   assert_contains "T4のADVISORYコードが出る" "$out_override" "ADVISORY:T4"
 }
 
-echo "=== 43b. §3.4 T4の本番互換経路(モンキーパッチ無し): P3段階4以前に作られた既存v2実体(schema_version:2・no_read_paths欠落・reviewer軸〈team_mode差し替え以前の旧キー〉のまま)が、現行のEXPECTED_SCHEMA_VERSION(=4)のまま仮想補完されOKになる（Codex一次レビュー指摘・Major対応: 43番はEXPECTEDを一時的に書き換えるホワイトボックス試験のみで、今回のno_read_paths追加で実際に本番到達するdeclared<EXPECTED経路そのものは未検証だった。reviewerは3モード体制対応でCAPABILITY_KEYSから除去済みのためUNKNOWN_EXTRAへ回る＝これも歴史的に正しい古い実体の再現） ==="
+echo "=== 43b. §3.4 T4の本番互換経路(モンキーパッチ無し): 現行の能力軸3キーをいずれも持たず未知キーだけを持つschema_version:2の実体が、現行のEXPECTED_SCHEMA_VERSION(=5)のまま仮想補完されOKになる（Codex一次レビュー指摘・Major対応: 43番はEXPECTEDを一時的に書き換えるホワイトボックス試験のみで、declared<EXPECTED経路そのものは未検証だった） ==="
 {
+  # ⚠️ Codex一次レビュー指摘（MAJOR-3・2026-09-07）対応: 当初は歴史的な実在
+  # キー名（廃止5キー）をそのまま使いAC5-ALLOWタグで許可していたが、これは
+  # 「現行resolverに旧入力を渡すケース」であって要件AC-5③が許可する
+  # 「旧コードそのものを起動する再現fixture」ではないと指摘された。本テストの
+  # 実質はUNKNOWN_EXTRAの束＋T4仮想補完の組み合わせであり、キー名の実在性は
+  # 検証対象ではないため、廃止語を一切含まない架空のキー名へ差し替えた
+  # （AC5-ALLOWタグは不要になったため撤去）。
   T4REAL="$(mktemp -d)/t4real.md"
   mkdir -p "$(dirname "$T4REAL")"
-  # V2_BASE/make_v2_profile()は既にschema_version:3+no_read_paths込みの雛形に
-  # なっているため使わない。P3段階4より前の実際の実体を模して手書きする
-  # （schema_version:2・no_read_paths行なし・他7キーは揃っている）。
+  # V2_BASE/make_v2_profile()は既に現行の能力軸3キー込みの雛形になっている
+  # ため使わない。現行のCAPABILITY_KEYSに含まれない未知キー6個を持つ
+  # schema_version:2の実体を手書きする。
   cat > "$T4REAL" <<'EOF'
 ---
 schema_version: 2
 profile_slug: authoring
 role.leader: configured provider=anthropic-api model=claude-opus-5
-inventory_source: configured value=work-tools-dir
-reviewer:         configured value=codex-mcp
-vault_write:      configured value=via-scribe
-ui.user_call:     configured value=send-message
-git_role:         configured value=aienv-repo:commit
-web_verification: configured value=websearch
+legacy_axis_a: configured value=work-tools-dir
+legacy_axis_b: configured value=codex-mcp
+legacy_axis_c: configured value=via-scribe
+legacy_axis_d: configured value=send-message
+legacy_axis_e: configured value=aienv-repo:commit
+legacy_axis_f: configured value=websearch
 excluded_models: configured value=none
 ---
 EOF
   out="$(resolve_v2 "$T4REAL")"  || true
   assert_contains "モンキーパッチ無しでもMINIMALへは倒さない(OKになる)" "$out" "OK"
-  assert_contains "T4のADVISORYコードが出る(no_read_pathsがunknownで仮想補完される)" "$out" "ADVISORY:T4"
+  assert_contains "T4のADVISORYコードが出る(能力軸3キーがunknownで仮想補完される)" "$out" "ADVISORY:T4"
   assert_not_contains "T5(既知キー欠落)としては失敗しない" "$out" "MINIMAL	T5"
 }
 
@@ -1813,7 +1819,7 @@ echo "=== 44. V8-b共通規則・excluded_modelsの扱い統一（Codex一次レ
   DUP_VALUE="$(mktemp -d)/dupvalue.md"
   make_v2_profile "$DUP_VALUE" \
     "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' 's/web_verification: configured value=websearch/web_verification: configured value=websearch,websearch/' "$DUP_VALUE"
+  sed -i '' 's/team_mode:        configured value=full/team_mode:        configured value=full,full/' "$DUP_VALUE"
   out="$(resolve_v2 "$DUP_VALUE")"  || true
   assert_contains "value内の重複要素はV8-bでMINIMALになる（共通規則）" "$out" "MINIMAL	T8	V8-b"
 
@@ -1834,19 +1840,19 @@ echo "=== 45. is_v2_resolve_output_well_formed(): ゴミ混入・重複・順序
   }
   source_well_formed
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main')"
   is_v2_resolve_output_well_formed "$T" 0 && pass "正常なOK単体は受理される" || fail_case "正常なOK単体は受理される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tGARBAGE:xyz')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tGARBAGE:xyz')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "未知フィールド(GARBAGE)混入は拒否される" || fail_case "未知フィールド(GARBAGE)混入は拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tFALLBACK:verifier\tFALLBACK:verifier')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tFALLBACK:verifier\tFALLBACK:verifier')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "同一フィールドの重複は拒否される" || fail_case "同一フィールドの重複は拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tVACANT:verifier\tFALLBACK:verifier')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tVACANT:verifier\tFALLBACK:verifier')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "フィールドの順序違反(VACANTがFALLBACKより先)は拒否される" || fail_case "フィールドの順序違反(VACANTがFALLBACKより先)は拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main')"
   ! is_v2_resolve_output_well_formed "$T" 1 && pass "OKなのにexit1は拒否される" || fail_case "OKなのにexit1は拒否される"
 
   T="$(printf 'MINIMAL\tT6\t3行目: 解析できない行です')"
@@ -1855,14 +1861,14 @@ echo "=== 45. is_v2_resolve_output_well_formed(): ゴミ混入・重複・順序
   T="$(printf 'MINIMAL\tT6\t理由')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "MINIMALなのにexit0は拒否される" || fail_case "MINIMALなのにexit0は拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\nEXTRA_LINE')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\nEXTRA_LINE')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "複数行出力は拒否される" || fail_case "複数行出力は拒否される"
 
   T="$(printf 'MINIMAL\tT6\t3行目: 解析できない行です\tGARBAGE')"
   ! is_v2_resolve_output_well_formed "$T" 1 && pass "MINIMALの理由部分にタブで4つ目のフィールドが紛れ込むと拒否される（Codex三次レビュー指摘・Major対応）" \
     || fail_case "MINIMALの理由部分にタブで4つ目のフィールドが紛れ込むと拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tVACANT_UNKNOWN:My_Role.v2')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tVACANT_UNKNOWN:My_Role.v2')"
   is_v2_resolve_output_well_formed "$T" 0 && pass "大文字・アンダースコア・ドットを含む職種名も受理される（Codex三次レビュー指摘・Major対応: parserのKEY_RE[A-Za-z0-9_.-]+と同じ文字集合に統一）" \
     || fail_case "大文字・アンダースコア・ドットを含む職種名も受理される"
 
@@ -1870,13 +1876,33 @@ echo "=== 45. is_v2_resolve_output_well_formed(): ゴミ混入・重複・順序
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "TEAM_MODE:欠落は拒否される（3モード体制-設計-2026-09-06.md §4.2＝必須フィールド）" \
     || fail_case "TEAM_MODE:欠落は拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:quick')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:quick\tMACHINE_ROLE:main')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "TEAM_MODE:の値が4語のいずれでもないと拒否される" \
     || fail_case "TEAM_MODE:の値が4語のいずれでもないと拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tFALLBACK:verifier\tTEAM_MODE:full')"
+  T="$(printf 'OK\tschema_version=2\tFALLBACK:verifier\tTEAM_MODE:full\tMACHINE_ROLE:main')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "TEAM_MODE:がschema_versionの直後以外の位置にあると拒否される" \
     || fail_case "TEAM_MODE:がschema_versionの直後以外の位置にあると拒否される"
+
+  # 配役表-能力軸整理-設計-2026-09-07.md §4.2・D-2: MACHINE_ROLE:はTEAM_MODE:の
+  # 直後・必須フィールド。
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full')"
+  ! is_v2_resolve_output_well_formed "$T" 0 && pass "MACHINE_ROLE:欠落は拒否される（D-2＝必須フィールド）" \
+    || fail_case "MACHINE_ROLE:欠落は拒否される"
+
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:primary')"
+  ! is_v2_resolve_output_well_formed "$T" 0 && pass "MACHINE_ROLE:の値がmain/sub/unknown/unavailableのいずれでもないと拒否される" \
+    || fail_case "MACHINE_ROLE:の値が不正だと拒否される"
+
+  # TEAM_MODEは正しい位置のまま、MACHINE_ROLEだけをTEAM_MODEの直後以外へ
+  # 動かす（TEAM_MODEの位置違反とは独立にMACHINE_ROLEの位置だけを検証する）。
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tFALLBACK:verifier\tMACHINE_ROLE:main')"
+  ! is_v2_resolve_output_well_formed "$T" 0 && pass "MACHINE_ROLE:がTEAM_MODE:の直後以外の位置にあると拒否される" \
+    || fail_case "MACHINE_ROLE:がTEAM_MODE:の直後以外の位置にあると拒否される"
+
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:unknown')"
+  is_v2_resolve_output_well_formed "$T" 0 && pass "MACHINE_ROLE:unknownは受理される" \
+    || fail_case "MACHINE_ROLE:unknownは受理される"
 }
 
 echo "=== 46. list-roles: kind/state/execution既定値/not_adopted・unknownの空欄化・fallbackの並び（リーダー裁定2026-09-01でB向けに追加確定・契約書§4.5） ==="
@@ -1982,7 +2008,7 @@ echo "=== 50. §10欠落補充: T12(v1委譲でLEGACY_V1がトップレベルに
   MIXED_DISPATCH="$(mktemp -d)/mixeddispatch.md"
   cat > "$MIXED_DISPATCH" <<'EOF'
 ---
-inventory_source: Vault
+team_mode: 本人
 role.leader: configured provider=anthropic-api model=claude-opus-5
 ---
 EOF
@@ -1999,13 +2025,13 @@ echo "=== 51. V14メタ構文の直接検証: schema_versionが正整数でな�
 {
   BADVER="$(mktemp -d)/badver.md"
   make_v2_profile "$BADVER" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' 's/schema_version: 4/schema_version: abc/' "$BADVER"
+  sed -i '' 's/schema_version: 5/schema_version: abc/' "$BADVER"
   out="$(resolve_v2 "$BADVER")"  || true
   assert_contains "schema_versionが数値でなければT3になる" "$out" "MINIMAL	T3"
 
   BADVER0="$(mktemp -d)/badver0.md"
   make_v2_profile "$BADVER0" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' 's/schema_version: 4/schema_version: 0/' "$BADVER0"
+  sed -i '' 's/schema_version: 5/schema_version: 0/' "$BADVER0"
   out="$(resolve_v2 "$BADVER0")"  || true
   assert_contains "schema_version=0(正整数でない)もT3になる" "$out" "MINIMAL	T3"
 
@@ -2233,7 +2259,6 @@ EOF
         VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
         PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
         MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
-        AIENV_MACHINE_ROLE_MARKER="/nonexistent-dir/machine-role" \
         AIENV_LOCAL_PROFILE_PATH="/nonexistent-dir/profile-for-default-gate-test.md" \
         "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext')"
@@ -2440,15 +2465,28 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
   assert_not_contains "FX-P7: TEAM_MODE:は出ない" "$out" "TEAM_MODE:"
 }
 
-echo "=== 64. AC-4: known-keysがSCHEMA_VERSION:4・FIXED:にteam_modeを含みreviewerを含まない・要素数は10（能力軸1つ撤去分だけ減る） ==="
+echo "=== 64. known-keysがSCHEMA_VERSION:5・FIXED:にteam_mode/machine_roleを含み廃止5キーを含まない・要素数は6（配役表-能力軸整理-設計-2026-09-07.md §3。要件AC-1・AC-2の基本口Kの実測はtest-core-docs-placeholder-schema.shが担う） ==="
 {
   kk="$(python3 "$PROFILE_LIB" known-keys)"
-  assert_contains "known-keys: SCHEMA_VERSION:4" "$kk" "SCHEMA_VERSION:4"
+  assert_contains "known-keys: SCHEMA_VERSION:5" "$kk" "SCHEMA_VERSION:5"
   fixed_line="$(printf '%s' "$kk" | grep '^FIXED:')"
   assert_contains "known-keys: FIXED:にteam_modeを含む" "$fixed_line" "team_mode"
-  assert_not_contains "known-keys: FIXED:にreviewerを含まない" "$fixed_line" "reviewer"
+  assert_contains "known-keys: FIXED:にmachine_roleを含む" "$fixed_line" "machine_role"
+  # ⚠️ 廃止済み能力軸キー名をソースへ直接書かない（AC-5の0件検査に自分自身が
+  # 引っかかるため）。実行時に文字列を組み立てる。
+  _underscore='_'
+  _retired_key="git${_underscore}role"
+  assert_not_contains "known-keys: FIXED:に廃止済み能力軸キーを含まない（本人決定Decisions/2026-09-07-profile-axes-consolidation対象の1つ）" "$fixed_line" "$_retired_key"
   n="$(printf '%s' "${fixed_line#FIXED:}" | tr ',' '\n' | grep -c .)"
-  assert_eq "known-keys: FIXED:の要素数は10（reviewer→team_modeは差引ゼロ・能力軸1つ撤去で1減）" "10" "$n"
+  assert_eq "known-keys: FIXED:の要素数は6（メタ2＋能力軸3＋excluded_models）" "6" "$n"
+
+  # ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 上のcontains/件数
+  # チェックだけでは、誤った6キーへ全体が同時に変わっても通ってしまう
+  # （例: team_mode/machine_roleが偶然両方含まれる別の6キー集合）。
+  # 要件AC-1が定めるリテラル6キー集合と、ソート済み文字列として直接比較する。
+  actual_sorted="$(printf '%s' "${fixed_line#FIXED:}" | tr ',' '\n' | sort | tr '\n' ',')"
+  expected_sorted="$(printf 'schema_version\nprofile_slug\nteam_mode\nno_read_paths\nmachine_role\nexcluded_models\n' | sort | tr '\n' ',')"
+  assert_eq "AC-1: known-keysのFIXED集合が期待6キー(リテラル集合)と完全一致する" "$expected_sorted" "$actual_sorted"
 }
 
 echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞれちょうど1行現れ、他2モードは0行（AC-6①） ==="
@@ -2504,7 +2542,7 @@ echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはre
   python3 - "$FXI6" <<'PYEOF'
 import sys
 path = sys.argv[1]
-lines = [l for l in open(path).read().splitlines() if not l.startswith("web_verification:")]
+lines = [l for l in open(path).read().splitlines() if not l.startswith("machine_role:")]
 open(path, "w").write("\n".join(lines) + "\n")
 PYEOF
   ctx="$(run_bootstrap_with_profile "$VD2" "$FXI6")"
@@ -2613,14 +2651,14 @@ EOF
   # 値の取り出し=OK行からのTEAM_MODE:抽出ロジックには到達しない——その
   # コードはこの早期exitより後段のDIRECTIVE組み立て内にあるため）。値の
   # 取り出し自体がbuiltinだけであることは、後段のテスト71（AC-1②・実際の
-  # SessionStart全体を走らせて外部プロセス総数が変更前後で不変であることを
-  # 見る）が間接的に証明する。
+  # SessionStart全体を走らせて外部プロセス総数が変更前から増加しないことを
+  # 見る。実測は29→28＝設計v1.5反映済み）が間接的に証明する。
   calls="$(cat "$SPY0/calls.log")"
   assert_eq "BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY=1: dirname以外の外部プロセスは0件" "" "$(printf '%s\n' "$calls" | grep -v '^dirname$' | grep -v '^$' || true)"
   rm -rf "$SPY0"
 }
 
-echo "=== 71. AC-1②: SessionStart(schema4・正常分岐)が起こす外部プロセス数が、変更前(段階2直前コミットのschema3)と等しい ==="
+echo "=== 71. AC-1②: SessionStart(schema5・正常分岐)が起こす外部プロセス数が、変更前(段階2直前コミットのschema3)から増加しない（実測29→28。配役表-能力軸整理-設計-2026-09-07.md §10.3・設計v1.5反映済み） ==="
 {
   SPY="$(mktemp -d)"
   BASE_WT=""
@@ -2663,7 +2701,7 @@ EOF
     echo '{"session_id":"test-session-0000"}' | "$REAL_BASH" "$@" > "$out_json"
   }
 
-  # 変更後（現worktree・schema4）を測る。
+  # 変更後（現worktree・schema5）を測る。
   VD="$(mktemp -d)"; make_full_vault "$VD"
   FXP1="$(mktemp -d)/fxp1-spy.md"
   make_v2_profile "$FXP1" \
@@ -2677,7 +2715,6 @@ EOF
     VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
     PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
     MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
-    AIENV_MACHINE_ROLE_MARKER="/nonexistent-dir/machine-role" \
     AIENV_SETTINGS_JSON_FILE="$SETTINGS_MATCH_71" \
     BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$FXP1" \
     run_bootstrap_capture_rc "$AFTER_JSON" "$SCRIPT"
@@ -2700,18 +2737,23 @@ EOF
 ---
 schema_version: 3
 profile_slug: authoring
-inventory_source: configured value=work-tools-dir
+inventory_source: configured value=work-tools-dir  # AC5-ALLOW:FXP0
 reviewer:         configured value=codex-mcp
-vault_write:      configured value=via-scribe
+vault_write:      configured value=via-scribe  # AC5-ALLOW:FXP0
 vault_scope:      configured value=full
-ui.user_call:     configured value=send-message
-git_role:         configured value=aienv-repo:commit
-web_verification: configured value=websearch
-no_read_paths:    configured value=work-old
+ui.user_call:     configured value=send-message  # AC5-ALLOW:FXP0
+git_role:         configured value=aienv-repo:commit  # AC5-ALLOW:FXP0
+web_verification: configured value=websearch  # AC5-ALLOW:FXP0
+no_read_paths:    configured value=work-old  # AC5-ALLOW:FXP0
 excluded_models: configured value=none
 role.leader: configured provider=anthropic-api model=claude-opus-5
 ---
 EOF
+  # 段階2直前コミット（3583015b…）のbootstrap-vault.shは廃止済みの旧
+  # マーカーを読む。本テストは「旧マーカーのパスは行継続の途中にあって
+  # コメントを付けられない」ため、先に変数へ入れてその代入行にタグを付ける
+  # （配役表-能力軸整理-設計-2026-09-07.md §6.4）。
+  LEGACY_MARKER_71="/nonexistent-dir/machine-role"  # AC5-ALLOW:FXP0
   BEFORE_LOG="$(mktemp -d)/calls-before.log"; : > "$BEFORE_LOG"
   BEFORE_JSON="$(mktemp -d)/before.json"
   PATH="$SPY" SPY_CALLS_LOG="$BEFORE_LOG" \
@@ -2720,7 +2762,7 @@ EOF
     VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
     PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
     MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
-    AIENV_MACHINE_ROLE_MARKER="/nonexistent-dir/machine-role" \
+    AIENV_MACHINE_ROLE_MARKER="$LEGACY_MARKER_71" \
     AIENV_SETTINGS_JSON_FILE="$SETTINGS_MATCH_71" \
     AIENV_AGENTS_DIR="$BASE_AGENTS" \
     BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$FXP0" \
@@ -2734,18 +2776,208 @@ EOF
   before_profile_block="$(printf '%s\n' "$before_ctx" | awk '/^【ローカル実体プロファイル】$/{flag=1; next} flag')"
   assert_not_contains "変更前: 【ローカル実体プロファイル】内に⚠️警告が無い（真に警告0件。ℹ️のV1-a advisoryはrole.leaderのみ宣言する最小fixtureゆえの想定内の情報行で許容する）" "$before_profile_block" "⚠️"
 
-  assert_eq "外部プロセス数(変更前後)が一致する（NFR-4・AC-1②）" "$before_count" "$after_count"
-  # 設計§10.5⑥「基準値はテスト内に定数として記録する」への対応。この実測値は
-  # 2026-09-07時点でこのマシン上で観測した参考値であり、増やす変更を入れる
-  # ときはNFR-4との突合を経てから更新すること（変更前後比較そのものが
-  # 主たる検査であり、この定数は補助的な記録）。
-  AC1_2_REFERENCE_COUNT_2026_09_07=29
-  if [ "$before_count" != "$AC1_2_REFERENCE_COUNT_2026_09_07" ]; then
-    echo "  info - 参考値: 変更前の外部プロセス数は${AC1_2_REFERENCE_COUNT_2026_09_07}を記録していたが今回は${before_count}だった（環境差の可能性・変更前後の一致さえ保たれていれば問題ない）"
+  # ⚠️ リーダー裁定（MINOR-2再裁定・2026-09-08）: 29→28への減少は、本案件で
+  # 削除した④の廃止済み旧マーカー読取ブロック（`cat`による外部プロセス1回。
+  # 既に呼んでいるresolveの出力からbashのパラメータ展開だけでmachine_role
+  # を取り出す実装にしたため不要になった）による正当な減少であり、縮退では
+  # ない。設計§10.3の意図＝NFR-1「外部プロセスを増やさない」を判定式として
+  # 固定するため、判定は「増加しない」（`after <= before`）とする（設計側は
+  # v1.5でこの字面へ揃える予定）。
+  assert_eq "外部プロセス数(変更後)が変更前から増加しない（設計§10.3・NFR-1・AC-1②）" "1" \
+    "$([ "$after_count" -le "$before_count" ] && echo 1 || echo 0)"
+  # 設計§10.5⑥「基準値はテスト内に定数として記録する」への対応。この実測値
+  # （変更前29・変更後28＝cat呼び出し1回分の削減）は2026-09-07時点でこの
+  # マシン上で観測した参考値であり、増やす変更を入れるときはNFR-4との突合を
+  # 経てから更新すること。
+  AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07=29
+  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=28
+  if [ "$before_count" != "$AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07" ] || [ "$after_count" != "$AC1_2_REFERENCE_COUNT_AFTER_2026_09_07" ]; then
+    echo "  info - 参考値: 変更前${AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07}・変更後${AC1_2_REFERENCE_COUNT_AFTER_2026_09_07}を記録していたが今回は変更前${before_count}・変更後${after_count}だった"
   fi
 
   cleanup_71
   trap - EXIT
+}
+
+# ============================================================================
+# 72番以降: 配役表-能力軸整理-要件-2026-09-07.md §7の受入条件のうち、本ファイル
+# 担当分（AC-3・AC-4・AC-8・AC-9・AC-11）をfixture単位で直接検証する。
+# fixture定義・期待値は同要件書§6.2の表のとおり（FX-P1が共通ベース）。
+# ============================================================================
+
+echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)・陰性2件(FX-P3・FX-P4) ==="
+{
+  # ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 先頭文字列とexit
+  # codeだけでは、fixture表（要件§6.2）が定めるTEAM_MODE:full・UNKNOWN_EXTRA:
+  # 不在という残りの期待を固定していなかった。両方を明示的に検査する。
+  FXP1_72="$(mktemp -d)/fxp1.md"
+  make_v2_profile "$FXP1_72" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  rc=0; out="$(resolve_v2 "$FXP1_72")" || rc=$?
+  assert_eq "FX-P1: OK<TAB>schema_version=5で始まる" "1" \
+    "$([[ "$out" == $'OK\tschema_version=5'* ]] && echo 1 || echo 0)"
+  assert_eq "FX-P1: exit 0" "0" "$rc"
+  assert_contains "FX-P1: TEAM_MODE:fullを含む" "$out" "TEAM_MODE:full"
+  assert_not_contains "FX-P1: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
+
+  FXP2_72="$(mktemp -d)/fxp2.md"
+  make_v2_profile "$FXP2_72" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=sub/" "$FXP2_72"
+  rc=0; out="$(resolve_v2 "$FXP2_72")" || rc=$?
+  assert_eq "FX-P2: OK<TAB>schema_version=5で始まる" "1" \
+    "$([[ "$out" == $'OK\tschema_version=5'* ]] && echo 1 || echo 0)"
+  assert_eq "FX-P2: exit 0" "0" "$rc"
+  assert_contains "FX-P2: TEAM_MODE:fullを含む" "$out" "TEAM_MODE:full"
+  assert_not_contains "FX-P2: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
+
+  FXP3_72="$(mktemp -d)/fxp3.md"
+  make_v2_profile "$FXP3_72" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "s/machine_role:     configured value=main/machine_role:     not_adopted/" "$FXP3_72"
+  rc=0; out="$(resolve_v2 "$FXP3_72")" || rc=$?
+  assert_contains "FX-P3: V7(machine_roleの状態が不正)を含む" "$out" "V7: machine_roleの状態が不正です"
+  assert_eq "FX-P3: exit 1" "1" "$rc"
+
+  FXP4_72="$(mktemp -d)/fxp4.md"
+  make_v2_profile "$FXP4_72" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=primary/" "$FXP4_72"
+  rc=0; out="$(resolve_v2 "$FXP4_72")" || rc=$?
+  assert_contains "FX-P4: V8-b(machine_roleのvalue形式が不正)を含む" "$out" "V8-b: machine_roleのvalue形式が不正です"
+  assert_eq "FX-P4: exit 1" "1" "$rc"
+}
+
+echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・陰性2件(FX-P10・FX-P11) ==="
+{
+  FXP9_73="$(mktemp -d)/fxp9.md"
+  make_v2_profile "$FXP9_73" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old,~/Data/private#" "$FXP9_73"
+  rc=0; out="$(resolve_v2 "$FXP9_73")" || rc=$?
+  assert_eq "FX-P9: OKで始まる（大文字を含む実パスも受理）" "1" \
+    "$([[ "$out" == OK* ]] && echo 1 || echo 0)"
+  assert_eq "FX-P9: exit 0" "0" "$rc"
+
+  FXP10_73="$(mktemp -d)/fxp10.md"
+  make_v2_profile "$FXP10_73" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old, ~/tmp/x#" "$FXP10_73"
+  rc=0; out="$(resolve_v2 "$FXP10_73")" || rc=$?
+  assert_contains "FX-P10: T6を含む" "$out" "T6"
+  assert_contains "FX-P10: 属性の形式が不正ですを含む" "$out" "属性の形式が不正です"
+  assert_eq "FX-P10: exit 1" "1" "$rc"
+
+  FXP11_73="$(mktemp -d)/fxp11.md"
+  make_v2_profile "$FXP11_73" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=/work/old#" "$FXP11_73"
+  rc=0; out="$(resolve_v2 "$FXP11_73")" || rc=$?
+  assert_contains "FX-P11: V8-b(no_read_pathsのvalue形式が不正)を含む" "$out" "V8-b: no_read_pathsのvalue形式が不正です"
+  assert_eq "FX-P11: exit 1" "1" "$rc"
+}
+
+echo "=== 74. AC-8(FR-14): schema版の追随待ちの陽性1件(FX-P5)・陰性1件(FX-P6) ==="
+{
+  FXP5_74="$(mktemp -d)/fxp5.md"
+  make_v2_profile "$FXP5_74" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "s/schema_version: 5/schema_version: 4/" "$FXP5_74"
+  sed -i '' "/^machine_role:/d" "$FXP5_74"
+  rc=0; out="$(resolve_v2 "$FXP5_74")" || rc=$?
+  assert_eq "FX-P5: OK<TAB>schema_version=4で始まる（追随待ち）" "1" \
+    "$([[ "$out" == $'OK\tschema_version=4'* ]] && echo 1 || echo 0)"
+  assert_not_contains "FX-P5: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
+  assert_eq "FX-P5: exit 0" "0" "$rc"
+  ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP5_74")"
+  assert_contains "FX-P5: I=実体の全文Readを指示する行を含む" "$ctx" "Readで全文を読むこと"
+
+  FXP6_74="$(mktemp -d)/fxp6.md"
+  make_v2_profile "$FXP6_74" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "/^machine_role:/d" "$FXP6_74"
+  rc=0; out="$(resolve_v2 "$FXP6_74")" || rc=$?
+  assert_contains "FX-P6: T5を含む（schema_version:5のまま欠落は壊れている扱い）" "$out" "T5"
+  assert_eq "FX-P6: exit 1" "1" "$rc"
+}
+
+echo "=== 75. AC-9(FR-13): 廃止キー残存時のUNKNOWN_EXTRA契約の陽性1件(FX-P7)・陰性1件(FX-P1) ==="
+{
+  FXP7_75="$(mktemp -d)/fxp7-ac9.md"
+  make_v2_profile "$FXP7_75" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  # frontmatter終端(---)の直前に挿入する（末尾に追記すると frontmatter の
+  # 外側になってしまうため）。AC5-ALLOW:FX-P7
+  python3 - "$FXP7_75" <<'PYEOF'
+import sys
+path = sys.argv[1]
+lines = open(path).read().splitlines()
+idx = len(lines) - 1  # 末尾の "---"
+lines.insert(idx, "git_role: unavailable")  # AC5-ALLOW:FX-P7
+open(path, "w").write("\n".join(lines) + "\n")
+PYEOF
+  rc=0; out="$(resolve_v2 "$FXP7_75")" || rc=$?
+  assert_contains "FX-P7: R=UNKNOWN_EXTRA:git_roleを含む（機械側は既知キーで解決）" "$out" "UNKNOWN_EXTRA:git_role"  # AC5-ALLOW:FX-P7
+  assert_eq "FX-P7: R=exit 0" "0" "$rc"
+  ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP7_75")"
+  assert_contains "FX-P7: I=必読から除外の文言を含む（AI側は降格）" "$ctx" "必読から除外"
+  assert_contains "FX-P7: I=最小能力の文言を含む" "$ctx" "最小能力"
+
+  FXP1_75="$(mktemp -d)/fxp1-ac9.md"
+  make_v2_profile "$FXP1_75" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  out="$(resolve_v2 "$FXP1_75")"
+  assert_not_contains "FX-P1: R=UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
+  ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP1_75")"
+  assert_contains "FX-P1: I=全文Readを指示する" "$ctx" "Readで全文を読むこと"
+}
+
+echo "=== 76. AC-11(FR-9): machine_roleがunknownのときだけDIRECTIVEへ保留の1行が増える（FX-P8陽性・FX-P1陰性・同一HOME・同一パスでmachine_roleの値だけを変える） ==="
+{
+  VD_76="$(mktemp -d)"; make_full_vault "$VD_76"
+
+  # ⚠️ 同一のHOME・同一の実体パスでmachine_roleの値だけを書き換える（AC-11の
+  # 判定式どおり）。FX-P1・FX-P8はいずれもrole.leader以外の職種行を書かない
+  # ため、VACANT_UNKNOWN/ADVISORY:V1-aが付随する（要件§6.1の注記どおり）。
+  # ⚠️ Codex一次レビュー指摘（MAJOR-2・2026-09-07）対応: 従来は「保留の行の
+  # 有無」と「保留を除いた行数の一致」を別々に検査しており、要件AC-11が
+  # 求める「2本文の差分がちょうど1行」を実際にはdiffしていなかった（AC-11の
+  # 意図した検査になっていなかった＝実装側で判定式を緩めていた）。
+  # 【ローカル実体プロファイル】ブロックの「配役表の状態」行はresolveの生OK行
+  # をそのまま転写する仕様であり、MACHINE_ROLE:の値もその中に含まれるため、
+  # machine_roleを変えるとこの1行の内容も変わる（保留の1行の追加とは別の、
+  # 既存メカニズムに由来する副作用）。この副作用を打ち消すため、両本文の
+  # 診断行中のMACHINE_ROLE:<値>トークンを共通のプレースホルダへ正規化して
+  # からdiffする（値そのものの一致は他のテスト＝§75等で別途検査済み）。
+  FXP_76="$(mktemp -d)/fxp-ac11.md"
+  make_v2_profile "$FXP_76" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  ctx_p1="$(run_bootstrap_with_profile "$VD_76" "$FXP_76")"
+
+  sed -i '' "s/machine_role:     configured value=main/machine_role:     unknown/" "$FXP_76"
+  ctx_p8="$(run_bootstrap_with_profile "$VD_76" "$FXP_76")"
+
+  norm_p1="$(printf '%s\n' "$ctx_p1" | sed -E 's/MACHINE_ROLE:[a-z]+/MACHINE_ROLE:X/')"
+  norm_p8="$(printf '%s\n' "$ctx_p8" | sed -E 's/MACHINE_ROLE:[a-z]+/MACHINE_ROLE:X/')"
+
+  diff_out="$(diff <(printf '%s\n' "$norm_p1") <(printf '%s\n' "$norm_p8") || true)"
+  added_lines="$(printf '%s\n' "$diff_out" | grep -c '^> ' || true)"
+  removed_lines="$(printf '%s\n' "$diff_out" | grep -c '^< ' || true)"
+  assert_eq "正規化後の差分は追加1行のみ（削除0行）" "1" "$added_lines"
+  assert_eq "正規化後の差分に削除は無い" "0" "$removed_lines"
+  assert_eq "追加された1行にmachine_roleを含む" "1" \
+    "$(printf '%s\n' "$diff_out" | grep '^> ' | grep -q 'machine_role' && echo 1 || echo 0)"
+
+  hold_count_p1="$(printf '%s\n' "$ctx_p1" | grep -c '配役表の machine_role が未確定です' || true)"
+  hold_count_p8="$(printf '%s\n' "$ctx_p8" | grep -c '配役表の machine_role が未確定です' || true)"
+  assert_eq "FX-P1(main): 保留の行は0回" "0" "$hold_count_p1"
+  assert_eq "FX-P8(unknown): 保留の行はちょうど1回" "1" "$hold_count_p8"
+
+  rm -rf "$VD_76"
+}
+
+echo "=== 76b. AC-11(FR-9)陰性・MAJOR-1対応: machine_roleがunavailableのときは保留行を出さない（unknownとは区別する） ==="
+{
+  VD_76B="$(mktemp -d)"; make_full_vault "$VD_76B"
+
+  FXP_76B="$(mktemp -d)/fxp-ac11-unavailable.md"
+  make_v2_profile "$FXP_76B" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  sed -i '' "s/machine_role:     configured value=main/machine_role:     unavailable/" "$FXP_76B"
+  ctx_unavail="$(run_bootstrap_with_profile "$VD_76B" "$FXP_76B")"
+
+  hold_count_unavail="$(printf '%s\n' "$ctx_unavail" | grep -c '配役表の machine_role が未確定です' || true)"
+  assert_eq "machine_role=unavailable: 保留の行は0回（unknownと違い明示的な申告のため）" "0" "$hold_count_unavail"
+  assert_contains "machine_role=unavailable: 診断行にはMACHINE_ROLE:unavailableがそのまま出る" "$ctx_unavail" "MACHINE_ROLE:unavailable"
+
+  rm -rf "$VD_76B"
 }
 
 echo

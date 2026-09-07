@@ -109,10 +109,60 @@ EOF
   echo "# サンプル方針" > "$repo/vault-public/Preferences/sample.md"
 }
 
+# make_fake_repo_with_stub_leader_runtime <repo> <stub_log> <main_model> <sub_model> —
+# Codex一次レビュー指摘（MAJOR-1・2026-09-07・第2巡）対応。make_fake_repo()を
+# 呼んだ後、scripts/install-main.shを引数記録つきの軽量スタブへ置き換える。
+# 実物のinstall-main.shはv2実体でmachine_roleに依存しない値を返す（D-6）ため、
+# 4j/4j2のような実物ベースのテストでは「診断が--sub-delegateの有無を実際に
+# 使っているか」を固定できない（実際、当該分岐を削除しても327 passedのまま
+# だったことをCodexが実測で確認済み）。本ヘルパーはscripts/check-drift.sh
+# 自身の引数組み立て（machine_role=subのときだけ--sub-delegateを付ける・
+# scripts/check-drift.sh:401-402）を、install-main.sh側の実装から切り離して
+# 直接検証するために使う。
+# --print-leader-runtimeが受け取った引数は<stub_log>へ1行1回で記録し、
+# 引数に--sub-delegateを含むかどうかで返すJSONのmodelを変える
+# （含まない＝<main_model>／含む＝<sub_model>）。--print-bedrock-env-jsonと
+# --check-profileは他の診断項目（Bedrock envマージ・⑧の表示）が空振りしない
+# よう最小限の無害な応答を返す。
+make_fake_repo_with_stub_leader_runtime() {
+  local repo="$1" stub_log="$2" main_model="$3" sub_model="$4"
+  make_fake_repo "$repo"
+  : > "$stub_log"
+  cat > "$repo/scripts/install-main.sh" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "$stub_log"
+case "\$1" in
+  --print-leader-runtime)
+    shift
+    for a in "\$@"; do
+      if [ "\$a" = "--sub-delegate" ]; then
+        printf '{"model": "%s"}\n' "$sub_model"
+        exit 0
+      fi
+    done
+    printf '{"model": "%s"}\n' "$main_model"
+    exit 0
+    ;;
+  --print-bedrock-env-json)
+    printf '{"env": {}, "rejected_keys": [], "malformed_lines": []}\n'
+    exit 0
+    ;;
+  --check-profile)
+    printf 'OK\tschema_version=5\tTEAM_MODE:full\tMACHINE_ROLE:unknown\n'
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+STUB
+  chmod +x "$repo/scripts/install-main.sh"
+}
+
 # claude/・codex/ の symlink化（install-main.sh相当を簡易に再現）＋
 # config.toml・settings.json生成を行う。$3（省略可）はsettings.jsonのmodel値
-# （既定 claude-fable-5[1m]＝machine-roleマーカーを置かないテストの大半が想定する
-# メイン機の既定値。check-drift.sh側のAIENV_MODEL_MAIN既定値と一致させることで
+# （既定 claude-fable-5[1m]＝ローカル実体プロファイルを置かないテストの大半が
+# 想定するメイン機の既定値。check-drift.sh側のAIENV_MODEL_MAIN既定値と一致させることで
 # 「他項目のfixtureのためだけの」テストで①-2が無関係にdriftを出さないようにする）。
 # $4（省略可）はeffortLevel値。既定"high"＝ローカル実体プロファイルを置かない
 # fixture（大半のテスト）はv1委譲経路（§3.5）に入り、値出力口
@@ -123,7 +173,7 @@ install_fake_home() {
   local repo="$1" home="$2" model="${3:-claude-fable-5[1m]}" effort="${4-high}"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
   # settings.json はsymlinkではなく生成物（install-main.shのgenerate_settings_json()
-  # と同じプレースホルダ置換方式・2026-08-21 machine-role対応）。effortLevelは
+  # と同じプレースホルダ置換方式・2026-08-21 機役割対応）。effortLevelは
   # sedの単純文字列置換ではキーの削除を表現できないため、model同様の目印
   # 置換に加えてpython3でキー削除まで行う（install-main.sh generate_settings_
   # json()の実装を模した最小限の再現）。
@@ -245,6 +295,27 @@ import json, pathlib
 p = pathlib.Path('$home/.claude/logs/maintenance/last-run.json')
 p.write_text(json.dumps({'started_at': '$(d_ts "$ts_offset")'}), encoding='utf-8')
 "
+}
+
+# write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
+# を書く（tests/test-update-sub.shのwrite_v2_profile()と同じ最小セットの
+# 流儀に揃える＝担当Cの他ファイルと様式を合わせる）。
+write_v2_profile() {
+  local dest="$1" leader_line="$2"
+  shift 2
+  mkdir -p "$(dirname "$dest")"
+  {
+    echo "---"
+    echo "schema_version: 2"
+    echo "profile_slug: test"
+    echo "role.leader: ${leader_line}"
+    for extra in "$@"; do
+      printf '%s\n' "$extra"
+    done
+    echo "excluded_models: configured value=none"
+    echo "reviewer: configured value=codex-mcp"
+    echo "---"
+  } > "$dest"
 }
 
 echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
@@ -391,8 +462,8 @@ echo "=== 4i. ①-2 modelフィールドがテンプレの期待値(メイン=cl
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
-  # あえてサブ機の値でsettings.jsonを生成する（machine-roleマーカーは置かない＝
-  # このマシンはmainとして判定される想定）。
+  # あえてサブ機の値でsettings.jsonを生成する（ローカル実体プロファイルは
+  # 置かない＝v1委譲経路に入り、このマシンはmainとして判定される想定）。
   install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -403,18 +474,129 @@ echo "=== 4i. ①-2 modelフィールドがテンプレの期待値(メイン=cl
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 4j. ①-2 machine-roleマーカーが「sub」ならmodelの期待値もOpus 5になる（サブ機シナリオ） ==="
+echo "=== 4j. ①-2 v2実体ではsettings.jsonのmodel期待値はrole.leaderから決まり、machine_role(sub)には依存しない（配役表-能力軸整理-設計-2026-09-07.md §5.2 D-6） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5"
-  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
-  printf 'sub\n' > "$HOME_DIR/.config/takumi009-ai-env/machine-role"
+  # settings.json自体はmain既定値(claude-fable-5[1m])で生成する。
+  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
+  # machine_role: sub だが role.leader は main既定値と同じmodelを配役する。
+  # 旧方式（--sub-delegate経由でAIENV_MODEL_SUB=claude-opus-5を選ぶ）なら
+  # driftするはずだが、v2実体ではrole.leaderが唯一の正本であり機役割にも
+  # --sub-delegateにも依存しないため、driftしないことを確認する。
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "machine_role: configured value=sub"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "サブ機ならmodelのINFOも出ない（期待値どおりのため）" "$out" "'model' フィールドが現在の期待値と異なります"
+  assert_not_contains "machine_role=subでもmodelの差分は出ない（role.leaderが正本）" "$out" "[DIFF] キー 'model'"
   assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4j2. FX-M1/FX-M2対照(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): 4jと同一環境でmachine_role=mainに変えても同じ非drift結果になる（診断がsub/main両側で同一のsettings.json期待値へ収束することの確認・AC-6④） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
+  # 4jとの唯一の違いはmachine_roleの値（sub→main）。role.leaderの値は同じ。
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "machine_role: configured value=main"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "machine_role=mainでもmodelの差分は出ない（role.leaderが正本・4jと同一結果）" "$out" "[DIFF] キー 'model'"
+  assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4j3. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=main・本番と同じ場所に旧マーカー(sub)を併設しても診断結果に影響しない（旧マーカーを読んでいないことの証明） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "machine_role: configured value=main"
+  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
+  printf 'sub\n' > "$HOME_DIR/.config/takumi009-ai-env/machine-role"  # AC5-ALLOW:FX-M1
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "FX-M1: 旧マーカーがsubでもmachine_role=mainならmodelの差分は出ない" "$out" "[DIFF] キー 'model'"
+  assert_contains "FX-M1: settings.json一致（旧マーカーは無視される）" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4j4. FX-M2(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=sub・旧マーカー無しで通常どおり診断される（4jと同型だが旧マーカー不在を明示） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "machine_role: configured value=sub"
+
+  # ⚠️ 廃止済みマーカーのファイル名をソースへ直接書かない（AC-5の0件検査に
+  # 自分自身が引っかかるため）。実行時に文字列を組み立てる。
+  _h_4j4='-'
+  _legacy_marker_name_4j4="machine${_h_4j4}role"
+  [ ! -e "$HOME_DIR/.config/takumi009-ai-env/$_legacy_marker_name_4j4" ] && pass "FX-M2前提: 旧マーカーは無い" \
+    || fail_case "FX-M2前提: 旧マーカーが無いはずが存在する"
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "FX-M2: machine_role=sub・旧マーカー無しでもmodelの差分は出ない" "$out" "[DIFF] キー 'model'"
+  assert_contains "FX-M2: settings.json一致" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4j5. FX-M1直接検証(Codex一次レビュー指摘・MAJOR-1・第2巡対応): machine_role=mainのとき--print-leader-runtimeへ--sub-delegateを付けず、スタブが返すmain側の値がsettings.jsonと一致する ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  STUB_LOG_M1="$(mktemp -d)/stub-calls-m1.log"
+  make_fake_repo_with_stub_leader_runtime "$REPO" "$STUB_LOG_M1" "claude-opus-5" "claude-sonnet-5"
+  # ⚠️ スタブは{"model": ...}のみ返しeffortキーを持たないため、settings.json
+  # 側もeffortLevelキー自体を持たない形に揃える（effort=""でinstall_fake_home
+  # にeffortLevelキーを落とさせる）。揃えないとmodelとは無関係のeffortLevel
+  # 差分でこのテストの意図が濁る。
+  install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5" ""
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-opus-5" \
+    "machine_role: configured value=main"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "FX-M1: --print-leader-runtime呼出しに--sub-delegateが付かない" "$(cat "$STUB_LOG_M1")" "--sub-delegate"
+  assert_contains "FX-M1: --print-leader-runtimeは呼ばれている" "$(cat "$STUB_LOG_M1")" "--print-leader-runtime"
+  assert_not_contains "FX-M1: main側の期待値と一致しmodelの差分は出ない" "$out" "[DIFF] キー 'model'"
+  assert_contains "FX-M1: settings.json一致" "$out" "settings.jsonはテンプレと一致しています"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4j6. FX-M2直接検証(Codex一次レビュー指摘・MAJOR-1・第2巡対応): machine_role=subのとき--print-leader-runtimeへ--sub-delegateが付き、スタブが返すsub側の値(main側と異なる)により同一settings.jsonでも差分が検知される ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  STUB_LOG_M2="$(mktemp -d)/stub-calls-m2.log"
+  make_fake_repo_with_stub_leader_runtime "$REPO" "$STUB_LOG_M2" "claude-opus-5" "claude-sonnet-5"
+  # ⚠️ settings.jsonは4j5と同じ"claude-opus-5"・effortLevelキー無しのまま
+  # 変えない（「同一settings.jsonに対する診断結果が分岐する」ことを固定
+  # するため）。
+  install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5" ""
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-opus-5" \
+    "machine_role: configured value=sub"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "FX-M2: --print-leader-runtime呼出しに--sub-delegateが付く" "$(cat "$STUB_LOG_M2")" "--sub-delegate"
+  assert_contains "FX-M2: sub側の期待値(claude-sonnet-5)と実際(claude-opus-5)が食い違いmodelの差分が出る" "$out" "[DIFF] キー 'model'"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -2555,32 +2737,6 @@ echo "=== 60. ⑦-2 ロック回収ミューテックスの更新時刻が未来
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-# write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
-# を書く（tests/test-update-sub.shのwrite_v2_profile()と同じ最小セットの
-# 流儀に揃える＝担当Cの他ファイルと様式を合わせる）。
-write_v2_profile() {
-  local dest="$1" leader_line="$2"
-  shift 2
-  mkdir -p "$(dirname "$dest")"
-  {
-    echo "---"
-    echo "schema_version: 2"
-    echo "profile_slug: test"
-    echo "role.leader: ${leader_line}"
-    for extra in "$@"; do
-      printf '%s\n' "$extra"
-    done
-    echo "excluded_models: configured value=none"
-    echo "inventory_source: configured value=work-tools-dir"
-    echo "reviewer: configured value=codex-mcp"
-    echo "vault_write: configured value=via-scribe"
-    echo "ui.user_call: configured value=send-message"
-    echo "git_role: configured value=aienv-repo:commit"
-    echo "web_verification: configured value=websearch"
-    echo "---"
-  } > "$dest"
-}
-
 echo "=== 61. ①-2 effortLevelは三者一致が崩れると/effort等での意図的切替とは扱われず常時driftになる（V13・2026-09-01 設計書§4.4。旧実装ではmodel側だけINFO特例があり非対称だったが、2026-09-01工程横断レビュー差し戻しMAJOR対応でmodel側もdrift扱いへ揃え、この非対称は解消済み） ==="
 {
   REPO="$(mktemp -d)"
@@ -2791,24 +2947,19 @@ echo "=== 70b. ⑧ advisory T4-PRIME（実体の版がコードの期待版よ�
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  # EXPECTED_SCHEMA_VERSION(=4・3モード体制対応で3→4へ引き上げ済み)より新しい
-  # schema_versionを書くとT4-PRIME（このマシンのコードが古い可能性）が発生する
-  # （profile_resolve.py reconcile_schema_version()のdeclared>EXPECTED分岐。
-  # declared>EXPECTED分岐は固定キーの過不足を検査しないため、no_read_pathsを
-  # 書かなくてもT5にはならない）。
+  # EXPECTED_SCHEMA_VERSION(=5・配役表-能力軸整理-設計-2026-09-07.md §3対応で
+  # 4→5へ引き上げ済み)より新しいschema_versionを書くとT4-PRIME（このマシンの
+  # コードが古い可能性）が発生する（profile_resolve.py reconcile_schema_version()
+  # のdeclared>EXPECTED分岐。declared>EXPECTED分岐は固定キーの過不足を検査
+  # しないため、no_read_paths・machine_roleを書かなくてもT5にはならない）。
   mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
   cat > "$HOME_DIR/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test
 role.leader: configured provider=anthropic-api model=claude-sonnet-5
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 team_mode: configured value=full
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 
@@ -3051,6 +3202,30 @@ EOF
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "MODEL-VALUE-UNAVAILABLEとして検知される（複数行JSONは契約違反）" "$out" "[MODEL-VALUE-UNAVAILABLE]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 75. 配役表-能力軸整理: AIENV_AGENTS_DIRが未設定でもset -u下で落ちない（配役表-能力軸整理-設計-2026-09-07.md §2.2の共通レシピの既定値初期化位置を固定する） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "machine_role: configured value=main"
+
+  rc=0
+  out="$(env -u AIENV_AGENTS_DIR DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
+    bash "$REPO/scripts/check-drift.sh" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    pass "AIENV_AGENTS_DIR未設定でも正常終了する(exit 0)"
+  else
+    fail_case "AIENV_AGENTS_DIR未設定でも正常終了する(exit 0) (実際のexit=$rc)"
+  fi
+  assert_not_contains "unbound variableで落ちていない" "$out" "unbound variable"
+  assert_contains "①-2 settings.jsonの判定まで到達している(set -uで落ちて空出力になっていない)" "$out" "settings.jsonはテンプレと一致しています"
 
   rm -rf "$REPO" "$HOME_DIR"
 }

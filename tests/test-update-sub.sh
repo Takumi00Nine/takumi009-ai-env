@@ -4,12 +4,15 @@
 # 実 ~/.codex・実Vault・実GitHubには一切依存しない。ローカルの使い捨てbare repo
 # を「origin」に見立て、cloneしたサブ相当のrepoに対して update-sub.sh を実行する。
 #
-# 2026-07-24: machine-roleマーカー（AIENV_MACHINE_ROLE_MARKER）の中身が「sub」
+# 2026-07-24: 旧マーカー（AIENV_MACHINE_ROLE_MARKER）の中身が「sub」
 # でなければ即fail()で拒否するガードを追加した（リーダー裁定・Codex一次レビュー
 # 指摘Major対応）。run_update()ヘルパーは「サブ機として正しく provisioning 済み」
-# の正常系を再現するため、呼び出しのたびに$homeへマーカーを自動設置する
-# （マーカー無し/中身違いの拒否そのものを検証するテストは後段で個別に直接
-# スクリプトを呼ぶ）。
+# の正常系を再現するため、呼び出しのたびに$homeへ実体プロファイルを自動設置する
+# （実体が既に置かれている呼び出し元は上書きしない。プロファイル無し/値違いの
+# 拒否そのものを検証するテストは後段で個別に直接スクリプトを呼ぶ）。
+#
+# 2026-09-07: 判定元を旧マーカーファイルから配役表の能力軸`machine_role`へ
+# 変更した（配役表-能力軸整理-設計-2026-09-07.md §2）。
 #
 # 実行方法: bash tests/test-update-sub.sh
 
@@ -81,7 +84,7 @@ assert_agents_line() {
 make_origin() {
   local bare="$1" src="$2"
   git init -q --bare "$bare"
-  mkdir -p "$src/codex" "$src/vault-public/Preferences" "$src/scripts/lib"
+  mkdir -p "$src/codex" "$src/vault-public/Preferences" "$src/scripts/lib" "$src/claude/hooks/lib"
   cat > "$src/codex/config.toml" <<'EOF'
 service_tier = "default"
 [mcp_servers.obsidian]
@@ -94,6 +97,10 @@ EOF
   # backup-vault.sh・maintenance.shと共通の scripts/lib/pid-lock.sh へ
   # 一本化したことに伴う対応）。
   cp "$REPO_ROOT/scripts/lib/pid-lock.sh" "$src/scripts/lib/pid-lock.sh"
+  # 配役表-能力軸整理-設計-2026-09-07.md §10.2a: update-sub.shはstep 0で
+  # machine_roleを読むためにresolverを常に呼ぶ（add_settings_json_template()
+  # を呼ばないテストにもresolverが要る＝実測）。
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$src/claude/hooks/lib/profile_resolve.py"
   git -C "$src" init -q
   git -C "$src" config user.name test
   git -C "$src" config user.email test@example.invalid
@@ -160,16 +167,42 @@ make_sub_clone() {
   git -C "$sub" config user.email test@example.invalid
 }
 
-# $home配下にmachine-roleマーカー（sub）を設置する。
-make_sub_marker() {
+# $home配下にschema 5・machine_role: subの実体プロファイルを置く
+# （配役表-能力軸整理-設計-2026-09-07.md §10.2a）。
+make_sub_profile() {
   local home="$1"
   mkdir -p "$home/.config/takumi009-ai-env"
-  printf 'sub\n' > "$home/.config/takumi009-ai-env/machine-role"
+  cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 5
+profile_slug: test-update-sub-machine
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=sub
+excluded_models: configured value=none
+role.leader: configured provider=anthropic-api model=claude-sonnet-5
+---
+EOF
+}
+
+# $home配下にschema 5の実体（machine_role: sub）と、廃止済みの旧マーカーを
+# 併設する（§9.3切替当日の実機の状態の再現。版境界の移行テスト専用＝
+# §10.2b。旧版コード再現fixture＝RV-4の第2区分）。
+make_sub_profile_with_legacy_marker() {
+  local home="$1"
+  make_sub_profile "$home"
+  # ⚠️ Codex一次レビュー指摘（MAJOR-3・2026-09-07）対応: 許可タグは要件AC-5③
+  # の明示リスト（FX-P7・FX-M1・FXP0）だけを受理するため、独自のFX-M3を
+  # 廃止しFXP0（旧版コード再現の汎用タグ）へ統一した。
+  printf 'sub\n' > "$home/.config/takumi009-ai-env/machine-role"  # AC5-ALLOW:FXP0
 }
 
 run_update() {
   local dir="$1" home="$2" vault="$3" lock="$4"
-  make_sub_marker "$home"
+  # 呼び出し元が先に独自の実体プロファイル（write_v2_profile()等）を
+  # 置いている場合は上書きしない（後勝ちで実体を差し替えられていたのを
+  # 温存しつつ、既定は「サブ機として正しく provisioning 済み」を保証する）。
+  [ -f "$home/.config/takumi009-ai-env/profile.md" ] || make_sub_profile "$home"
   DIR="$dir" HOME="$home" VAULT="$vault" LOCK_FILE="$lock" "$SCRIPT"
 }
 
@@ -179,16 +212,18 @@ run_update() {
 run_update_with_args() {
   local dir="$1" home="$2" vault="$3" lock="$4"
   shift 4
-  make_sub_marker "$home"
+  [ -f "$home/.config/takumi009-ai-env/profile.md" ] || make_sub_profile "$home"
   DIR="$dir" HOME="$home" VAULT="$vault" LOCK_FILE="$lock" "$SCRIPT" "$@"
 }
 
 # write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
-# を書く（schema_version・能力軸7キー・excluded_modelsは固定キー検査
+# を書く（schema_version・能力軸3キー・excluded_modelsは固定キー検査
 # （V7/V8-b）を通すための最小セット。role.leaderの行は必須引数、それ以外の
 # 職種行は可変長の追加引数で渡す。tests/test-check-drift.shの同名関数・
 # tests/test-install-main.shのwrite_v2_profile_with_bedrock_role()と
-# 同じ最小セット・様式に揃える）。
+# 同じ最小セット・様式に揃える）。⚠️ machine_role: subを固定で含める
+# （update-sub.shのstep 0ゲートを通すため。マーカー撤去後は実体プロファイル
+# 自身がこの役目を負う）。
 write_v2_profile() {
   local dest="$1" leader_line="$2"
   shift 2
@@ -202,12 +237,10 @@ write_v2_profile() {
       printf '%s\n' "$extra"
     done
     echo "excluded_models: configured value=none"
-    echo "inventory_source: configured value=work-tools-dir"
     echo "reviewer: configured value=codex-mcp"
-    echo "vault_write: configured value=via-scribe"
-    echo "ui.user_call: configured value=send-message"
-    echo "git_role: configured value=aienv-repo:commit"
-    echo "web_verification: configured value=websearch"
+    echo "team_mode: configured value=full"
+    echo "no_read_paths: unavailable"
+    echo "machine_role: configured value=sub"
     echo "---"
   } > "$dest"
 }
@@ -413,12 +446,15 @@ echo "=== 6. remote origin未設定ならWARNで終了しexit 0 ==="
 {
   WORK="$(mktemp -d)"
   SUB="$WORK/sub-no-remote"
-  mkdir -p "$SUB" "$SUB/scripts/lib"
+  mkdir -p "$SUB" "$SUB/scripts/lib" "$SUB/claude/hooks/lib"
   git -C "$SUB" init -q
   git -C "$SUB" config user.name test
   git -C "$SUB" config user.email test@example.invalid
   echo "x" > "$SUB/x.md"
   cp "$REPO_ROOT/scripts/lib/pid-lock.sh" "$SUB/scripts/lib/pid-lock.sh"
+  # update-sub.shはstep 0でmachine_roleを読むためにresolverを常に呼ぶ
+  # （配役表-能力軸整理-設計-2026-09-07.md §10.2a）。
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$SUB/claude/hooks/lib/profile_resolve.py"
   git -C "$SUB" add -A
   git -C "$SUB" commit -q -m init
 
@@ -477,7 +513,7 @@ echo "=== 8. ロック: staleなPIDは自動解除して続行する ==="
   rm -rf "$WORK"
 }
 
-echo "=== 9. machine-roleマーカー: マーカーが無ければ即FAILで拒否する（メインでの誤実行防止・2026-07-24追加） ==="
+echo "=== 9. 配役表machine_role: 実体プロファイルが無ければ即FAILで拒否する（メインでの誤実行防止・2026-07-24追加。2026-09-07で判定元を旧マーカーから配役表へ移行） ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
@@ -488,22 +524,22 @@ echo "=== 9. machine-roleマーカー: マーカーが無ければ即FAILで拒�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
-  # make_sub_marker() を意図的に呼ばず、マーカー未設置(=メイン相当)を再現する。
+  # 実体プロファイルを意図的に置かず、未provisioning(=メイン相当)を再現する。
 
   rc=0
   out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
-  assert_eq "マーカー無しはexit 1(FAIL)" "1" "$rc"
+  assert_eq "実体プロファイル無しはexit 1(FAIL)" "1" "$rc"
   assert_true "サブ機として登録されていない旨のFAILメッセージが出る" \
     "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
-  assert_true "install-sub.shを先に実行するよう案内する" \
-    "$(echo "$out" | grep -q "install-sub.sh を実行" && echo 1 || echo 0)"
-  assert_true "マーカー無しの時点でgit pull等には一切進まない(rule1.mdが同期されていない)" \
+  assert_true "machine_roleをconfigured value=subで書くよう案内する" \
+    "$(echo "$out" | grep -qF 'machine_role: configured value=sub を書いてください' && echo 1 || echo 0)"
+  assert_true "実体プロファイル無しの時点でgit pull等には一切進まない(rule1.mdが同期されていない)" \
     "$([[ ! -f "$FAKE_HOME/Data/obsidian/Preferences/rule1.md" ]] && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
 
-echo "=== 9b. machine-roleマーカー: 中身が「sub」以外(例: main)でも即FAILで拒否する ==="
+echo "=== 9b. 配役表machine_role: 値が「sub」以外(例: main)でも即FAILで拒否する ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
@@ -512,20 +548,24 @@ echo "=== 9b. machine-roleマーカー: 中身が「sub」以外(例: main)で�
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
-  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
-  printf 'main\n' > "$FAKE_HOME/.config/takumi009-ai-env/machine-role"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5"
+  sed -i.bak 's/^machine_role:.*/machine_role: configured value=main/' \
+    "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
+  rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
   LOCK="$WORK/lock"
 
   rc=0
   out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
-  assert_eq "中身がmainならexit 1(FAIL)" "1" "$rc"
+  assert_eq "値がmainならexit 1(FAIL)" "1" "$rc"
   assert_true "サブ機として登録されていない旨のFAILメッセージが出る" \
     "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
 
-echo "=== 9c. machine-roleマーカー: 中身が「sub」(前後空白付き)なら正常に動作する ==="
+echo "=== 9c. 配役表machine_role: 正常な値(configured value=sub)なら正常に動作する（旧マーカーのtrim観点は値の形式検査に代替＝設計書§10.2a） ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
@@ -534,12 +574,11 @@ echo "=== 9c. machine-roleマーカー: 中身が「sub」(前後空白付き)�
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
-  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
-  printf '  sub  \n' > "$FAKE_HOME/.config/takumi009-ai-env/machine-role"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
 
   rc=0
-  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
   assert_eq "exit 0" "0" "$rc"
   assert_true "変更なしメッセージまで正常に到達する" \
     "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
@@ -547,7 +586,7 @@ echo "=== 9c. machine-roleマーカー: 中身が「sub」(前後空白付き)�
   rm -rf "$WORK"
 }
 
-echo "=== 9d. machine-roleマーカー: 中身が「s u b」(内部に空白を含む)なら「sub」と誤認せずFAILで拒否する(Codex再レビュー指摘Minor対応) ==="
+echo "=== 9c2. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=main・本番と同じ場所に旧マーカー(sub)を併設してもFAILで拒否されたまま(main扱い) ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
@@ -557,24 +596,83 @@ echo "=== 9d. machine-roleマーカー: 中身が「s u b」(内部に空白を�
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
-  printf 's u b\n' > "$FAKE_HOME/.config/takumi009-ai-env/machine-role"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5"
+  sed -i.bak 's/^machine_role:.*/machine_role: configured value=main/' \
+    "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
+  rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
+  printf 'sub\n' > "$FAKE_HOME/.config/takumi009-ai-env/machine-role"  # AC5-ALLOW:FX-M1
   LOCK="$WORK/lock"
 
   rc=0
   out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
-  assert_eq "内部に空白を含む中身はexit 1(FAIL)" "1" "$rc"
+  assert_eq "FX-M1: 旧マーカーがsubでもmachine_role=mainならexit 1(FAIL)" "1" "$rc"
+  assert_true "FX-M1: サブ機として登録されていない旨のFAILメッセージが出る（旧マーカーは無視される）" \
+    "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 9c3. FX-M2(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=sub・旧マーカー無しで正常に動作する（9cと同型だが旧マーカー不在を明示） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  make_sub_profile "$FAKE_HOME"
+  LOCK="$WORK/lock"
+
+  # ⚠️ 廃止済みマーカーのファイル名をソースへ直接書かない（AC-5の0件検査に
+  # 自分自身が引っかかるため）。実行時に文字列を組み立てる。
+  _h_9c3='-'
+  _legacy_marker_name_9c3="machine${_h_9c3}role"
+  assert_true "前提: 旧マーカーは存在しない" \
+    "$([ ! -e "$FAKE_HOME/.config/takumi009-ai-env/$_legacy_marker_name_9c3" ] && echo 1 || echo 0)"
+  rc=0
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
+  assert_eq "FX-M2: exit 0" "0" "$rc"
+  assert_true "FX-M2: 変更なしメッセージまで正常に到達する（旧マーカー不在でも問題ない）" \
+    "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 9d. 配役表machine_role: 値に内部空白(s u b)があると属性の形式検査(T6)で解決失敗しFAILで拒否する(Codex再レビュー指摘Minor対応の観点を値の形式検査へ引き継ぐ) ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-sonnet-5"
+  sed -i.bak 's/^machine_role:.*/machine_role: configured value=s u b/' \
+    "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
+  rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
+  assert_eq "値に内部空白を含む場合はexit 1(FAIL)" "1" "$rc"
   assert_true "サブ機として登録されていない旨のFAILメッセージが出る" \
     "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
 
-echo "=== 9f. machine-roleマーカー: ja_JP.UTF-8ロケール環境でも本来のFAILメッセージが握り潰されない（2026-07-16 scripts/install-backup.shで発見済みの実バグ回帰テスト・2026-07-24 update-sub.shへの横展開で同型バグが再発しないことの固定化） ==="
+echo "=== 9f. 配役表machine_role: ja_JP.UTF-8ロケール環境でも本来のFAILメッセージが握り潰されない（2026-07-16 scripts/install-backup.shで発見済みの実バグ回帰テスト・2026-07-24 update-sub.shへの横展開で同型バグが再発しないことの固定化） ==="
 {
   # bash 3.2(macOS既定)+ja_JP.UTF-8ロケール環境で、fail()メッセージ内の裸の
-  # $AIENV_MACHINE_ROLE_MARKER直後に全角の閉じ括弧（）が続くと、変数名の境界を
+  # $AIENV_LOCAL_PROFILE_PATH直後に全角の閉じ括弧（）が続くと、変数名の境界を
   # 誤認識し「unbound variable」でクラッシュし本来のFAILメッセージが一切
-  # 表示されない欠陥が実装中に一度発生した（${AIENV_MACHINE_ROLE_MARKER}と
+  # 表示されない欠陥が実装中に一度発生した（${AIENV_LOCAL_PROFILE_PATH}と
   # 波括弧で囲んで修正済み）。元バグはこのロケール下でのみ再現するため、CI等の
   # 別ロケール環境でも確実にこの回帰を検出できるようLC_ALL/LANGを明示指定する。
   WORK="$(mktemp -d)"
@@ -586,18 +684,19 @@ echo "=== 9f. machine-roleマーカー: ja_JP.UTF-8ロケール環境でも本�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
-  # マーカーは意図的に未設置のまま(=拒否パスを踏ませる)。
+  # 実体プロファイルは意図的に未設置のまま(=拒否パスを踏ませる)。必ず残す
+  # （拒否文言を書き換えるので同型のバグを再発させうる）。
 
   rc=0
   out=$(LC_ALL=ja_JP.UTF-8 LANG=ja_JP.UTF-8 DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1) || rc=$?
-  assert_eq "マーカー拒否はexit 1(FAIL)のまま" "1" "$rc"
+  assert_eq "拒否はexit 1(FAIL)のまま" "1" "$rc"
   assert_true "'unbound variable'クラッシュでは落ちず本来のFAILメッセージが出る" \
     "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
 
-echo "=== 10. settings.json再生成: HEADが変わっていなくてもサブ既定値(claude-opus-5)で再生成される（§9.0 A-0-1・§11.2 項目3の受入条件） ==="
+echo "=== 10. settings.json再生成: HEADが変わっていなくても実体のrole.leaderの値で再生成される（v2実体ではmachine_roleにも--sub-delegateにも依存しない＝配役表-能力軸整理-設計-2026-09-07.md §5.2 D-6。§9.0 A-0-1・§11.2 項目3の受入条件） ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
@@ -609,6 +708,8 @@ echo "=== 10. settings.json再生成: HEADが変わっていなくてもサブ�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-opus-5"
 
   # HEADは変わらない（pull時点で既に最新）ケースでも再生成されることを見る。
   out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
@@ -616,7 +717,7 @@ echo "=== 10. settings.json再生成: HEADが変わっていなくてもサブ�
     "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
   assert_true "settings.jsonが生成される" \
     "$([[ -f "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
-  assert_true "modelはサブ既定値(claude-opus-5)へ解決される（値出力口＝install-main.sh --print-leader-runtime --sub-delegate）" \
+  assert_true "modelは実体のrole.leaderの値(claude-opus-5)へ解決される" \
     "$(grep -q 'claude-opus-5' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
   assert_true "再生成メッセージが出る" \
     "$(echo "$out" | grep -q 'settings.json を再生成しました' && echo 1 || echo 0)"
@@ -624,7 +725,7 @@ echo "=== 10. settings.json再生成: HEADが変わっていなくてもサブ�
   rm -rf "$WORK"
 }
 
-echo "=== 11. settings.json再生成: ローカルのmodel値上書き(AIENV_MODEL_SUB)にも従う（値出力口の一本化の裏付け） ==="
+echo "=== 11. settings.json再生成: v2実体ではAIENV_MODEL_SUBのローカル上書きはmodel値に影響しない（v1委譲・実体不在に縮退したときのlegacy値選択にしか効かない＝D-6） ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
@@ -637,11 +738,14 @@ echo "=== 11. settings.json再生成: ローカルのmodel値上書き(AIENV_MOD
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
 
-  make_sub_marker "$FAKE_HOME"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
+    "configured provider=anthropic-api model=claude-opus-5"
   AIENV_MODEL_SUB='custom-sub-model' DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" >/dev/null
 
-  assert_true "AIENV_MODEL_SUB上書きがsettings.jsonへ反映される" \
-    "$(grep -q 'custom-sub-model' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
+  assert_true "AIENV_MODEL_SUBの上書きは反映されない(v2実体ではrole.leaderが正本)" \
+    "$(grep -q 'custom-sub-model' "$FAKE_HOME/.claude/settings.json" && echo 0 || echo 1)"
+  assert_true "modelは実体のrole.leaderの値(claude-opus-5)のまま" \
+    "$(grep -q 'claude-opus-5' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
@@ -1117,7 +1221,10 @@ echo "=== 17. P1受入④(HEAD不変): update-sub.sh実行後もPreferencesがre
   # update-sub.sh自身はPreferences同期処理〈4b〉まで到達しないため）。
   cp -R "$SUB/vault-public/Preferences/." "$FAKE_HOME/Data/obsidian/Preferences/"
   PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  echo "ローカル実体プロファイルの中身（update-sub.shで変わってはいけない）" > "$PROFILE_PATH"
+  # update-sub.shはstep 0でmachine_roleをこの実体から読むため、有効な
+  # プロファイルにしておく（内容自体は「update-sub.shで変わってはいけない」
+  # ことをSHA-256不変で確認するのが本テストの主眼）。
+  make_sub_profile "$FAKE_HOME"
   profile_sha_before="$(shasum -a 256 "$PROFILE_PATH" | cut -d' ' -f1)"
   LOCK="$WORK/lock"
 
@@ -1142,7 +1249,10 @@ echo "=== 18. P1受入④(HEAD変化あり): update-sub.sh実行後にPreference
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
   PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  echo "ローカル実体プロファイルの中身（update-sub.shで変わってはいけない）" > "$PROFILE_PATH"
+  # update-sub.shはstep 0でmachine_roleをこの実体から読むため、有効な
+  # プロファイルにしておく（内容自体は「update-sub.shで変わってはいけない」
+  # ことをSHA-256不変で確認するのが本テストの主眼）。
+  make_sub_profile "$FAKE_HOME"
   profile_sha_before="$(shasum -a 256 "$PROFILE_PATH" | cut -d' ' -f1)"
   LOCK="$WORK/lock"
 
@@ -1264,7 +1374,7 @@ print(json.dumps({k: env[k] for k in keys if k in env}, sort_keys=True))
   rm -rf "$WORK"
 }
 
-echo "=== 20. §4.3: リーダー配役未確定(role.leader: unknown)なら機械可読コードを人向け文言へ変換してWARNし、settings.jsonを再生成しない（旧ファイル保持・fail-open）（2026-09-01 配役表解凍） ==="
+echo "=== 20. §4.3→配役表-能力軸整理-設計-2026-09-07.md §7.2 S6: リーダー配役未確定(role.leader: unknown)は配役表のresolve自体が失敗しMACHINE_ROLE:を持たないため、settings.json再生成のリーダー個別WARNより前の機役割ゲート（step 0）でメイン機扱いとして拒否される（旧ファイル保持・fail-closed。role.leader未確定は積極的な証明〈D-3〉の対象外のため機役割ごと解決できない） ==="
 {
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
@@ -1287,17 +1397,17 @@ EOF
   rc=0
   out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
 
-  # 2026-09-01 Codex一次レビュー指摘・Blocking対応: 設計書§3.9
-  # 「update-sub.shはリーダー行が未確定ならWARN＋非0終了」どおり、対話を
-  # せず旧ファイルを保持する代わりに終了コードは非0になる（「対話はしない」
-  # ≠「exit 0で完走する」＝旧テストの誤った期待を修正）。
-  assert_eq "update-sub.sh全体は非0終了する（対話はしないが成功扱いにもしない・§3.9）" "1" "$rc"
-  assert_true "機械可読コードLEADER_UNCONFIGUREDが人向け文言に変換される" \
-    "$(echo "$out" | grep -q 'リーダー配役が未確定です' && echo 1 || echo 0)"
-  assert_true "WARN文面に「プロファイルのリーダー行を確認してください」を含む" \
-    "$(echo "$out" | grep -q 'プロファイルのリーダー行（role.leader）を確認してください' && echo 1 || echo 0)"
-  assert_true "生の機械可読コード(LEADER_UNCONFIGURED)自体は理由として画面に残っていてもよいが、素の2>/dev/nullの汎用WARNへ丸められていない" \
-    "$(echo "$out" | grep -q '値の取得に失敗しました（scripts/install-main.sh --print-model' && echo 0 || echo 1)"
+  # ⚠️ role.leader: unknownはprofile_resolve.pyのdo_resolve()内で
+  # resolve_leader_candidate()がNoneを返しMINIMAL(T8)になるため、machine_role
+  # を含むcapability値が既に検証済みであってもMACHINE_ROLE:フィールド自体が
+  # 出力されない（§7.2 S6「実体が壊れている→フィールドなし→全員サブ機では
+  # ない」）。したがってstep 0のfail-closedゲートが先に働き、settings.json
+  # 再生成フェーズ固有のLEADER_UNCONFIGURED変換文言には到達しない。
+  assert_eq "update-sub.sh全体は非0終了する（fail-closed・§3.9と整合）" "1" "$rc"
+  assert_true "サブ機として登録されていない旨のFAILメッセージが出る（step 0のゲートで拒否）" \
+    "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
+  assert_true "settings.json再生成フェーズ固有のWARN文言（プロファイルのリーダー行を確認してください）には到達しない" \
+    "$(echo "$out" | grep -q 'プロファイルのリーダー行（role.leader）を確認してください' && echo 0 || echo 1)"
   POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
   assert_eq "settings.jsonは再生成されず旧ファイルが保持される（バイト単位で不変）" "$PRE_SHA" "$POST_SHA"
 
@@ -1832,7 +1942,7 @@ echo "=== 27. 自己更新対策: update-sub.sh自身がpullで更新された�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
   LOCK="$WORK/lock"
-  make_sub_marker "$FAKE_HOME"
+  make_sub_profile "$FAKE_HOME"
 
   # v2 = v1の1行目（shebang）直後に実際に実行される識別用echoを差し込んだもの
   # （Codexフォローアップレビュー指摘・Nit対応: 単なる末尾コメントの追加だと
@@ -1885,7 +1995,7 @@ echo "=== 27c. 自己更新対策(handoff): ロックファイルのPIDは自分
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
-  make_sub_marker "$FAKE_HOME"
+  make_sub_profile "$FAKE_HOME"
 
   orig_head="$(git -C "$SUB" rev-parse HEAD)"
 
@@ -1930,7 +2040,7 @@ echo "=== 27d. 自己更新対策(handoff): 記録された指紋が『取得不
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
-  make_sub_marker "$FAKE_HOME"
+  make_sub_profile "$FAKE_HOME"
 
   orig_head="$(git -C "$SUB" rev-parse HEAD)"
 
@@ -1969,7 +2079,7 @@ echo "=== 27b. 自己更新対策: AIENV_UPDATE_SUB_REEXECガードが立って�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
-  make_sub_marker "$FAKE_HOME"
+  make_sub_profile "$FAKE_HOME"
 
   orig_head="$(git -C "$SUB" rev-parse HEAD)"
 
@@ -2282,11 +2392,12 @@ echo "=== 36. PA-10: --resync は同期元の欠落・rsyncの失敗のいずれ
   rm -rf "$WORK"
 }
 
-echo "=== 37. PA-11: 非0の原因が相互に誤分類されない（プロファイル検査の失敗単独・dangling同時の2ケース） ==="
+echo "=== 37. PA-11: 非0の原因が相互に誤分類されない（settings.json再生成の失敗単独・dangling同時の2ケース。⚠️ 2026-09-07 配役表-能力軸整理でrole.leader:unknownはmachine_roleごと解決不能になりstep 0で拒否されるため〈テスト20〉、settings.json再生成フェーズ固有の失敗はBedrock envの障害で代替する） ==="
 {
-  # ① プロファイル検査の失敗単独: agentsは正しく配置済み（新規もdanglingも無い）
-  #    状態でもAGENTS:行は出ない（「AGENTS:が無ければ他の原因」という不在からの
-  #    推定を禁じる規則の裏付け＝pull失敗のケースは PA-7 で確認済み。§2.1）。
+  # ① settings.json再生成の失敗単独: agentsは正しく配置済み（新規もdanglingも
+  #    無い）状態でもAGENTS:行は出ない（「AGENTS:が無ければ他の原因」という
+  #    不在からの推定を禁じる規則の裏付け＝pull失敗のケースは PA-7 で確認済み。
+  #    §2.1）。
   WORK="$(mktemp -d)"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
@@ -2300,26 +2411,28 @@ echo "=== 37. PA-11: 非0の原因が相互に誤分類されない（プロフ�
   SUB="$WORK/sub"
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
-  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude"
-  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "unknown"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude" "$FAKE_HOME/.config/takumi009-ai-env"
+  # Bedrock envのパスをディレクトリにする（settings.json再生成だけを確実に
+  # 失敗させる。machine_role・role.leaderは正常なのでstep 0は通過する）。
+  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
   LOCK="$WORK/lock"
 
-  # baseline: ロールを正しく配置しておく（このbaseline実行時点ではプロファイルは
-  # unknownのため exit非0になるが、agents symlink化自体は完走する＝2cは
-  # プロファイル検査の成否と独立に実行されるため）。
+  # baseline: ロールを正しく配置しておく（このbaseline実行時点でもBedrock env
+  # 障害でexit非0になるが、agents symlink化自体は完走する＝2cはsettings.json
+  # 再生成の成否と独立に実行されるため）。
   run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null 2>&1 || true
   assert_true "前提: test-pa11-role が配置済み（新規でもdanglingでもない状態を作る）" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa11-role.md" ]] && echo 1 || echo 0)"
 
   rc=0
   out="$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
-  assert_true "① 終了コードが非0（プロファイル未確定）" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "① プロファイル検査失敗の固有エラー文（リーダー配役が未確定）が出る" \
-    "$(echo "$out" | grep -q 'リーダー配役が未確定です' && echo 1 || echo 0)"
+  assert_true "① 終了コードが非0（settings.json再生成の失敗）" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "① settings.json再生成失敗の固有エラー文（通常ファイルではありません）が出る" \
+    "$(echo "$out" | grep -q '通常ファイルではありません' && echo 1 || echo 0)"
   assert_true "① AGENTS: 行は出ない（新規配置もdanglingも無いため。不在から他原因を推定しないことの裏付け）" \
     "$(echo "$out" | grep -q 'AGENTS:' && echo 0 || echo 1)"
 
-  # ② dangling とプロファイル検査の失敗が同時に起きるケース: 両方の文言が出る。
+  # ② dangling とsettings.json再生成の失敗が同時に起きるケース: 両方の文言が出る。
   rm -f "$SRC/claude/agents/test-pa11-role.md"
   git -C "$SRC" add -A
   git -C "$SRC" commit -q -m "retire test-pa11-role"
@@ -2330,8 +2443,8 @@ echo "=== 37. PA-11: 非0の原因が相互に誤分類されない（プロフ�
   assert_true "② 終了コードが非0" "$([[ "$rc2" -ne 0 ]] && echo 1 || echo 0)"
   assert_agents_line "② AGENTS: dangling の固定文にtest-pa11-roleが厳密一致で出る（件数・句読点も検査）" \
     "$out2" "dangling" "test-pa11-role"
-  assert_true "② プロファイル検査失敗の固有エラー文（リーダー配役が未確定）も同時に出る" \
-    "$(echo "$out2" | grep -q 'リーダー配役が未確定です' && echo 1 || echo 0)"
+  assert_true "② settings.json再生成失敗の固有エラー文（通常ファイルではありません）も同時に出る" \
+    "$(echo "$out2" | grep -q '通常ファイルではありません' && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
@@ -2367,6 +2480,85 @@ echo "=== 38. 契約1: --resync の引数解析は不正な組み合わせを拒
     "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "固有のエラー文が出る(3)" \
     "$(echo "$out" | grep -q '不正な引数です' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 39. 配役表-能力軸整理: AIENV_AGENTS_DIRが未設定でもset -euo pipefail下で落ちない（§2.2の共通レシピの既定値初期化位置を固定する） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  make_sub_profile "$FAKE_HOME"
+  LOCK="$WORK/lock"
+
+  rc=0
+  out="$(env -u AIENV_AGENTS_DIR DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" 2>&1)" || rc=$?
+  assert_eq "AIENV_AGENTS_DIR未設定でも正常終了する(exit 0)" "0" "$rc"
+  assert_true "unbound variableで落ちていない" \
+    "$(printf '%s' "$out" | grep -qi 'unbound variable' && echo 0 || echo 1)"
+  assert_true "変更なしメッセージまで正常に到達する" \
+    "$(echo "$out" | grep -q '変更なし' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 40. 版境界の移行: 旧版update-sub.sh（旧マーカー判定）がpull後に新版（machine_role判定）へ自己execし、schema 5の実体1つで1回の起動が完走する（配役表-能力軸整理-設計-2026-09-07.md §9.3・§10.2b。切替当日の実機の状態＝実体は先に書き換え済み・旧マーカーは削除前、を再現する） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_settings_json_template "$SRC"
+  add_agent_role "$SRC" "vault-scribe"
+
+  # 起点＝基準commit 9321ff6のscripts/update-sub.sh（旧＝マーカー判定）を
+  # fixtureの作業コピーへ置く（テスト71が段階2直前コミットのbootstrap-vault.sh
+  # をworktreeから取るのと同型）。
+  git -C "$REPO_ROOT" show 9321ff6:scripts/update-sub.sh > "$SRC/scripts/update-sub.sh"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add legacy(9321ff6) update-sub.sh"
+  git -C "$SRC" push -q origin HEAD:main
+
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  # fake HOME＝schema 5のmachine_role: subの実体と旧マーカーを併設
+  # （切替当日の実機の状態そのもの）。
+  make_sub_profile_with_legacy_marker "$FAKE_HOME"
+  LOCK="$WORK/lock"
+
+  # upstream（bare repo）へ新版update-sub.sh・新版resolverを追加でpushして
+  # おく（実行中に自己execで拾う新版）。
+  cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
+  echo "# 追加方針v2" > "$SRC/vault-public/Preferences/rule2.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "bump to new update-sub.sh + rule2"
+  git -C "$SRC" push -q origin HEAD:main
+
+  orig_head="$(git -C "$SUB" rev-parse HEAD)"
+  upstream_head="$(git -C "$SRC" rev-parse HEAD)"
+
+  rc=0
+  out="$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" bash "$SUB/scripts/update-sub.sh" 2>&1)" || rc=$?
+  new_head="$(git -C "$SUB" rev-parse HEAD)"
+
+  assert_true "① 自己更新のre-exec後に新版へ切り替わった旨のログが出る" \
+    "$(echo "$out" | grep -q 'update-sub.sh自身が更新されました' && echo 1 || echo 0)"
+  assert_eq "② 1回の起動でexit 0まで完走する" "0" "$rc"
+  assert_true "③ Preferencesが再同期されている（upstreamの内容と一致）" \
+    "$([[ -f "$FAKE_HOME/Data/obsidian/Preferences/rule2.md" ]] && echo 1 || echo 0)"
+  assert_true "③ 旧ルール(rule1)も残っている（再同期がPreferences全体に及んでいる）" \
+    "$([[ -f "$FAKE_HOME/Data/obsidian/Preferences/rule1.md" ]] && echo 1 || echo 0)"
+  assert_eq "④ HEADがupstreamと一致する" "$upstream_head" "$new_head"
+  assert_true "前提: pull前後でHEADが実際に進んでいる（このテストが版境界を踏んでいることの確認）" \
+    "$([[ "$orig_head" != "$new_head" ]] && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }

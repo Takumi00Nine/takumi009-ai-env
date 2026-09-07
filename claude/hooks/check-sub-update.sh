@@ -10,21 +10,17 @@
 # config.toml再生成・Preferences再同期処理）は変更なしで温存し、本フックは
 # 「実行すべきか」を案内するだけに徹する。
 #
-# メイン/サブの判定は明示的な「machine-role マーカーファイル」で行う
-# （2026-07-24 リーダー裁定＝Codex一次レビュー指摘Major対応で設計変更。旧方式は
-# Vaultのprivate層専用ファイル(Personal/profile-personal.md・Knowledge/mistakes.md)
-# の「不在」を根拠にしていたが、これは否定証明であり、メイン機で私的パッチが
-# 未適用・復旧中等の理由で一時的にファイルが欠けていると誤ってサブ扱いされ、
-# 案内どおり `scripts/update-sub.sh` を実行するとメインVaultの`Preferences/`が
-# `rsync --delete`で上書き削除される事故になり得た）。
-# scripts/install-sub.sh が実行された時だけ machine-role マーカーファイル
-# （既定 $HOME/.config/takumi009-ai-env/machine-role・中身は "sub"）を書き込む。
-# 本フックはこのマーカーの中身が「sub」の場合だけ動作し、それ以外（マーカーが
-# 無い・中身が違う・読めない等）はメイン機とみなして即座に何も出力せず exit 0
-# する（fail-closed＝積極的な証明が無ければ動かない）。install-main.sh（サブへの
-# 委譲経路である --sub-delegate 経由も含む）はこのマーカーを一切書かないため、
-# メイン機で誤ってマーカーが立つ経路は設計上存在しない。scripts/update-sub.sh
-# 側にも同じマーカーチェックを設けている（誤って手動実行された場合の最後の砦）。
+# メイン/サブの判定は配役表（ローカル実体プロファイル）の能力軸`machine_role`
+# で行う（配役表-能力軸整理-設計-2026-09-07.md §2。2026-07-24リーダー裁定の
+# 「否定証明を根拠にしない・積極的な証明が要る」という設計方針は維持し、
+# 判定式の正本を`claude/hooks/lib/profile_resolve.py`の1箇所に置く＝D-1）。
+# 本フックは`machine_role`が「sub」と解決できた場合だけ動作し、それ以外
+# （解決失敗・unknown・unavailable・欠落等）はメイン機とみなして即座に
+# 何も出力せず exit 0 する（fail-closed＝積極的な証明が無ければ動かない）。
+# install-main.sh（サブへの委譲経路である --sub-delegate 経由も含む）は
+# 実体プロファイルを書き換えないため、メイン機で誤って`machine_role: sub`が
+# 立つ経路は設計上存在しない。scripts/update-sub.sh 側にも同じ判定を設けている
+# （誤って手動実行された場合の最後の砦）。
 #
 # ワーカー/サブエージェント起動時もスキップする（bootstrap-vault.shと同様に
 # stdin JSON の agent_type の有無で判定。チーム設定ファイルとの突合までは
@@ -42,11 +38,16 @@
 #
 # パスは全て $HOME 相対（絶対パスのハードコード禁止＝リポジトリの掟）。
 # 環境変数はすべてテスト用に上書き可（本番は既定値のまま呼べばよい）。
-#   AIENV_MACHINE_ROLE_MARKER … machine-roleマーカーファイル
-#                                （既定 $HOME/.config/takumi009-ai-env/machine-role。
-#                                 scripts/install-sub.sh・scripts/update-sub.sh と
-#                                 同じ環境変数名・既定値を共有する）
-#   CHECK_SUB_UPDATE_DIR      … リポジトリのルート（既定 $HOME/work/takumi009-ai-env）
+#   AIENV_LOCAL_PROFILE_PATH … ローカル実体プロファイル（既定
+#                                $HOME/.config/takumi009-ai-env/profile.md。
+#                                4つの読み手が共有する既定値＝配役表-能力軸
+#                                整理-設計-2026-09-07.md §2.2）
+#   AIENV_BEDROCK_ENV_FILE    … Bedrockピン留め実値ファイル（既定
+#                                $HOME/.config/takumi009-ai-env/bedrock.env）
+#   AIENV_AGENTS_DIR           … コア職種マニフェストの実体側入力（既定
+#                                $SELF_DIR/../agents）
+#   CHECK_SUB_UPDATE_DIR      … リポジトリのルート（既定 $HOME/work/takumi009-ai-env。
+#                                ⚠️ lib解決には使わない＝テストではスタブrepoを指すため）
 #   CHECK_SUB_UPDATE_LOG      … 失敗ログの出力先（既定 /tmp/check-sub-update.log）
 #   CHECK_SUB_UPDATE_TIMEOUT  … git fetch のタイムアウト秒数（既定 5）
 #
@@ -54,7 +55,29 @@
 # set -e は使わない（bootstrap-vault.sh・vault-recall.shと同方針＝fail-openを
 # 徹底するため、途中の失敗は各所で個別にexit 0へ倒す）。
 
-: "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
+# claude/hooks/bootstrap-vault.sh の resolve_bootstrap_self_dir() と同じ方式を
+# 複製する（配役表-能力軸整理-設計-2026-09-07.md §2.3）。installerはフックを
+# 1本ずつsymlinkしており（~/.claude/hooks/lib/ は存在しない）、lib専用の
+# リンクは持たないため、本フック自身のsymlinkを解決した実体ディレクトリ
+# 直下のlib/を見る（判定式を2箇所に増やさない＝A-0-3と同型）。
+resolve_check_sub_update_self_dir() {
+  local src="${BASH_SOURCE[0]}"
+  while [ -L "$src" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    case "$src" in
+      /*) ;;
+      *) src="$dir/$src" ;;
+    esac
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+SELF_DIR="$(resolve_check_sub_update_self_dir)"
+: "${PROFILE_RESOLVE_LIB:=$SELF_DIR/lib/profile_resolve.py}"
+: "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
+: "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
+: "${AIENV_AGENTS_DIR:=$SELF_DIR/../agents}"
 DIR="${CHECK_SUB_UPDATE_DIR:-$HOME/work/takumi009-ai-env}"
 LOG_FILE="${CHECK_SUB_UPDATE_LOG:-/tmp/check-sub-update.log}"
 FETCH_TIMEOUT_SECONDS="${CHECK_SUB_UPDATE_TIMEOUT:-5}"
@@ -70,15 +93,27 @@ INPUT=$(cat 2>/dev/null)
 AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // ""' 2>/dev/null)
 [ -n "$AGENT_TYPE" ] && exit 0
 
-# --- 1. machine-roleマーカーが「sub」でなければ何もしない（無出力・fail-closed） ---
-# マーカーが無い・読めない・中身が"sub"以外（前後の空白等はtrimして許容）の
-# いずれでもメイン機とみなす。積極的な証明（マーカー）が無ければ動かない設計。
-# 前後の空白だけを取り除く（Codex再レビュー指摘・Minor: `tr -d '[:space:]'`は
-# 内部の空白まで削除してしまうため、"s u b"のような中身まで誤って"sub"として
-# 通してしまう穴があった。bash 3.2互換のパラメータ展開のみで前後trimする）。
-MACHINE_ROLE_RAW="$(cat "$AIENV_MACHINE_ROLE_MARKER" 2>/dev/null)"
-MACHINE_ROLE="${MACHINE_ROLE_RAW#"${MACHINE_ROLE_RAW%%[![:space:]]*}"}"
-MACHINE_ROLE="${MACHINE_ROLE%"${MACHINE_ROLE##*[![:space:]]}"}"
+# --- 1. machine_roleが「sub」でなければ何もしない（無出力・fail-closed） ---
+# 配役表の`machine_role`が解決失敗・unknown・unavailable・欠落等のいずれでも
+# メイン機とみなす。積極的な証明（`sub`と読めること）が無ければ動かない設計
+# （配役表-能力軸整理-設計-2026-09-07.md §2.2の共通レシピ）。
+_mr_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" \
+  --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _mr_out=""
+# 失敗を静かにしない（Knowledge/fail-open-and-observable-guards）＝空、または
+# OKで始まらない出力はログへ1行残してからexit 0する。標準出力へは出さない
+# （メイン機で毎セッション出力が増えるのを避ける＝§2.4②）。
+case "$_mr_out" in
+  OK*) : ;;
+  *)
+    log_fail "profile_resolve.py resolveが失敗またはOKで始まらない出力を返しました（machine_roleを解決できません）: '${_mr_out}'"
+    exit 0
+    ;;
+esac
+_mr_tab=$'\t'
+_mr_rest="${_mr_out#*"${_mr_tab}MACHINE_ROLE:"}"
+MACHINE_ROLE=""
+[ "$_mr_rest" != "$_mr_out" ] && MACHINE_ROLE="${_mr_rest%%"${_mr_tab}"*}"
+case "$MACHINE_ROLE" in main|sub) : ;; *) MACHINE_ROLE="unknown" ;; esac
 [ "$MACHINE_ROLE" = "sub" ] || exit 0
 
 # --- 2. リポジトリが無い/gitが無いなら何もしない ---

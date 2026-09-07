@@ -72,6 +72,23 @@ EOF
 make_fake_home() {
   local home="$1"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
+  # 配役表-能力軸整理-設計-2026-09-07.md §3: schema 5・新3キーの実体を
+  # あらかじめ置く。本ファイルの主眼＝--with-dotfilesの呼び分けとは無関係
+  # なので、install-main.sh の雛形配置（vault-public/Preferences/
+  # profile-sample.md からのコピー。段階2で新schemaへ追随予定＝設計書§9.1）に
+  # 依存させない（テストの独立性・§10「機能差分なし」を字面どおり保つため）。
+  mkdir -p "$home/.config/takumi009-ai-env"
+  cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 5
+profile_slug: test-with-dotfiles-machine
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+excluded_models: configured value=none
+role.leader: configured provider=anthropic-api model=claude-sonnet-5
+---
+EOF
 }
 
 echo "=== 1. install-main.sh: 既定（--with-dotfiles無し）ではdotfilesに一切触れない ==="
@@ -195,7 +212,7 @@ echo "=== 7. clone失敗（不正なURL）でもinstall-main.sh自体は失敗�
     "$(echo "$out" | grep -q 'WARN.*clone.*失敗' && echo 1 || echo 0)"
   assert_true "claude/codexのsymlink化自体は完了している" \
     "$([[ -L "$HOME_DIR/.claude/hooks/bootstrap-vault.sh" ]] && echo 1 || echo 0)"
-  assert_true "settings.jsonも生成されている（2026-08-21 machine-role対応でsymlinkから変更）" \
+  assert_true "settings.jsonも生成されている（2026-08-21 機役割対応でsymlinkから変更）" \
     "$([[ -f "$HOME_DIR/.claude/settings.json" && ! -L "$HOME_DIR/.claude/settings.json" ]] && echo 1 || echo 0)"
 
   rm -rf "$HOME_DIR"

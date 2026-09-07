@@ -168,16 +168,19 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 # 私的パッチ（別のprivateリポジトリ）のローカルclone先。環境変数で上書き可
 # （ユニットテスト用。本番は既定値のままでよい＝README.md「導入手順」記載のパス）。
 : "${AIENV_PRIVATE_REPO:=$HOME/work/takumi009-ai-env-private}"
-# ①-2（~/.claude/settings.json）で使う machine-role マーカー。
-# scripts/install-main.sh・claude/hooks/check-sub-update.sh 等と同じ環境変数名・
-# 既定値・fail-closedの読み方（trimして中身がちょうど"sub"の場合だけサブ扱い。
-# マーカー不在・読めない・中身が違う等はすべてmain扱い）を踏襲する。
+# ①-2（~/.claude/settings.json）で使う配役表の能力軸`machine_role`（配役表-
+# 能力軸整理-設計-2026-09-07.md §2.2の共通レシピ。fail-closed＝解決失敗・
+# unknown・unavailable・欠落等はすべてmain扱い）。4つの読み手が共有する
+# 既定値・環境変数名。
 # ⚠️ model/effort既定値（AIENV_MODEL_MAIN/AIENV_MODEL_SUB等）はここでは持たない
 # （2026-08-30 §9.0 A-0-3＝値表2箇所重複の解消）。値の出力口は
 # scripts/install-main.sh --print-leader-runtime [--sub-delegate] に一本化し
 # （2026-09-01 配役表解凍 §4.2-a・§4.4で--print-modelから改名）、診断側は
 # その出力を読むだけにする（①-2で呼び出す）。
-: "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
+: "${PROFILE_RESOLVE_LIB:=$DIR/claude/hooks/lib/profile_resolve.py}"
+: "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
+: "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
+: "${AIENV_AGENTS_DIR:=$DIR/claude/agents}"
 
 JSON_MODE=0
 for arg in "$@"; do
@@ -301,9 +304,10 @@ KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS=(
   "inputNeededNotifEnabled" # 同上
 )
 #
-# machine-roleマーカーを読み、期待されるmodel/effort値を決定する
-# （fail-closed＝マーカー不在・読めない・中身が「sub」以外はすべてmain扱い。
-# 他フックと同じ判定パターンを踏襲）。値そのものは自前の値表を持たず、値出力口
+# 配役表の`machine_role`を読み、期待されるmodel/effort値を決定する
+# （fail-closed＝解決失敗・unknown・unavailable・欠落等はすべてmain扱い。
+# 他の読み手と同じ判定パターンを踏襲＝配役表-能力軸整理-設計-2026-09-07.md
+# §2.2）。値そのものは自前の値表を持たず、値出力口
 # （scripts/install-main.sh --print-leader-runtime [--sub-delegate]）を呼んで
 # 得る（§9.0 A-0-3＝値表2箇所重複の解消・2026-09-01 配役表解凍 §4.2-a・§4.4で
 # --print-modelから改名。診断からは副作用ゼロの--print-leader-runtimeだけを
@@ -353,13 +357,22 @@ leader_runtime_error_message() {
   [ -n "$reason" ] && msg="${msg}（${reason}）"
   printf '%s。プロファイルのリーダー行（role.leader）を確認してください: %s' "$msg" "$AIENV_LOCAL_PROFILE_PATH_HINT"
 }
-: "${AIENV_LOCAL_PROFILE_PATH_HINT:=$HOME/.config/takumi009-ai-env/profile.md}"
+# 配役表-能力軸整理-設計-2026-09-07.md §2.3: AIENV_LOCAL_PROFILE_PATH_HINTの
+# 既定をAIENV_LOCAL_PROFILE_PATHにする（既存の上書きを壊さず、パスが2つに
+# 割れるのを防ぐ）。
+: "${AIENV_LOCAL_PROFILE_PATH_HINT:=$AIENV_LOCAL_PROFILE_PATH}"
 
 SETTINGS_JSON_LIVE="$HOME/.claude/settings.json"
 SETTINGS_JSON_TEMPLATE="$DIR/claude/settings.json"
-MACHINE_ROLE_RAW="$(cat "$AIENV_MACHINE_ROLE_MARKER" 2>/dev/null)"
-MACHINE_ROLE="${MACHINE_ROLE_RAW#"${MACHINE_ROLE_RAW%%[![:space:]]*}"}"
-MACHINE_ROLE="${MACHINE_ROLE%"${MACHINE_ROLE##*[![:space:]]}"}"
+# 配役表-能力軸整理-設計-2026-09-07.md §2.2の共通レシピ（副作用ゼロ＝
+# resolveは読むだけ。Knowledge/diagnostics-must-not-mutateを満たす）。
+_mr_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" \
+  --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _mr_out=""
+_mr_tab=$'\t'
+_mr_rest="${_mr_out#*"${_mr_tab}MACHINE_ROLE:"}"
+MACHINE_ROLE=""
+[ "$_mr_rest" != "$_mr_out" ] && MACHINE_ROLE="${_mr_rest%%"${_mr_tab}"*}"
+case "$MACHINE_ROLE" in main|sub) : ;; *) MACHINE_ROLE="unknown" ;; esac
 EXPECTED_MODEL=""
 EXPECTED_EFFORT=""
 EXPECTED_EFFORT_SET=0

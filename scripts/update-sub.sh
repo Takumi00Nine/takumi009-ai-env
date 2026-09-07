@@ -11,15 +11,16 @@
 # 骨格フォルダ補充）は変更していない。**サブ専用**＝メインでは実行しない
 # （メインは編集側なので自動pullは多地点編集事故のもと）。
 #
-# 2026-07-24: machine-roleマーカーファイル（既定
-# $HOME/.config/takumi009-ai-env/machine-role・中身「sub」。
-# scripts/install-sub.shが設置。claude/hooks/check-sub-update.shと同じ
-# 環境変数名・既定値を共有）の中身が「sub」でなければ fail() で拒否する
-# ガードを追加した（リーダー裁定・Codex一次レビュー指摘Major対応）。メインで
-# 誤って本コマンドを手動実行すると 4b の`rsync --delete`でメインVaultの
-# `Preferences/`が上書き削除されるため、最後の砦として設けている。
+# 2026-07-24: 機役割が「sub」でなければ fail() で拒否するガードを追加した
+# （リーダー裁定・Codex一次レビュー指摘Major対応）。メインで誤って本コマンドを
+# 手動実行すると 4b の`rsync --delete`でメインVaultの`Preferences/`が
+# 上書き削除されるため、最後の砦として設けている。2026-09-07: 判定元を
+# 旧マーカーファイル（廃止＝Decisions/2026-09-07-profile-axes-consolidation）
+# から配役表の能力軸`machine_role`へ変更した（配役表-能力軸整理-設計-
+# 2026-09-07.md §2。claude/hooks/check-sub-update.shと同じ共通レシピを
+# 複製する＝判定式の正本は`claude/hooks/lib/profile_resolve.py`の1箇所）。
 # 処理順序:
-#   0. machine-roleマーカーの確認（「sub」でなければ即fail()で拒否）
+#   0. 配役表の`machine_role`の確認（「sub」でなければ即fail()で拒否）
 #   1. スクリプト自身の多重起動防止ロック（scripts/lib/pid-lock.shの
 #      acquire_pid_lock()＝backup-vault.sh・maintenance.shと共通の実装。
 #      2026-08-30 Codex 2巡目差し戻し・MAJOR対応で独自実装から移行した）。
@@ -79,7 +80,11 @@ set -euo pipefail
 : "${DIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 : "${VAULT:=$HOME/Data/obsidian}"
 : "${LOCK_FILE:=${TMPDIR:-/tmp}/aienv-update-sub.lock}"
-: "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
+# 配役表-能力軸整理-設計-2026-09-07.md §2.2: machine_roleの共通レシピが
+# 使う入力。4つの読み手が同じ既定値・同じ環境変数名を共有する。
+: "${PROFILE_RESOLVE_LIB:=$DIR/claude/hooks/lib/profile_resolve.py}"
+: "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
+: "${AIENV_AGENTS_DIR:=$DIR/claude/agents}"
 # Bedrock最小セット（2026-08-30 §9.0 A-1-4）: install-main.shと同じ環境変数名・
 # 既定値。存在しない（Bedrock未導入機）場合は何もしない。
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
@@ -151,25 +156,26 @@ print('OK' if stat.S_ISREG(st.st_mode) else 'UNAVAILABLE')
 " "$1"
 }
 
-# --- 0. machine-roleマーカーの確認（メインでの誤実行を防ぐ最後の砦） ---
-# マーカーが無い・読めない・中身が"sub"以外のいずれでも拒否する（積極的な証明が
-# 無ければ動かないfail-closed。scripts/install-sub.shが唯一このマーカーを書く）。
-# `|| true` はset -e/pipefail対策（マーカー不在時 `cat` が非0を返し、pipefail下の
+# --- 0. 配役表`machine_role`の確認（メインでの誤実行を防ぐ最後の砦） ---
+# 解決失敗・unknown・unavailable・欠落のいずれでも拒否する（積極的な証明が
+# 無ければ動かないfail-closed。実体プロファイルへ書くのは本人だけ＝FR-15）。
+# `|| _mr_out=""` はset -e/pipefail対策（resolveが非0のとき、pipefail下の
 # コマンド置換がそのまま script 全体を落としてしまい、直後のfail()の分かりやすい
 # メッセージが一切出ないまま黙って落ちる事故になるため。実装中に発見・回帰テストで
-# 固定化した実バグ）。前後の空白だけを取り除く（Codex再レビュー指摘・Minor:
-# `tr -d '[:space:]'`は内部の空白まで削除してしまうため、"s u b"のような中身
-# まで誤って"sub"として通してしまう穴があった。claude/hooks/check-sub-update.sh
-# と同じbash 3.2互換のパラメータ展開のみで前後trimする）。
-MACHINE_ROLE_RAW="$(cat "$AIENV_MACHINE_ROLE_MARKER" 2>/dev/null)" || true
-MACHINE_ROLE="${MACHINE_ROLE_RAW#"${MACHINE_ROLE_RAW%%[![:space:]]*}"}"
-MACHINE_ROLE="${MACHINE_ROLE%"${MACHINE_ROLE##*[![:space:]]}"}"
+# 固定化した実バグの型と同じ＝配役表-能力軸整理-設計-2026-09-07.md §2.2）。
+_mr_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" \
+  --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _mr_out=""
+_mr_tab=$'\t'
+_mr_rest="${_mr_out#*"${_mr_tab}MACHINE_ROLE:"}"
+MACHINE_ROLE=""
+[ "$_mr_rest" != "$_mr_out" ] && MACHINE_ROLE="${_mr_rest%%"${_mr_tab}"*}"
+case "$MACHINE_ROLE" in main|sub) : ;; *) MACHINE_ROLE="unknown" ;; esac
 if [ "$MACHINE_ROLE" != "sub" ]; then
-  # ${AIENV_MACHINE_ROLE_MARKER}と明示的に波括弧で囲む（2026-07-16
+  # ${AIENV_LOCAL_PROFILE_PATH}と明示的に波括弧で囲む（2026-07-16
   # scripts/install-backup.shで発見済みの実バグの回帰: bash 3.2(macOS既定)+
   # ja_JP.UTF-8ロケール環境で、裸の$VAR直後に全角記号（）等が続くと変数名の
   # 境界を誤認識し「unbound variable」で本来のFAILメッセージを握り潰してしまう）。
-  fail "このマシンはサブ機として登録されていません（machine-roleマーカー: ${AIENV_MACHINE_ROLE_MARKER}）。メイン機でこのコマンドを実行するとVaultのPreferencesが上書き削除される恐れがあるため拒否します。サブ機であれば先に scripts/install-sub.sh を実行してマーカーを設置してください。"
+  fail "このマシンはサブ機として登録されていません（配役表の machine_role が sub ではありません: ${AIENV_LOCAL_PROFILE_PATH}）。メイン機でこのコマンドを実行すると Vault の Preferences が上書き削除される恐れがあるため拒否します。サブ機であれば実体プロファイルへ machine_role: configured value=sub を書いてください（検査＝scripts/install-sub.sh --check-profile）。"
 fi
 
 [ -d "$DIR/.git" ] || fail "DIR が git リポジトリではありません: $DIR"
@@ -746,7 +752,7 @@ if [ -d "$AGENTS_SRC_DIR" ]; then
     fi
     if [ "${#AGENTS_DANGLING[@]}" -gt 0 ]; then
       # ⚠️ ここは肯定判定にだけ使う（§2.1）。この行の有無で「他の失敗の
-      # 不在」を推定しない（PA-11・pull失敗・machine-role・--resync等、
+      # 不在」を推定しない（PA-11・pull失敗・machine_role・--resync等、
       # update-sub.shの非0経路は他にも複数あるため）。
       log "AGENTS: dangling ${#AGENTS_DANGLING[@]}件（異常・repo から消えた定義のリンクが残っています。削除は本人が判断）: $(IFS=,; echo "${AGENTS_DANGLING[*]}")"
       EXIT_CODE=1

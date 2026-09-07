@@ -55,17 +55,21 @@ from typing import Optional
 # 廃止値も同時に変わる（executionの旧MCP経路の値→CLI経路の値）ため固定キー・
 # 文法・enumが変わったときだけ版を上げる規約どおり1回で版上げする
 # （同設計§4.1a。⚠️ 廃止値の文字列そのものはこのファイルへ残さない＝AC-11）。
-EXPECTED_SCHEMA_VERSION = 4
+# 2026-09-07 能力軸整理対応（配役表-能力軸整理-設計-2026-09-07.md §3。
+# 本人決定＝Decisions/2026-09-07-profile-axes-consolidation・
+# Decisions/2026-09-07-retire-vault-write-axis）: 廃止対象5キー
+# （同決定ノート参照）を撤去し`machine_role`を新設する固定キーの追加を
+# 伴うため4→5へ引き上げた（旧`vault_scope`撤去は削除だけだったので版を
+# 上げなかったのと異なり、今回は新キーが欠けた既存実体を「壊れている」
+# ではなく「追随待ち」として扱わせる必要がある＝FR-14）。⚠️ 廃止した
+# キー名の文字列そのものはこのファイルへ残さない＝AC-5。
+EXPECTED_SCHEMA_VERSION = 5
 
 META_KEYS = ("schema_version", "profile_slug")
 CAPABILITY_KEYS = (
-    "inventory_source",
     "team_mode",
-    "vault_write",
-    "ui.user_call",
-    "git_role",
-    "web_verification",
     "no_read_paths",
+    "machine_role",
 )
 EXTRA_FIXED_KEYS = ("excluded_models",)
 FIXED_KEYS_ORDERED = META_KEYS + CAPABILITY_KEYS + EXTRA_FIXED_KEYS  # 宣言順（known-keysの決定的出力用）
@@ -108,26 +112,18 @@ IMPLEMENTED_HANDLERS = frozenset(
 )
 
 # V8-b: 能力軸・excluded_models の value= 厳格形式（U-8裁定）。
-_TOKEN = r"[a-z0-9][a-z0-9-]{0,31}"
-_REPO_SCOPE = r"[a-z0-9][a-z0-9-]{0,31}"
-_GIT_STANCE = r"(?:push|commit|pull-only|ask)"
 CAPABILITY_VALUE_PATTERNS = {
-    "inventory_source": re.compile(rf"^{_TOKEN}(,{_TOKEN}){{0,7}}$"),
     # team_mode: この案件をどの体制で回すかの既定値（3モード体制-設計-2026-09-06.md
     # §4.1a）。solo|lean|fullの1語のみ。
     "team_mode": re.compile(r"^(?:solo|lean|full)$"),
-    "vault_write": re.compile(r"^(via-scribe|direct)$"),
-    "ui.user_call": re.compile(
-        r"^(send-message|cmux-notify|stdout-only)(,(send-message|cmux-notify|stdout-only)){0,2}$"
-    ),
-    "git_role": re.compile(rf"^{_REPO_SCOPE}:{_GIT_STANCE}(,{_REPO_SCOPE}:{_GIT_STANCE})*$"),
-    "web_verification": re.compile(r"^(websearch|webfetch)(,(websearch|webfetch)){0,1}$"),
-    # no_read_paths: inventory_sourceと同型の自由記述トークン列（固定enumでは
-    # なく、退避済み旧資料の置き場は機体ごとに増減しうるため）。トークンは
-    # 実際のパスではなくenum風の短い別名（例: work-old = ~/work/old/）。
-    # 別名→実パスの対応はコード側で解決しない（core-conduct.md §2の
-    # `{{no_read_paths}}`本文・profile-sample.md側の注記が正本）。
-    "no_read_paths": re.compile(rf"^{_TOKEN}(,{_TOKEN}){{0,7}}$"),
+    # no_read_paths: 読まない・検索しないパスを`~/`表記の実パスでカンマ区切り
+    # に列挙する（配役表-能力軸整理-設計-2026-09-07.md §3・要件FR-5。旧版の
+    # 別名トークン方式は廃止）。実パスは大文字を含みうるため、本キーだけ
+    # _validate_capability_value()の小文字固定規則から除外する。
+    "no_read_paths": re.compile(r"^~/[^,\s]+(?:,~/[^,\s]+)*$"),
+    # machine_role: この機がメイン機かサブ機かの唯一の正本（同設計§2.1）。
+    # main|subの1語のみ。
+    "machine_role": re.compile(r"^(?:main|sub)$"),
 }
 # excluded_modelsのvalue検査は_validate_capability_value()内で要素ごとに
 # provider(PROVIDERS)・model(MODEL_PATTERNS)を直接検査する（単純な正規表現1本
@@ -357,7 +353,7 @@ def parse_v2(path: str) -> ParsedProfile:
             parsed.meta_lineno[key] = lineno
             continue
 
-        # 状態＋属性を持つ行（role./fallback./能力軸7キー/excluded_models）。
+        # 状態＋属性を持つ行（role./fallback./能力軸3キー/excluded_models）。
         tokens = rest.split()
         state = tokens[0] if tokens else ""
         attr_tokens = tokens[1:]
@@ -524,7 +520,9 @@ def _validate_capability_value(key: str, value: str) -> None:
         raise _fail("V8-b", f"{key}のvalueに空要素があります")
     if len(parts) != len(set(parts)):
         raise _fail("V8-b", f"{key}のvalueに重複要素があります")
-    if value != value.lower():
+    # no_read_pathsは実パス書式（`~/`表記）であり大文字を含みうるため、
+    # 小文字固定規則の対象外にする（要件FR-5・リーダー裁定2026-09-07）。
+    if key != "no_read_paths" and value != value.lower():
         raise _fail("V8-b", f"{key}のvalueは小文字である必要があります")
 
     if key == "excluded_models":
@@ -1076,6 +1074,30 @@ def determine_team_mode(parsed: ParsedProfile) -> str:
     return "unknown"
 
 
+def determine_machine_role(parsed: ParsedProfile) -> str:
+    """machine_role能力軸から`MACHINE_ROLE:`へ出す値を決める（配役表-能力軸
+    整理-設計-2026-09-07.md §2.1・v1.4でunavailableの扱いを明確化）。
+    `configured value=<main|sub>`のときはその値、`unavailable`のときは
+    "unavailable"、それ以外（unknown・欠落からの仮想補完）は"unknown"を
+    返す。⚠️ 新しい検査規則は作らない（FR-1）——ここに来る時点で
+    validate_capability_keys()のV7/V8-bを通過済みなので、configuredの
+    valueは既にmain|subのいずれかであることが保証されている。
+    ⚠️ Codex一次レビュー指摘（MAJOR-1・2026-09-07）対応: 従来は
+    unavailableもunknownへ潰していたため、bootstrap-vault.sh側で
+    「machine_roleが未確定」の保留行がunavailableでも誤って出ていた
+    （FR-9・設計§4.3は「保留はunknownのときだけ」）。unavailableを
+    区別できる値として返すことで、呼び出し側が保留行の要否を
+    正しく判定できるようにする。
+    """
+    line = parsed.capability.get("machine_role")
+    if line is not None:
+        if line.state == "configured":
+            return line.attrs.get("value", "unknown")
+        if line.state == "unavailable":
+            return "unavailable"
+    return "unknown"
+
+
 def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str]) -> tuple[str, int]:
     """戻り値: (標準出力へ書く1行, exit code)。"""
     forbidden_hits = preflight_forbidden_keys(path)
@@ -1161,7 +1183,8 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
                 advisory_codes.append(adv)
 
     team_mode = determine_team_mode(parsed)
-    fields = [f"OK\tschema_version={declared}", f"TEAM_MODE:{team_mode}"]
+    machine_role = determine_machine_role(parsed)
+    fields = [f"OK\tschema_version={declared}", f"TEAM_MODE:{team_mode}", f"MACHINE_ROLE:{machine_role}"]
     if fallback_roles:
         fields.append("FALLBACK:" + ",".join(sorted(fallback_roles)))
     if vacant_roles:

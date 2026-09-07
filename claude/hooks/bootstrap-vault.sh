@@ -17,11 +17,6 @@
 # VAULT は環境変数で上書き可（ユニットテスト用。本番は既定値のまま）。
 VAULT="${BOOTSTRAP_VAULT:-$HOME/Data/obsidian}"
 TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
-# machine-roleマーカー（サブ機判定用。既定値・環境変数名は
-# check-sub-update.sh・install-main.sh・install-sub.sh・update-sub.shと共通）。
-# 用途は外部脳ヘルス行④（週次メンテ死活検知）のサブ機スキップのみ
-# （2026-08-06対応。下部compute_health_lines参照）。
-: "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
 
 # 外部脳ヘルス行（2026-07-10 敵対的レビュー2回目 §5-2・8.0の柱②対応）。
 # 「本人が定期的にレポート/ログを見に行かないと死活が分からない」問題への
@@ -95,11 +90,13 @@ BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 # S10/S11/S16対応（check_leader_settings_drift参照）の比較先として読むだけ
 # ＝副作用ゼロ。
 : "${AIENV_SETTINGS_JSON_FILE:=$HOME/.claude/settings.json}"
-# 最小能力表の7キー（§3.3.0）。ここに列挙した7つが「今のスキーマが要求する
-# キー」＝これが欠けていれば§9.0 A-1最低契約④⑤どおり最小能力+⚠️へ倒す
-# （T5＝既存キー欠落）。逆にfrontmatterにこの7つ以外の見慣れないキーが
-# 有っても、それは「まだこのコードが追随していない新しいキー」とみなし
-# unknown扱いで無視するだけに留め、最小能力へは倒さない（T4＝新キー未追随。
+# 最小能力表の能力軸3キー（§3.3.0。2026-09-07能力軸整理でmachine_role新設・
+# 廃止5キー撤去により7→3キーへ縮小＝配役表-能力軸整理-設計-2026-09-07.md
+# §4.1）。ここに列挙した3つが「今のスキーマが要求するキー」＝これが欠けて
+# いれば§9.0 A-1最低契約④⑤どおり最小能力+⚠️へ倒す（T5＝既存キー欠落）。
+# 逆にfrontmatterにこの3つ以外の見慣れないキーが有っても、それは「まだこの
+# コードが追随していない新しいキー」とみなしunknown扱いで無視するだけに
+# 留め、最小能力へは倒さない（T4＝新キー未追随。
 # schema_version／版管理を作らない以上、キー集合の前方互換をこの非対称な
 # 扱いで担保する＝リーダー指示）。
 # 2026-09-05 P3段階4差し戻し対応: profile_resolve.py（v2）のCAPABILITY_KEYSへ
@@ -108,16 +105,16 @@ BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 # 2026-09-07 3モード体制対応（3モード体制-設計-2026-09-06.md §4.3(a)）:
 # profile_resolve.pyのCAPABILITY_KEYSから`reviewer`を削り`team_mode`を
 # 同じ位置に足したのに合わせて、こちら（v1・第2正本）も同じ位置で差し替えた。
+# 2026-09-07 能力軸整理対応（配役表-能力軸整理-設計-2026-09-07.md §4.1。
+# 本人決定＝Decisions/2026-09-07-profile-axes-consolidation）:
+# profile_resolve.pyのCAPABILITY_KEYSを廃止対象5キー撤去・machine_role新設で
+# 3キーへ整理したのに合わせて、こちら（v1・第2正本）も同じ3キーへ揃えた。
 LOCAL_PROFILE_KNOWN_KEYS=(
-  "inventory_source"
   "team_mode"
-  "vault_write"
-  "ui.user_call"
-  "git_role"
-  "web_verification"
   "no_read_paths"
+  "machine_role"
 )
-# テスト専用: BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1のとき、最小能力表7キー
+# テスト専用: BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1のとき、最小能力表の能力軸3キー
 # （LOCAL_PROFILE_KNOWN_KEYS）を1行1キーで標準出力へ返して即終了する。
 # stdin JSON読み込み・ヘルス行計算等の本処理には一切進まない。本番では
 # 未設定のため無効（2026-08-30追加・MINOR-D対応: test-core-docs-placeholder-
@@ -148,7 +145,7 @@ compose_team_mode_directive5() {   # $1 = solo|lean|full|unknown
   local base5='⑤ オーケストレーター行動則（詳細＝Preferences/core-workflow.md §1・§2）: 「作る工程」は自分でやらず委任し、成果物の修正はリーダーが直接行わず作成元ロールへ差し戻す。⚠️ リーダー自身の Edit/Write が正当なのは、~/.claude・scratchpad・リーダー自身の成果物への軽微な修正・ユーザーの直接作業指示のみ（Vault は含まない）。許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。'
   case "$1" in
     solo)
-      TEAM_MODE_DIRECTIVE5='⑤ ⚠️ 単独モードでは全工程をリーダー自身が行い、他の職種を1つも立てない（検証職も立てない）。工程は飛ばさず『専任なし』を明記する。許可パス外の直接編集は、単独モードであることを理由として本人への応答で明示してから touch $MARKER_DIR/claude-direct-edit-ok-<session_id> して再試行する。⚠️ Vault の AI 向け6フォルダは対象外——solo でもリーダーは直筆せず『Vault記録候補:』で申告する。'
+      TEAM_MODE_DIRECTIVE5='⑤ ⚠️ 単独モードでは全工程をリーダー自身が行い、他の職種を1つも立てない（検証職も立てない）。工程は飛ばさず『専任なし』を明記する。許可パス外の直接編集は、単独モードであることを理由として本人への応答で明示してから touch $MARKER_DIR/claude-direct-edit-ok-<session_id> して再試行する。⚠️ Vault の AI 向け6フォルダも同じ扱い——solo ではリーダーが案件の締めにまとめて直筆する（理由を応答で明示してから touch $MARKER_DIR/claude-vault-direct-ok-<session_id>）。'
       ;;
     lean)
       TEAM_MODE_DIRECTIVE5="${base5} ⚠️ 軽量モードでは要件定義と設計はリーダー自身が行う。実装は implementer へ委任し、適用工程ごとに検証職を1巡だけ回す。requirements-analyst・system-designer・researcher・adoption-critic・operator は立てず『専任なし』を明記する。"
@@ -181,8 +178,9 @@ fi
 # 未記入のまま残っていると壊れているのと同じ扱いにする印（T2-MINIMAL。
 # 設計書v10.3で確定した表記＝凍結側の別のT2と識別子が衝突しないよう分離）。
 # サンプル（Preferences/profile-sample.md）は本人裁定（2026-08-30「初期値は
-# メイン機の実値を既定値に戻す」）により全7キーとも実運用値（メイン機の
-# 確認済み実値）を入れて配布し、このsentinelはどのキーにも使わない。
+# メイン機の実値を既定値に戻す」）により全キー（裁定当時は7キー・2026-09-07
+# 能力軸整理後は能力軸3キー）とも実運用値（メイン機の確認済み実値）を入れて
+# 配布し、このsentinelはどのキーにも使わない。
 # fail-soft機構（sentinel検出・未記入判定）自体はコード契約として維持する
 # （サブ機・別マシンで値を書き換えず出荷した場合や、将来キーが増えた場合の
 # 安全弁のため）。詳細は
@@ -314,8 +312,10 @@ is_v2_resolve_output_well_formed() {
       [ "$rc" = "0" ] || return 1
       # ⚠️ TEAM_MODE:はschema_version=<N>の直後・必須（3モード体制-設計-
       # 2026-09-06.md §4.2）。任意にすると「TEAM_MODEもUNKNOWN_EXTRAも無い行」
-      # を文法が受理してしまい、位置が一意に決まらなくなる。
-      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)(${tab}FALLBACK:${name}(,${name})*)?(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${code}(,${code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
+      # を文法が受理してしまい、位置が一意に決まらなくなる。MACHINE_ROLE:は
+      # TEAM_MODE:の直後・同じく必須（配役表-能力軸整理-設計-2026-09-07.md
+      # §2.1・D-2）。
+      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)${tab}MACHINE_ROLE:(main|sub|unknown|unavailable)(${tab}FALLBACK:${name}(,${name})*)?(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${code}(,${code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
       [[ "$s" =~ $re ]]
       ;;
     MINIMAL"$tab"*)
@@ -441,8 +441,9 @@ fi
 # フル実装）は「次にcheck-drift.shを手動/cronで実行するまで」気づけない。
 # 本関数はそのギャップを埋める軽量版で、SessionStartの毎回で必ず走る。
 #
-# スコープをv2のrole.leader行に限定する（v1の値出力口＝
-# AIENV_MODEL_MAIN/SUBはmachine-role/--sub-delegateに依存する別経路であり、
+# スコープをv2のrole.leader行に限定する（v2の実体ではsettings.jsonの
+# modelは配役表のrole.leaderから決まり、v1の値出力口＝AIENV_MODEL_MAIN/SUBは
+# v1実体・実体不在に縮退したときのlegacy値選択にしか効かない別経路である。
 # ここで再実装すると判定式が2箇所に増える＝A-0-3で潰した重複の再発になる。
 # v1はcheck-drift.shの週次V13が既に--print-leader-runtime経由でmodel/effort
 # 両方をカバーしている。呼び出し元＝本ファイル下部でprofile_kind="OK"
@@ -671,17 +672,13 @@ compute_health_lines() {
   # 設計上存在しない（install-sub.shはmaintenance.sh関連のインストールを一切
   # 行わない）。そのためサブ機ではlast-run.jsonが常に不在のままとなり、
   # 以下の判定が「毎セッション必ず」④の警告を出し続けてしまっていた
-  # （本来は正常な状態にもかかわらず）。判定はcheck-sub-update.shの
-  # machine-roleマーカー読取・trimパターンをそのまま流用し一貫させる
-  # （fail-closed＝マーカーが無い/読めない/中身が"sub"以外はすべて
-  # 「メイン機」とみなし従来どおり④を実行する。積極的な証明＝厳密に
-  # "sub"の場合のみスキップする）。①②等の他セクションは元々ディレクトリ
-  # 不在時に静かにスキップするfail-open設計のため対象外（変更しない）。
-  local machine_role_raw machine_role
-  machine_role_raw="$(cat "$AIENV_MACHINE_ROLE_MARKER" 2>/dev/null)"
-  machine_role="${machine_role_raw#"${machine_role_raw%%[![:space:]]*}"}"
-  machine_role="${machine_role%"${machine_role##*[![:space:]]}"}"
-
+  # （本来は正常な状態にもかかわらず）。判定は配役表の`machine_role`能力軸
+  # （配役表-能力軸整理-設計-2026-09-07.md §2.1・§4.2）を使う（$machine_role
+  # は本関数の呼び出し前に代入済み＝下部の`resolve`出力からの取り出し参照）。
+  # fail-closed＝解決失敗/欠落/"sub"以外の値はすべて「メイン機」とみなし
+  # 従来どおり④を実行する。積極的な証明＝厳密に"sub"の場合のみスキップする。
+  # ①②等の他セクションは元々ディレクトリ不在時に静かにスキップする
+  # fail-open設計のため対象外（変更しない）。
   if [ "$machine_role" != "sub" ]; then
   # Codex+Fable5収束後の小修正＝impl4）: maintenance.sh(週次)のlast-run.json
   # started_atが${MAINTENANCE_STALE_DAYS}日以上前のままなら「週次メンテ自体が
@@ -979,6 +976,10 @@ else
   # 代入されない。TEAM_MODE:の取り出しはブロックの外でも動く必要があるので、
   # ここで明示的に初期化する（初期化しないと将来の改修で未定義参照になる）。
   profile_kind=""
+  # 配役表-能力軸整理-設計-2026-09-07.md §4.2: machine_roleも同じ理由で
+  # 同じ位置で初期化する（BOOTSTRAP_ENABLE_LOCAL_PROFILE=0の経路でも未定義
+  # 参照にしない。外部脳ヘルス行④のcompute_health_linesが読む）。
+  machine_role=""
   if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
     # resolve_local_profile()自身がsymlink拒否(SYMLINK)・不在(T1)を含めた
     # 全状態を返すため、必読リスト表示側で-L/-fを個別に再判定しない
@@ -1081,6 +1082,29 @@ ${leader_settings_drift_warning}"
   compose_team_mode_line "$team_mode"
   compose_team_mode_directive5 "$team_mode"
 
+  # 配役表-能力軸整理-設計-2026-09-07.md §4.2: MACHINE_ROLE:フィールドを
+  # 同じ形で取り出す。⚠️ team_modeとは条件が違い、profile_has_unknown_extraは
+  # 見ない（機械側＝機構の分岐は既知キー部分だけを使う＝FR-13①。降格させると
+  # 廃止キーが残っている過渡状態のサブ機で外部脳ヘルス行④の誤警告が毎セッション
+  # 出る＝2026-08-06に実害として直した挙動が戻る）。
+  mr_tab=$'\t'
+  mr_pat="${mr_tab}MACHINE_ROLE:"
+  if [ "$profile_kind" = "OK" ]; then
+    mr_rest="${profile_status#*"$mr_pat"}"
+    [ "$mr_rest" != "$profile_status" ] && machine_role="${mr_rest%%"$mr_tab"*}"
+  fi
+  # ⚠️ Codex一次レビュー指摘（MAJOR-1・2026-09-07）対応: unavailableを
+  # unknownへ潰すと、直後の保留行判定が「unavailableでも保留を出さない」
+  # という下のコメントの意図を実現できない（両方ともunknownに見えるため）。
+  # main|sub|unavailableの3値だけをそのまま通し、それ以外（値の欠落・
+  # resolverが返し得ない未知値）だけをunknownへ倒す。
+  case "$machine_role" in main|sub|unavailable) : ;; *) machine_role="unknown" ;; esac
+  # FR-9・D-5（§4.3）: machine_roleがunknownのときだけDIRECTIVEへ保留の
+  # 1行を足す（unavailableでは足さない＝本人が「機役割を持たない」と
+  # 明示した状態のため。§7.2 S5）。
+  MACHINE_ROLE_HOLD_LINE=""
+  [ "$machine_role" = "unknown" ] && MACHINE_ROLE_HOLD_LINE='⚠️ 配役表の machine_role が未確定です（この機がメイン機かサブ機かを本人が宣言していません）。機役割に依存する判断（Preferences の編集・公開スナップショットの生成・git の立場）は本人へ確認してから行う。既定値を発明しない。'
+
   # 外部脳ヘルス行（fail-open: 失敗してもブートストラップ本文は必ず出す）。
   HEALTH_LINES="$(compute_health_lines 2>/dev/null)" || HEALTH_LINES=""
 
@@ -1101,6 +1125,8 @@ $list
 ③ ユーザーの質問に関連するキーワードで Vault($VAULT) を Read/Grep/Glob で検索し、ヒットしたノートを読んでから回答する(obsidian-mcp は使わない)。
 ④ 新たな知見・判断・好み・プロジェクト変化が出たら、その場で Vault へ記録する。決定者・委任・空席時の申告の型は Preferences/core-workflow.md §4・§7 のとおりに従う（リーダー直筆は禁止＝delegation-gate が deny）。⚠️ vault-scribe の起動は Task tool の subagent_type に必ず"vault-scribe"を渡す（"scribe"という省略形は職種名・エージェント定義ファイル名のいずれとも一致せず spawn 失敗する。2026-09-03 実機で発生した実害の再発防止）。vault-scribe 不在なら起動してから振る。
 ${TEAM_MODE_DIRECTIVE5}
+${MACHINE_ROLE_HOLD_LINE:+
+${MACHINE_ROLE_HOLD_LINE}}
 ${HEALTH_LINES:+
 【外部脳ヘルス】（scripts/check-drift.sh ⑥の簡易版。詳細確認は本体を実行）
 $HEALTH_LINES}

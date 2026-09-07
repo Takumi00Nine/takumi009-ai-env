@@ -15,7 +15,7 @@
 # （詳細は codex/config.toml 冒頭のコメント参照）。
 #
 # 例外その2: claude/settings.json も symlink しない（2026-08-21 リーダー承認・
-# machine-role対応）。理由は2つ: ① JSONもTOML同様シェル変数展開されないため、
+# 機役割対応）。理由は2つ: ① JSONもTOML同様シェル変数展開されないため、
 # "model" フィールドをマシン別（メイン=Fable 5・サブ=Opus 5。サブはPro プランで
 # Fable非対応）に出し分けるには値の置き換えが必要。② symlinkのままだと、
 # セッション内で `/model` を実行した際にClaude Code自身がユーザー設定ファイルの
@@ -27,8 +27,8 @@
 # トップレベル"model"キーへ直接代入する＝Codex一次レビュー指摘Minor対応。
 # テンプレの__AIENV_MODEL__値はscripts/check-drift.sh①-2が比較に使う目印として
 # 残す）。値は --sub-delegate の有無（＝呼び出し経路）から直接決定する（後述の
-# AIENV_MODEL_MAIN/AIENV_MODEL_SUB）。machine-roleマーカーの読み返しには依存
-# しない＝マーカー不在時の曖昧さという既存の問題が生じない。
+# AIENV_MODEL_MAIN/AIENV_MODEL_SUB）。配役表の`machine_role`の読み返しには
+# 依存しない＝実体の状態に関わらず出し分けが一意に決まる。
 #
 # 使い方:
 #   scripts/install-main.sh                   # 実行（symlink化 / config.toml生成）
@@ -38,9 +38,9 @@
 #                                              # model値を1行印字して即終了（副作用ゼロ）
 #
 # --print-model（2026-08-30 共通コア分離 §9.0 A-0-1 新設）: claude/settings.json の
-# "model" 値の**唯一の出力口**。値を標準出力へ1行印字するだけで、生成・配置・
-# マーカー書込など一切の副作用を持たない（他の全オプションより先に判定し、
-# python3依存チェックより前・machine-roleマーカー書込より前に exit する）。
+# "model" 値の**唯一の出力口**。値を標準出力へ1行印字するだけで、生成・配置など
+# 一切の副作用を持たない（他の全オプションより先に判定し、python3依存
+# チェックより前に exit する）。
 # scripts/update-sub.sh・scripts/check-drift.sh はこのモードだけを呼び、model値を
 # 独自の値表として重複保持しない（設計書§9.0 A-0-1/A-0-3・§11.2 項目1「値出力口を
 # 1本に絞る」の実装）。--sub-delegate を同時に付けるとサブ機向けの値
@@ -64,14 +64,10 @@
 # 実装。install-backup.sh・install-vault-agents.sh を別スクリプトに分離しているのと
 # 同じ意図だが、drift-check はinstall-main.sh本体に統合する指示だったため、
 # install-sub.shからの委譲経路だけをこのフラグで区別する）。
-# 同フラグはmachine-roleマーカー（後述）の扱いにも使う: --sub-delegate経由の
-# 場合は委譲元のinstall-sub.shが既に"sub"を書き込む/書き込む予定のため、本
-# スクリプト側では一切マーカーに触れない。
 # ⚠️ 配役表解凍（2026-09-01・設計書§4.2-f）以降、--sub-delegateはv2プロファイル
 # ベースのmodel/effort解決（後述--print-leader-runtime・実インストール時の
 # リーダー実行値決定）には一切使わない（受理はするが無視する）。v1委譲期間中の
-# --print-modelの出し分け（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）とmachine-role
-# マーカーの扱いにだけ引き続き効く。
+# --print-modelの出し分け（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）にだけ引き続き効く。
 #
 # --print-leader-runtime（2026-09-01 設計書§4.2-a 新設・値出力口の一本化）:
 # ローカル実体プロファイル（$AIENV_LOCAL_PROFILE_PATH）を解決し、実効リーダー
@@ -100,14 +96,12 @@
 # 確定済みの値はそのまま通す＝冪等）。後者は対話を一切行わない（CI・バック
 # グラウンド実行での正しい運用。付いていれば`[ -t 0 ]`より常に優先する）。
 #
-# machine-roleマーカー（$HOME/.config/takumi009-ai-env/machine-role）:
-# 本スクリプトを --sub-delegate 無しで直接実行した場合（＝実際にメイン機として
-# セットアップする場合）は明示的に"main"を書き込む（2026-07-24 Codex一次レビュー
-# 指摘Major対応: かつてinstall-sub.shを実行しサブ機だった機体を、後から
-# install-main.shを直接実行してメイン機へ移行する運用で、旧"sub"マーカーが
-# 残ったままだとclaude/hooks/check-sub-update.sh・scripts/update-sub.shが
-# サブ機と誤認し続け、update-sub.shの`rsync --delete`でメインVaultの
-# `Preferences/`が上書き削除される事故になり得た）。
+# 機役割（配役表の能力軸`machine_role`）: 本スクリプトは実体プロファイルへの
+# 書込を一切行わない（配役表-能力軸整理-設計-2026-09-07.md §5.2・FR-15＝
+# 実体を編集するのは本人だけ）。settings.jsonの"model"はv2実体では配役表の
+# `role.leader`から決まり（--print-leader-runtime）、機役割にも
+# --sub-delegateにも依存しない。--sub-delegateが効くのはv1実体・実体不在に
+# 縮退したときのlegacy値選択（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）だけである。
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 #       本スクリプトは既存の実ファイルをsymlinkへ置き換えるため、ユーザー本人が
@@ -1206,10 +1200,10 @@ done
 
 # --- claude/settings.json の model 値を確定する ---
 # --sub-delegate の有無（＝install-sub.sh経由か、直接実行か）だけで決まる。
-# machine-roleマーカーファイルの読み返しには依存しない（同マーカーは
-# fail-closed設計＝「積極的な証明（sub）が無ければmain扱い」だが、本値は
-# そもそも読み返しが不要な一次情報＝どちらのインストーラ経路で呼ばれたかから
-# 直接決まるため、マーカー不在時の曖昧さという既存の問題自体が生じない）。
+# 配役表の`machine_role`の読み返しには依存しない（本値はどちらのインストーラ
+# 経路で呼ばれたかから直接決まる一次情報のため。⚠️ この値の決め方が効くのは
+# v1実体・実体不在に縮退したときのlegacy値選択だけであり、v2実体では
+# settings.jsonの"model"は配役表の`role.leader`から決まる＝§5.2の実測）。
 if [ "$IS_SUB_DELEGATE" = "1" ]; then
   AIENV_MODEL_VALUE="$AIENV_MODEL_SUB"
 else
@@ -1217,8 +1211,8 @@ else
 fi
 
 # --print-model: 値を1行印字して即終了する（副作用ゼロ）。python3依存チェック・
-# machine-roleマーカー書込・symlink化等の実処理より前に判定する（値の出力口が
-# 「読むだけ」であることを保証するため。§9.0 A-0-1）。
+# symlink化等の実処理より前に判定する（値の出力口が「読むだけ」であることを
+# 保証するため。§9.0 A-0-1）。
 if [ "$PRINT_MODEL" = "1" ]; then
   printf '%s\n' "$AIENV_MODEL_VALUE"
   exit 0
@@ -1571,33 +1565,6 @@ $PY_OUT
 EOF
 }
 
-# --- machine-roleマーカー: --sub-delegate無し（＝メイン機としての直接実行）の
-#     場合だけ明示的に"main"を書く。--sub-delegate経由では一切触れない
-#     （委譲元のinstall-sub.shが"sub"を書き込む/書き込む予定のため。詳細は
-#     本ファイル冒頭のコメント参照）。
-#
-# Codex再レビュー指摘・Major対応: 他の全処理より前（symlink化・config.toml生成
-# 等の実処理が始まる前）に真っ先に書く。末尾に置いていた旧実装だと、直接実行の
-# 途中でchecked-out破損等によりfail()して停止した場合、旧"sub"マーカーが
-# 上書きされないまま残ってしまい、Main Vault上でscripts/update-sub.shが
-# 引き続き許可されてしまう欠陥があった（本人が直接install-main.shを実行した
-# 時点で「メイン機として使うつもりだ」という意思は既に確定しているため、
-# 後続処理の成否に関わらず真っ先にマーカーを確定させるのが安全側）。
-# 書込自体（mkdir/mktemp/mv）が失敗した場合はset -eによりここで即座に
-# スクリプト全体が停止する（他のfail-fast処理と同じ扱い＝黙って続行しない）。
-if [ "$IS_SUB_DELEGATE" != "1" ]; then
-  : "${AIENV_MACHINE_ROLE_MARKER:=$HOME/.config/takumi009-ai-env/machine-role}"
-  if [ "$DRY_RUN" = "1" ]; then
-    log "[dry-run] would write: $AIENV_MACHINE_ROLE_MARKER (content: main)"
-  else
-    mkdir -p "$(dirname "$AIENV_MACHINE_ROLE_MARKER")"
-    marker_tmp="$(mktemp "$(dirname "$AIENV_MACHINE_ROLE_MARKER")/.$(basename "$AIENV_MACHINE_ROLE_MARKER").aienv-tmp.XXXXXX")"
-    printf 'main\n' > "$marker_tmp"
-    mv "$marker_tmp" "$AIENV_MACHINE_ROLE_MARKER"
-    log "machine-role マーカーを設置しました（main）: $AIENV_MACHINE_ROLE_MARKER"
-  fi
-fi
-
 # --- ローカル実体プロファイルの雛形配置（2026-08-30 共通コア分離 §9.0 A-1 P1機構） ---
 # サンプル（vault-public/Preferences/profile-sample.md・repo管理下）から
 # $AIENV_LOCAL_PROFILE_PATH の雛形を作る。メイン/サブ共通（--sub-delegate経由でも
@@ -1617,11 +1584,12 @@ fi
 #
 # ⚠️ 実サンプルの入力形式不整合（2026-08-30 工程横断レビュー指摘・BLOCKING対応）:
 # `profile-sample.md`はObsidianノートであり、**先頭のfrontmatter（date/tags/…）は
-# ノート自体のメタデータであって最小能力表7キーではない**。7キー本体は本文中の
+# ノート自体のメタデータであって最小能力表の固定キー（当時7キー・2026-09-07
+# 能力軸整理後は能力軸3キー）ではない**。固定キー本体は本文中の
 # ```yaml フェンスコードブロックの中にYAML frontmatter形式で書かれている
 # （そのブロック自体が独立した`---`区切りを持つ）。単純にノート全体を
 # コピーするだけでは、bootstrap-vault.shのresolve_local_profile()が
-# ノートの先頭frontmatterを解析してしまい、7キー全てが「既存キー欠落」（T5）
+# ノートの先頭frontmatterを解析してしまい、固定キー全てが「既存キー欠落」（T5）
 # という誤判定になる（結合テストが合成fixtureだったため見逃されていた不具合）。
 # 対策: サンプル本文の**最初の```yamlフェンスブロックのうち、内容が`---`で
 # 始まるもの**を抽出し、そのYAML frontmatter部分だけをローカル実体として書く
@@ -1685,6 +1653,21 @@ else
   # サンプルがまだリポジトリに存在しない場合（P1機構のロールアウト未完了時）は
   # installer全体を落とさずWARNに留める（--with-dotfiles失敗時と同じsoft-fail方針）。
   warn "vault-public/Preferences/profile-sample.md が見つかりません（P1機構のロールアウト未完了、またはcheckout破損の可能性）: $PROFILE_SAMPLE_SRC"
+fi
+
+# ⚠️ 2026-09-07実測発見（配役表 能力軸整理）: 直後のensure_leader_configured()は
+# $AIENV_LOCAL_PROFILE_PATH.leader.lock を取得する（pid-lock.sh）。ロック取得は
+# 同ディレクトリへのmktempに依存するため、親ディレクトリ（$HOME/.config/
+# takumi009-ai-env/）が存在しないとmktempが無言で失敗し、ロック取得が
+# 「他プロセスとの競合」と誤認されて回収不能なまま失敗し続ける。上の雛形配置
+# ブロックは「サンプルが見つからない」分岐（1651行目のelse）を通るとmkdir -pを
+# 実行しない。旧マーカーファイル書込ブロック（撤去済み・FR-15＝
+# Decisions/2026-09-07-profile-axes-consolidation）が同じ親ディレクトリを
+# 副作用で作っていたため、この依存はこれまで表面化していなかった潜在バグ
+# だった。雛形配置の成否・分岐に関わらず、ここで一度だけ確実に作る
+# （DRY_RUNではensure_leader_configuredがロックを取得しない＝副作用不要）。
+if [ "$DRY_RUN" != "1" ]; then
+  mkdir -p "$(dirname "$AIENV_LOCAL_PROFILE_PATH")"
 fi
 
 # --- リーダー実行値の決定（2026-09-01 配役表解凍 §4.2-a〜g・§3.9）---
@@ -1819,8 +1802,8 @@ link claude/hooks/vault-read-log.sh  "$HOME/.claude/hooks/vault-read-log.sh"
 # 対応表を注入する（2026-08-06 追加・表示ツール本体は ~/work/tools 側）。
 link claude/hooks/next-pane-resolve.sh "$HOME/.claude/hooks/next-pane-resolve.sh"
 # サブ機更新チェック(SessionStart)。settings.json は main/sub 共通でこのフックを
-# 登録するため、リンクも main/sub 共通で配置する（スクリプト側が machine-role
-# マーカーで判定し、メイン機では無出力で即 exit 0＝fail-closed）。
+# 登録するため、リンクも main/sub 共通で配置する（スクリプト側が配役表の
+# `machine_role`で判定し、メイン機では無出力で即 exit 0＝fail-closed）。
 # 2026-07-28 追加: 2026-07-23 実装時にリンク配置が漏れており、両機で
 # SessionStart に「No such file or directory」の非ブロッキングエラーが出ていた。
 link claude/hooks/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"

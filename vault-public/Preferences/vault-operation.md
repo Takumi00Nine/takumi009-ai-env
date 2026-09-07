@@ -3,6 +3,8 @@ date: 2026-06-21
 updated: 2026-09-07
 tags: [preference, meta, external-brain, routing]
 project: external-brain
+related:
+  - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
 aliases:
   - "外部脳運用チートシート"
   - "public執筆の掟"
@@ -17,7 +19,7 @@ aliases:
 2. ユーザーの呼び名を書かない。「ユーザー」「本人」等の中立表現を使う（ID「takumi009」は可）。
 3. Personal 配下への wiki link・Personal ノート名を書かない（他フォルダへのリンクは可）。
 4. ホーム配下の絶対パスを書かない（`~/` 表記＝Vault 全域の掟）。
-- Preferences 編集セッションの締めに `~/work/takumi009-ai-env/scripts/export-public-vault.sh` を実行（commit 自動・push は別途明示）。
+- Preferences 編集セッションの締めに `~/work/takumi009-ai-env/scripts/export-public-vault.sh` を実行（commit 自動・push は別途明示）。⚠️ Preferences の編集も公開スナップショットの生成・commit も、メイン機（machine_role: main）だけが行う。サブ機（machine_role: sub）は配布物を pull するだけで、編集も生成もしない。
 ## SSOT の役割分担（ドリフト防止）
 - **Preferences＝今どう動くか／Decisions＝なぜ／Knowledge＝背景。** 判断は Preferences と Decisions を**ペアで**書く。現行値（設定値・状態）は Projects のみ。
 - 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録（該当ノートは**通し読み**）。
@@ -34,7 +36,7 @@ aliases:
 - 検索仕様は**フック1つだけ**（aliases・ファイル名照合。ベクトル検索撤去済み・別ツール/別閾値/別モード禁止）。候補不足なら同じフックをクエリ言い換えで手動再実行（コマンド＝[[Knowledge/external-brain-guide]] §必読ノートの詳細）。工夫は「聞き方」のみ。
 ## 起動時ヘルス警告・綻びの扱い
 - SessionStart 注入のヘルス行の ⚠️ は**最初の応答で報告し対処を提案**（黙って本題に入らない）。
-- **綻びは読み時（気づいた時点）で直す**: 鮮度（`review_by` 超過・古い外部可変情報＝一次情報で再確認→`updated` 引き直し。内部の決定ノートは対象外）／リンク切れ（張り直す or 除去）／alias（欠落・汎用/短すぎ＝想起に効く語へ）。⚠️ サブ機（Preferences を編集しない側）では、Preferences 内のリンク先が無いのは常態（他フォルダは機ごとに独立・同期されない）でありリンク切れに数えない（メイン機では直す。他フォルダ内のリンク切れはどの機でも直す＝[[Preferences/core-workflow]] §4・[[Decisions/2026-09-07-out-of-scope-links-not-broken]]）。
+- **綻びは読み時（気づいた時点）で直す**: 鮮度（`review_by` 超過・古い外部可変情報＝一次情報で再確認→`updated` 引き直し。内部の決定ノートは対象外）／リンク切れ（張り直す or 除去）／alias（欠落・汎用/短すぎ＝想起に効く語へ）。⚠️ サブ機（machine_role: sub＝Preferences を編集しない側）では、Preferences 内のリンク先が無いのは常態（他フォルダは機ごとに独立・同期されない）でありリンク切れに数えない（メイン機では直す。他フォルダ内のリンク切れはどの機でも直す＝[[Preferences/core-workflow]] §4・[[Decisions/2026-09-07-out-of-scope-links-not-broken]]）。
 - **撤回・白紙化バナー**: 失効ノート（Decisions 含む）は冒頭に「⚠️白紙化済み/撤回済み（日付＋出典）」バナー（本文は書き換えない・単体で失効が分かる）。**バナー付きノートを新文脈の材料に使わない**（再採用は本人の明示指示のみ）。
 - **撤去済みシステムの退役**: システム・ツールを撤去したら、関連 Knowledge ノートを想起から退役させる＝aliases・review_by を除去し frontmatter `retired: true`＋冒頭に退役バナー（本文は温存・削除/移動しない）。判定は読み時・棚卸し時に個別（ルールの根拠ノートは対象外）。詳細＝[[Decisions/2026-08-10-round6-rulings]]。
 - **停滞は本人の領域**: project の status は本人が棚卸しで判断＝**AI は勝手に書き換えない**（気づいたら一言添える）。最終防衛線はリーダーの読み時判断（棚卸しレポートは検出のみ）＝**読んだノートの綻びは読むたびに直す**。

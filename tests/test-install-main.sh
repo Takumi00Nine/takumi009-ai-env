@@ -89,9 +89,37 @@ assert_agents_line() {
   esac
 }
 
+# make_fake_home_no_profile <home> — $home/.config/takumi009-ai-env/profile.md
+# を置かない版（雛形配置＝profile.mdの生成・非破壊性そのものを検証する
+# テスト専用。make_fake_home()が既定で書く実体があると「実体が無い」前提の
+# 検証ができないため分離する）。
+make_fake_home_no_profile() {
+  local home="$1"
+  mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
+}
+
 make_fake_home() {
   local home="$1"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
+  # 配役表-能力軸整理-設計-2026-09-07.md §3: schema 5・新3キーの実体を
+  # あらかじめ置く。本ファイルの多くのテストの主眼＝symlink化・settings.json
+  # 生成・その他installerの振る舞いの検証であり、install-main.shの雛形配置
+  # （vault-public/Preferences/profile-sample.md からのコピー。段階2で
+  # 新schemaへ追随予定＝設計書§9.1）に依存させない（テストの独立性）。
+  # role.leaderの状態・machine_roleの値等を個別に検証するテストは、この
+  # 既定値を上書きする（後勝ち）。
+  mkdir -p "$home/.config/takumi009-ai-env"
+  cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 5
+profile_slug: test-install-main-machine
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+excluded_models: configured value=none
+role.leader: configured provider=anthropic-api model=claude-sonnet-5
+---
+EOF
 }
 
 echo "=== 1. --print-model はメイン既定値を1行印字してexit 0（副作用ゼロ） ==="
@@ -105,8 +133,8 @@ echo "=== 1. --print-model はメイン既定値を1行印字してexit 0（副�
   assert_eq "出力はメイン既定値ちょうど1行" "claude-fable-5[1m]" "$out"
   assert_true "settings.json等は一切生成されない（副作用ゼロ）" \
     "$([[ ! -e "$FAKE_HOME/.claude" ]] && echo 1 || echo 0)"
-  assert_true "machine-roleマーカーも書かれない" \
-    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/machine-role" ]] && echo 1 || echo 0)"
+  assert_true "実体プロファイルも一切書かれない（副作用ゼロ）" \
+    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -119,8 +147,8 @@ echo "=== 2. --print-model --sub-delegate はサブ既定値を印字する（�
   out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-model --sub-delegate 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_eq "出力はサブ既定値ちょうど1行" "claude-opus-5" "$out"
-  assert_true "machine-roleマーカーは書かれない（委譲元install-sub.shが書く責務のため）" \
-    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/machine-role" ]] && echo 1 || echo 0)"
+  assert_true "実体プロファイルも一切書かれない（副作用ゼロ）" \
+    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -234,17 +262,18 @@ make_repo_with_profile_sample_fixture() {
   mkdir -p "$tmp_repo/vault-public/Preferences"
   # 2026-08-30 工程横断レビュー指摘・BLOCKING対応: 実サンプル
   # （vault-public/Preferences/profile-sample.md）はObsidianノート形式であり、
-  # 先頭frontmatterはノートのメタデータ（date/tags/…）で、最小能力表6キーは
+  # 先頭frontmatterはノートのメタデータ（date/tags/…）で、最小能力表3キーは
   # 本文中の```yamlフェンスコードブロックの中にある。以前のfixtureは
-  # 「先頭frontmatterがそのまま6キー」という誤った形（実物と乖離した形）を
+  # 「先頭frontmatterがそのまま3キー」という誤った形（実物と乖離した形）を
   # 使っており、installer/resolverの入力形式不整合を結合テストが隠して
   # しまっていた。ここでは実物と同じ「ノートmetadata＋本文＋```yamlフェンス」
   # 構造を再現する。
   # ⚠️ 2026-08-30本人裁定「profile-sampleの初期値はメイン機の実値に戻す」に
-  # 合わせ、このfixtureもsentinel(`<fill-in>`)ではなく実値で6キーを埋めた
+  # 合わせ、このfixtureもsentinel(`<fill-in>`)ではなく実値で3キーを埋めた
   # （実サンプルの初期値方針の変更に追随。fixtureの目的自体は「コピー機構が
   # ノートmetadataを取り違えない」ことの確認であり、値そのものは何でもよい。
-  # 2026-09-07 能力軸1つ撤去で7キー→6キーへ）。
+  # 2026-09-07 配役表-能力軸整理-設計-2026-09-07.md §3で能力軸を6キー→3キーへ
+  # 整理）。
   cat > "$tmp_repo/vault-public/Preferences/profile-sample.md" <<'EOF'
 ---
 date: 2026-08-30
@@ -253,18 +282,15 @@ project: takumi009-ai-env
 ---
 # プロファイルサンプル（fixture・テスト専用）
 
-このノート自体のfrontmatter（上）は最小能力表6キーではない。6キーは下の
+このノート自体のfrontmatter（上）は最小能力表3キーではない。3キーは下の
 ```yamlフェンス内にある（実物のvault-public/Preferences/profile-sample.mdと
 同じ構造の再現）。
 
 ```yaml
 ---
-inventory_source: Vault(Preferences/Knowledge直下)
-reviewer: configured(Codex一次レビュー)
-vault_write: configured(vault-scribe)
-ui.user_call: configured(SendMessage to: main)
-git_role: push可(takumi009-ai-env repo限定)
-web_verification: configured(WebSearch/WebFetch)
+team_mode: full(案件による切替可)
+no_read_paths: ~/work/old,~/tmp/scratch（無ければunavailable）
+machine_role: 本人が実体へmain/subを書く
 ---
 ```
 EOF
@@ -273,7 +299,7 @@ EOF
 echo "=== 6. ローカル実体プロファイルの雛形配置: サンプルがあり実体が無ければコピーする（P1機構・§9.0 A-1） ==="
 {
   FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
+  make_fake_home_no_profile "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   make_repo_with_profile_sample_fixture "$TMP_REPO"
 
@@ -294,8 +320,8 @@ echo "=== 6. ローカル実体プロファイルの雛形配置: サンプル�
   # そのまま実体になっていることを確認する。
   assert_true "実体はノートmetadata(date:)を含まない" \
     "$(grep -q '^date:' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 0 || echo 1)"
-  assert_true "実体は最小能力表6キーを含む" \
-    "$(grep -q '^git_role: push可(takumi009-ai-env repo限定)$' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 1 || echo 0)"
+  assert_true "実体は最小能力表3キーを含む" \
+    "$(grep -q '^machine_role: 本人が実体へmain/subを書く$' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 1 || echo 0)"
   assert_true "実体は正しいYAML frontmatter形式（先頭行が---）" \
     "$([[ "$(head -1 "$FAKE_HOME/.config/takumi009-ai-env/profile.md")" == "---" ]] && echo 1 || echo 0)"
 
@@ -309,7 +335,7 @@ echo "=== 7. ローカル実体プロファイルの雛形配置: 非破壊性�
 
   for kind in file dir symlink broken_symlink; do
     FAKE_HOME="$(mktemp -d)"
-    make_fake_home "$FAKE_HOME"
+    make_fake_home_no_profile "$FAKE_HOME"
     mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
     PROFILE_DEST="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
     case "$kind" in
@@ -363,7 +389,7 @@ echo "=== 7. ローカル実体プロファイルの雛形配置: 非破壊性�
 echo "=== 8. ローカル実体プロファイルの雛形配置: サンプルが無ければWARNのみでinstaller全体は落とさない ==="
 {
   FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
+  make_fake_home_no_profile "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   rm -f "$TMP_REPO/vault-public/Preferences/profile-sample.md"
@@ -409,12 +435,7 @@ profile_slug: test
 role.leader: configured provider=anthropic-api model=claude-sonnet-5
 role.researcher: configured provider=bedrock model=${alias}
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 }
@@ -750,9 +771,9 @@ echo "=== 11c3b. Bedrock最小セット: 親ディレクトリの探索権限不
 }
 EOF
   PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  # machine-roleマーカー用ディレクトリ($FAKE_HOME/.config/takumi009-ai-env)
-  # とは別のディレクトリにBedrock envを置き、そのディレクトリだけ探索権限を
-  # 剥奪する（同じディレクトリを巻き込むとmarker書込自体がset -eで落ちて
+  # 実体プロファイル用ディレクトリ($FAKE_HOME/.config/takumi009-ai-env)とは
+  # 別のディレクトリにBedrock envを置き、そのディレクトリだけ探索権限を
+  # 剥奪する（同じディレクトリを巻き込むと雛形配置自体がset -eで落ちて
   # 本題のBedrock経路を検証できなくなるため分離する）。
   LOCKED_DIR="$FAKE_HOME/.config/bedrock-locked"
   mkdir -p "$LOCKED_DIR"
@@ -813,10 +834,10 @@ echo "=== 12. Bedrock最小セット: envファイルが無ければ何も変わ
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-vault.shへ渡すと、実サンプルの7キーが正しく抽出される（BLOCKING対応。値の内容には依存しない＝2026-08-30本人裁定でサンプルの初期値がsentinel/unknownから実値へ変わったため、T2-MINIMAL固定ではなくキー抽出の正しさだけを検証する） ==="
+echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-vault.shへ渡すと、実サンプルの3キーが正しく抽出される（BLOCKING対応。値の内容には依存しない＝2026-08-30本人裁定でサンプルの初期値がsentinel/unknownから実値へ変わったため、T2-MINIMAL固定ではなくキー抽出の正しさだけを検証する） ==="
 {
   FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
+  make_fake_home_no_profile "$FAKE_HOME"
 
   # ⚠️ ここだけは合成fixtureを使わず、追跡中の実サンプル
   # （$REPO_ROOT/vault-public/Preferences/profile-sample.md）を直接入力にする
@@ -824,13 +845,18 @@ echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-
   # 実物と違う形を使っており、installer/resolverの入力形式不整合を隠していた）。
   # ⚠️ アサーションはサンプルの「値の中身」（sentinelか実値か）に依存しない
   # 形にしている——本人裁定でサンプルの初期値が変わりうる（現に一度、
-  # sentinel方式から実値方式へ変わった）ため、値の中身ではなく「7キーが
+  # sentinel方式から実値方式へ変わった）ため、値の中身ではなく「3キーが
   # ノートmetadataと取り違えられずに正しく抽出されているか」（BLOCKING対応の
   # 本質）だけを固定的に検証する。
   if [ ! -f "$REPO_ROOT/vault-public/Preferences/profile-sample.md" ]; then
     fail_case "前提: 実サンプル(vault-public/Preferences/profile-sample.md)が見つからない"
   else
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/install-main.sh" >/dev/null 2>&1
+    # ⚠️ 段階2（vault-scribeによるvault-public/Preferences/profile-sample.md
+    # のschema 5追随・設計書§9.1）が終わるまでは、実サンプルがschema 4の
+    # ままのため雛形配置の後続処理（settings.json生成）がV8-b
+    # （no_read_pathsの旧書式）で失敗しうる。ここで打ち切らず後続の
+    # アサーション（3キー抽出の正しさ）で赤として観測させる。
+    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/install-main.sh" >/dev/null 2>&1 || true
     PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
     VAULT_FIXTURE="$(mktemp -d)"
 
@@ -840,23 +866,22 @@ echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-
         VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
         PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
         MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
-        AIENV_MACHINE_ROLE_MARKER="/nonexistent-dir/machine-role" \
         BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$PROFILE_PATH" \
         bash "$REPO_ROOT/claude/hooks/bootstrap-vault.sh" \
       | python3 -c "import json,sys; print(json.load(sys.stdin)['hookSpecificOutput']['additionalContext'])")"
 
     missing_keys=0
-    # 3モード体制対応（設計§4.4・2026-09-07）: 能力軸reviewerはteam_modeへ
-    # 差し替え済み（同じ位置）。LOCAL_PROFILE_KNOWN_KEYS/CAPABILITY_KEYSの
-    # 現行6キー集合に合わせる（2026-09-07 能力軸1つを撤去）。
-    for k in inventory_source team_mode vault_write ui.user_call git_role web_verification; do
+    # 配役表-能力軸整理-設計-2026-09-07.md §3・§4.1対応: 能力軸5キーを撤去し
+    # machine_roleを新設。LOCAL_PROFILE_KNOWN_KEYS/CAPABILITY_KEYSの現行3キー
+    # 集合に合わせる。
+    for k in team_mode no_read_paths machine_role; do
       if ! grep -q "^${k}:" "$PROFILE_PATH"; then
-        fail_case "実サンプルから最小能力表6キーの1つ(${k})がノートmetadataと取り違えられ抽出できていない"
+        fail_case "実サンプルから最小能力表3キーの1つ(${k})がノートmetadataと取り違えられ抽出できていない"
         missing_keys=$((missing_keys + 1))
       fi
     done
     if [ "$missing_keys" -eq 0 ]; then
-      pass "実サンプルからノートmetadataではなく最小能力表6キー全てが正しく抽出されている（T5にならない）"
+      pass "実サンプルからノートmetadataではなく最小能力表3キー全てが正しく抽出されている（T5にならない）"
     fi
     assert_true "T5(既存キー欠落)にはならない（BLOCKING対応の直接確認・値の中身に依存しない）" \
       "$(echo "$ctx" | grep -q 'T5' && echo 0 || echo 1)"
@@ -940,7 +965,7 @@ echo "=== 15. --print-bedrock-env-json: envファイルが無ければ空のenv/
 echo "=== 15b. ローカル実体プロファイルの雛形配置: 抽出失敗時のWARNに実際のエラー詳細が含まれる（Codex二次レビュー指摘・Minor対応: 従来はstdout/stderr両方をファイルへ吸い込んでいて詳細が常に空だった） ==="
 {
   FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
+  make_fake_home_no_profile "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   mkdir -p "$TMP_REPO/vault-public/Preferences"
@@ -1008,12 +1033,7 @@ schema_version: 2
 profile_slug: test
 role.leader: configured provider=anthropic-api model=claude-opus-5 effort=high
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 
@@ -1033,12 +1053,7 @@ schema_version: 2
 profile_slug: test
 role.leader: unknown
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 
@@ -1059,12 +1074,7 @@ echo "=== 20. --print-leader-runtime: v1プロファイル（schema_versionな�
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-inventory_source: configured(work-tools-dir)
 reviewer: configured(codex-mcp)
-vault_write: configured(via-scribe)
-ui.user_call: configured(send-message)
-git_role: configured(aienv-repo:commit)
-web_verification: configured(websearch)
 ---
 EOF
 
@@ -1120,12 +1130,7 @@ profile_slug: test
 role.leader: unavailable provider=bedrock model=opus
 fallback.leader: configured provider=anthropic-api model=claude-opus-5 effort=medium
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 
@@ -1197,6 +1202,19 @@ echo "=== 27. §3.9対話: role.leader未確定・--non-interactiveなら非0終
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
+  # 本テストの主眼＝role.leader未確定時の対話可否判定であり、
+  # make_fake_home()の既定プロファイル（role.leader確定済み）を上書きする。
+  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 5
+profile_slug: test-install-main-machine
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+excluded_models: configured value=none
+role.leader: unknown
+---
+EOF
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
@@ -1221,6 +1239,19 @@ echo "=== 28. §3.9対話: role.leader未確定・非TTY実行（--non-interacti
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
+  # 本テストの主眼＝role.leader未確定時の対話可否判定であり、
+  # make_fake_home()の既定プロファイル（role.leader確定済み）を上書きする。
+  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 5
+profile_slug: test-install-main-machine
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+excluded_models: configured value=none
+role.leader: unknown
+---
+EOF
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
@@ -1257,10 +1288,14 @@ PYEOF
   PRE_CONTENT="$(cat "$PROFILE_PATH")"
 
   # Q1=1(anthropic-api) Q2=0(自分で入力)+claude-opus-5 Q3=3(medium)
+  # ⚠️ 段階2（vault-scribeによるvault-public/Preferences/profile-sample.md
+  # のschema 5追随・設計書§9.1）が終わるまでは、実サンプルがschema 4の
+  # ままのためno_read_pathsの旧書式でV8-bになりうる。set -e下で全体を
+  # 落とさないよう`|| true`で受ける。
+  rc=0
   out="$(printf '1\n0\nclaude-opus-5\n3\n' \
     | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)"
-  rc=$?
+      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
   assert_eq "対話完了後exit 0" "0" "$rc"
   assert_true "role.leader行がconfigured provider=anthropic-api model=claude-opus-5 effort=mediumになる" \
     "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=medium' "$PROFILE_PATH" && echo 1 || echo 0)"
@@ -1413,12 +1448,7 @@ schema_version: 2
 profile_slug: test
 role.researcher: configured provider=anthropic-api model=claude-sonnet-5
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 
@@ -1450,12 +1480,7 @@ profile_slug: test
 role.leader: unknown
 role.leader: configured provider=anthropic-api model=claude-opus-5
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 
@@ -1537,12 +1562,7 @@ schema_version: 2
 profile_slug: test
 role.leader: unknown
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 
@@ -1593,12 +1613,7 @@ schema_version: 2
 profile_slug: test
 role.leader: configured provider=anthropic-api model=claude-sonnet-5 effort=medium
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 
@@ -1658,8 +1673,6 @@ EOF
     "$(echo "$out" | grep -q 'python3 が見つかりません' && echo 1 || echo 0)"
   POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
   assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
-  assert_true "machine-roleマーカーも書かれない（settings.json生成に着手する前に停止する）" \
-    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/machine-role" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$BINDIR"
 }
@@ -1725,6 +1738,22 @@ echo "=== 43d. 設計書S7×S8: settings.json配置先の親ディレクトリ�
   # 先に作ってしまうため）。
   mkdir -p "$FAKE_HOME"
   : > "$FAKE_HOME/.claude"
+  # 実体プロファイルをあらかじめ有効な内容で置く（雛形配置＝vault-public/
+  # Preferences/profile-sample.mdからのコピーに依存させない。同ファイルは
+  # 段階2で新schemaへ追随予定＝設計書§9.1であり、本テストの主眼＝mkdir失敗
+  # 経路の検証とは無関係）。
+  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
+  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 5
+profile_slug: test-install-main-machine
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+excluded_models: configured value=none
+role.leader: configured provider=anthropic-api model=claude-sonnet-5
+---
+EOF
 
   rc=0
   out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
@@ -1812,12 +1841,7 @@ profile_slug: test
 role.leader: unknown
 role.researcher: configured provider=anthropic-api model=claude-sonnet-5
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 EOF
 }
@@ -1956,12 +1980,7 @@ role.leader: unknown
 role.leader: unknown
 role.researcher: configured provider=anthropic-api model=claude-sonnet-5
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 ```
 EOF
@@ -2006,12 +2025,7 @@ profile_slug: ok
 role.leader: unknown
 role.researcher: configured provider=bedrock model=opus
 excluded_models: configured value=none
-inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
-vault_write: configured value=via-scribe
-ui.user_call: configured value=send-message
-git_role: configured value=aienv-repo:commit
-web_verification: configured value=websearch
 ---
 ```
 EOF
