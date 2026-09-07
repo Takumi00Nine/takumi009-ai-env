@@ -68,7 +68,7 @@ aliases:
 - 同じルールの正本は1つ。判断は「今どう動くか」と「なぜ」をペアで残す。
 - 書き込みの決定者はリーダー職。リーダーは自分で書かない（記録職へ渡す）。Vault への書き込み可否は `{{vault_write}}` に従う。`unavailable` の場合は蓄積する保管先を持たないため、その場の応答に「Vault記録候補:」として明示する。記録職が空席のときはコア §7。
 - 執筆規約＝frontmatter 必須／updated 更新／wiki link はフォルダ付きで相互に／aliases 必須／目安8,000字で分割／Knowledge はカタログ名で作る。
-- 読んだノートの綻び（鮮度・リンク切れ・alias 不足）は、直せるなら読み時に直し、直せないなら「Vault記録候補:」としてその場の応答に明示する。⚠️ **Preferences 内の wiki link で、参照先が `{{vault_scope}}` の範囲外にあるもの（範囲限定機に配布されない private ノート）はリンク切れではない。**「このマシンには無い」だけで正本には在る前提で扱い、作成・修正・「作成しますか」の提案・Vault記録候補への計上・綻びとしての報告のいずれも行わない。Preferences だけが更新されて参照先が手元に無い状態は範囲限定機の正常な状態である。⚠️ この例外は Preferences 発のリンクに限る＝Knowledge／Decisions／Projects／Fragments／Personal の中のリンク切れは範囲内の綻びなので従来どおり直す（[[Decisions/2026-09-07-out-of-scope-links-not-broken]]）。
+- 読んだノートの綻び（鮮度・リンク切れ・alias 不足）は、直せるなら読み時に直し、直せないなら「Vault記録候補:」としてその場の応答に明示する。⚠️ **Preferences 内の wiki link の参照先がこの機に無いのは、サブ機では常態でありリンク切れではない。** Preferences だけがメイン機で書かれ repo 経由で全機に届き、他フォルダ（Knowledge／Decisions／Projects／Fragments／Personal）は同期されず機ごとに独立に育つため、Preferences のリンクはメイン機のノートを指している。サブ機では「この機には無い」として扱い、作成・修正・「作成しますか」の提案・Vault記録候補への計上・綻びとしての報告のいずれも行わない。⚠️ **Preferences を編集する唯一の機であるメイン機では本物のリンク切れ**なので従来どおり直す。⚠️ この例外は Preferences 発のリンクに限る＝他フォルダの中のリンク切れはどの機でも綻びなので従来どおり直す（[[Decisions/2026-09-07-out-of-scope-links-not-broken]]）。
 - 撤回・白紙化バナーの付いたノートを新しい文脈の材料に使わない。
 - project の status は本人の領域＝AI は書き換えない。
 - Vault の読み書きは本人へ明示報告する（定常メンテは例外）。
