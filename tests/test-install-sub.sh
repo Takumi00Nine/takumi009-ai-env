@@ -131,7 +131,6 @@ seed_v1_profile() {
 inventory_source: configured(work-tools-dir)
 reviewer: configured(codex-mcp)
 vault_write: configured(via-scribe)
-vault_scope: configured(full)
 ui.user_call: configured(send-message)
 git_role: configured(aienv-repo:commit)
 web_verification: configured(websearch)
@@ -155,7 +154,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -508,7 +506,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -590,7 +587,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch

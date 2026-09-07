@@ -205,7 +205,6 @@ write_v2_profile() {
     echo "inventory_source: configured value=work-tools-dir"
     echo "reviewer: configured value=codex-mcp"
     echo "vault_write: configured value=via-scribe"
-    echo "vault_scope: configured value=full"
     echo "ui.user_call: configured value=send-message"
     echo "git_role: configured value=aienv-repo:commit"
     echo "web_verification: configured value=websearch"

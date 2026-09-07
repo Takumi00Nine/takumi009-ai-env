@@ -142,9 +142,9 @@ run_bootstrap_with_profile() {
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 
-# 最小能力表8キーすべてに実運用値を入れた「壊れていない」profile.mdを作る。
+# 最小能力表7キーすべてに実運用値を入れた「壊れていない」profile.mdを作る。
 # 2026-09-05 P3段階4差し戻し対応: no_read_pathsをLOCAL_PROFILE_KNOWN_KEYSへ
-# 追加したのに合わせてfixtureも8キーへ更新した。
+# 追加したのに合わせてfixtureも8キーへ更新した（2026-09-07 能力軸1つ撤去で7キーへ）。
 make_ok_profile() {
   local path="$1"
   mkdir -p "$(dirname "$path")"
@@ -153,7 +153,6 @@ make_ok_profile() {
 inventory_source: Vault(Preferences/Knowledge直下)
 team_mode: 本人
 vault_write: configured(vault-scribe)
-vault_scope: Preferences配下のみ
 ui.user_call: SendMessage(to: main)
 git_role: push可(takumi009-ai-env repo限定)
 web_verification: WebSearch/WebFetch
@@ -935,7 +934,6 @@ echo "=== 13. P1機構 T2-MINIMAL(未記入sentinel): 最小能力+⚠️にな�
 inventory_source: Vault
 team_mode: <fill-in>
 vault_write: configured
-vault_scope: 全範囲
 ui.user_call: SendMessage
 git_role: pull専用
 web_verification: WebSearch
@@ -964,7 +962,6 @@ echo "=== 14. P1機構 T5(既存キー欠落): 最小能力+⚠️になる ==="
 inventory_source: Vault
 team_mode: 本人
 vault_write: configured
-vault_scope: 全範囲
 ui.user_call: SendMessage
 web_verification: WebSearch
 no_read_paths: work-old
@@ -1005,13 +1002,12 @@ echo "=== 16. P1機構 T9'(UNKNOWN_EXTRA): 機械側は既知キー部分が有�
   make_full_vault "$VAULT_DIR"
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
-  # 既知の8キーはすべて揃えたうえで、将来のスキーマ拡張を想定した未知キーを追加する。
+  # 既知の7キーはすべて揃えたうえで、将来のスキーマ拡張を想定した未知キーを追加する。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
 inventory_source: Vault
 team_mode: 本人
 vault_write: configured
-vault_scope: 全範囲
 ui.user_call: SendMessage
 git_role: pull専用
 web_verification: WebSearch
@@ -1096,7 +1092,6 @@ echo "=== 18. resolve_local_profile(): 値が空(\`key:\`のみ)のキーはOK�
 inventory_source: Vault
 team_mode:
 vault_write: configured
-vault_scope: 全範囲
 ui.user_call: SendMessage
 git_role: pull専用
 web_verification: WebSearch
@@ -1121,7 +1116,6 @@ echo "=== 19. resolve_local_profile(): 空白のみの値も\"unknown\"へ正規
     echo "inventory_source: Vault"
     printf 'team_mode:   \n'
     echo "vault_write: configured"
-    echo "vault_scope: 全範囲"
     echo "ui.user_call: SendMessage"
     echo "git_role: pull専用"
     echo "web_verification: WebSearch"
@@ -1145,7 +1139,6 @@ echo "=== 20. resolve_local_profile(): 値が空でも他のキーの値は変�
 inventory_source: Vault
 team_mode:
 vault_write: configured(vault-scribe)
-vault_scope: 全範囲
 ui.user_call: SendMessage
 git_role: pull専用
 web_verification: WebSearch
@@ -1192,7 +1185,7 @@ resolve_leader_v2() {
   python3 "$PROFILE_LIB" resolve-leader "$path" --bedrock-env "$bedrock_env" --agents-dir "$agents_dir"
 }
 
-# v2の全11固定キー(メタ2+能力軸8+excluded_models)をすべて満たした最小の
+# v2の全10固定キー(メタ2+能力軸7+excluded_models)をすべて満たした最小の
 # base雛形。呼び出し側がrole./fallback.行だけを足して各シナリオを作る。
 # 2026-09-05 P3段階4対応: EXPECTED_SCHEMA_VERSIONを2→3へ引き上げ、能力軸に
 # no_read_pathsを追加した（profile_resolve.py側）のに合わせてbaseも更新した。
@@ -1205,7 +1198,6 @@ profile_slug: authoring
 inventory_source: configured value=work-tools-dir
 team_mode:        configured value=full
 vault_write:      configured value=via-scribe
-vault_scope:      configured value=full
 ui.user_call:     configured value=send-message
 git_role:         configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1542,7 +1534,6 @@ api_key: configured value=xyz
 inventory_source: configured value=work-tools-dir
 reviewer:         configured value=codex-mcp
 vault_write:      configured value=via-scribe
-vault_scope:      configured value=full
 ui.user_call:     configured value=send-message
 git_role:         configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1562,7 +1553,6 @@ EOF
 inventory_source: Vault
 team_mode: 本人
 vault_write: configured
-vault_scope: 全範囲
 ui.user_call: SendMessage
 git_role: pull専用
 web_verification: WebSearch
@@ -1798,7 +1788,6 @@ role.leader: configured provider=anthropic-api model=claude-opus-5
 inventory_source: configured value=work-tools-dir
 reviewer:         configured value=codex-mcp
 vault_write:      configured value=via-scribe
-vault_scope:      configured value=full
 ui.user_call:     configured value=send-message
 git_role:         configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -2451,7 +2440,7 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
   assert_not_contains "FX-P7: TEAM_MODE:は出ない" "$out" "TEAM_MODE:"
 }
 
-echo "=== 64. AC-4: known-keysがSCHEMA_VERSION:4・FIXED:にteam_modeを含みreviewerを含まない・要素数は変わらない ==="
+echo "=== 64. AC-4: known-keysがSCHEMA_VERSION:4・FIXED:にteam_modeを含みreviewerを含まない・要素数は10（能力軸1つ撤去分だけ減る） ==="
 {
   kk="$(python3 "$PROFILE_LIB" known-keys)"
   assert_contains "known-keys: SCHEMA_VERSION:4" "$kk" "SCHEMA_VERSION:4"
@@ -2459,7 +2448,7 @@ echo "=== 64. AC-4: known-keysがSCHEMA_VERSION:4・FIXED:にteam_modeを含みr
   assert_contains "known-keys: FIXED:にteam_modeを含む" "$fixed_line" "team_mode"
   assert_not_contains "known-keys: FIXED:にreviewerを含まない" "$fixed_line" "reviewer"
   n="$(printf '%s' "${fixed_line#FIXED:}" | tr ',' '\n' | grep -c .)"
-  assert_eq "known-keys: FIXED:の要素数は11（reviewer→team_modeは差引ゼロ）" "11" "$n"
+  assert_eq "known-keys: FIXED:の要素数は10（reviewer→team_modeは差引ゼロ・能力軸1つ撤去で1減）" "10" "$n"
 }
 
 echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞれちょうど1行現れ、他2モードは0行（AC-6①） ==="

@@ -95,9 +95,9 @@ BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 # S10/S11/S16対応（check_leader_settings_drift参照）の比較先として読むだけ
 # ＝副作用ゼロ。
 : "${AIENV_SETTINGS_JSON_FILE:=$HOME/.claude/settings.json}"
-# 最小能力表の8キー（§3.3.0）。ここに列挙した8つが「今のスキーマが要求する
+# 最小能力表の7キー（§3.3.0）。ここに列挙した7つが「今のスキーマが要求する
 # キー」＝これが欠けていれば§9.0 A-1最低契約④⑤どおり最小能力+⚠️へ倒す
-# （T5＝既存キー欠落）。逆にfrontmatterにこの8つ以外の見慣れないキーが
+# （T5＝既存キー欠落）。逆にfrontmatterにこの7つ以外の見慣れないキーが
 # 有っても、それは「まだこのコードが追随していない新しいキー」とみなし
 # unknown扱いで無視するだけに留め、最小能力へは倒さない（T4＝新キー未追随。
 # schema_version／版管理を作らない以上、キー集合の前方互換をこの非対称な
@@ -112,13 +112,12 @@ LOCAL_PROFILE_KNOWN_KEYS=(
   "inventory_source"
   "team_mode"
   "vault_write"
-  "vault_scope"
   "ui.user_call"
   "git_role"
   "web_verification"
   "no_read_paths"
 )
-# テスト専用: BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1のとき、最小能力表8キー
+# テスト専用: BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1のとき、最小能力表7キー
 # （LOCAL_PROFILE_KNOWN_KEYS）を1行1キーで標準出力へ返して即終了する。
 # stdin JSON読み込み・ヘルス行計算等の本処理には一切進まない。本番では
 # 未設定のため無効（2026-08-30追加・MINOR-D対応: test-core-docs-placeholder-

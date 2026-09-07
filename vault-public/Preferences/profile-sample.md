@@ -22,7 +22,7 @@ aliases:
 - **本サンプルに「どのマシンの値か」というラベルは付けない**（2026-08-29 本人裁定）。コピーした本人が、自分のマシンで実際に採用する職種・provider・modelへ書き換えて使う前提の雛形であり、特定機の実運用値ではない。
 - 各キー・各状態のとりうる値は**コメントに書く**（2026-08-30 本人フィードバック＝日本語長文値は手編集困難・指定可能な値がコメントで分かるようにする）。本文中で説明しない値は書かない。
 - `role.leader`は雛形では`unknown`のまま配布する。**installerの対話（U-1・設計§3.9）が実体側で確定させる**ため、サンプル側に既定値を発明しない。
-- 能力軸8キー（`inventory_source`／`team_mode`／`vault_write`／`vault_scope`／`ui.user_call`／`git_role`／`web_verification`／`no_read_paths`）。前7キーはA-1からキー名・書式（`configured value=...`）を変更していない（§3.2 の④）。`no_read_paths` は P3 段階4（schema_version 3）で追加。
+- 能力軸7キー（`inventory_source`／`team_mode`／`vault_write`／`ui.user_call`／`git_role`／`web_verification`／`no_read_paths`）。キー名・書式（`configured value=...`）は A-1 から変更していない（§3.2 の④）。`no_read_paths` は P3 段階4（schema_version 3）で追加。`vault_scope` は 2026-09-07 に撤去（[[Decisions/2026-09-07-retire-vault-scope-axis]]・schema は 4 のまま）。
 - `effort` は全行に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通）。サンプルの `effort=high` は一例で、機体ごとに選び直してよい。
 
 ## サンプル本文（コピーしてこのまま編集する）
@@ -112,7 +112,7 @@ fallback.verifier: configured provider=anthropic-api model=claude-opus-5 effort=
 #    （例 anthropic-api/claude-fable-5,bedrock/fable）
 excluded_models: configured value=none
 
-# --- ④ 能力軸（8キー・前7キーはA-1 から**キー名は変更なし**・`no_read_paths`はP3段階4で追加）-----------------
+# --- ④ 能力軸（7キー・キー名は A-1 から変更なし・`no_read_paths` は P3 段階4 で追加）-----------------
 # 共通のとりうる値: configured value=<短い英語トークン> | unavailable | unknown
 # 既存確認の参照先。値: work-tools-dir | vault-preferences | vault-knowledge
 inventory_source: configured value=work-tools-dir,vault-preferences,vault-knowledge
@@ -120,8 +120,6 @@ inventory_source: configured value=work-tools-dir,vault-preferences,vault-knowle
 team_mode:        configured value=full
 # Vaultへの書込み。値: via-scribe | direct ／ 書けなければ unavailable
 vault_write:      configured value=via-scribe
-# このマシンに実在するVault蔵書範囲。値: full | フォルダ名のカンマ区切り
-vault_scope:      configured value=full
 # 本人を呼ぶ手段。値: send-message | cmux-notify | stdout-only
 ui.user_call:     configured value=send-message,cmux-notify
 # git上の立場。**必ずrepoスコープ付き**。値: <repoスコープ>:<立場> のカンマ区切り
@@ -150,7 +148,6 @@ no_read_paths:    configured value=work-old
 | `inventory_source` | `value=work-tools-dir,vault-preferences,vault-knowledge` | このマシンで`work`配下の`tools/`やVaultの`Preferences`/`Knowledge`が実在するかを確認し、実在するものだけをカンマ区切りで残す |
 | `team_mode` | `value=full` | このマシンの枠に合う既定体制を選ぶ（メイン機＝`full`・サブ機＝`lean` が目安）。迷ったら本人に確認する |
 | `vault_write` | `value=via-scribe` | vault-scribe teammateが実際に起動できるか確認する。委任先が無ければ`unavailable`にする |
-| `vault_scope` | `value=full` | このマシンの`Data/obsidian`配下がVault全体（private含む）か、`vault-public`のみのpublicスナップショットかを確認し、後者ならフォルダ名のカンマ区切り（例`Preferences,Knowledge`）へ書き換える |
 | `ui.user_call` | `value=send-message,cmux-notify` | このマシンで実際に使える呼び出し手段（SendMessage・cmux notify等）だけを残す |
 | `git_role` | `value=aienv-repo:commit,other-repo:ask` | リポジトリごとの実際の立場（push/commit/pull-only/ask）を repoスコープ付きで書く。決まっていないrepoは`ask`にする（絶対厳守②＝public化は本人が行う） |
 | `web_verification` | `value=websearch,webfetch` | このマシンで実際にWebSearch/WebFetchを1回実行して使えるかを確認する。⚠️ Bedrock機では公式ドキュメントとの食い違いがありうるので**このマシンで実測してから書く**（§9-6） |
@@ -158,6 +155,6 @@ no_read_paths:    configured value=work-old
 
 ## サンプルの位置づけ（unknown・enum一例を使う理由）
 
-本サンプルは**特定機の実運用値ではなく、書式と各キーのとりうる値を示す雛形**である（2026-08-29 本人裁定「どのマシンの値かラベルを付けない」）。`role.leader`は雛形では常に`unknown`のまま配布し、installerの対話（設計§3.9・U-1裁定）が実体側でリーダー配役を確定させる。それ以外の職種行・能力軸8キーは「書式として妥当な値の一例」であり、コピーした本人が上表の確認手順に従って自分のマシンの実値へ書き換える運用とする。
+本サンプルは**特定機の実運用値ではなく、書式と各キーのとりうる値を示す雛形**である（2026-08-29 本人裁定「どのマシンの値かラベルを付けない」）。`role.leader`は雛形では常に`unknown`のまま配布し、installerの対話（設計§3.9・U-1裁定）が実体側でリーダー配役を確定させる。それ以外の職種行・能力軸7キーは「書式として妥当な値の一例」であり、コピーした本人が上表の確認手順に従って自分のマシンの実値へ書き換える運用とする。
 
 未記載の職種は`unknown`（保留・本人確認待ち）として扱われる。「このマシンでは使わない」と決めている職種は、行を省略せず`not_adopted`と明示的に書くこと（§3.2）。

@@ -62,7 +62,6 @@ CAPABILITY_KEYS = (
     "inventory_source",
     "team_mode",
     "vault_write",
-    "vault_scope",
     "ui.user_call",
     "git_role",
     "web_verification",
@@ -118,7 +117,6 @@ CAPABILITY_VALUE_PATTERNS = {
     # §4.1a）。solo|lean|fullの1語のみ。
     "team_mode": re.compile(r"^(?:solo|lean|full)$"),
     "vault_write": re.compile(r"^(via-scribe|direct)$"),
-    "vault_scope": re.compile(r"^(full|[A-Z][A-Za-z0-9]{0,31}(,[A-Z][A-Za-z0-9]{0,31}){0,15})$"),
     "ui.user_call": re.compile(
         r"^(send-message|cmux-notify|stdout-only)(,(send-message|cmux-notify|stdout-only)){0,2}$"
     ),
@@ -359,7 +357,7 @@ def parse_v2(path: str) -> ParsedProfile:
             parsed.meta_lineno[key] = lineno
             continue
 
-        # 状態＋属性を持つ行（role./fallback./能力軸8キー/excluded_models）。
+        # 状態＋属性を持つ行（role./fallback./能力軸7キー/excluded_models）。
         tokens = rest.split()
         state = tokens[0] if tokens else ""
         attr_tokens = tokens[1:]
@@ -508,7 +506,7 @@ def _fail(code: str, detail: str) -> ProfileError:
 
 def _validate_capability_value(key: str, value: str) -> None:
     """V8-bの個別厳格形式＋共通規則（空要素・末尾カンマ・要素重複の禁止・
-    200文字以内・小文字固定＝vault_scopeのフォルダ名を除く）。sentinelは
+    200文字以内・小文字固定）。sentinelは
     sentinel_violations()が先に捕まえる契約なのでここには来ない前提だが、
     念のためsentinelは形式検査の対象外にする（多重にMINIMALへ倒れても
     実害は無いため防御的に許容する）。
@@ -526,7 +524,7 @@ def _validate_capability_value(key: str, value: str) -> None:
         raise _fail("V8-b", f"{key}のvalueに空要素があります")
     if len(parts) != len(set(parts)):
         raise _fail("V8-b", f"{key}のvalueに重複要素があります")
-    if key != "vault_scope" and value != value.lower():
+    if value != value.lower():
         raise _fail("V8-b", f"{key}のvalueは小文字である必要があります")
 
     if key == "excluded_models":

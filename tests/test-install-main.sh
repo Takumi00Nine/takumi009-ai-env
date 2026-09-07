@@ -234,16 +234,17 @@ make_repo_with_profile_sample_fixture() {
   mkdir -p "$tmp_repo/vault-public/Preferences"
   # 2026-08-30 工程横断レビュー指摘・BLOCKING対応: 実サンプル
   # （vault-public/Preferences/profile-sample.md）はObsidianノート形式であり、
-  # 先頭frontmatterはノートのメタデータ（date/tags/…）で、最小能力表7キーは
+  # 先頭frontmatterはノートのメタデータ（date/tags/…）で、最小能力表6キーは
   # 本文中の```yamlフェンスコードブロックの中にある。以前のfixtureは
-  # 「先頭frontmatterがそのまま7キー」という誤った形（実物と乖離した形）を
+  # 「先頭frontmatterがそのまま6キー」という誤った形（実物と乖離した形）を
   # 使っており、installer/resolverの入力形式不整合を結合テストが隠して
   # しまっていた。ここでは実物と同じ「ノートmetadata＋本文＋```yamlフェンス」
   # 構造を再現する。
   # ⚠️ 2026-08-30本人裁定「profile-sampleの初期値はメイン機の実値に戻す」に
-  # 合わせ、このfixtureもsentinel(`<fill-in>`)ではなく実値で7キーを埋めた
+  # 合わせ、このfixtureもsentinel(`<fill-in>`)ではなく実値で6キーを埋めた
   # （実サンプルの初期値方針の変更に追随。fixtureの目的自体は「コピー機構が
-  # ノートmetadataを取り違えない」ことの確認であり、値そのものは何でもよい）。
+  # ノートmetadataを取り違えない」ことの確認であり、値そのものは何でもよい。
+  # 2026-09-07 能力軸1つ撤去で7キー→6キーへ）。
   cat > "$tmp_repo/vault-public/Preferences/profile-sample.md" <<'EOF'
 ---
 date: 2026-08-30
@@ -252,7 +253,7 @@ project: takumi009-ai-env
 ---
 # プロファイルサンプル（fixture・テスト専用）
 
-このノート自体のfrontmatter（上）は最小能力表7キーではない。7キーは下の
+このノート自体のfrontmatter（上）は最小能力表6キーではない。6キーは下の
 ```yamlフェンス内にある（実物のvault-public/Preferences/profile-sample.mdと
 同じ構造の再現）。
 
@@ -261,7 +262,6 @@ project: takumi009-ai-env
 inventory_source: Vault(Preferences/Knowledge直下)
 reviewer: configured(Codex一次レビュー)
 vault_write: configured(vault-scribe)
-vault_scope: Vault全体(Data/obsidian配下)
 ui.user_call: configured(SendMessage to: main)
 git_role: push可(takumi009-ai-env repo限定)
 web_verification: configured(WebSearch/WebFetch)
@@ -277,7 +277,7 @@ echo "=== 6. ローカル実体プロファイルの雛形配置: サンプル�
   TMP_REPO="$(mktemp -d)"
   make_repo_with_profile_sample_fixture "$TMP_REPO"
 
-  # このfixtureはv1形式（schema_version・role.*行を持たない7キーのみ）。
+  # このfixtureはv1形式（schema_version・role.*行を持たない6キーのみ）。
   # 2026-09-01 配役表解凍§3.9「v1と分類されたら対話しない（AIENV_LEADER_ROLE
   # 指定時も非0終了）」に該当するため、本ファイル冒頭のexportを打ち消す
   # （このテストの主眼＝雛形コピーの正しさとは無関係な理由でinstallerを
@@ -290,12 +290,12 @@ echo "=== 6. ローカル実体プロファイルの雛形配置: サンプル�
     "$([[ ! -L "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
   # 2026-08-30 BLOCKING対応: コピーはノート全体の複製ではなく、```yaml
   # フェンス内の最小能力表ブロックだけを抽出したものになる。ノート本体の
-  # frontmatter（date/tags等）は含まれず、7キーのYAML frontmatterだけが
+  # frontmatter（date/tags等）は含まれず、6キーのYAML frontmatterだけが
   # そのまま実体になっていることを確認する。
   assert_true "実体はノートmetadata(date:)を含まない" \
     "$(grep -q '^date:' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 0 || echo 1)"
-  assert_true "実体は最小能力表7キーを含む" \
-    "$(grep -q '^vault_scope: Vault全体(Data/obsidian配下)$' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 1 || echo 0)"
+  assert_true "実体は最小能力表6キーを含む" \
+    "$(grep -q '^git_role: push可(takumi009-ai-env repo限定)$' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 1 || echo 0)"
   assert_true "実体は正しいYAML frontmatter形式（先頭行が---）" \
     "$([[ "$(head -1 "$FAKE_HOME/.config/takumi009-ai-env/profile.md")" == "---" ]] && echo 1 || echo 0)"
 
@@ -412,7 +412,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -849,15 +848,15 @@ echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-
     missing_keys=0
     # 3モード体制対応（設計§4.4・2026-09-07）: 能力軸reviewerはteam_modeへ
     # 差し替え済み（同じ位置）。LOCAL_PROFILE_KNOWN_KEYS/CAPABILITY_KEYSの
-    # 現行7キー集合に合わせる。
-    for k in inventory_source team_mode vault_write vault_scope ui.user_call git_role web_verification; do
+    # 現行6キー集合に合わせる（2026-09-07 能力軸1つを撤去）。
+    for k in inventory_source team_mode vault_write ui.user_call git_role web_verification; do
       if ! grep -q "^${k}:" "$PROFILE_PATH"; then
-        fail_case "実サンプルから最小能力表7キーの1つ(${k})がノートmetadataと取り違えられ抽出できていない"
+        fail_case "実サンプルから最小能力表6キーの1つ(${k})がノートmetadataと取り違えられ抽出できていない"
         missing_keys=$((missing_keys + 1))
       fi
     done
     if [ "$missing_keys" -eq 0 ]; then
-      pass "実サンプルからノートmetadataではなく最小能力表7キー全てが正しく抽出されている（T5にならない）"
+      pass "実サンプルからノートmetadataではなく最小能力表6キー全てが正しく抽出されている（T5にならない）"
     fi
     assert_true "T5(既存キー欠落)にはならない（BLOCKING対応の直接確認・値の中身に依存しない）" \
       "$(echo "$ctx" | grep -q 'T5' && echo 0 || echo 1)"
@@ -1012,7 +1011,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1038,7 +1036,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1065,7 +1062,6 @@ echo "=== 20. --print-leader-runtime: v1プロファイル（schema_versionな�
 inventory_source: configured(work-tools-dir)
 reviewer: configured(codex-mcp)
 vault_write: configured(via-scribe)
-vault_scope: configured(full)
 ui.user_call: configured(send-message)
 git_role: configured(aienv-repo:commit)
 web_verification: configured(websearch)
@@ -1127,7 +1123,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1421,7 +1416,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1459,7 +1453,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1547,7 +1540,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1604,7 +1596,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1824,7 +1815,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -1969,7 +1959,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch
@@ -2020,7 +2009,6 @@ excluded_models: configured value=none
 inventory_source: configured value=work-tools-dir
 reviewer: configured value=codex-mcp
 vault_write: configured value=via-scribe
-vault_scope: configured value=full
 ui.user_call: configured value=send-message
 git_role: configured value=aienv-repo:commit
 web_verification: configured value=websearch

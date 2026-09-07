@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # vault-public/Preferences/core-conduct.md・core-workflow.md 内の {{…}} プレース
-# ホルダ集合が、最小能力表8キー（§3.3.0）、または設計上認められた文書参照名
+# ホルダ集合が、最小能力表7キー（§3.3.0）、または設計上認められた文書参照名
 # （DOC_REFERENCE_KNOWN_KEYS。2026-09-02追加・配役表解凍-設計-2026-09-01.md
 # §7）の集合に含まれることを機械判定する静的テスト（2026-08-30 工程横断
 # レビュー指摘・MAJOR-3支援）。
@@ -47,7 +47,7 @@ ensure_extract_profile_schema_block_fn() {
   declare -F extract_profile_schema_block >/dev/null 2>&1
 }
 
-# 最小能力表8キー（§3.3.0）。ハードコードで再列挙せず、claude/hooks/
+# 最小能力表7キー（§3.3.0）。ハードコードで再列挙せず、claude/hooks/
 # bootstrap-vault.sh の LOCAL_PROFILE_KNOWN_KEYS（正本）を実行時ソースとして
 # 参照する（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応: 従来はここに独自の
 # 配列を再列挙しており、正本が増減してもこのテストが追随せず気づけない
@@ -170,13 +170,13 @@ check_file() {
   while IFS= read -r ph; do
     [ -z "$ph" ] && continue
     if is_known_key "$ph"; then
-      pass "$relpath: {{${ph}}} は最小能力表8キー・v2追加の能力軸キー、または配役表解凍で正当化された参照名に含まれる"
+      pass "$relpath: {{${ph}}} は最小能力表7キー・v2追加の能力軸キー、または配役表解凍で正当化された参照名に含まれる"
     else
       # ⚠️ is_known_key()と同じ理由（120行目コメント）で`:-`ガードを付ける。
       # 3モード体制対応で{{reviewer}}が未解決参照になった実例（公開スナップ
       # ショット未再生成の間）で、ここが無guardのままset -u下でunbound
       # variableエラーとなりスイート全体を落としていたのを機に追加した。
-      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表8キー＝${KNOWN_KEYS[*]:-}／v2追加の能力軸キー＝${V2_ONLY_CAPABILITY_KEYS[*]:-}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]:-}）"
+      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表7キー＝${KNOWN_KEYS[*]:-}／v2追加の能力軸キー＝${V2_ONLY_CAPABILITY_KEYS[*]:-}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]:-}）"
       unknown=$((unknown + 1))
     fi
   done <<EOF
@@ -184,10 +184,10 @@ $placeholders
 EOF
 }
 
-echo "=== 1. Preferences/core-conduct.md の {{…}} プレースホルダが最小能力表8キー、または設計上認められた文書参照名に含まれる ==="
+echo "=== 1. Preferences/core-conduct.md の {{…}} プレースホルダが最小能力表7キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-conduct.md"
 
-echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表8キー、または設計上認められた文書参照名に含まれる ==="
+echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表7キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-workflow.md"
 
 echo "=== 3. 回帰: プレースホルダが0件のファイルでもset -e下でスクリプト全体が落ちずfail_caseまで到達する（Codex二次レビュー指摘・Minor対応） ==="
