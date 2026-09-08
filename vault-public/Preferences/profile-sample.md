@@ -1,30 +1,33 @@
 ---
 date: 2026-08-30
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
   - "[[Preferences/core-conduct]]"
   - "[[Preferences/core-workflow]]"
   - "[[Preferences/bedrock-env-sample]]"
+  - "[[Preferences/model-definitions-sample]]"
   - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
   - "[[Decisions/2026-09-06-codex-mcp-retire]]"
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
+  - "[[Decisions/2026-09-08-model-definitions-file]]"
 aliases:
   - "配役表サンプル"
   - "プロファイルサンプル"
 ---
-# プロファイルサンプル（v5・職種ファースト配役表）
+# プロファイルサンプル（v6・職種ファースト配役表）
 
 ## この案の要点
+- **v6 schema**は role 行から `provider`／`execution`／`effort` の属性を撤去し、モデル定義ファイル（[[Preferences/model-definitions-sample]]）の定義名を `model=<定義名>[,<定義名>…]` で参照する形へ変えた（[[Decisions/2026-09-08-model-definitions-file]]）。
 - **v4 schema**（基本形＝配役表解凍-設計-2026-09-01.md §3.2 が正本。v3 は P3 段階4 で `no_read_paths` を追加、v4 は 3モード体制で `team_mode` を追加・能力軸 `reviewer` を廃止・`execution` の enum を `external-cli`／`external-api` に改めた＝[[Decisions/2026-09-07-three-team-mode-rollout]]）。旧版の能力軸7キーだけの形式（`schema_version`が無い/`1`の実体）は現行実装（`resolve_local_profile()`）へ委譲され続ける（§3.5）。v5 は能力軸を `team_mode`・`no_read_paths`・`machine_role` の3キーへ整理し、`machine_role` を新設した（[[Decisions/2026-09-07-profile-axes-consolidation]]）。
-- 配役は**職種を第一階層にしたインライン形式**（`role.<職種>: <状態> provider=... model=... [execution=...] [effort=...]`）。`fallback.<職種>`は同じ書式で本命が使えないときの代替。
-- **本サンプルに「どのマシンの値か」というラベルは付けない**（2026-08-29 本人裁定）。コピーした本人が、自分のマシンで実際に採用する職種・provider・modelへ書き換えて使う前提の雛形であり、特定機の実運用値ではない。
+- 配役は**職種を第一階層にしたインライン形式**（`role.<職種>: <状態> model=<定義名>[,<定義名>…]`）。`fallback.<職種>`は同じ書式で本命が使えないときの代替（候補は1件だけ）。
+- **本サンプルに「どのマシンの値か」というラベルは付けない**（2026-08-29 本人裁定）。コピーした本人が、自分のマシンで実際に採用する職種・model（モデル定義ファイルの定義名）へ書き換えて使う前提の雛形であり、特定機の実運用値ではない。
 - 各キー・各状態のとりうる値は**コメントに書く**（2026-08-30 本人フィードバック＝日本語長文値は手編集困難・指定可能な値がコメントで分かるようにする）。本文中で説明しない値は書かない。
 - `role.leader`は雛形では`unknown`のまま配布する。**installerの対話（U-1・設計§3.9）が実体側で確定させる**ため、サンプル側に既定値を発明しない。
 - 能力軸3キー（`team_mode`／`no_read_paths`／`machine_role`）。キー名・書式（`configured value=...`）は A-1 から変更していない（§3.2 の④）。`no_read_paths` は P3 段階4（schema_version 3）で追加。`vault_scope` は 2026-09-07 に撤去（[[Decisions/2026-09-07-retire-vault-scope-axis]]・schema は 4 のまま）。`inventory_source`／`vault_write`／`ui.user_call`／`git_role`／`web_verification` は 2026-09-07 に撤去・`machine_role` を新設（[[Decisions/2026-09-07-profile-axes-consolidation]]・schema 5）。
-- `effort` は全行に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通）。サンプルの `effort=high` は一例で、機体ごとに選び直してよい。
+- `effort` は各モデル定義（[[Preferences/model-definitions-sample]]）に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通）。定義ファイルのサンプルにある `effort=high` は一例で、機体ごとに選び直してよい。
 
 ## サンプル本文（コピーしてこのまま編集する）
 
@@ -46,60 +49,40 @@ aliases:
 # （欠けた固定キーは unknown 扱い・警告のみ）、同じなのに欠けていたら「壊れて
 # いる」（最小能力へ倒す）。⚠️ 職種の行を足しても版は上げない。版を上げるのは
 # 固定キー・文法・必須属性・enum が変わったときだけ。
-schema_version: 5
+schema_version: 6
 # 能力クラスの表示ラベル。^[a-z0-9][a-z0-9-]*$ ／判定には使わない
 profile_slug: authoring
 
 # --- ① 配役表：職種ごとに「使うか・誰が演じるか」を1行で書く --------
-# 書式: role.<職種>: <状態> [provider=<経路>] [model=<渡す値>] [execution=<起動方法>]
+# 書式: role.<職種>: <状態> [model=<定義名>[,<定義名>…]]
 #  状態: configured    この職種を使う。下の model で起動する
 #      | unavailable   使いたいが今は動かせない（上限・認証失敗・定義ファイル不在）
-#                      ⚠️ 何を使いたかったかを残すため provider/model は書く
+#                      ⚠️ 何を使いたかったかを残すため model は書く
 #      | not_adopted   この職種はこのマシンでは使わない（属性は書かない）
 #      | unknown       未確定。⚠️ 保留して本人に確認する（属性は書かない）
-#  provider: anthropic-api    サブスク／ネイティブAPI経由
-#          | bedrock          Amazon Bedrock の Invoke API 経由
-#          | bedrock-mantle   Bedrock の Mantle エンドポイント経由
-#          | external         このツールの外にあるモデル
-#  model   : **リーダーが起動時にそのまま渡す値**。エイリアスを発明しない
-#            anthropic-api  = 具体ID（claude-opus-5 等。aliasは書かない）
-#            bedrock        = 別名だけ（opus/sonnet/haiku/fable）
-#                             ⚠️ 推論プロファイルID・ARN はここに書かない
-#                             （それは bedrock.env のピン留め側にだけ置く）
-#            bedrock-mantle = anthropic. で始まるID
-#            external       = 呼び出し先の識別子
-#            1M文脈が要るなら [1m] を付ける
-#            ⚠️ Sonnet 5 は常に1Mで [1m] 変種が無いので付けない
-#  execution: 書かなければ subagent（チームメイトとして起動する）。
-#             provider=external のときだけ external-cli / external-api を必ず書く
-#  effort  : 推論エフォート（任意）。書かなければ**セッション既定を継承**する
-#            Claude 系＝low|medium|high|xhigh|max ／ Codex＝minimal|low|medium|high|xhigh
-#            ⚠️ **実際に効くのはリーダー行だけ**（settings.json へ反映される）。
-#               ワーカー行の effort は「意図の記録＝参考値」で実行値ではない（§3.8）
-#  ⚠️ Bedrockのピン留めは書かない（provider=bedrock なら model の別名から
-#     bedrock_pin_<別名> を機械が導出する）
+#  model   : モデル定義ファイル（[[Preferences/model-definitions-sample]]）の定義名を
+#            カンマ区切りで1つ以上。並び順に優先度の意味は無い（どれを使うかは
+#            リーダーがそのつど1つ選ぶ）。provider・execution・effort の説明は
+#            モデル定義ファイル側が正本（本ファイルには書かない）
 #  ⚠️ 職種を増やすときは、この表に1行足す（コード改修は不要。ただし自分の
 #     セッションで起動する職種は、コア側の職種定義 agents/<職種>.md も要る）
 #  ⚠️ 行を書かなかった職種は unknown 扱い＝保留して本人に確認する
 #     （「使わない」つもりなら not_adopted と明示的に書くこと）
 role.leader:               unknown        # ← このマシンのリーダー配役を記入（U-1）
 role.navi:                 unknown        # 未実装（Projects/navi-orchestrator 設計中）
-role.requirements-analyst: configured provider=anthropic-api model=claude-opus-5 effort=high
-role.system-designer:      configured provider=anthropic-api model=claude-opus-5 effort=high
-role.adoption-critic:      configured provider=anthropic-api model=claude-opus-5 effort=high
-role.implementer:          configured provider=anthropic-api model=claude-sonnet-5 effort=high
-role.researcher:           configured provider=anthropic-api model=claude-sonnet-5 effort=high
-role.operator:             configured provider=anthropic-api model=claude-sonnet-5 effort=high
-role.vault-scribe:         configured provider=anthropic-api model=claude-sonnet-5 effort=high
-role.verifier:             configured provider=external execution=external-cli model=codex-review-default effort=high
+role.requirements-analyst: configured model=opus-main
+role.system-designer:      configured model=opus-main
+role.adoption-critic:      configured model=opus-main
+role.implementer:          configured model=sonnet-main,opus-main  # 候補は複数可（起動のたびにリーダーが1つ選ぶ）
+role.researcher:           configured model=sonnet-main
+role.operator:             configured model=sonnet-main
+role.vault-scribe:         configured model=sonnet-main
+role.verifier:             configured model=codex-high
 role.ja-doc:               unknown        # 候補=Qwen（H17 実測評価待ち・経路未実装）
-# Bedrock機ではこう書く（例）:
-# role.leader:             configured provider=bedrock model=opus
-# role.researcher:         configured provider=bedrock model=haiku
 
 # --- ② 代替配役：本命が使えないときに使う（無い職種は書かなくてよい）--
 # 書式は ① と同じ。⚠️ 状態が configured のものだけが代替として採用される
-fallback.verifier: configured provider=anthropic-api model=claude-opus-5 effort=high
+fallback.verifier: configured model=opus-main  # 候補は1件だけ（2件以上あると本命不能時に機構が選べず止まる）
 
 # --- ③ このマシンで配役してはいけないモデル -------------------------
 # 書式: excluded_models: <状態> [value=<値>]
@@ -133,8 +116,8 @@ machine_role:     unknown
 | キー | サンプルの値（例） | 確認手順（1行） |
 |---|---|---|
 | `role.leader` | `unknown` | 記入しない。`scripts/install-main.sh`／`scripts/install-sub.sh`実行時の対話（設計§3.9）で確定させる |
-| `role.*`（leader以外） | `configured provider=... model=...` など | 自分のセッションで実際に起動する職種だけ`configured`にし、providerとmodelを§3.2の適合表（anthropic-api/bedrock/bedrock-mantle/externalそれぞれのmodel形式）に沿って書く。使わない職種は`not_adopted`、判断保留は`unknown`のまま残す。`effort`も全行に明示する |
-| `fallback.*` | `configured provider=... model=...` | 本命(`role.*`)が使えないときに使う職種にだけ書く。不要なら行ごと削ってよい |
+| `role.*`（leader以外） | `configured model=<定義名>[,<定義名>…]` | 自分のセッションで実際に起動する職種だけ`configured`にし、モデル定義ファイル（[[Preferences/model-definitions-sample]]）の定義名をカンマ区切りで1つ以上書く。使わない職種は`not_adopted`、判断保留は`unknown`のまま残す |
+| `fallback.*` | `configured model=<定義名>` | 本命(`role.*`)が使えないときに使う職種にだけ、定義名を**1件だけ**書く。不要なら行ごと削ってよい |
 | `excluded_models` | `value=none` | このマシンで使ってはいけないモデル族があれば`<provider>/<model>`のカンマ区切りへ書き換える。無ければ`none`のまま |
 | `team_mode` | `value=full` | このマシンの枠に合う既定体制を選ぶ（メイン機＝`full`・サブ機＝`lean` が目安）。迷ったら本人に確認する |
 | `no_read_paths` | `value=~/work/old` | 読まない・検索しないパスが実在するかを確認し、無ければ`unavailable`にする |

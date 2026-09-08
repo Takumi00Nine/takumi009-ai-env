@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -19,6 +19,8 @@ related:
   - "[[Preferences/core-worker]]"
   - "[[Decisions/2026-09-06-worker-common-norms-and-delivery]]"
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
+  - "[[Preferences/model-definitions-sample]]"
+  - "[[Decisions/2026-09-08-model-definitions-file]]"
 aliases:
   - "7ロール運用"
   - "requirements-analyst"
@@ -80,11 +82,7 @@ aliases:
 6. ツール境界: Web調査だけで足りるタスクは**「Bash/gh 不使用・WebFetch で読む」を明示**（ワーカーの許可リスト外コマンドは承認プロンプトがユーザーへ飛び、作業も止まるため）
 
 呼び方: チームメイト＝「Spawn a teammate using the implementer agent type…」／サブエージェント＝Agent ツールの subagent_type。
-7. **配役の指定＝正本は配役表**（コア＝[[Preferences/core-workflow]] §1 spawn 条文・[[Decisions/2026-09-01-role-cast-table-unfreeze]]）。配役表はセッション開始時に読んだ値を使う。`agents/*.md` の `model:` は「指定しなかった場合の既定値」であり、配役表の派生物ではない（二重管理にしない）。
-   - 配役表の `model` と職種定義の既定値が一致する職種（現状のメイン機は全職種が一致）では、Agent ツールの `model` パラメータを**渡さない**＝定義側の具体 ID がそのまま効く。渡すと別名（sonnet/opus/haiku/fable の4種しか受理されない）へ置き換えることになり、別名は具体 ID に固定されない（実例 2026-07-27: `model: opus` を明示→定義の claude-opus-5 が当時の既定 Opus へ落ちた）。
-   - 配役表が定義の既定値と**異なる**値を要求する場合: `provider=bedrock` の別名（opus/sonnet/haiku/fable）はピン留めが効いている確認が取れていればその別名をそのまま渡す（未確認なら渡さず本人へ上げる＝コア §1 条文④）。`provider=anthropic-api` の具体 ID は Agent ツールの `model` パラメータでは渡せない（別名 enum のみ受理）ため、勝手に別名へ読み替えず「職種定義の `model:` 改訂」か「本人裁定」へ上げる。エイリアスを発明しない。
-   - 指定漏れ・別名の誤解決は機構では塞げない（設計書 F-4）。実効モデルの確認＝ワーカー別トランスクリプト（`~/.claude/projects/<プロジェクト>/<セッション>/subagents/agent-*.jsonl`）の `model` フィールドを見る（in-process ワーカーも可・[[Knowledge/model-param-accepted-vs-resolved]]）。ペイン先頭のモデル表記はペイン運用時のみ存在し、in-process（既定）では無い（2026-09-02 実測）。正本はトランスクリプト。命名規則 `<配役>-<職種名>` は判別の補助。
-   - 例外＝本人がその場でモデルを明示指定した場合はその指示に従う（従来どおり）。
+7. **配役の指定＝正本は配役表**（コア＝[[Preferences/core-workflow]] §1 spawn 条文・[[Decisions/2026-09-01-role-cast-table-unfreeze]]）。配役表の `model` は**定義名の候補**であり、リーダーが spawn のたびにその中から1つ選ぶ。属性（provider・model ID・effort 等）の正本は**モデル定義ファイル**（[[Preferences/model-definitions-sample]]）。選んだ定義について `MODEL_MISMATCH` が出ていなければ、Agent ツールの `model` パラメータは**渡さない**（職種定義の既定値が効く）。
 
 **モデル指定は「受理された」ことと「意図どおり解決された」ことは別**（詳細＝[[Knowledge/model-param-accepted-vs-resolved]]）。実効モデルの確認手段: リーダー行＝`/status`・ワーカー行（named/cmux・in-process とも）＝ワーカー別トランスクリプトの `model` フィールドが正本。ペイン先頭のモデル表記はペイン運用時のみ存在し、in-process（既定）では無い（2026-09-02 実測）。ピン留め効果が未検証の指定経路（例: settings.json 単体経由）ではエイリアス指定を避け、疑わしければ本人へ確認する。
 

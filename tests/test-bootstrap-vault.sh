@@ -129,8 +129,110 @@ run_bootstrap() {
 # すると、v2プロファイルがOKで解決するテスト（#36・#37等）がテスト実行機の
 # 実settings.jsonに依存してしまい非決定的になる＝他のログ系引数と同じく
 # /nonexistent-dir配下を既定にして隔離する）。
+# 2026-09-08 モデル定義ファイルと候補指定対応: 役割の行がmodel=<定義名>だけに
+# なったため、resolve()を通すfixtureは全てモデル定義ファイルを要る。1つの
+# 共有ファイル（読取専用・書き換えない）を全テスト共通で使う。個別に別の
+# 定義ファイルが要るケース（不在・壊れている等）だけローカルに上書きする。
+SHARED_MODELS_CONF="$(mktemp -d)/models.conf"
+make_model_defs() {
+  # $1=出力先。$2以降を渡すとそれをそのまま書く（不正な定義ファイルを作る
+  # 用途）。無指定なら本ファイル全体で使う既定の豊富な定義集合を書く。
+  local path="$1"; shift
+  mkdir -p "$(dirname "$path")"
+  if [ "$#" -eq 0 ]; then
+    cat > "$path" <<'EOF'
+[opus-main]
+provider=anthropic-api
+model=claude-opus-5
+
+[opus-high]
+provider=anthropic-api
+model=claude-opus-5
+effort=high
+
+[opus-max]
+provider=anthropic-api
+model=claude-opus-5
+effort=max
+
+[opus46-xhigh]
+provider=anthropic-api
+model=claude-opus-4.6
+effort=xhigh
+
+[fable-1m]
+provider=anthropic-api
+model=claude-fable-5[1m]
+
+[sonnet-main]
+provider=anthropic-api
+model=claude-sonnet-5
+
+[sonnet-max]
+provider=anthropic-api
+model=claude-sonnet-5
+effort=max
+
+[bedrock-opus]
+provider=bedrock
+model=opus
+
+[bedrock-opus-xhigh]
+provider=bedrock
+model=opus
+effort=xhigh
+
+[bedrock-haiku]
+provider=bedrock
+model=haiku
+
+[bedrock-sonnet]
+provider=bedrock
+model=sonnet
+
+[mantle-haiku]
+provider=bedrock-mantle
+model=anthropic.claude-3-haiku
+
+[codex-review]
+provider=external
+execution=external-cli
+model=codex-review-default
+effort=high
+
+[codex-other-tool]
+provider=external
+execution=external-cli
+model=other-tool
+
+[ext-api-bad]
+provider=external
+execution=external-api
+model=codex-review-default
+
+[codex-review-minimal]
+provider=external
+execution=external-cli
+model=codex-review-default
+effort=minimal
+EOF
+  else
+    : > "$path"
+    for block in "$@"; do printf '%s\n' "$block" >> "$path"; done
+  fi
+}
+make_model_defs "$SHARED_MODELS_CONF"
+# ⚠️ 個別のケースがAIENV_MODEL_DEFS_FILEを上書きしない限り、この既定値
+# （読取専用・全ケース共通の豊富な定義集合）を使う。値を書き換えるケースは
+# 無いので、ファイル冒頭の1回exportが他ケースへ誤って漏れる心配は無い
+# （モデル定義ファイルと候補指定-設計-2026-09-08.md §11.1の注記は「ケースごとに
+# 異なる値が要る」場合の注意であり、本ファイルでは1つの正しい値を全ケースが
+# 共有できるためこの形にした）。
+export AIENV_MODEL_DEFS_FILE="$SHARED_MODELS_CONF"
+
 run_bootstrap_with_profile() {
   local vault="$1" profile_path="$2" settings_json="${3:-/nonexistent-dir/settings.json}"
+  local models_conf="${4:-$SHARED_MODELS_CONF}"
   echo '{"session_id":"test-session-0000"}' \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
@@ -138,6 +240,7 @@ run_bootstrap_with_profile() {
       PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
       MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
       AIENV_SETTINGS_JSON_FILE="$settings_json" \
+      AIENV_MODEL_DEFS_FILE="$models_conf" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
@@ -161,13 +264,13 @@ run_bootstrap_health4() {
   mkdir -p "$(dirname "$profile_path")"
   {
     echo "---"
-    echo "schema_version: 5"
+    echo "schema_version: 6"
     echo "profile_slug: authoring"
     echo "team_mode:        configured value=full"
     echo "no_read_paths:    unavailable"
     echo "machine_role:     ${machine_role_line}"
     echo "excluded_models: configured value=none"
-    echo "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    echo "role.leader: configured model=opus-main"
     echo "---"
   } > "$profile_path"
   if [ -n "$legacy_marker" ]; then
@@ -184,18 +287,23 @@ run_bootstrap_health4() {
   rm -rf "$fake_home"
 }
 
-# 最小能力表の能力軸3キー（team_mode・no_read_paths・machine_role）すべてに
-# 実運用値を入れた「壊れていない」profile.mdを作る（2026-09-07能力軸整理で
-# 廃止5キーを撤去しmachine_roleを新設・3キーへ整理＝配役表-能力軸整理-
-# 設計-2026-09-07.md §3・§4.1。整理前の中間状態の経緯はgit履歴を参照）。
+# 「壊れていない」schema 6のprofile.mdを作る（2026-09-08 モデル定義ファイルと
+# 候補指定対応: role.leaderまで含めて完全にOKへ解決できる最小の実体。旧版は
+# 能力軸3キーだけの自由値v1形式だったが、schema 6のコードは6未満（版なし
+# 含む）を一律T4-LEGACYで解決失敗にするため、role.leader込みの完全な実体に
+# 差し替えた＝§4.1・§4.2。整理前の中間状態の経緯はgit履歴を参照）。
 make_ok_profile() {
   local path="$1"
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<'EOF'
 ---
-team_mode: 本人
-no_read_paths: ~/work/old
-machine_role: 本人
+schema_version: 6
+profile_slug: authoring
+team_mode:        configured value=full
+no_read_paths:    unavailable
+machine_role:     configured value=main
+excluded_models: configured value=none
+role.leader:      configured model=opus-main
 ---
 EOF
 }
@@ -961,9 +1069,13 @@ echo "=== 13. P1機構 T2-MINIMAL(未記入sentinel): 最小能力+⚠️にな�
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-team_mode: <fill-in>
-no_read_paths: ~/work/old
-machine_role: 本人
+schema_version: 6
+profile_slug: authoring
+team_mode: configured value=<fill-in>
+no_read_paths: unavailable
+machine_role: configured value=main
+excluded_models: configured value=none
+role.leader: configured model=opus-main
 ---
 EOF
 
@@ -985,8 +1097,12 @@ echo "=== 14. P1機構 T5(既存キー欠落): 最小能力+⚠️になる ==="
   # 回帰テストの意図を保つ＝Codex一次レビュー指摘・Minor対応の型を継承）。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-team_mode: 本人
-no_read_paths: ~/work/old
+schema_version: 6
+profile_slug: authoring
+team_mode: configured value=full
+no_read_paths: unavailable
+excluded_models: configured value=none
+role.leader: configured model=opus-main
 ---
 EOF
 
@@ -1026,9 +1142,13 @@ echo "=== 16. P1機構 T9'(UNKNOWN_EXTRA): 機械側は既知キー部分が有�
   # 既知の3キーはすべて揃えたうえで、将来のスキーマ拡張を想定した未知キーを追加する。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-team_mode: 本人
-no_read_paths: ~/work/old
-machine_role: 本人
+schema_version: 6
+profile_slug: authoring
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+excluded_models: configured value=none
+role.leader: configured model=opus-main
 future_new_key: 未来のスキーマが追加した値
 ---
 EOF
@@ -1071,116 +1191,18 @@ echo "=== 17. P1機構: 実体がsymlinkの場合は受理せず最小能力+⚠
   rm -rf "$VAULT_DIR" "$PROFILE_DIR"
 }
 
-# resolve_local_profile()の生出力（MINIMAL/OK行）だけを取得するテスト専用
-# ヘルパー。BOOTSTRAP_RESOLVE_PROFILE_ONLY=1を使う（2026-08-30 MAJOR-8b対応）。
-run_resolve_local_profile() {
-  local profile_path="$1"
-  echo '{}' | BOOTSTRAP_RESOLVE_PROFILE_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" \
-    BOOTSTRAP_VAULT="/nonexistent-dir" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" "$SCRIPT"
-}
-
-# resolve_local_profile()（v1/v2/混在の分類ディスパッチャそのもの）の生出力
-# だけを取得するテスト専用ヘルパー。BOOTSTRAP_RESOLVE_PROFILE_DISPATCH_ONLY=1
-# を使う（2026-09-01追加・tester独立検証差し戻し対応。T12=LEGACY_V1トップ
-# レベル差し替え・T3-PRIME=混在・T10=lib欠落を直接検証する）。
-# 第2引数（省略可）でPROFILE_RESOLVE_LIBを差し替えられる＝T10（lib欠落）テスト用。
-run_resolve_local_profile_dispatch() {
-  local profile_path="$1" lib_override="${2:-}"
-  # ⚠️ `${var:+NAME="$val"}`は「展開結果がNAME=valの形をしていても」bash
-  # パーサはparse時点で代入語と認識しない（代入語認識はソース上の字面が
-  # NAME=valの形をしている場合だけに働く既知の制約）ため、if/elseで
-  # 完全な代入トークンを直接書く形に分ける。
-  if [ -n "$lib_override" ]; then
-    echo '{}' | BOOTSTRAP_RESOLVE_PROFILE_DISPATCH_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" \
-      PROFILE_RESOLVE_LIB="$lib_override" \
-      BOOTSTRAP_VAULT="/nonexistent-dir" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" "$SCRIPT"
-  else
-    echo '{}' | BOOTSTRAP_RESOLVE_PROFILE_DISPATCH_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" \
-      BOOTSTRAP_VAULT="/nonexistent-dir" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" "$SCRIPT"
-  fi
-}
-
-echo "=== 18. resolve_local_profile(): 値が空(\`key:\`のみ)のキーはOKのまま\"unknown\"へ正規化される（2026-08-30 工程横断レビュー指摘・MAJOR-8b対応: 最低契約④どおり空値をOK扱いのまま通さない） ==="
-{
-  PROFILE_DIR="$(mktemp -d)"
-  PROFILE_PATH="$PROFILE_DIR/profile.md"
-  cat > "$PROFILE_PATH" <<'EOF'
----
-team_mode:
-no_read_paths: ~/work/old
-machine_role: 本人
----
-EOF
-
-  out="$(run_resolve_local_profile "$PROFILE_PATH")"
-  assert_contains "OK扱いのまま（最小能力へは倒さない）" "$out" "OK"
-  assert_not_contains "MINIMALへは倒さない" "$out" "MINIMAL"
-  assert_contains "team_modeの値がunknownへ正規化される" "$out" "team_mode=unknown"
-
-  rm -rf "$PROFILE_DIR"
-}
-
-echo "=== 19. resolve_local_profile(): 空白のみの値も\"unknown\"へ正規化される ==="
-{
-  PROFILE_DIR="$(mktemp -d)"
-  PROFILE_PATH="$PROFILE_DIR/profile.md"
-  {
-    echo "---"
-    printf 'team_mode:   \n'
-    echo "no_read_paths: ~/work/old"
-    echo "machine_role: 本人"
-    echo "---"
-  } > "$PROFILE_PATH"
-
-  out="$(run_resolve_local_profile "$PROFILE_PATH")"
-  assert_contains "OK扱いのまま" "$out" "OK"
-  assert_contains "空白のみのteam_modeもunknownへ正規化される" "$out" "team_mode=unknown"
-
-  rm -rf "$PROFILE_DIR"
-}
-
-echo "=== 20. resolve_local_profile(): 値が空でも他のキーの値は変わらない（正規化が該当キーだけに閉じている回帰確認） ==="
-{
-  PROFILE_DIR="$(mktemp -d)"
-  PROFILE_PATH="$PROFILE_DIR/profile.md"
-  cat > "$PROFILE_PATH" <<'EOF'
----
-team_mode:
-no_read_paths: ~/work/old(vault-scribe)
-machine_role: 本人
----
-EOF
-
-  out="$(run_resolve_local_profile "$PROFILE_PATH")"
-  assert_contains "team_mode以外(no_read_paths)の値は空値正規化の影響を受けない" "$out" "no_read_paths=~/work/old(vault-scribe)"
-
-  rm -rf "$PROFILE_DIR"
-}
-
-echo "=== 21. resolve_local_profile(): 全キー正常記入ならOK・unknown正規化は起きない（回帰確認） ==="
-{
-  PROFILE_DIR="$(mktemp -d)"
-  PROFILE_PATH="$PROFILE_DIR/profile.md"
-  make_ok_profile "$PROFILE_PATH"
-
-  out="$(run_resolve_local_profile "$PROFILE_PATH")"
-  assert_contains "OKが返る" "$out" "OK"
-  assert_not_contains "unknownへの正規化は起きない（元々空値のキーが無いため）" "$out" "=unknown"
-
-  rm -rf "$PROFILE_DIR"
-}
-
 # ============================================================================
-# 22番以降: v2配役表解凍（配役表解凍-設計-2026-09-01.md 担当A）のユニット・結合
-# テスト。claude/hooks/lib/profile_resolve.py を直接CLI呼び出しする（分類・
-# parser・validator・候補評価は本libが唯一の正本＝§3.4）。DIRECTIVE統合部分
-# だけrun_bootstrap_with_profile()を使う。
+# 23番以降: v2配役表解凍（配役表解凍-設計-2026-09-01.md 担当A）のユニット・結合
+# テスト。claude/hooks/lib/profile_resolve.py を直接CLI呼び出しする（parser・
+# validator・候補評価は本libが唯一の正本＝§3.4）。DIRECTIVE統合部分だけ
+# run_bootstrap_with_profile()を使う。2026-09-08 モデル定義ファイルと候補
+# 指定対応（同設計§3.8・D-13）: 旧・分類ラッパー関数（旧・版分類サブコマンドの
+# ラッパー）は撤去した——schema 6のコードは分類そのものを行わない。
 # ============================================================================
 
 PROFILE_LIB="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
 AGENTS_DIR="$REPO_ROOT/claude/agents"
 
-classify_v2() { python3 "$PROFILE_LIB" classify "$1"; }
 resolve_v2() {
   local path="$1" bedrock_env="${2:-/nonexistent-dir/bedrock.env}" agents_dir="${3:-$AGENTS_DIR}"
   python3 "$PROFILE_LIB" resolve "$path" --bedrock-env "$bedrock_env" --agents-dir "$agents_dir"
@@ -1192,18 +1214,15 @@ resolve_leader_v2() {
 
 # v2の全6固定キー(メタ2+能力軸3+excluded_models)をすべて満たした最小の
 # base雛形。呼び出し側がrole./fallback.行だけを足して各シナリオを作る。
-# 2026-09-05 P3段階4対応: EXPECTED_SCHEMA_VERSIONを2→3へ引き上げ、能力軸に
-# no_read_pathsを追加した（profile_resolve.py側）のに合わせてbaseも更新した。
-# 2026-09-07 3モード体制対応: EXPECTED_SCHEMA_VERSIONを3→4へ引き上げ、能力軸
-# reviewerをteam_modeへ差し替えた（3モード体制-設計-2026-09-06.md §4.1）のに
-# 合わせてbaseも更新した。
-# 2026-09-07 配役表-能力軸整理対応: 廃止対象5キーを撤去しmachine_roleを新設・
-# no_read_pathsを実パス書式へ・EXPECTED_SCHEMA_VERSIONを4→5へ引き上げた
-# （配役表-能力軸整理-設計-2026-09-07.md §3・§10.1）のに合わせてbaseも更新した。
+# 2026-09-08 モデル定義ファイルと候補指定対応: EXPECTED_SCHEMA_VERSIONを
+# 5→6へ引き上げた（モデル定義ファイルと候補指定-設計-2026-09-08.md・D-8）
+# のに合わせてbaseも更新した。役割の行の属性はmodel=<定義名>[,…]だけになり、
+# provider/execution/effortはモデル定義ファイル側（make_model_defs()）へ
+# 移した。
 # ⚠️ team_mode:の行末揃え（8スペース）は下部のsed置換が字面で参照するため
 # 崩さないこと。
 V2_BASE='---
-schema_version: 5
+schema_version: 6
 profile_slug: authoring
 team_mode:        configured value=full
 no_read_paths:    unavailable
@@ -1221,42 +1240,13 @@ make_v2_profile() {
   } > "$path"
 }
 
-echo "=== 22. classify(): v1/v2/混在の3分岐 ==="
-{
-  V1_PATH="$(mktemp -d)/v1.md"
-  make_ok_profile "$V1_PATH"
-  assert_eq "v1: schema_versionが無く動的行も無い" "v1" "$(classify_v2 "$V1_PATH")"
-
-  V2_PATH="$(mktemp -d)/v2.md"
-  make_v2_profile "$V2_PATH" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  assert_eq "v2: schema_versionありかつ動的行あり" "v2" "$(classify_v2 "$V2_PATH")"
-
-  MIXED_PATH="$(mktemp -d)/mixed.md"
-  cat > "$MIXED_PATH" <<'EOF'
----
-team_mode: 本人
-role.leader: configured provider=anthropic-api model=claude-opus-5
----
-EOF
-  assert_eq "mixed: schema_version無しなのに動的行がある" "mixed" "$(classify_v2 "$MIXED_PATH")"
-
-  MIXED2_PATH="$(mktemp -d)/mixed2.md"
-  cat > "$MIXED2_PATH" <<'EOF'
----
-schema_version: 1
-role.leader: configured provider=anthropic-api model=claude-opus-5
----
-EOF
-  assert_eq "mixed: schema_version:1でも動的行があれば混在" "mixed" "$(classify_v2 "$MIXED2_PATH")"
-}
-
 echo "=== 23. parser 4.1-a/4.1-b: ハイフンキー・コメント行・行末コメントが正しく扱われる ==="
 {
   P="$(mktemp -d)/comment.md"
   make_v2_profile "$P" \
     "# これはコメント行（無視される）" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5  # 行末コメントも無視" \
-    "role.requirements-analyst: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main  # 行末コメントも無視" \
+    "role.requirements-analyst: configured model=opus-main"
   out="$(resolve_v2 "$P")"  || true
   assert_contains "4.1-a: ハイフンを含むキー(role.requirements-analyst)がT6にならない" "$out" "OK"
   assert_not_contains "4.1-b: コメント行・行末コメントでT6にならない" "$out" "MINIMAL"
@@ -1266,7 +1256,7 @@ echo "=== 24. parser §3.1-7: 重複キー・重複属性・未許可属性は�
 {
   DUPKEY="$(mktemp -d)/dupkey.md"
   make_v2_profile "$DUPKEY" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
+    "role.leader: configured model=opus-main" \
     "role.leader: unknown"
   out="$(resolve_v2 "$DUPKEY")"  || true
   assert_contains "重複キーはMINIMAL/T6になる" "$out" "MINIMAL"
@@ -1274,13 +1264,13 @@ echo "=== 24. parser §3.1-7: 重複キー・重複属性・未許可属性は�
 
   DUPATTR="$(mktemp -d)/dupattr.md"
   make_v2_profile "$DUPATTR" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5 provider=bedrock"
+    "role.leader: configured model=opus-main model=sonnet-main"
   out="$(resolve_v2 "$DUPATTR")"  || true
   assert_contains "重複属性はMINIMAL/T6になる" "$out" "MINIMAL	T6"
 
   UNKATTR="$(mktemp -d)/unkattr.md"
   make_v2_profile "$UNKATTR" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5 mystery=1"
+    "role.leader: configured model=opus-main mystery=1"
   out="$(resolve_v2 "$UNKATTR")"  || true
   assert_contains "許可されない属性はMINIMAL/T6になる" "$out" "MINIMAL	T6"
 
@@ -1293,85 +1283,85 @@ echo "=== 25. validator V8-a: 状態4値と属性有無の組み合わせ ==="
 {
   NOTADOPT_ATTR="$(mktemp -d)/notadopt.md"
   make_v2_profile "$NOTADOPT_ATTR" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.researcher: not_adopted provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main" \
+    "role.researcher: not_adopted model=opus-main"
   out="$(resolve_v2 "$NOTADOPT_ATTR")"  || true
   assert_contains "not_adoptedが属性を持つとV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
   MISSING_MODEL="$(mktemp -d)/missingmodel.md"
   make_v2_profile "$MISSING_MODEL" \
-    "role.leader: configured provider=anthropic-api"
+    "role.leader: configured"
   out="$(resolve_v2 "$MISSING_MODEL")"  || true
   assert_contains "configuredでmodel欠落はV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
   UNAVAIL_OK="$(mktemp -d)/unavailok.md"
   make_v2_profile "$UNAVAIL_OK" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.researcher: unavailable provider=bedrock model=haiku"
+    "role.leader: configured model=opus-main" \
+    "role.researcher: unavailable model=bedrock-haiku"
   out="$(resolve_v2 "$UNAVAIL_OK")"  || true
   assert_contains "unavailableはprovider/modelを持ってよい（意図の記録）" "$out" "OK"
 }
 
-echo "=== 26. validator V9-b: provider毎のmodel形式・execution既定・external必須execution ==="
+echo "=== 26. validate_model_def(): provider毎のmodel形式・execution既定・external必須execution（2026-09-08 モデル定義ファイルと候補指定対応でV9-bの検査対象が役割の行からモデル定義ファイル側へ移った。§2.4） ==="
 {
+  # ⚠️ load_model_defs()は定義ファイル内の全定義を検証するため、role.leaderが
+  # 実際にその定義を参照していなくても、ファイル内に1つでも不正な定義が
+  # あればT12でMINIMALになる（役割の行の候補解決より前の段）。
   BADMODEL="$(mktemp -d)/badmodel.md"
-  make_v2_profile "$BADMODEL" \
-    "role.leader: configured provider=anthropic-api model=gpt-5"
-  out="$(resolve_v2 "$BADMODEL")"  || true
-  assert_contains "anthropic-apiでmodelがclaude-接頭辞でないとV9-bでMINIMAL" "$out" "MINIMAL	T8	V9-b"
+  BADMODEL_CONF="$(mktemp -d)/badmodel.conf"
+  make_model_defs "$BADMODEL_CONF" "[bad-model]" "provider=anthropic-api" "model=gpt-5"
+  make_v2_profile "$BADMODEL" "role.leader: configured model=opus-main"
+  out="$(AIENV_MODEL_DEFS_FILE="$BADMODEL_CONF" resolve_v2 "$BADMODEL")"  || true
+  assert_contains "anthropic-apiでmodelがclaude-接頭辞でないとT12でMINIMAL" "$out" "MINIMAL	T12"
 
   BEDROCKARN="$(mktemp -d)/bedrockarn.md"
-  make_v2_profile "$BEDROCKARN" \
-    "role.leader: configured provider=bedrock model=arn:aws:bedrock:foo"
-  out="$(resolve_v2 "$BEDROCKARN")"  || true
-  assert_contains "bedrockでarn:始まりのmodelはV9-bでMINIMAL（別名限定）" "$out" "MINIMAL	T8	V9-b"
+  BEDROCKARN_CONF="$(mktemp -d)/bedrockarn.conf"
+  make_model_defs "$BEDROCKARN_CONF" "[bad-arn]" "provider=bedrock" "model=arn:aws:bedrock:foo"
+  make_v2_profile "$BEDROCKARN" "role.leader: configured model=opus-main"
+  out="$(AIENV_MODEL_DEFS_FILE="$BEDROCKARN_CONF" resolve_v2 "$BEDROCKARN")"  || true
+  assert_contains "bedrockでarn:始まりのmodelはT12（別名限定）" "$out" "MINIMAL	T12"
 
   BEDROCKUS="$(mktemp -d)/bedrockus.md"
-  make_v2_profile "$BEDROCKUS" \
-    "role.leader: configured provider=bedrock model=us.opus"
-  out="$(resolve_v2 "$BEDROCKUS")"  || true
-  assert_contains "bedrockでus.始まりのmodelもV9-bでMINIMAL" "$out" "MINIMAL	T8	V9-b"
+  BEDROCKUS_CONF="$(mktemp -d)/bedrockus.conf"
+  make_model_defs "$BEDROCKUS_CONF" "[bad-us]" "provider=bedrock" "model=us.opus"
+  make_v2_profile "$BEDROCKUS" "role.leader: configured model=opus-main"
+  out="$(AIENV_MODEL_DEFS_FILE="$BEDROCKUS_CONF" resolve_v2 "$BEDROCKUS")"  || true
+  assert_contains "bedrockでus.始まりのmodelもT12" "$out" "MINIMAL	T12"
 
   EXTNOEXEC="$(mktemp -d)/extnoexec.md"
-  make_v2_profile "$EXTNOEXEC" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=external model=codex-review-default"
-  out="$(resolve_v2 "$EXTNOEXEC")"  || true
-  assert_contains "provider=externalでexecution未記載はV9-bでMINIMAL" "$out" "MINIMAL	T8	V9-b"
+  EXTNOEXEC_CONF="$(mktemp -d)/extnoexec.conf"
+  make_model_defs "$EXTNOEXEC_CONF" "[bad-noexec]" "provider=external" "model=default"
+  make_v2_profile "$EXTNOEXEC" "role.leader: configured model=opus-main"
+  out="$(AIENV_MODEL_DEFS_FILE="$EXTNOEXEC_CONF" resolve_v2 "$EXTNOEXEC")"  || true
+  assert_contains "provider=externalでexecution未記載はT12" "$out" "MINIMAL	T12"
 
   NONSUBEXEC="$(mktemp -d)/nonsubexec.md"
-  make_v2_profile "$NONSUBEXEC" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5 execution=external-cli"
-  out="$(resolve_v2 "$NONSUBEXEC")"  || true
-  assert_contains "anthropic-apiでexecution!=subagentはV9-bでMINIMAL" "$out" "MINIMAL	T8	V9-b"
+  NONSUBEXEC_CONF="$(mktemp -d)/nonsubexec.conf"
+  make_model_defs "$NONSUBEXEC_CONF" "[bad-nonsub]" "provider=anthropic-api" "model=claude-opus-5" "execution=external-cli"
+  make_v2_profile "$NONSUBEXEC" "role.leader: configured model=opus-main"
+  out="$(AIENV_MODEL_DEFS_FILE="$NONSUBEXEC_CONF" resolve_v2 "$NONSUBEXEC")"  || true
+  assert_contains "anthropic-apiでexecution!=subagentはT12" "$out" "MINIMAL	T12"
 
   DEFAULTEXEC="$(mktemp -d)/defaultexec.md"
   make_v2_profile "$DEFAULTEXEC" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   out="$(resolve_v2 "$DEFAULTEXEC")"  || true
   assert_contains "execution未記載はsubagent既定でOKになる" "$out" "OK"
 }
 
-echo "=== 27. validator V9-d①②: ハンドラ写像に無い組・execution=external-apiは常にconfigured不可 ==="
+echo "=== 27. validator V9-d②: execution=external-apiは常にconfigured不可（2026-09-08 モデル定義ファイルと候補指定対応でハンドラ写像が(provider,execution,model)の三つ組から(provider,execution)の対へ縮まったため、旧『写像に無いmodel名』の陰性ケースは消滅した＝external-cliならどのmodelでも実装済み扱いになる。§2.4） ==="
 {
-  UNIMPL_HANDLER="$(mktemp -d)/unimplhandler.md"
-  make_v2_profile "$UNIMPL_HANDLER" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=external execution=external-cli model=other-tool"
-  out="$(resolve_v2 "$UNIMPL_HANDLER")"  || true
-  assert_contains "写像に無い(provider,execution,model)組はV9-dでMINIMAL" "$out" "MINIMAL	T8	V9-d"
-
   EXTAPI="$(mktemp -d)/extapi.md"
   make_v2_profile "$EXTAPI" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=external execution=external-api model=codex-review-default"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=ext-api-bad"
   out="$(resolve_v2 "$EXTAPI")"  || true
   assert_contains "execution=external-apiはハンドラ未実装でconfigured不可(V9-d)" "$out" "MINIMAL	T8	V9-d"
 
   EXTAPI_UNAVAIL="$(mktemp -d)/extapiunavail.md"
   make_v2_profile "$EXTAPI_UNAVAIL" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: unavailable provider=external execution=external-api model=codex-review-default"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: unavailable model=ext-api-bad"
   out="$(resolve_v2 "$EXTAPI_UNAVAIL")"  || true
   assert_contains "unavailableならexternal-apiでも構文上は許される(V9-d②はconfigured限定)" "$out" "OK"
 }
@@ -1380,14 +1370,14 @@ echo "=== 28. validator V16: excluded_modelsに一致する配役はMINIMAL ==="
 {
   V16="$(mktemp -d)/v16.md"
   make_v2_profile "$V16" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' 's/excluded_models: configured value=none/excluded_models: configured value=anthropic-api\/claude-opus-5/' "$V16"
   out="$(resolve_v2 "$V16")"  || true
   assert_contains "禁止モデル一致はV16でMINIMAL" "$out" "MINIMAL	T8	V16"
 
   V16_1M="$(mktemp -d)/v16_1m.md"
   make_v2_profile "$V16_1M" \
-    "role.leader: configured provider=anthropic-api model=claude-fable-5[1m]"
+    "role.leader: configured model=fable-1m"
   sed -i '' 's/excluded_models: configured value=none/excluded_models: configured value=anthropic-api\/claude-fable-5/' "$V16_1M"
   out="$(resolve_v2 "$V16_1M")"  || true
   assert_contains "[1m]は判定で無視されるので同じく一致してMINIMALになる" "$out" "MINIMAL	T8	V16"
@@ -1397,8 +1387,8 @@ echo "=== 29. validator V6: fallbackが指す職種がrole.表に無いとMINIMA
 {
   V6="$(mktemp -d)/v6.md"
   make_v2_profile "$V6" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "fallback.ghost-role: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main" \
+    "fallback.ghost-role: configured model=opus-main"
   out="$(resolve_v2 "$V6")"  || true
   assert_contains "対応するrole.表が無いfallbackはV6でMINIMAL" "$out" "MINIMAL	T8	V6"
 }
@@ -1414,12 +1404,12 @@ echo "=== 30. §3.5-L リーダー状態遷移: unknown/not_adopted/行が無い
   done
 
   NOLEADER="$(mktemp -d)/noleader.md"
-  make_v2_profile "$NOLEADER" "role.researcher: configured provider=anthropic-api model=claude-sonnet-5"
+  make_v2_profile "$NOLEADER" "role.researcher: configured model=sonnet-main"
   out="$(resolve_v2 "$NOLEADER")"  || true
   assert_contains "role.leader行が無ければfail(MINIMAL)になる" "$out" "MINIMAL"
 
   UNAVAIL_NOFB="$(mktemp -d)/leaderunavail.md"
-  make_v2_profile "$UNAVAIL_NOFB" "role.leader: unavailable provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$UNAVAIL_NOFB" "role.leader: unavailable model=opus-main"
   out="$(resolve_v2 "$UNAVAIL_NOFB")"  || true
   assert_contains "leader=unavailableでfallback無しはfail" "$out" "MINIMAL"
 
@@ -1431,8 +1421,8 @@ echo "=== 31. §3.5-L: leaderのfallback救済（本命unavailable→fallbackが
 {
   RESCUE="$(mktemp -d)/leaderrescue.md"
   make_v2_profile "$RESCUE" \
-    "role.leader: unavailable provider=bedrock model=opus" \
-    "fallback.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: unavailable model=bedrock-opus" \
+    "fallback.leader: configured model=opus-main"
   out="$(resolve_v2 "$RESCUE")"  || true
   assert_contains "leaderがfallback救済されればOKになる" "$out" "OK"
   json="$(resolve_leader_v2 "$RESCUE")"  || true
@@ -1441,7 +1431,7 @@ echo "=== 31. §3.5-L: leaderのfallback救済（本命unavailable→fallbackが
   echo "--- leader専用規則: 実効候補のproviderがexternalならfail ---"
   EXT_LEADER="$(mktemp -d)/extleader.md"
   make_v2_profile "$EXT_LEADER" \
-    "role.leader: configured provider=external execution=external-cli model=codex-review-default"
+    "role.leader: configured model=codex-review"
   out="$(resolve_v2 "$EXT_LEADER")"  || true
   assert_contains "leaderのprovider=externalはfailになる" "$out" "MINIMAL"
 }
@@ -1450,9 +1440,9 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
 {
   FB_RESCUE="$(mktemp -d)/workerfallback.md"
   make_v2_profile "$FB_RESCUE" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock model=haiku" \
-    "fallback.verifier: configured provider=anthropic-api model=claude-sonnet-5"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=bedrock-haiku" \
+    "fallback.verifier: configured model=sonnet-main"
   # bedrock.envを与えない(ABSENT=disabled)のでverifierの本命(bedrock)はV9-dで使用不可
   out="$(resolve_v2 "$FB_RESCUE")"  || true
   assert_contains "本命が使用不可でもfallbackが使えればFALLBACK:verifierとして採用される" "$out" "FALLBACK:verifier"
@@ -1461,9 +1451,9 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
   echo "--- 双方使用不可のときだけVACANT+VACANT_REASON、優先順はV1-b→V9-d→V12 ---"
   BOTH_BAD="$(mktemp -d)/bothbad.md"
   make_v2_profile "$BOTH_BAD" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock model=haiku" \
-    "fallback.verifier: configured provider=bedrock model=opus"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=bedrock-haiku" \
+    "fallback.verifier: configured model=bedrock-opus"
   out="$(resolve_v2 "$BOTH_BAD")"  || true
   assert_contains "双方bedrockで経路無効なら空席になる" "$out" "VACANT:verifier"
   assert_contains "空席理由の条件番号が出る(V9-d)" "$out" "VACANT_REASON:verifier=V9-d"
@@ -1471,9 +1461,9 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
   echo "--- unavailableの本命は評価されず、fallbackだけが評価される ---"
   UNAVAIL_SKIP="$(mktemp -d)/unavailskip.md"
   make_v2_profile "$UNAVAIL_SKIP" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: unavailable provider=bedrock model=opus" \
-    "fallback.verifier: configured provider=anthropic-api model=claude-sonnet-5"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: unavailable model=bedrock-opus" \
+    "fallback.verifier: configured model=sonnet-main"
   out="$(resolve_v2 "$UNAVAIL_SKIP")"  || true
   assert_contains "unavailableな本命はスキップされfallbackが採用される" "$out" "FALLBACK:verifier"
 }
@@ -1487,15 +1477,15 @@ echo "=== 33. §3.7 判定不能: Bedrock経路の判定不能はワーカーな
 
   WORKER_UNKNOWN="$(mktemp -d)/workerunknown.md"
   make_v2_profile "$WORKER_UNKNOWN" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock model=haiku"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$WORKER_UNKNOWN" "$UNREADABLE_ENV")"  || true
   assert_not_contains "判定不能でもワーカーは空席にならない" "$out" "VACANT:verifier"
   assert_contains "resolve自体はOKのまま" "$out" "OK"
 
   LEADER_UNKNOWN="$(mktemp -d)/leaderunknownenv.md"
   make_v2_profile "$LEADER_UNKNOWN" \
-    "role.leader: configured provider=bedrock model=opus"
+    "role.leader: configured model=bedrock-opus"
   out="$(resolve_v2 "$LEADER_UNKNOWN" "$UNREADABLE_ENV")"  || true
   assert_contains "判定不能でもleaderはfailになる" "$out" "MINIMAL"
 
@@ -1513,7 +1503,7 @@ AWS_ACCESS_KEY_ID=AKIA_SHOULD_NEVER_LEAK
 EOF
   SECRET_PROFILE="$(mktemp -d)/secretprofile.md"
   make_v2_profile "$SECRET_PROFILE" \
-    "role.leader: configured provider=bedrock model=opus"
+    "role.leader: configured model=bedrock-opus"
   out="$(resolve_v2 "$SECRET_PROFILE" "$PIN_ENV")"  || true
   assert_not_contains "resolve出力にピン実値(ARN)が現れない" "$out" "supersecret-arn"
   assert_not_contains "resolve出力にAWSキーが現れない" "$out" "AKIA_SHOULD_NEVER_LEAK"
@@ -1528,14 +1518,14 @@ echo "=== 35. V15/T11: 禁止キー名はv1/v2どちらの分類でもpreflight�
 {
   V15_V2="$(mktemp -d)/v15v2.md"
   make_v2_profile "$V15_V2" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   echo "api_key: configured value=xyz" >> "$V15_V2"
   # frontmatter終端---の後ろに付けると構文が壊れるので、専用のfixtureを作り直す。
   cat > "$V15_V2" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: authoring
-role.leader: configured provider=anthropic-api model=claude-opus-5
+role.leader: configured model=opus-main
 api_key: configured value=xyz
 team_mode:        configured value=full
 no_read_paths:    unavailable
@@ -1571,9 +1561,9 @@ echo "=== 36. 結合（DIRECTIVE）: VACANT_UNKNOWN・FALLBACK・VACANT_REASON�
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   make_v2_profile "$PROFILE_PATH" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock model=haiku" \
-    "fallback.verifier: configured provider=bedrock model=opus"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=bedrock-haiku" \
+    "fallback.verifier: configured model=bedrock-opus"
   # 静的検証: このprofile単体でVACANT_REASON:verifier=V9-dが出ることを確認済み(#32)。
   # ここではDIRECTIVEへの伝播だけを確認する。
 
@@ -1581,13 +1571,14 @@ echo "=== 36. 結合（DIRECTIVE）: VACANT_UNKNOWN・FALLBACK・VACANT_REASON�
   assert_contains "DIRECTIVEに配役表の状態行が出る" "$ctx" "配役表の状態"
   assert_contains "VACANT:teseterの職種名が出る" "$ctx" "VACANT:verifier"
   assert_contains "VACANT_REASONの条件番号が出る" "$ctx" "VACANT_REASON:verifier=V9-d"
-  # Codex一次レビュー指摘・Major対応: 元のfixtureに存在しない文字列
-  # ("model=bedrock")を検査しても常に偽陰性で通ってしまう無意味な検査だった。
-  # 実際にfixtureへ書いたmodel値(haiku/opus)とprovider値(bedrock)そのものが
-  # 再掲されないことを検査する。
-  assert_not_contains "配役の値(model=haiku)そのものは再掲されない（4.1-f）" "$ctx" "model=haiku"
-  assert_not_contains "配役の値(model=opus)そのものは再掲されない（4.1-f）" "$ctx" "model=opus"
-  assert_not_contains "provider=の値も再掲されない" "$ctx" "provider=bedrock"
+  # 2026-09-08 モデル定義ファイルと候補指定対応: 定義名（例=bedrock-haiku）は
+  # D-10によりこの原則の対象外（配役表解凍-設計-2026-09-08.md §4.1-f）——候補
+  # 行に定義名だけが出ることは別のテスト（AC-7相当）で検証済み。ここで見るのは
+  # 生の属性構文（`model=`・`provider=`のkey=value形式）がDIRECTIVEへそのまま
+  # 再掲されないこと（機構が値を再包装せず生のprofile行を横流しした場合の
+  # 回帰を検知する）。
+  assert_not_contains "配役の属性構文(model=)がそのまま再掲されない（4.1-f）" "$ctx" "model="
+  assert_not_contains "配役の属性構文(provider=)がそのまま再掲されない（4.1-f）" "$ctx" "provider="
 
   rm -rf "$VAULT_DIR" "$PROFILE_DIR"
 }
@@ -1599,8 +1590,8 @@ echo "=== 37. stdout契約: v2 OKでは全文Readが必読リストに載り、�
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   make_v2_profile "$PROFILE_PATH" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.requirements-analyst: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main" \
+    "role.requirements-analyst: configured model=opus-main"
 
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
   occurrences="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH  （全" || true)"
@@ -1617,11 +1608,11 @@ echo "=== 37. stdout契約: v2 OKでは全文Readが必読リストに載り、�
   echo "--- フィールドが複数同時に出るケースで固定順を検証する（Codex一次レビュー指摘・Major対応: 従来は先頭がOKかしか見ていなかった） ---"
   MULTI="$(mktemp -d)/multi.md"
   make_v2_profile "$MULTI" \
-    "role.leader: unavailable provider=bedrock model=opus" \
-    "fallback.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock model=haiku" \
-    "fallback.verifier: configured provider=anthropic-api model=claude-sonnet-5" \
-    "role.researcher: configured provider=anthropic-api model=claude-sonnet-5"
+    "role.leader: unavailable model=bedrock-opus" \
+    "fallback.leader: configured model=opus-main" \
+    "role.verifier: configured model=bedrock-haiku" \
+    "fallback.verifier: configured model=sonnet-main" \
+    "role.researcher: configured model=sonnet-main"
   multi_out="$(resolve_v2 "$MULTI")"  || true
   # 期待: OK -> FALLBACK:leader,verifier(順不同はソート済み) -> VACANT_UNKNOWN(コア
   # マニフェストの他職種) -> ADVISORY:V1-a の順で、この並びどおりに現れること。
@@ -1639,6 +1630,11 @@ echo "=== 37. stdout契約: v2 OKでは全文Readが必読リストに載り、�
 
 echo "=== 38. 候補評価§3.6: 本命と代替の失敗理由が異なるとき、優先順(V1-b→V9-d→V12)で高い方が採用される（ホワイトボックス・Codex二次レビュー指摘・Major対応: CLI経由のfixtureでは本命/fallbackが同一職種名を共有するためV1-bは両者で必ず同じ結果になり、異なる理由の組み合わせを黒箱では再現できない。_evaluate_single_candidate()を差し替えて優先順ロジック自体を直接検証する） ==="
 {
+  # 2026-09-08 モデル定義ファイルと候補指定対応: evaluate_worker_candidate()の
+  # シグネチャがresolved辞書（{(kind,name): [ModelDef,...]}）を取るように
+  # 変わり、内部で候補ごとにCandidate(name, ModelDef)を組み立ててから
+  # _evaluate_single_candidate()へ渡すようになった（1行1候補→1行n候補）。
+  # そのためline識別はオブジェクトの同一性ではなくdef_nameで行う。
   result="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 - <<'PYEOF'
 import profile_resolve as pr
 
@@ -1647,21 +1643,32 @@ class Fake:
     def __init__(self, name):
         self.name = name
         self.state = "configured"
-        self.attrs = {"provider": "anthropic-api", "model": "claude-opus-5", "execution": "subagent"}
 
 
-def fake_eval(line, agents_dir, bedrock_env, is_leader):
-    if line is primary:
+def make_def(name):
+    d = pr.ModelDef(name, 0)
+    d.provider = "anthropic-api"
+    d.model = "claude-opus-5"
+    d.execution = "subagent"
+    return d
+
+
+def fake_eval(cand, agents_dir, bedrock_env, is_leader):
+    if cand.def_name == "primary-def":
         return False, "V9-d", None
     return False, "V1-b", None
 
 
 primary = Fake("verifier")
 fallback = Fake("verifier")
+resolved = {
+    ("role", "verifier"): [make_def("primary-def")],
+    ("fallback", "verifier"): [make_def("fallback-def")],
+}
 orig = pr._evaluate_single_candidate
 pr._evaluate_single_candidate = fake_eval
 try:
-    cand = pr.evaluate_worker_candidate("verifier", {"verifier": primary}, {"verifier": fallback}, None, None)
+    cand = pr.evaluate_worker_candidate("verifier", {"verifier": primary}, {"verifier": fallback}, resolved, None, None)
 finally:
     pr._evaluate_single_candidate = orig
 print(cand.vacant_reason)
@@ -1679,8 +1686,8 @@ echo "=== 39. §3.7 判定不能: ワーカーが判定不能で通ったこと�
 
   ADV_UNKNOWN="$(mktemp -d)/advunknown.md"
   make_v2_profile "$ADV_UNKNOWN" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock model=haiku"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$ADV_UNKNOWN" "$UNREADABLE_ENV2")"  || true
   assert_contains "判定不能で通した職種があることがADVISORY:JUDGEMENT_UNKNOWNとして出る" "$out" "ADVISORY:JUDGEMENT_UNKNOWN"
 
@@ -1692,8 +1699,8 @@ echo "=== 40. §4.1-f: leaderがfallback救済されたときも職種名'leader
 {
   LEADER_FB="$(mktemp -d)/leaderfb.md"
   make_v2_profile "$LEADER_FB" \
-    "role.leader: unavailable provider=bedrock model=opus" \
-    "fallback.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: unavailable model=bedrock-opus" \
+    "fallback.leader: configured model=opus-main"
   out="$(resolve_v2 "$LEADER_FB")"  || true
   assert_contains "leaderのfallback採用がFALLBACK:leaderとして出る" "$out" "FALLBACK:leader"
 }
@@ -1716,7 +1723,7 @@ EOF
   assert_not_contains "check-candidate出力にAWSキーが現れない" "$cc_out" "SHOULD_NEVER_LEAK_2"
 
   LEADER_FAIL_ENV="$(mktemp -d)/leaderfailenv.md"
-  make_v2_profile "$LEADER_FAIL_ENV" "role.leader: configured provider=bedrock model=sonnet"
+  make_v2_profile "$LEADER_FAIL_ENV" "role.leader: configured model=bedrock-sonnet"
   leader_err="$(python3 "$PROFILE_LIB" resolve-leader "$LEADER_FAIL_ENV" --bedrock-env "$PIN_ENV2" --agents-dir "$AGENTS_DIR" 2>&1 1>/dev/null)"  || true
   assert_not_contains "resolve-leaderのstderrにもピン実値が現れない" "$leader_err" "supersecret-arn-2"
   assert_not_contains "resolve-leaderのstderrにもAWSキーが現れない" "$leader_err" "SHOULD_NEVER_LEAK_2"
@@ -1726,8 +1733,8 @@ echo "=== 42. §3.4 T4'(実体の版>コードの版): 未知キーを無視しA
 {
   T4PRIME="$(mktemp -d)/t4prime.md"
   make_v2_profile "$T4PRIME" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' 's/schema_version: 5/schema_version: 6/' "$T4PRIME"
+    "role.leader: configured model=opus-main"
+  sed -i '' 's/schema_version: 6/schema_version: 7/' "$T4PRIME"
   # ---の直前に未知キーを挿入する。
 
   python3 - "$T4PRIME" <<'PYEOF'
@@ -1744,73 +1751,11 @@ PYEOF
   assert_contains "T4-PRIME: 未知キーはUNKNOWN_EXTRAにも出る" "$out" "UNKNOWN_EXTRA:future_key_v3"
 }
 
-echo "=== 43. §3.4 T4(実体の版<コードの版): 欠落した固定キーをunknownで仮想補完しADVISORY:T4で通す（ホワイトボックス・Codex二次レビュー指摘・Major対応: 環境変数で本番の期待版を差し替えられる穴を撤去したため、テストはサブプロセス内でモジュール属性を直接上書きする。本番の起動経路（bootstrap-vault.sh・install-main.sh）には一切影響しない） ==="
-{
-  T4="$(mktemp -d)/t4.md"
-  make_v2_profile "$T4" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  # machine_roleキーを欠落させる（EXPECTED=4のときだけT5にせずT4で仮想補完される）。
-  python3 - "$T4" <<'PYEOF'
-import sys
-path = sys.argv[1]
-lines = [l for l in open(path).read().splitlines() if not l.startswith("machine_role:")]
-open(path, "w").write("\n".join(lines) + "\n")
-PYEOF
-  out_normal="$(resolve_v2 "$T4")"  || true
-  assert_contains "EXPECTED=5(現行)のままなら欠落はT5でMINIMALになる（回帰確認）" "$out_normal" "MINIMAL	T5"
-
-  out_override="$(python3 - "$T4" "$AGENTS_DIR" <<PYEOF
-import sys
-sys.path.insert(0, "$REPO_ROOT/claude/hooks/lib")
-import profile_resolve as pr
-pr.EXPECTED_SCHEMA_VERSION = 6
-line, code = pr.do_resolve(sys.argv[1], None, sys.argv[2])
-print(line)
-PYEOF
-)"
-  assert_contains "EXPECTED=6に差し替えるとT4で仮想補完されOKになる" "$out_override" "OK"
-  assert_contains "T4のADVISORYコードが出る" "$out_override" "ADVISORY:T4"
-}
-
-echo "=== 43b. §3.4 T4の本番互換経路(モンキーパッチ無し): 現行の能力軸3キーをいずれも持たず未知キーだけを持つschema_version:2の実体が、現行のEXPECTED_SCHEMA_VERSION(=5)のまま仮想補完されOKになる（Codex一次レビュー指摘・Major対応: 43番はEXPECTEDを一時的に書き換えるホワイトボックス試験のみで、declared<EXPECTED経路そのものは未検証だった） ==="
-{
-  # ⚠️ Codex一次レビュー指摘（MAJOR-3・2026-09-07）対応: 当初は歴史的な実在
-  # キー名（廃止5キー）をそのまま使いAC5-ALLOWタグで許可していたが、これは
-  # 「現行resolverに旧入力を渡すケース」であって要件AC-5③が許可する
-  # 「旧コードそのものを起動する再現fixture」ではないと指摘された。本テストの
-  # 実質はUNKNOWN_EXTRAの束＋T4仮想補完の組み合わせであり、キー名の実在性は
-  # 検証対象ではないため、廃止語を一切含まない架空のキー名へ差し替えた
-  # （AC5-ALLOWタグは不要になったため撤去）。
-  T4REAL="$(mktemp -d)/t4real.md"
-  mkdir -p "$(dirname "$T4REAL")"
-  # V2_BASE/make_v2_profile()は既に現行の能力軸3キー込みの雛形になっている
-  # ため使わない。現行のCAPABILITY_KEYSに含まれない未知キー6個を持つ
-  # schema_version:2の実体を手書きする。
-  cat > "$T4REAL" <<'EOF'
----
-schema_version: 2
-profile_slug: authoring
-role.leader: configured provider=anthropic-api model=claude-opus-5
-legacy_axis_a: configured value=work-tools-dir
-legacy_axis_b: configured value=codex-mcp
-legacy_axis_c: configured value=via-scribe
-legacy_axis_d: configured value=send-message
-legacy_axis_e: configured value=aienv-repo:commit
-legacy_axis_f: configured value=websearch
-excluded_models: configured value=none
----
-EOF
-  out="$(resolve_v2 "$T4REAL")"  || true
-  assert_contains "モンキーパッチ無しでもMINIMALへは倒さない(OKになる)" "$out" "OK"
-  assert_contains "T4のADVISORYコードが出る(能力軸3キーがunknownで仮想補完される)" "$out" "ADVISORY:T4"
-  assert_not_contains "T5(既知キー欠落)としては失敗しない" "$out" "MINIMAL	T5"
-}
-
 echo "=== 44. V8-b共通規則・excluded_modelsの扱い統一（Codex一次レビュー指摘・Major対応） ==="
 {
   EM_SENTINEL="$(mktemp -d)/emsentinel.md"
   make_v2_profile "$EM_SENTINEL" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' 's/excluded_models: configured value=none/excluded_models: configured value=<fill-in>/' "$EM_SENTINEL"
   out="$(resolve_v2 "$EM_SENTINEL")"  || true
   assert_contains "excluded_modelsのsentinelもT2-MINIMALで検出される" "$out" "MINIMAL	T2-MINIMAL"
@@ -1818,14 +1763,14 @@ echo "=== 44. V8-b共通規則・excluded_modelsの扱い統一（Codex一次レ
 
   DUP_VALUE="$(mktemp -d)/dupvalue.md"
   make_v2_profile "$DUP_VALUE" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' 's/team_mode:        configured value=full/team_mode:        configured value=full,full/' "$DUP_VALUE"
   out="$(resolve_v2 "$DUP_VALUE")"  || true
   assert_contains "value内の重複要素はV8-bでMINIMALになる（共通規則）" "$out" "MINIMAL	T8	V8-b"
 
   EM_UNAVAIL="$(mktemp -d)/emunavail.md"
   make_v2_profile "$EM_UNAVAIL" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' 's/excluded_models: configured value=none/excluded_models: unavailable/' "$EM_UNAVAIL"
   out="$(resolve_v2 "$EM_UNAVAIL")"  || true
   assert_contains "excluded_models: unavailable（属性無し）はOKになる（他の能力軸キーと同じ3状態）" "$out" "OK"
@@ -1905,25 +1850,25 @@ echo "=== 45. is_v2_resolve_output_well_formed(): ゴミ混入・重複・順序
     || fail_case "MACHINE_ROLE:unknownは受理される"
 }
 
-echo "=== 46. list-roles: kind/state/execution既定値/not_adopted・unknownの空欄化・fallbackの並び（リーダー裁定2026-09-01でB向けに追加確定・契約書§4.5） ==="
+echo "=== 46. list-roles: kind/state/定義名/execution既定値/not_adopted・unknownの空欄化・fallbackの並び（2026-09-08 モデル定義ファイルと候補指定対応で8列・1候補1行へ改訂＝設計§3.4） ==="
 {
   LR="$(mktemp -d)/listroles.md"
   make_v2_profile "$LR" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
+    "role.leader: configured model=opus-main" \
     "role.navi: unknown" \
     "role.researcher: not_adopted" \
-    "role.system-designer: configured provider=anthropic-api model=claude-opus-5 effort=high" \
-    "role.verifier: unavailable provider=bedrock model=opus" \
-    "fallback.verifier: configured provider=anthropic-api model=claude-sonnet-5"
+    "role.system-designer: configured model=opus-high" \
+    "role.verifier: unavailable model=bedrock-opus" \
+    "fallback.verifier: configured model=sonnet-main"
   out="$(python3 "$PROFILE_LIB" list-roles "$LR")"  || true
 
-  assert_contains "role.leaderの行がkind=role・state=configuredで出る" "$out" "role	leader	configured	anthropic-api	claude-opus-5	subagent	"
+  assert_contains "role.leaderの行がkind=role・state=configured・定義名=opus-mainで出る" "$out" "role	leader	configured	opus-main	anthropic-api	claude-opus-5	subagent	"
   assert_contains "executionが省略されていてもsubagentが補われて出る" "$out" "	subagent	"
-  assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "role	system-designer	configured	anthropic-api	claude-opus-5	subagent	high"
-  assert_contains "unknown状態はprovider以降が全て空文字になる" "$out" "role	navi	unknown				"
-  assert_contains "not_adopted状態もprovider以降が全て空文字になる" "$out" "role	researcher	not_adopted				"
-  assert_contains "unavailable状態はprovider/modelを保持したまま出る（意図の記録）" "$out" "role	verifier	unavailable	bedrock	opus	subagent	"
-  assert_contains "fallback行もkind=fallbackとして出る" "$out" "fallback	verifier	configured	anthropic-api	claude-sonnet-5	subagent	"
+  assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "role	system-designer	configured	opus-high	anthropic-api	claude-opus-5	subagent	high"
+  assert_contains "unknown状態は定義名以降が全て空文字になる（5フィールド）" "$out" "role	navi	unknown					"
+  assert_contains "not_adopted状態も定義名以降が全て空文字になる（5フィールド）" "$out" "role	researcher	not_adopted					"
+  assert_contains "unavailable状態は定義名・provider/modelを保持したまま出る（意図の記録）" "$out" "role	verifier	unavailable	bedrock-opus	bedrock	opus	subagent	"
+  assert_contains "fallback行もkind=fallbackとして出る" "$out" "fallback	verifier	configured	sonnet-main	anthropic-api	claude-sonnet-5	subagent	"
 
   # role.表→fallback.表の順であることの確認（roleの最後の行より後にfallbackが来る）。
   role_idx=$(printf '%s' "$out" | grep -n '^role	verifier' | head -1 | cut -d: -f1)
@@ -1940,7 +1885,7 @@ echo "=== 47. list-roles: 失敗時（自己完結・resolve-leaderと同じコ�
 
   DUP="$(mktemp -d)/lrdup.md"
   make_v2_profile "$DUP" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
+    "role.leader: configured model=opus-main" \
     "role.leader: unknown"
   out="$(python3 "$PROFILE_LIB" list-roles "$DUP" 2>/dev/null)"  || true
   err="$(python3 "$PROFILE_LIB" list-roles "$DUP" 2>&1 1>/dev/null)"  || true
@@ -1958,14 +1903,14 @@ AWS_SECRET_ACCESS_KEY=SHOULD_NEVER_LEAK_3
 EOF
   LR_SECRET="$(mktemp -d)/lrsecret.md"
   make_v2_profile "$LR_SECRET" \
-    "role.leader: configured provider=bedrock model=opus"
+    "role.leader: configured model=bedrock-opus"
   # list-rolesはbedrock-envを引数に取らない（profile本体の値=別名しか扱わない
   # 設計）ため、そもそもbedrock.envを読まない。念のため実際に出力へ実値が
   # 混入していないことを確認する。
   out="$(python3 "$PROFILE_LIB" list-roles "$LR_SECRET")"  || true
   assert_not_contains "list-roles出力にピン実値(ARN)が現れない" "$out" "supersecret-arn-3"
   assert_not_contains "list-roles出力にAWSキーが現れない" "$out" "SHOULD_NEVER_LEAK_3"
-  assert_contains "list-roles出力にはBedrockの別名(opus)だけが出る" "$out" "role	leader	configured	bedrock	opus	subagent	"
+  assert_contains "list-roles出力にはBedrockの別名(opus)だけが出る" "$out" "role	leader	configured	bedrock-opus	bedrock	opus	subagent	"
 }
 
 echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8があってもクラッシュせず、判定不能として扱われる（_read_bedrock_env_wanted()がUnicodeDecodeErrorを未捕捉だった実バグの回帰テスト） ==="
@@ -1975,8 +1920,8 @@ echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8�
 
   WORKER_BAD_UTF8="$(mktemp -d)/workerbadutf8.md"
   make_v2_profile "$WORKER_BAD_UTF8" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock model=haiku"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$WORKER_BAD_UTF8" "$BAD_UTF8_ENV")"  || true
   err="$(python3 "$PROFILE_LIB" resolve "$WORKER_BAD_UTF8" --bedrock-env "$BAD_UTF8_ENV" --agents-dir "$AGENTS_DIR" 2>&1 1>/dev/null)"  || true
   assert_contains "workerは判定不能で通り(JUDGEMENT_UNKNOWN)クラッシュしない" "$out" "ADVISORY:JUDGEMENT_UNKNOWN"
@@ -1984,7 +1929,7 @@ echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8�
   assert_not_contains "stderrにPythonのtracebackが出ない" "$err" "Traceback"
 
   LEADER_BAD_UTF8="$(mktemp -d)/leaderbadutf8.md"
-  make_v2_profile "$LEADER_BAD_UTF8" "role.leader: configured provider=bedrock model=haiku"
+  make_v2_profile "$LEADER_BAD_UTF8" "role.leader: configured model=bedrock-haiku"
   out2="$(resolve_v2 "$LEADER_BAD_UTF8" "$BAD_UTF8_ENV")"  || true
   err2="$(python3 "$PROFILE_LIB" resolve-leader "$LEADER_BAD_UTF8" --bedrock-env "$BAD_UTF8_ENV" --agents-dir "$AGENTS_DIR" 2>&1 1>/dev/null)"  || true
   assert_contains "leaderはクリーンな機械可読コードで非0終了する" "$out2" "MINIMAL"
@@ -1997,46 +1942,22 @@ echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8�
   assert_not_contains "list-rolesもtracebackを出さない" "$lr_out" "Traceback"
 }
 
-echo "=== 50. §10欠落補充: T12(v1委譲でLEGACY_V1がトップレベルに出る)・T3-PRIME(混在)・T10(lib欠落)を分類ディスパッチャ(resolve_local_profile())で直接検証（tester独立検証・§10欠落指摘対応） ==="
-{
-  V1_OK="$(mktemp -d)/v1ok.md"
-  make_ok_profile "$V1_OK"
-  out="$(run_resolve_local_profile_dispatch "$V1_OK")"
-  assert_contains "v1でOKなプロファイルはトップレベルがLEGACY_V1になる(T12)" "$out" "LEGACY_V1"
-  assert_not_contains "生のOKトークンでは始まらない(トップレベルが差し替わっている)" "$out" "OK	"
-
-  MIXED_DISPATCH="$(mktemp -d)/mixeddispatch.md"
-  cat > "$MIXED_DISPATCH" <<'EOF'
----
-team_mode: 本人
-role.leader: configured provider=anthropic-api model=claude-opus-5
----
-EOF
-  out="$(run_resolve_local_profile_dispatch "$MIXED_DISPATCH")"
-  assert_contains "混在はMINIMAL/T3-PRIMEになる" "$out" "MINIMAL	T3-PRIME"
-
-  V2_OK_DISPATCH="$(mktemp -d)/v2okdispatch.md"
-  make_v2_profile "$V2_OK_DISPATCH" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  out="$(run_resolve_local_profile_dispatch "$V2_OK_DISPATCH" "/nonexistent/lib-for-t10-test.py")"
-  assert_contains "libが見つからない場合はT10になる(v2分類のprofileでも)" "$out" "MINIMAL	T10"
-}
-
 echo "=== 51. V14メタ構文の直接検証: schema_versionが正整数でない・profile_slugが規約に反する ==="
 {
   BADVER="$(mktemp -d)/badver.md"
-  make_v2_profile "$BADVER" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' 's/schema_version: 5/schema_version: abc/' "$BADVER"
+  make_v2_profile "$BADVER" "role.leader: configured model=opus-main"
+  sed -i '' 's/schema_version: 6/schema_version: abc/' "$BADVER"
   out="$(resolve_v2 "$BADVER")"  || true
   assert_contains "schema_versionが数値でなければT3になる" "$out" "MINIMAL	T3"
 
   BADVER0="$(mktemp -d)/badver0.md"
-  make_v2_profile "$BADVER0" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' 's/schema_version: 5/schema_version: 0/' "$BADVER0"
+  make_v2_profile "$BADVER0" "role.leader: configured model=opus-main"
+  sed -i '' 's/schema_version: 6/schema_version: 0/' "$BADVER0"
   out="$(resolve_v2 "$BADVER0")"  || true
   assert_contains "schema_version=0(正整数でない)もT3になる" "$out" "MINIMAL	T3"
 
   BADSLUG="$(mktemp -d)/badslug.md"
-  make_v2_profile "$BADSLUG" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$BADSLUG" "role.leader: configured model=opus-main"
   sed -i '' 's/profile_slug: authoring/profile_slug: Bad_Slug!/' "$BADSLUG"
   out="$(resolve_v2 "$BADSLUG")"  || true
   assert_contains "profile_slugが規約(^[a-z0-9][a-z0-9-]*\$)に反するとT14になる" "$out" "MINIMAL	T14"
@@ -2046,32 +1967,30 @@ echo "=== 52. V8-a 状態4値×属性有無の網羅補充: unavailableでmodel�
 {
   UNAVAIL_MISSING="$(mktemp -d)/unavailmissing.md"
   make_v2_profile "$UNAVAIL_MISSING" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: unavailable provider=bedrock"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: unavailable"
   out="$(resolve_v2 "$UNAVAIL_MISSING")"  || true
   assert_contains "unavailableでもmodel欠落はV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
   UNKNOWN_ATTR="$(mktemp -d)/unknownattr.md"
   make_v2_profile "$UNKNOWN_ATTR" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: unknown provider=anthropic-api model=claude-sonnet-5"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: unknown model=sonnet-main"
   out="$(resolve_v2 "$UNKNOWN_ATTR")"  || true
   assert_contains "unknown状態で属性を持つとV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
-  MISSING_PROVIDER="$(mktemp -d)/missingprovider.md"
-  make_v2_profile "$MISSING_PROVIDER" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5 execution=subagent"
-  sed -i '' 's/role.leader: configured provider=anthropic-api model=claude-opus-5 execution=subagent/role.leader: configured model=claude-opus-5/' "$MISSING_PROVIDER"
-  out="$(resolve_v2 "$MISSING_PROVIDER")"  || true
-  assert_contains "providerが無いこともV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
+  # 2026-09-08 モデル定義ファイルと候補指定対応: 旧「providerが無いこともV8-a
+  # でMINIMALになる」ケースは撤去した——role行はもうprovider属性を持たない
+  # ため、そのケース自体が成立しない（`model=claude-opus-5`は定義名として
+  # 文法上妥当に読め、未定義参照ならV17で落ちる。V8-aの対象外）。
 }
 
-echo "=== 53. bedrock-mantle provider: 適合表(§3.3)の形式検査とV12対象外(ピンチェックを課さない) ==="
+echo "=== 53. bedrock-mantle provider: 適合表(§3.3)の形式検査(モデル定義ファイル側=T12)とV12対象外(ピンチェックを課さない) ==="
 {
   MANTLE_OK="$(mktemp -d)/mantleok.md"
   make_v2_profile "$MANTLE_OK" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock-mantle model=anthropic.claude-3-haiku"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=mantle-haiku"
   # bedrock.envは渡すがCLAUDE_CODE_USE_BEDROCKだけ有効にする(ピンは無し)。
   MANTLE_ENV="$(mktemp -d)/bedrock.env"
   echo "CLAUDE_CODE_USE_BEDROCK=1" > "$MANTLE_ENV"
@@ -2080,24 +1999,24 @@ echo "=== 53. bedrock-mantle provider: 適合表(§3.3)の形式検査とV12対�
   assert_not_contains "bedrock-mantleはVACANTにならない(ピンチェック不要)" "$out" "VACANT:verifier"
 
   MANTLE_BAD="$(mktemp -d)/mantlebad.md"
-  make_v2_profile "$MANTLE_BAD" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock-mantle model=not-anthropic-prefixed"
-  out="$(resolve_v2 "$MANTLE_BAD")"  || true
-  assert_contains "bedrock-mantleでanthropic.始まりでないmodelはV9-bでMINIMALになる" "$out" "MINIMAL	T8	V9-b"
+  MANTLE_BAD_CONF="$(mktemp -d)/mantlebad.conf"
+  make_model_defs "$MANTLE_BAD_CONF" "[bad-mantle]" "provider=bedrock-mantle" "model=not-anthropic-prefixed"
+  make_v2_profile "$MANTLE_BAD" "role.leader: configured model=opus-main"
+  out="$(AIENV_MODEL_DEFS_FILE="$MANTLE_BAD_CONF" resolve_v2 "$MANTLE_BAD")"  || true
+  assert_contains "bedrock-mantleでanthropic.始まりでないmodelはT12でMINIMALになる" "$out" "MINIMAL	T12"
 }
 
 echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex方言minimal・設定効果先の非対称 ==="
 {
   WORKER_MAX="$(mktemp -d)/workermax.md"
   make_v2_profile "$WORKER_MAX" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=anthropic-api model=claude-sonnet-5 effort=max"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=sonnet-max"
   out="$(resolve_v2 "$WORKER_MAX")"  || true
   assert_contains "ワーカー行はmaxを書ける(V9-bのenumはEFFORT_CLAUDEでmaxを含む)" "$out" "OK"
 
   LEADER_MAX="$(mktemp -d)/leadermax.md"
-  make_v2_profile "$LEADER_MAX" "role.leader: configured provider=anthropic-api model=claude-opus-5 effort=max"
+  make_v2_profile "$LEADER_MAX" "role.leader: configured model=opus-max"
   out="$(resolve_v2 "$LEADER_MAX")"  || true
   assert_contains "leader行はmaxだとV9-eで弾かれfailになる(settings.jsonのeffortLevelがmaxを受理しないため)" "$out" "MINIMAL"
   err="$(python3 "$PROFILE_LIB" resolve-leader "$LEADER_MAX" --agents-dir "$AGENTS_DIR" 2>&1 1>/dev/null)"  || true
@@ -2105,25 +2024,27 @@ echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex�
 
   CODEX_MINIMAL="$(mktemp -d)/codexminimal.md"
   make_v2_profile "$CODEX_MINIMAL" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=external execution=external-cli model=codex-review-default effort=minimal"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=codex-review-minimal"
   out="$(resolve_v2 "$CODEX_MINIMAL")"  || true
   assert_contains "Codexハンドラ(external-cli/codex-review-default)はminimalを書ける" "$out" "OK"
 
+  # 2026-09-08 モデル定義ファイルと候補指定対応: effortの許可集合検査は
+  # モデル定義ファイル側（validate_model_def・T12）へ移った。
+  CODEX_MINIMAL_ELSEWHERE_CONF="$(mktemp -d)/codexminimalelsewhere.conf"
+  make_model_defs "$CODEX_MINIMAL_ELSEWHERE_CONF" "[bad-sonnet-minimal]" "provider=anthropic-api" "model=claude-sonnet-5" "effort=minimal"
   CODEX_MINIMAL_ELSEWHERE="$(mktemp -d)/codexminimalelsewhere.md"
-  make_v2_profile "$CODEX_MINIMAL_ELSEWHERE" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=anthropic-api model=claude-sonnet-5 effort=minimal"
-  out="$(resolve_v2 "$CODEX_MINIMAL_ELSEWHERE")"  || true
-  assert_contains "Claude系(anthropic-api)でminimalはV9-bでMINIMALになる(Codex方言はexternalハンドラ限定)" "$out" "MINIMAL	T8	V9-b"
+  make_v2_profile "$CODEX_MINIMAL_ELSEWHERE" "role.leader: configured model=opus-main"
+  out="$(AIENV_MODEL_DEFS_FILE="$CODEX_MINIMAL_ELSEWHERE_CONF" resolve_v2 "$CODEX_MINIMAL_ELSEWHERE")"  || true
+  assert_contains "Claude系(anthropic-api)でminimalはT12でMINIMALになる(Codex方言はexternalハンドラ限定)" "$out" "MINIMAL	T12"
 }
 
 echo "=== 55. V9-f直接検証: 既知の非対応モデル×xhigh はADVISORY、別名は判別不能としてEFFORT_COMPATIBILITY_UNVERIFIED ==="
 {
   V9F_KNOWN="$(mktemp -d)/v9fknown.md"
   make_v2_profile "$V9F_KNOWN" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=anthropic-api model=claude-opus-4.6 effort=xhigh"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=opus46-xhigh"
   out="$(resolve_v2 "$V9F_KNOWN")"  || true
   # ADVISORYフィールドはコードをソートして併記する(§5)ため"V1-a,V9-f"に
   # なる。"ADVISORY:V9-f"という直結文字列を探すのは誤り(実測で判明)。
@@ -2132,8 +2053,8 @@ echo "=== 55. V9-f直接検証: 既知の非対応モデル×xhigh はADVISORY�
 
   V9F_BEDROCK="$(mktemp -d)/v9fbedrock.md"
   make_v2_profile "$V9F_BEDROCK" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: configured provider=bedrock model=opus effort=xhigh"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: configured model=bedrock-opus-xhigh"
   out="$(resolve_v2 "$V9F_BEDROCK")"  || true
   assert_contains "bedrock別名は実モデル版を判別できないためEFFORT_COMPATIBILITY_UNVERIFIEDになる" "$out" "ADVISORY:EFFORT_COMPATIBILITY_UNVERIFIED"
 }
@@ -2142,7 +2063,7 @@ echo "=== 56. check_leader_settings_drift(): S10/S11/S16対応（配役表解凍
 {
   LEADER_PROFILE="$(mktemp -d)/leaderdrift.md"
   make_v2_profile "$LEADER_PROFILE" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5 effort=high"
+    "role.leader: configured model=opus-high"
 
   echo "--- S10/S11/S16共通の検出信号: settings.jsonのmodelが配役表の解決値と食い違う(手で直した/旧ファイルを放置/生成失敗のいずれでも観測結果は同じ不一致になる) ---"
   SETTINGS_MODEL_MISMATCH="$(mktemp -d)/settings-model-mismatch.json"
@@ -2179,7 +2100,7 @@ EOF
   echo "--- effort未指定のleader行では、settings.jsonにeffortLevelキーが有るだけで不一致になる（§3.8の非対称） ---"
   LEADER_NO_EFFORT="$(mktemp -d)/leadernoeffort.md"
   make_v2_profile "$LEADER_NO_EFFORT" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   SETTINGS_UNEXPECTED_EFFORT="$(mktemp -d)/settings-unexpected-effort.json"
   cat > "$SETTINGS_UNEXPECTED_EFFORT" <<'EOF'
 {"model": "claude-opus-5", "effortLevel": "high"}
@@ -2273,12 +2194,18 @@ EOF
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$LEADER_PROFILE" "$SETTINGS_MATCH")"
   assert_not_contains "一致していれば警告が出ない" "$ctx" "settings.json"
 
-  echo "--- LEGACY_V1(v1委譲)はスコープ外: v1プロファイルではsettings.json比較を試みない(週次drift=check-drift.shのV13が既にv1をカバーする) ---"
-  V1_PROFILE="$(mktemp -d)/v1profile.md"
-  make_ok_profile "$V1_PROFILE"
-  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$V1_PROFILE" "$SETTINGS_BROKEN")"
-  assert_contains "v1委譲の警告文言は出る" "$ctx" "v1形式です"
-  assert_not_contains "v1ではsettings.json比較の監視不能メッセージは出ない(スコープ外)" "$ctx" "監視不能"
+  echo "--- 旧版(T4-LEGACY)はスコープ外: profile_kind=OK以外ではsettings.json比較を試みない（2026-09-08 モデル定義ファイルと候補指定対応でv1委譲は撤去したが、旧版が比較対象外という契約自体は同じ。週次drift=check-drift.shのV13が既に旧版をカバーする） ---"
+  LEGACY_PROFILE="$(mktemp -d)/legacyprofile.md"
+  cat > "$LEGACY_PROFILE" <<'EOF'
+---
+team_mode: 本人
+no_read_paths: ~/work/old
+machine_role: 本人
+---
+EOF
+  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$LEGACY_PROFILE" "$SETTINGS_BROKEN")"
+  assert_contains "旧版の警告文言は出る" "$ctx" "旧版"
+  assert_not_contains "旧版ではsettings.json比較の監視不能メッセージは出ない(スコープ外)" "$ctx" "監視不能"
 
   rm -rf "$VAULT_DIR"
 }
@@ -2318,7 +2245,7 @@ echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行�
   # しない＝role_and_core_manifest_diff()はparsed.rolesのキーのみを見る）。
   COMPLETE_ROSTER="$(mktemp -d)/complete-roster.md"
   make_v2_profile "$COMPLETE_ROSTER" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
+    "role.leader: configured model=opus-main" \
     "role.navi: unknown" \
     "role.ja-doc: unknown" \
     "role.adoption-critic: unknown" \
@@ -2349,7 +2276,7 @@ echo "=== 58b. V1-aマニフェスト(結合・回帰防止・対照実験): 完
   # 完全に同一。
   OLD_KEY_ROSTER="$(mktemp -d)/old-key-roster.md"
   make_v2_profile "$OLD_KEY_ROSTER" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
+    "role.leader: configured model=opus-main" \
     "role.navi: unknown" \
     "role.ja-doc: unknown" \
     "role.adoption-critic: unknown" \
@@ -2404,7 +2331,7 @@ echo "=== 61. FX-P1〜P3: resolver単体・team_modeがsolo/lean/fullのときTE
   for v in solo lean full; do
     FXP="$(mktemp -d)/fxp-$v.md"
     make_v2_profile "$FXP" \
-      "role.leader: configured provider=anthropic-api model=claude-opus-5"
+      "role.leader: configured model=opus-main"
     sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=$v/" "$FXP"
     # ⚠️ `out="$(cmd)" || true`は`||`の右辺が常に成功するため直後の`$?`は
     # 常に0になり、resolve_v2自身の終了コードを検証できない（Codex一次
@@ -2425,7 +2352,7 @@ echo "=== 62. FX-P4〜P5: resolver単体・team_modeがunknown/unavailableなら
 {
   FXP4="$(mktemp -d)/fxp4.md"
   make_v2_profile "$FXP4" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unknown/" "$FXP4"
   if out="$(resolve_v2 "$FXP4")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P4(team_mode:unknown): TEAM_MODE:unknownが出る" "$out" "TEAM_MODE:unknown"
@@ -2435,7 +2362,7 @@ echo "=== 62. FX-P4〜P5: resolver単体・team_modeがunknown/unavailableなら
 
   FXP5="$(mktemp -d)/fxp5.md"
   make_v2_profile "$FXP5" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unavailable/" "$FXP5"
   if out="$(resolve_v2 "$FXP5")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P5(team_mode:unavailable): TEAM_MODE:unknownが出る" "$out" "TEAM_MODE:unknown"
@@ -2448,7 +2375,7 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
 {
   FXP6="$(mktemp -d)/fxp6.md"
   make_v2_profile "$FXP6" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=solo,lean/" "$FXP6"
   if out="$(resolve_v2 "$FXP6")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P6(カンマ列挙): MINIMALになる" "$out" "MINIMAL"
@@ -2457,7 +2384,7 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
 
   FXP7="$(mktemp -d)/fxp7.md"
   make_v2_profile "$FXP7" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=quick/" "$FXP7"
   if out="$(resolve_v2 "$FXP7")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P7(未知の語): MINIMALになる" "$out" "MINIMAL"
@@ -2465,10 +2392,10 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
   assert_not_contains "FX-P7: TEAM_MODE:は出ない" "$out" "TEAM_MODE:"
 }
 
-echo "=== 64. known-keysがSCHEMA_VERSION:5・FIXED:にteam_mode/machine_roleを含み廃止5キーを含まない・要素数は6（配役表-能力軸整理-設計-2026-09-07.md §3。要件AC-1・AC-2の基本口Kの実測はtest-core-docs-placeholder-schema.shが担う） ==="
+echo "=== 64. known-keysがSCHEMA_VERSION:6・FIXED:にteam_mode/machine_roleを含み廃止5キーを含まない・要素数は6（配役表-能力軸整理-設計-2026-09-07.md §3・2026-09-08モデル定義ファイルと候補指定対応でschema 5→6。要件AC-1・AC-2の基本口Kの実測はtest-core-docs-placeholder-schema.shが担う） ==="
 {
   kk="$(python3 "$PROFILE_LIB" known-keys)"
-  assert_contains "known-keys: SCHEMA_VERSION:5" "$kk" "SCHEMA_VERSION:5"
+  assert_contains "known-keys: SCHEMA_VERSION:6" "$kk" "SCHEMA_VERSION:6"
   fixed_line="$(printf '%s' "$kk" | grep '^FIXED:')"
   assert_contains "known-keys: FIXED:にteam_modeを含む" "$fixed_line" "team_mode"
   assert_contains "known-keys: FIXED:にmachine_roleを含む" "$fixed_line" "machine_role"
@@ -2500,7 +2427,7 @@ echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞ�
     VD="$(mktemp -d)"; make_full_vault "$VD"
     FXI="$(mktemp -d)/fxi-$v.md"
     make_v2_profile "$FXI" \
-      "role.leader: configured provider=anthropic-api model=claude-opus-5"
+      "role.leader: configured model=opus-main"
     sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=$v/" "$FXI"
     ctx="$(run_bootstrap_with_profile "$VD" "$FXI")"
 
@@ -2525,7 +2452,7 @@ echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはre
   VD="$(mktemp -d)"; make_full_vault "$VD"
   FXI4="$(mktemp -d)/fxi4.md"
   make_v2_profile "$FXI4" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unknown/" "$FXI4"
   ctx="$(run_bootstrap_with_profile "$VD" "$FXI4")"
   n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED")"
@@ -2538,7 +2465,7 @@ echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはre
   VD2="$(mktemp -d)"; make_full_vault "$VD2"
   FXI6="$(mktemp -d)/fxi6.md"
   make_v2_profile "$FXI6" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   python3 - "$FXI6" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -2557,18 +2484,18 @@ echo "=== 67. FX-R1・FX-R2（AC-10）: 退役キー'primary-reviewer'はV1-bで
 {
   FXR1="$(mktemp -d)/fxr1.md"
   make_v2_profile "$FXR1" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.primary-reviewer: unavailable provider=bedrock model=opus" \
-    "fallback.primary-reviewer: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main" \
+    "role.primary-reviewer: unavailable model=bedrock-opus" \
+    "fallback.primary-reviewer: configured model=opus-main"
   out="$(resolve_v2 "$FXR1")"  || true
   assert_contains "FX-R1(陰性): VACANT:にprimary-reviewerが出る" "$out" "VACANT:primary-reviewer"
   assert_contains "FX-R1: VACANT_REASONがprimary-reviewer=V1-b" "$out" "VACANT_REASON:primary-reviewer=V1-b"
 
   FXR2="$(mktemp -d)/fxr2.md"
   make_v2_profile "$FXR2" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5" \
-    "role.verifier: unavailable provider=bedrock model=opus" \
-    "fallback.verifier: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main" \
+    "role.verifier: unavailable model=bedrock-opus" \
+    "fallback.verifier: configured model=opus-main"
   out="$(resolve_v2 "$FXR2")"  || true
   assert_contains "FX-R2(陽性): FALLBACK:にverifierが出る" "$out" "FALLBACK:verifier"
   assert_not_contains "FX-R2: VACANT:に現れない" "$out" "VACANT:verifier"
@@ -2589,15 +2516,22 @@ echo "=== 68. §6.3縮退経路の回帰(ID無し・要件のfixture表とは別
   assert_eq "①ゲート無効: 🧭行の合計もちょうど1行" "1" "$total"
   rm -rf "$VD"
 
-  # ②LEGACY_V1（v1実体。team_modeという概念自体が無い）。
+  # ②旧版（T4-LEGACY。schema_versionの行が無い実体＝team_modeという概念自体
+  # を機械が読めない）。
   VD2="$(mktemp -d)"; make_full_vault "$VD2"
   V1P="$(mktemp -d)/v1legacy.md"
-  make_ok_profile "$V1P"
+  cat > "$V1P" <<'EOF'
+---
+team_mode: 本人
+no_read_paths: ~/work/old
+machine_role: 本人
+---
+EOF
   ctx="$(run_bootstrap_with_profile "$VD2" "$V1P")"
   n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED")"
-  assert_eq "②LEGACY_V1: 未確定行がちょうど1行" "1" "$n"
+  assert_eq "②旧版(T4-LEGACY): 未確定行がちょうど1行" "1" "$n"
   total="$(printf '%s' "$ctx" | grep -c '^🧭 現在＝')"
-  assert_eq "②LEGACY_V1: 🧭行の合計もちょうど1行" "1" "$total"
+  assert_eq "②旧版(T4-LEGACY): 🧭行の合計もちょうど1行" "1" "$total"
   rm -rf "$VD2"
 
   # ③UNKNOWN_EXTRAを伴うOK行（team_mode自体は正しく読めていても、未知キーが
@@ -2605,7 +2539,7 @@ echo "=== 68. §6.3縮退経路の回帰(ID無し・要件のfixture表とは別
   VD3="$(mktemp -d)"; make_full_vault "$VD3"
   FXUE="$(mktemp -d)/fxue.md"
   make_v2_profile "$FXUE" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   python3 - "$FXUE" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -2658,7 +2592,7 @@ EOF
   rm -rf "$SPY0"
 }
 
-echo "=== 71. AC-1②: SessionStart(schema5・正常分岐)が起こす外部プロセス数が、変更前(段階2直前コミットのschema3)から増加しない（実測29→28。配役表-能力軸整理-設計-2026-09-07.md §10.3・設計v1.5反映済み） ==="
+echo "=== 71. AC-1②/NFR-1: SessionStart(schema6・正常分岐)が起こす外部プロセス数が、変更前(段階2直前コミットのschema3)から増加しない（実測29→29。配役表-能力軸整理-設計-2026-09-07.md §10.3・2026-09-08 モデル定義ファイルと候補指定対応で候補名注入のawk1段ぶん再実測） ==="
 {
   SPY="$(mktemp -d)"
   BASE_WT=""
@@ -2681,7 +2615,7 @@ EOF
     chmod +x "$SPY/$cmd"
   done
 
-  # role.leader: provider=anthropic-api model=claude-opus-5（effort未指定）と
+  # role.leader: model=opus-main（effort未指定）と
   # 一致するsettings.json（Codex一次レビュー指摘・MAJOR対応: 従来は
   # /nonexistent-dir/settings.jsonを指定しており、check_leader_settings_drift()
   # が「監視不能」警告を出す状態のまま「警告なし」と称していた。§10.5-5〜6の
@@ -2705,7 +2639,7 @@ EOF
   VD="$(mktemp -d)"; make_full_vault "$VD"
   FXP1="$(mktemp -d)/fxp1-spy.md"
   make_v2_profile "$FXP1" \
-    "role.leader: configured provider=anthropic-api model=claude-opus-5"
+    "role.leader: configured model=opus-main"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=solo/" "$FXP1"
   AFTER_LOG="$(mktemp -d)/calls-after.log"; : > "$AFTER_LOG"
   AFTER_JSON="$(mktemp -d)/after.json"
@@ -2724,7 +2658,12 @@ EOF
   assert_eq "変更後: bootstrap自身の終了コードが0" "0" "$after_bootstrap_rc"
   assert_contains "変更後: 正常分岐(OK・警告なし)を通っている" "$after_ctx" "🧭 現在＝単独モード"
   after_profile_block="$(printf '%s\n' "$after_ctx" | awk '/^【ローカル実体プロファイル】$/{flag=1; next} flag')"
-  assert_not_contains "変更後: 【ローカル実体プロファイル】内に⚠️警告が無い（真に警告0件。ℹ️のV1-a advisoryはrole.leaderのみ宣言する最小fixtureゆえの想定内の情報行で許容する）" "$after_profile_block" "⚠️"
+  # 2026-09-08 モデル定義ファイルと候補指定対応: 候補名の注入行
+  # （ℹ️ 職種ごとのモデル候補…）は本文中に固定の案内「⚠️ spawn のたびに候補
+  # から定義名を1つ選ぶこと」を含む契約（設計§4(b)）。これは実際の警告では
+  # なく毎回出る固定文言なので、その1行を除いてから「真の警告0件」を見る。
+  after_profile_block_no_candidates="$(printf '%s\n' "$after_profile_block" | grep -v '^ℹ️ 職種ごとのモデル候補')"
+  assert_not_contains "変更後: 【ローカル実体プロファイル】内に⚠️警告が無い（真に警告0件。ℹ️の候補注入行・V1-a advisoryはrole.leaderのみ宣言する最小fixtureゆえの想定内の情報行で許容する）" "$after_profile_block_no_candidates" "⚠️"
 
   # 変更前（段階2直前コミット・schema3）を隔離worktreeで測る。
   BASE_WT="$(mktemp -d)/aienv-base-wt"
@@ -2733,7 +2672,13 @@ EOF
   BASE_AGENTS="$BASE_WT/claude/agents"
   VD2="$(mktemp -d)"; make_full_vault "$VD2"
   FXP0="$(mktemp -d)/fxp0-spy.md"
-  cat > "$FXP0" <<'EOF'
+  # 2026-09-08 Codexレビュー指摘・BLOCKING-1対応（1巡目）: 本fixtureは
+  # 歴史的コミット（3583015b…）の旧role.leader文法をそのまま再現する
+  # 必要があるため属性構文自体は変えられないが、AC-14のrepo検索（完成
+  # 文字列の直書き禁止）に一致しないよう断片を変数へ分けてから展開する
+  # （意図的な歴史再現fixtureであり、本物の旧記法の取りこぼしではない）。
+  legacy_role_attr="provider="
+  cat > "$FXP0" <<EOF
 ---
 schema_version: 3
 profile_slug: authoring
@@ -2746,7 +2691,7 @@ git_role:         configured value=aienv-repo:commit  # AC5-ALLOW:FXP0
 web_verification: configured value=websearch  # AC5-ALLOW:FXP0
 no_read_paths:    configured value=work-old  # AC5-ALLOW:FXP0
 excluded_models: configured value=none
-role.leader: configured provider=anthropic-api model=claude-opus-5
+role.leader: configured ${legacy_role_attr}anthropic-api model=claude-opus-5
 ---
 EOF
   # 段階2直前コミット（3583015b…）のbootstrap-vault.shは廃止済みの旧
@@ -2785,12 +2730,17 @@ EOF
   # v1.5でこの字面へ揃える予定）。
   assert_eq "外部プロセス数(変更後)が変更前から増加しない（設計§10.3・NFR-1・AC-1②）" "1" \
     "$([ "$after_count" -le "$before_count" ] && echo 1 || echo 0)"
-  # 設計§10.5⑥「基準値はテスト内に定数として記録する」への対応。この実測値
-  # （変更前29・変更後28＝cat呼び出し1回分の削減）は2026-09-07時点でこの
-  # マシン上で観測した参考値であり、増やす変更を入れるときはNFR-4との突合を
-  # 経てから更新すること。
+  # 設計§10.5⑥「基準値はテスト内に定数として記録する」への対応。
+  # 2026-09-08 モデル定義ファイルと候補指定対応の実測値へ更新（変更前29は
+  # 不変。変更後は28→29——旧分類呼び出し1回の削減とlist-roles呼び出し
+  # 1回の追加は設計どおり相殺されるが、候補名の注入行がlist-rolesの出力を
+  # awkで加工する1段（外部プロセス1回）を追加で使うため、net -1+1+1(awk)=+1
+  # となり28→29になる。設計側のnet0見積もりはpython3呼び出し数だけを数えて
+  # おりawk等のパイプ段を含めていなかった実装レベルの差分＝実装記録
+  # モデル定義ファイルと候補指定-実装-2026-09-08.md参照）。増やす変更を
+  # 入れるときはNFR-4との突合を経てから更新すること。
   AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07=29
-  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=28
+  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=29
   if [ "$before_count" != "$AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07" ] || [ "$after_count" != "$AC1_2_REFERENCE_COUNT_AFTER_2026_09_07" ]; then
     echo "  info - 参考値: 変更前${AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07}・変更後${AC1_2_REFERENCE_COUNT_AFTER_2026_09_07}を記録していたが今回は変更前${before_count}・変更後${after_count}だった"
   fi
@@ -2811,33 +2761,33 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   # codeだけでは、fixture表（要件§6.2）が定めるTEAM_MODE:full・UNKNOWN_EXTRA:
   # 不在という残りの期待を固定していなかった。両方を明示的に検査する。
   FXP1_72="$(mktemp -d)/fxp1.md"
-  make_v2_profile "$FXP1_72" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP1_72" "role.leader: configured model=opus-main"
   rc=0; out="$(resolve_v2 "$FXP1_72")" || rc=$?
-  assert_eq "FX-P1: OK<TAB>schema_version=5で始まる" "1" \
-    "$([[ "$out" == $'OK\tschema_version=5'* ]] && echo 1 || echo 0)"
+  assert_eq "FX-P1: OK<TAB>schema_version=6で始まる" "1" \
+    "$([[ "$out" == $'OK\tschema_version=6'* ]] && echo 1 || echo 0)"
   assert_eq "FX-P1: exit 0" "0" "$rc"
   assert_contains "FX-P1: TEAM_MODE:fullを含む" "$out" "TEAM_MODE:full"
   assert_not_contains "FX-P1: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
 
   FXP2_72="$(mktemp -d)/fxp2.md"
-  make_v2_profile "$FXP2_72" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP2_72" "role.leader: configured model=opus-main"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=sub/" "$FXP2_72"
   rc=0; out="$(resolve_v2 "$FXP2_72")" || rc=$?
-  assert_eq "FX-P2: OK<TAB>schema_version=5で始まる" "1" \
-    "$([[ "$out" == $'OK\tschema_version=5'* ]] && echo 1 || echo 0)"
+  assert_eq "FX-P2: OK<TAB>schema_version=6で始まる" "1" \
+    "$([[ "$out" == $'OK\tschema_version=6'* ]] && echo 1 || echo 0)"
   assert_eq "FX-P2: exit 0" "0" "$rc"
   assert_contains "FX-P2: TEAM_MODE:fullを含む" "$out" "TEAM_MODE:full"
   assert_not_contains "FX-P2: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
 
   FXP3_72="$(mktemp -d)/fxp3.md"
-  make_v2_profile "$FXP3_72" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP3_72" "role.leader: configured model=opus-main"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     not_adopted/" "$FXP3_72"
   rc=0; out="$(resolve_v2 "$FXP3_72")" || rc=$?
   assert_contains "FX-P3: V7(machine_roleの状態が不正)を含む" "$out" "V7: machine_roleの状態が不正です"
   assert_eq "FX-P3: exit 1" "1" "$rc"
 
   FXP4_72="$(mktemp -d)/fxp4.md"
-  make_v2_profile "$FXP4_72" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP4_72" "role.leader: configured model=opus-main"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=primary/" "$FXP4_72"
   rc=0; out="$(resolve_v2 "$FXP4_72")" || rc=$?
   assert_contains "FX-P4: V8-b(machine_roleのvalue形式が不正)を含む" "$out" "V8-b: machine_roleのvalue形式が不正です"
@@ -2847,7 +2797,7 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
 echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・陰性2件(FX-P10・FX-P11) ==="
 {
   FXP9_73="$(mktemp -d)/fxp9.md"
-  make_v2_profile "$FXP9_73" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP9_73" "role.leader: configured model=opus-main"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old,~/Data/private#" "$FXP9_73"
   rc=0; out="$(resolve_v2 "$FXP9_73")" || rc=$?
   assert_eq "FX-P9: OKで始まる（大文字を含む実パスも受理）" "1" \
@@ -2855,7 +2805,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
   assert_eq "FX-P9: exit 0" "0" "$rc"
 
   FXP10_73="$(mktemp -d)/fxp10.md"
-  make_v2_profile "$FXP10_73" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP10_73" "role.leader: configured model=opus-main"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old, ~/tmp/x#" "$FXP10_73"
   rc=0; out="$(resolve_v2 "$FXP10_73")" || rc=$?
   assert_contains "FX-P10: T6を含む" "$out" "T6"
@@ -2863,39 +2813,17 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
   assert_eq "FX-P10: exit 1" "1" "$rc"
 
   FXP11_73="$(mktemp -d)/fxp11.md"
-  make_v2_profile "$FXP11_73" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP11_73" "role.leader: configured model=opus-main"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=/work/old#" "$FXP11_73"
   rc=0; out="$(resolve_v2 "$FXP11_73")" || rc=$?
   assert_contains "FX-P11: V8-b(no_read_pathsのvalue形式が不正)を含む" "$out" "V8-b: no_read_pathsのvalue形式が不正です"
   assert_eq "FX-P11: exit 1" "1" "$rc"
 }
 
-echo "=== 74. AC-8(FR-14): schema版の追随待ちの陽性1件(FX-P5)・陰性1件(FX-P6) ==="
-{
-  FXP5_74="$(mktemp -d)/fxp5.md"
-  make_v2_profile "$FXP5_74" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' "s/schema_version: 5/schema_version: 4/" "$FXP5_74"
-  sed -i '' "/^machine_role:/d" "$FXP5_74"
-  rc=0; out="$(resolve_v2 "$FXP5_74")" || rc=$?
-  assert_eq "FX-P5: OK<TAB>schema_version=4で始まる（追随待ち）" "1" \
-    "$([[ "$out" == $'OK\tschema_version=4'* ]] && echo 1 || echo 0)"
-  assert_not_contains "FX-P5: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
-  assert_eq "FX-P5: exit 0" "0" "$rc"
-  ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP5_74")"
-  assert_contains "FX-P5: I=実体の全文Readを指示する行を含む" "$ctx" "Readで全文を読むこと"
-
-  FXP6_74="$(mktemp -d)/fxp6.md"
-  make_v2_profile "$FXP6_74" "role.leader: configured provider=anthropic-api model=claude-opus-5"
-  sed -i '' "/^machine_role:/d" "$FXP6_74"
-  rc=0; out="$(resolve_v2 "$FXP6_74")" || rc=$?
-  assert_contains "FX-P6: T5を含む（schema_version:5のまま欠落は壊れている扱い）" "$out" "T5"
-  assert_eq "FX-P6: exit 1" "1" "$rc"
-}
-
 echo "=== 75. AC-9(FR-13): 廃止キー残存時のUNKNOWN_EXTRA契約の陽性1件(FX-P7)・陰性1件(FX-P1) ==="
 {
   FXP7_75="$(mktemp -d)/fxp7-ac9.md"
-  make_v2_profile "$FXP7_75" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP7_75" "role.leader: configured model=opus-main"
   # frontmatter終端(---)の直前に挿入する（末尾に追記すると frontmatter の
   # 外側になってしまうため）。AC5-ALLOW:FX-P7
   python3 - "$FXP7_75" <<'PYEOF'
@@ -2914,7 +2842,7 @@ PYEOF
   assert_contains "FX-P7: I=最小能力の文言を含む" "$ctx" "最小能力"
 
   FXP1_75="$(mktemp -d)/fxp1-ac9.md"
-  make_v2_profile "$FXP1_75" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP1_75" "role.leader: configured model=opus-main"
   out="$(resolve_v2 "$FXP1_75")"
   assert_not_contains "FX-P1: R=UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
   ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP1_75")"
@@ -2939,7 +2867,7 @@ echo "=== 76. AC-11(FR-9): machine_roleがunknownのときだけDIRECTIVEへ保�
   # 診断行中のMACHINE_ROLE:<値>トークンを共通のプレースホルダへ正規化して
   # からdiffする（値そのものの一致は他のテスト＝§75等で別途検査済み）。
   FXP_76="$(mktemp -d)/fxp-ac11.md"
-  make_v2_profile "$FXP_76" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP_76" "role.leader: configured model=opus-main"
   ctx_p1="$(run_bootstrap_with_profile "$VD_76" "$FXP_76")"
 
   sed -i '' "s/machine_role:     configured value=main/machine_role:     unknown/" "$FXP_76"
@@ -2969,7 +2897,7 @@ echo "=== 76b. AC-11(FR-9)陰性・MAJOR-1対応: machine_roleがunavailableの�
   VD_76B="$(mktemp -d)"; make_full_vault "$VD_76B"
 
   FXP_76B="$(mktemp -d)/fxp-ac11-unavailable.md"
-  make_v2_profile "$FXP_76B" "role.leader: configured provider=anthropic-api model=claude-opus-5"
+  make_v2_profile "$FXP_76B" "role.leader: configured model=opus-main"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     unavailable/" "$FXP_76B"
   ctx_unavail="$(run_bootstrap_with_profile "$VD_76B" "$FXP_76B")"
 
@@ -2978,6 +2906,33 @@ echo "=== 76b. AC-11(FR-9)陰性・MAJOR-1対応: machine_roleがunavailableの�
   assert_contains "machine_role=unavailable: 診断行にはMACHINE_ROLE:unavailableがそのまま出る" "$ctx_unavail" "MACHINE_ROLE:unavailable"
 
   rm -rf "$VD_76B"
+}
+
+echo "=== 77. 設計§11.3新設2件の①: AIENV_MODEL_DEFS_FILEが相対パスならR・L・LD・Cに加えI（bootstrap-vault.sh経由）もT13相当でloudに落ちる（Codexレビュー指摘・MAJOR-3対応・1巡目。R/L/LD/Cの4口はtest-model-definitions.shで既に検証済み） ==="
+{
+  UNCONFIRMED='🧭 現在＝モード未確定（配役表の team_mode が読めません）。委任の前に本人へ確認します。'
+  VD77="$(mktemp -d)"; make_full_vault "$VD77"
+  FXP77="$(mktemp -d)/fxp77.md"
+  make_v2_profile "$FXP77" "role.leader: configured model=opus-main"
+  ctx77="$(run_bootstrap_with_profile "$VD77" "$FXP77" "/nonexistent-dir/settings.json" "relative/models.conf")"
+  n77="$(printf '%s' "$ctx77" | grep -Fx -c "$UNCONFIRMED")"
+  assert_eq "I(T13): AIENV_MODEL_DEFS_FILEが相対パスだと未確定行がちょうど1行（resolve自体がT13でloud失敗する）" "1" "$n77"
+  total77="$(printf '%s' "$ctx77" | grep -c '^🧭 現在＝')"
+  assert_eq "I(T13): 🧭行の合計もちょうど1行" "1" "$total77"
+  rm -rf "$VD77"
+}
+
+echo "=== 78. 設計§11.3新設2件の②: 同じ絶対パスのAIENV_MODEL_DEFS_FILEなら、Iを呼び出すcwdを変えても同じ結果になる（Codexレビュー指摘・MAJOR-3対応・1巡目。R/L/LD/Cの4口はtest-model-definitions.shで既に検証済み） ==="
+{
+  VD78="$(mktemp -d)"; make_full_vault "$VD78"
+  FXP78="$(mktemp -d)/fxp78.md"
+  make_v2_profile "$FXP78" "role.leader: configured model=opus-main"
+  ctx78_tmp="$(cd /tmp && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"
+  ctx78_repo="$(cd "$REPO_ROOT" && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"
+  ctx78_vd="$(cd "$VD78" && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"
+  assert_eq "I(cwd不変性): /tmp とREPO_ROOTで同じ結果" "$ctx78_tmp" "$ctx78_repo"
+  assert_eq "I(cwd不変性): /tmp とVault作業ディレクトリで同じ結果" "$ctx78_tmp" "$ctx78_vd"
+  rm -rf "$VD78"
 }
 
 echo

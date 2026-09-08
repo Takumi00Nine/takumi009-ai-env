@@ -2,7 +2,7 @@
 name: researcher
 description: 調査工程のワーカー。重い・多方面のWeb裏取り、類似OSS・先行実装調査、作者の意図・思想調査、デバッグ（競合仮説の実測検証）、振り返り分析（Vault/ログ分析）を担当。全工程を横断して使う。
 tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch, WebFetch, SendMessage
-model: sonnet
+model: claude-sonnet-5
 color: cyan
 ---
 

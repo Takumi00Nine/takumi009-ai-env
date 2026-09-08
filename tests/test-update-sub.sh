@@ -167,22 +167,24 @@ make_sub_clone() {
   git -C "$sub" config user.email test@example.invalid
 }
 
-# $home配下にschema 5・machine_role: subの実体プロファイルを置く
-# （配役表-能力軸整理-設計-2026-09-07.md §10.2a）。
+# $home配下にschema 6・machine_role: subの実体プロファイルを置く
+# （配役表-能力軸整理-設計-2026-09-07.md §10.2a。2026-09-08 モデル定義
+# ファイルと候補指定対応でschema 5→6・role.leaderをmodel=<定義名>へ）。
 make_sub_profile() {
   local home="$1"
   mkdir -p "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-update-sub-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
 excluded_models: configured value=none
-role.leader: configured provider=anthropic-api model=claude-sonnet-5
+role.leader: configured model=sonnet-main
 ---
 EOF
+  write_model_defs "$home/.config/takumi009-ai-env/models.conf"
 }
 
 # $home配下にschema 5の実体（machine_role: sub）と、廃止済みの旧マーカーを
@@ -216,6 +218,47 @@ run_update_with_args() {
   DIR="$dir" HOME="$home" VAULT="$vault" LOCK_FILE="$lock" "$SCRIPT" "$@"
 }
 
+# write_model_defs <dest> — モデル定義ファイル（本ファイル内のwrite_v2_profile/
+# make_sub_profile呼び出しが参照する定義名の全集合）を書く。2026-09-08
+# モデル定義ファイルと候補指定対応（同設計§2.3・§11.3）: role.leader等が持てる
+# 属性がmodel（定義名）だけになったため、実体（provider/model/effort）はここへ
+# 集約する。
+write_model_defs() {
+  local dest="$1"
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest" <<'EOF'
+[sonnet-main]
+provider=anthropic-api
+model=claude-sonnet-5
+
+[sonnet-high]
+provider=anthropic-api
+model=claude-sonnet-5
+effort=high
+
+[opus-main]
+provider=anthropic-api
+model=claude-opus-5
+
+[opus-low]
+provider=anthropic-api
+model=claude-opus-5
+effort=low
+
+[bedrock-opus]
+provider=bedrock
+model=opus
+
+[bedrock-sonnet]
+provider=bedrock
+model=sonnet
+
+[bedrock-haiku]
+provider=bedrock
+model=haiku
+EOF
+}
+
 # write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
 # を書く（schema_version・能力軸3キー・excluded_modelsは固定キー検査
 # （V7/V8-b）を通すための最小セット。role.leaderの行は必須引数、それ以外の
@@ -223,14 +266,17 @@ run_update_with_args() {
 # tests/test-install-main.shのwrite_v2_profile_with_bedrock_role()と
 # 同じ最小セット・様式に揃える）。⚠️ machine_role: subを固定で含める
 # （update-sub.shのstep 0ゲートを通すため。マーカー撤去後は実体プロファイル
-# 自身がこの役目を負う）。
+# 自身がこの役目を負う）。2026-09-08 モデル定義ファイルと候補指定対応:
+# schema_versionを6へ・role.leaderの属性をmodel=<定義名>だけへ。定義の実体は
+# write_model_defs()が同じディレクトリのmodels.confへ書く
+# （model_defs_path()の既定パスをそのまま使う）。
 write_v2_profile() {
   local dest="$1" leader_line="$2"
   shift 2
   mkdir -p "$(dirname "$dest")"
   {
     echo "---"
-    echo "schema_version: 2"
+    echo "schema_version: 6"
     echo "profile_slug: test"
     echo "role.leader: ${leader_line}"
     for extra in "$@"; do
@@ -243,6 +289,7 @@ write_v2_profile() {
     echo "machine_role: configured value=sub"
     echo "---"
   } > "$dest"
+  write_model_defs "$(dirname "$dest")/models.conf"
 }
 
 echo "=== 1. 変更なし: 何もしない（静か・冪等） ==="
@@ -405,7 +452,7 @@ echo "=== 5. PA-7: ff-only不可（サブ側にローカルcommitがある）な
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
-  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured provider=anthropic-api model=claude-sonnet-5"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured model=sonnet-main"
   LOCK="$WORK/lock"
 
   # サブ側でローカルcommitを作る（本来は起きないはずだが、ff不可を人工的に再現）
@@ -550,7 +597,7 @@ echo "=== 9b. 配役表machine_role: 値が「sub」以外(例: main)でも即FA
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5"
+    "configured model=sonnet-main"
   sed -i.bak 's/^machine_role:.*/machine_role: configured value=main/' \
     "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
   rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
@@ -597,7 +644,7 @@ echo "=== 9c2. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJ
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5"
+    "configured model=sonnet-main"
   sed -i.bak 's/^machine_role:.*/machine_role: configured value=main/' \
     "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
   rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
@@ -652,7 +699,7 @@ echo "=== 9d. 配役表machine_role: 値に内部空白(s u b)があると属性
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5"
+    "configured model=sonnet-main"
   sed -i.bak 's/^machine_role:.*/machine_role: configured value=s u b/' \
     "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
   rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
@@ -709,7 +756,7 @@ echo "=== 10. settings.json再生成: HEADが変わっていなくても実体�
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-opus-5"
+    "configured model=opus-main"
 
   # HEADは変わらない（pull時点で既に最新）ケースでも再生成されることを見る。
   out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
@@ -739,7 +786,7 @@ echo "=== 11. settings.json再生成: v2実体ではAIENV_MODEL_SUBのローカ�
   LOCK="$WORK/lock"
 
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-opus-5"
+    "configured model=opus-main"
   AIENV_MODEL_SUB='custom-sub-model' DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" >/dev/null
 
   assert_true "AIENV_MODEL_SUBの上書きは反映されない(v2実体ではrole.leaderが正本)" \
@@ -807,8 +854,8 @@ EOF
   # （リーダー実査指摘・結合確認対応: tests/test-install-main.shの
   # write_v2_profile_with_bedrock_role()と同じ様式）。
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5" \
-    "role.researcher: configured provider=bedrock model=opus"
+    "configured model=sonnet-main" \
+    "role.researcher: configured model=bedrock-opus"
   LOCK="$WORK/lock"
 
   run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
@@ -1316,16 +1363,16 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   # （リーダー実査指摘・結合確認対応）。role.leaderはAIENV_LEADER_ROLEと
   # 一致させ対話を発生させない（既存の値と一致→そのまま通す・冪等＝§3.9）。
   write_v2_profile "$FAKE_HOME_INSTALLER/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5" \
-    "role.researcher: configured provider=bedrock model=opus" \
-    "role.verifier: configured provider=bedrock model=sonnet" \
-    "role.operator: configured provider=bedrock model=haiku"
+    "configured model=sonnet-main" \
+    "role.researcher: configured model=bedrock-opus" \
+    "role.verifier: configured model=bedrock-sonnet" \
+    "role.operator: configured model=bedrock-haiku"
   # 2026-09-01 配役表解凍（設計書§3.9）: v2雛形はrole.leaderがunknownのまま
   # 配布されるが、上記で事前にconfigured済みのプロファイルを置いたため
   # 雛形配置（非破壊・初回のみ）はskipされ、対話にも入らない
   # （tests/test-install-main.shが採用している既定パターンと同じ＝担当B
   # からの引き継ぎ）。
-  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5' \
+  AIENV_LEADER_ROLE='model=sonnet-main' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME_INSTALLER" bash "$REPO_ROOT/scripts/install-main.sh" --sub-delegate >/dev/null 2>&1
 
   # --- update-sub.sh（pull経路。SUBクローン＝add_settings_json_templateが
@@ -1336,10 +1383,10 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   # updater側にも同じ配役のv2プロファイルを置く（installer側と同一集合の
   # Bedrock由来envキーが動的に許可されることの前提を揃える）。
   write_v2_profile "$FAKE_HOME_UPDATER/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5" \
-    "role.researcher: configured provider=bedrock model=opus" \
-    "role.verifier: configured provider=bedrock model=sonnet" \
-    "role.operator: configured provider=bedrock model=haiku"
+    "configured model=sonnet-main" \
+    "role.researcher: configured model=bedrock-opus" \
+    "role.verifier: configured model=bedrock-sonnet" \
+    "role.operator: configured model=bedrock-haiku"
   LOCK="$WORK/lock"
   run_update "$SUB" "$FAKE_HOME_UPDATER" "$FAKE_HOME_UPDATER/Data/obsidian" "$LOCK" >/dev/null
 
@@ -1426,7 +1473,7 @@ echo "=== 21. §4.3: リーダー行のeffortが3者一致で追随する（mode
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5 effort=high"
+    "configured model=sonnet-high"
   LOCK="$WORK/lock"
 
   run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
@@ -1451,7 +1498,7 @@ echo "=== 21b. §4.3: リーダー行にeffort未指定ならeffortLevelキー�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5"
+    "configured model=sonnet-main"
   LOCK="$WORK/lock"
 
   run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
@@ -1474,7 +1521,7 @@ echo "=== 22. §11.2 項目3の受入条件（設計書§4.3・リーダー確�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_v2_profile "$PROFILE_PATH" "configured provider=anthropic-api model=claude-sonnet-5"
+  write_v2_profile "$PROFILE_PATH" "configured model=sonnet-main"
   LOCK="$WORK/lock"
   HEAD_BEFORE="$(git -C "$SUB" rev-parse HEAD)"
 
@@ -1486,7 +1533,7 @@ echo "=== 22. §11.2 項目3の受入条件（設計書§4.3・リーダー確�
 
   # ⚠️ repo($SUB)には一切触れず、ローカル実体プロファイルのリーダー行だけを
   # 書き換える（本人がエディタで1行編集する運用を模す）。
-  write_v2_profile "$PROFILE_PATH" "configured provider=anthropic-api model=claude-opus-5 effort=low"
+  write_v2_profile "$PROFILE_PATH" "configured model=opus-low"
   HEAD_MID="$(git -C "$SUB" rev-parse HEAD)"
   assert_eq "リーダー行の書き換え自体はrepoのHEADを一切動かさない" "$HEAD_BEFORE" "$HEAD_MID"
 
@@ -2254,7 +2301,7 @@ echo "=== 34. PA-8: HEAD不変で --resync を付けるとPreferencesの再同�
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
-  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured provider=anthropic-api model=claude-sonnet-5"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured model=sonnet-main"
   LOCK="$WORK/lock"
 
   # 通常実行（--resyncなし）: HEAD不変のため早期終了し、Preferencesは
@@ -2559,6 +2606,76 @@ echo "=== 40. 版境界の移行: 旧版update-sub.sh（旧マーカー判定）
   assert_eq "④ HEADがupstreamと一致する" "$upstream_head" "$new_head"
   assert_true "前提: pull前後でHEADが実際に進んでいる（このテストが版境界を踏んでいることの確認）" \
     "$([[ "$orig_head" != "$new_head" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 41. 版境界の1回通し(設計§10.3・§11.3 B-2): af72d16時点(machine_role方式・schema5のresolver)のサブ機で、PROFILE_RESOLVE_LIBへ新版resolverを注入するとpull→自己execを1回の起動で完走し、注入がexec後も効いてschema 6実体のmachine_roleが読める ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+
+  # v1 = af72d16時点(machine_role方式導入済み・schema 5専用resolver。
+  # §10.3手順0の「1以上→af72d16以降」区分)のupdate-sub.sh・resolverを
+  # $REPO_ROOTのgit履歴（af72d16はこのworktreeの祖先）から取り出して
+  # 同梱する。
+  git -C "$REPO_ROOT" show af72d16:scripts/update-sub.sh > "$SRC/scripts/update-sub.sh"
+  git -C "$REPO_ROOT" show af72d16:claude/hooks/lib/profile_resolve.py > "$SRC/claude/hooks/lib/profile_resolve.py"
+  chmod +x "$SRC/scripts/update-sub.sh"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "af72d16時点のupdate-sub.sh+resolverを同梱(v1)"
+  git -C "$SRC" push -q origin HEAD:main
+
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+  # 実体は§10.2の2と同じ要領で先にschema 6へ直す（本人の手順どおり・コードの
+  # pullより前に実体だけ新しくする＝S2/F-13の状態を再現する）。
+  make_sub_profile "$FAKE_HOME"
+
+  # 注入なしでv1のまま起動すると、旧resolverが新記法(model=<定義名>のみで
+  # providerを持たない)のrole.leader行を「provider/modelがありません」で
+  # 拒否しMACHINE_ROLE:を返せないため、pullへ到達する前にstep 0で拒否される
+  # ことを先に確認する（注入が要る根拠＝§10.3手順0）。
+  rc_noinject=0
+  out_noinject="$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" \
+    bash "$SUB/scripts/update-sub.sh" 2>&1)" || rc_noinject=$?
+  assert_eq "注入なしはexit 1(旧resolverが新記法の実体を解決できない)" "1" "$rc_noinject"
+  assert_true "注入なしは『サブ機として登録されていません』で拒否される" \
+    "$(echo "$out_noinject" | grep -q "サブ機として登録されていません" && echo 1 || echo 0)"
+
+  # upstream（bare repo）へ新版（本worktreeの現行HEAD）のupdate-sub.sh・
+  # resolverを追加でpushしておく（本人が§10.3手順3で取り出す新版resolverと
+  # 同じ実体＝pull後にrepo側とも一致する）。
+  cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$SRC/claude/hooks/lib/profile_resolve.py"
+  echo "# 追加方針v2" > "$SRC/vault-public/Preferences/rule2.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "bump to HEAD (schema 6 resolver + update-sub.sh)"
+  git -C "$SRC" push -q origin HEAD:main
+
+  # §10.3手順3＝新版resolverを取り出して事前検査する対象（本テストでは
+  # $REPO_ROOTの現行コピーをそのまま「取り出した新版」として使う）。
+  INJECTED="$WORK/pr-new.py"
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$INJECTED"
+
+  rc=0
+  out="$(PROFILE_RESOLVE_LIB="$INJECTED" DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" \
+    bash "$SUB/scripts/update-sub.sh" 2>&1)" || rc=$?
+
+  assert_eq "注入ありは1回の起動でexit 0まで完走する" "0" "$rc"
+  assert_true "『サブ機として登録されていません』では拒否されない（注入が効いている証拠）" \
+    "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 0 || echo 1)"
+  assert_true "自己更新検知のログが出る（update-sub.sh自身もaf72d16→HEADで変わっているため）" \
+    "$(echo "$out" | grep -q 'update-sub.sh自身が更新されました' && echo 1 || echo 0)"
+  assert_true "自己exec後もPreferences再同期(4b)まで到達する（注入がexec後も継続して効いている証拠＝B-2）" \
+    "$([[ -f "$FAKE_HOME/Data/obsidian/Preferences/rule2.md" ]] && echo 1 || echo 0)"
+  assert_true "『既に実行中です』にはならない（execがPIDを保つため自分自身のロックに阻まれない）" \
+    "$(echo "$out" | grep -q '既に実行中です' && echo 0 || echo 1)"
 
   rm -rf "$WORK"
 }

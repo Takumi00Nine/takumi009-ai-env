@@ -2,7 +2,7 @@
 name: implementer
 description: 実装工程のワーカー。承認済み設計と担当ファイル範囲に基づき、コード・ドキュメント（docs改修等の文書成果物も含む）を実装する。ユニットテスト付き。
 tools: Read, Grep, Glob, Edit, Write, NotebookEdit, Bash, WebSearch, WebFetch, SendMessage
-model: sonnet
+model: claude-sonnet-5
 color: green
 ---
 

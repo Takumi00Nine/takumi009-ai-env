@@ -329,12 +329,6 @@ leader_runtime_error_message() {
     PROFILE_NOT_FOUND|PROFILE_UNREADABLE)
       msg="プロファイル実体を読み取れませんでした（不在・symlink・権限不足等の可能性）"
       ;;
-    PROFILE_MIXED)
-      msg="プロファイルのschema_versionが職種行と整合していません（v2の職種行があるのにschema_versionが1のまま）"
-      ;;
-    PROFILE_LEGACY_V1)
-      msg="プロファイルがv1形式のままです。v2へ移行してください"
-      ;;
     PROFILE_INVALID:*)
       msg="プロファイルの構文または検証エラーです（${code#PROFILE_INVALID:}）"
       ;;
@@ -458,7 +452,7 @@ def is_clean_str(s):
 # 列挙する既知の集合に限定する（2026-09-01 Codex三次レビュー指摘・Major
 # 対応。scripts/update-sub.shと同じ検査を複製）。
 KNOWN_CODE_RE = re.compile(
-    r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|PROFILE_MIXED|PROFILE_LEGACY_V1|"
+    r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|"
     r"PROFILE_RESOLVER_MISSING|PROFILE_RESOLVER_ERROR|LEADER_UNCONFIGURED|"
     r"LEADER_UNAVAILABLE_NO_FALLBACK|"
     r"PROFILE_INVALID:[A-Za-z0-9_-]+|LEADER_CANDIDATE_INVALID:[A-Za-z0-9_-]+)$"
@@ -1862,18 +1856,13 @@ print('UNKNOWN_EXTRA' + chr(9) + unknown_extra)
   CP_STATUS="$(printf '%s\n' "$CHECK_PROFILE_PARSED" | awk -F'\t' '$1=="STATUS"{print $2}')"
   CP_ADVISORY="$(printf '%s\n' "$CHECK_PROFILE_PARSED" | awk -F'\t' '$1=="ADVISORY"{print $2}')"
   CP_UNKNOWN_EXTRA="$(printf '%s\n' "$CHECK_PROFILE_PARSED" | awk -F'\t' '$1=="UNKNOWN_EXTRA"{print $2}')"
-  # v1委譲経路の唯一の既知の安全な非OK応答（check_profile_cmd()がlist-roles
-  # のPROFILE_LEGACY_V1を捕捉して出す固定文言。install-main.sh:998の
-  # log()呼び出しをそのまま転記＝log()は"[install-main] "を前置するため
-  # その形まで含めて**完全一致**で判定する（2026-09-01 Codex三次レビュー
-  # 指摘・Major対応: 前方一致/部分一致だと「未知の異常応答にたまたま同じ
-  # 部分文字列が含まれる」ケースを誤って安全と判定しうる）。
-  # ⚠️ 文言一致は他チーム（担当B）の実装文言に依存する弱い結合だが、
-  # 「exit 0なら中身を見ずOK以外も健全」というfail-openより安全側。
-  CP_IS_KNOWN_V1_MESSAGE=0
-  if [ "$CHECK_PROFILE_FIRST_LINE" = "[install-main] プロファイルはv2形式ではありません（v1）。v1互換のまま運用されています。v2へ移行してください（§3.5）。" ]; then
-    CP_IS_KNOWN_V1_MESSAGE=1
-  fi
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）:
+  # CP_IS_KNOWN_V1_MESSAGE（v1委譲＝健全として扱う既知応答の文言一致判定）を
+  # 撤去した。schema 6のコードは旧版をPROFILE_INVALID:T4-LEGACYとして
+  # check_profile_cmd()が非0終了させるため（install-main.sh側にexit 0で
+  # ログ表示のみに丸めるv1委譲の分岐はもう無い）、旧実体は下の
+  # `elif [ "$CHECK_PROFILE_RC" -ne 0 ]`（[PROFILE-VALIDATION-FAILED]）で
+  # driftとして計上される——schema 6では実際に壊れているので正しい。
 
   if [ "$CHECK_PROFILE_PARSE_RC" -ne 0 ]; then
     item_drift "[PROFILE-VALIDATION-FAILED] --check-profile の出力を解析できませんでした（python3 exit=${CHECK_PROFILE_PARSE_RC}）＝監視不能。詳細: ${CHECK_PROFILE_FIRST_LINE:-空}"
@@ -1899,18 +1888,13 @@ print('UNKNOWN_EXTRA' + chr(9) + unknown_extra)
     # （2026-09-01 Codex一次レビュー指摘・Major対応: 従来は前方一致の
     # 誤判定余地があった）。
     item_drift "[PROFILE-VALIDATION-FAILED] --check-profile が非0終了しました（${CHECK_PROFILE_FIRST_LINE:-理由不明}）＝ローカル実体プロファイルの検証に失敗しています。修正方法は上記の出力（行番号とキー名）を参照してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
-  elif [ "$CP_STATUS" != "OK" ] && [ "$CP_IS_KNOWN_V1_MESSAGE" != "1" ]; then
-    # ⚠️ RC=0なのにOK行でも既知のv1委譲文言でもない＝空status・未知status・
-    # 契約変更等の可能性がある「監視不能」であり、無条件の健全表示にしない
-    # （2026-09-01 Codex二次レビュー指摘・Major対応: 従来はexit 0であれば
-    # OK以外を無条件でv1委譲とみなし健全扱いしていた＝false negative）。
-    item_drift "[PROFILE-VALIDATION-FAILED] --check-profile はexit 0でしたが、既知の応答形式（OK行／v1委譲の案内）のいずれとも一致しない出力でした＝監視不能。詳細: ${CHECK_PROFILE_FIRST_LINE:-空}"
   elif [ "$CP_STATUS" != "OK" ]; then
-    # RC=0・既知のv1委譲文言＝list-rolesがPROFILE_LEGACY_V1を返し
-    # install-main.sh側がログ表示のみでexit 0にする既存の委譲経路（§3.5）。
-    # 壊れているわけではないため drift にはしない（既存のv1委譲の扱いを
-    # 維持）。
-    log "  -> ✅ --check-profile は正常終了しました（v1委譲）"
+    # ⚠️ RC=0なのにOK行でもない＝空status・未知status・契約変更等の可能性が
+    # ある「監視不能」であり、無条件の健全表示にしない（2026-09-01 Codex
+    # 二次レビュー指摘・Major対応。2026-09-08 モデル定義ファイルと候補指定
+    # 対応で「v1委譲なら健全」の例外を撤去した——schema 6のコードは旧版を
+    # exit 0で通す経路をもう持たないため、この分岐に来ること自体が想定外）。
+    item_drift "[PROFILE-VALIDATION-FAILED] --check-profile はexit 0でしたが、既知の応答形式（OK行）と一致しない出力でした＝監視不能。詳細: ${CHECK_PROFILE_FIRST_LINE:-空}"
   else
     check_profile_drift_before=$TOTAL_DRIFT
     check_profile_had_info=0

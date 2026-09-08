@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [preference, core, workflow, roles, quality-gate]
 project: takumi009-ai-env
 related:
@@ -15,6 +15,7 @@ related:
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
   - "[[Decisions/2026-09-07-out-of-scope-links-not-broken]]"
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
+  - "[[Decisions/2026-09-08-model-definitions-file]]"
 aliases:
   - "共通コア工程"
   - "職種定義"
@@ -42,11 +43,12 @@ aliases:
 > spawn 時の条文（設計書§3.2 §1 復活）:
 > 1. 命名は `<配役>-<職種名>`
 > 2. spawn 時に渡す7点（配役の明示指定を含む）
-> 3. 配役表の `model` の値をそのまま渡す・エイリアスを発明しない
+> 3. 配役表の `model` は**定義名の候補**である。spawn の前に候補の中から定義名を**ちょうど1つ**指定する（機構は選ばない）。指定した定義の実効値は `profile_resolve.py resolve-candidate` が返す。エイリアスを発明しない
 > 4. Bedrock の別名はピン留めが効いている確認が取れなければ渡さず本人へ上げる
 > 5. 配役表を読むのはセッション開始時（起動のたびに読み直さない）
-> 6. `execution` が `subagent` 以外の職種は spawn せず、決められた呼び出し口から依頼する
+> 6. `execution` が `subagent` 以外の職種は spawn せず、決められた呼び出し口から依頼する（`resolve-candidate` の出力をそのままラッパーへ渡す。exit が0でなければ1つも起動しない）
 > 7. 職種名＝`agents/<職種名>.md` のファイル名＝spawn 時の subagent_type に渡す値。配役表の `role.<職種名>` もこの名前で書く（別名で書かない）
+> 8. `subagent` 経路では、`resolve` の突合結果に従う＝一致した候補を選んだときだけ起動し（Agent の `model` 引数は渡さない＝職種定義の既定値が効く）、`MODEL_MISMATCH:<職種>:<定義名>` が出ている候補を選んだ場合と、一致候補が0件の職種では起動せず本人へ上げる
 
 ## 2. 品質ゲート
 - 成果物は、作成者とは独立した系統による検証を通す。**起動するのはリーダー職**で、適用工程の成果物が完成した時点で1回起動する（実装工程は全実装者の完了を確認してから）。巡数はモードで決まる＝**単独＝行わない／軽量＝適用工程ごとに1巡ちょうど・再レビューなし／フル＝適用工程ごとに1巡以上**（指摘があれば作成者が修正して次の巡を回し、停止基準を満たしたら打ち切る。残件は明示する）。空席時の扱いはコア §7。

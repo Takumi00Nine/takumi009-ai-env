@@ -29,7 +29,7 @@ REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 # --non-interactiveいずれも指定せず実行すると対話可否の判定で止まる。
 # 本ファイルの主眼＝--with-dotfilesの呼び分けとは無関係なので、既定値を
 # exportして「未確定→envの値を検査して採用（質問しない）」経路を通す。
-export AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5'
+export AIENV_LEADER_ROLE='model=sonnet-main'
 
 PASS=0
 FAIL=0
@@ -69,6 +69,21 @@ EOF
   git -C "$src" -c user.name=t -c user.email=t@example.invalid commit -q -m init
 }
 
+# write_models_conf_at <dir> — モデル定義ファイル（models.conf）を<dir>/
+# models.conf へ書く（モデル定義ファイルと候補指定-設計-2026-09-08.md
+# §2.3・§2.4）。schema 6のrole/fallback行は`model=<定義名>[,...]`で定義名を
+# 参照するだけになったため、role.leaderの解決を伴うテストは全てこの定義
+# ファイルを必要とする（無いとT7で解決不能になる）。
+write_models_conf_at() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/models.conf" <<'EOF'
+[sonnet-main]
+provider=anthropic-api
+model=claude-sonnet-5
+EOF
+}
+
 make_fake_home() {
   local home="$1"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
@@ -78,15 +93,16 @@ make_fake_home() {
   # profile-sample.md からのコピー。段階2で新schemaへ追随予定＝設計書§9.1）に
   # 依存させない（テストの独立性・§10「機能差分なし」を字面どおり保つため）。
   mkdir -p "$home/.config/takumi009-ai-env"
+  write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-with-dotfiles-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
-role.leader: configured provider=anthropic-api model=claude-sonnet-5
+role.leader: configured model=sonnet-main
 ---
 EOF
 }

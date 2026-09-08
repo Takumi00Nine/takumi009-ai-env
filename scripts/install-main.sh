@@ -100,8 +100,10 @@
 # 書込を一切行わない（配役表-能力軸整理-設計-2026-09-07.md §5.2・FR-15＝
 # 実体を編集するのは本人だけ）。settings.jsonの"model"はv2実体では配役表の
 # `role.leader`から決まり（--print-leader-runtime）、機役割にも
-# --sub-delegateにも依存しない。--sub-delegateが効くのはv1実体・実体不在に
-# 縮退したときのlegacy値選択（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）だけである。
+# --sub-delegateにも依存しない。--sub-delegateが効くのは実体が本当に存在
+# しない場合に縮退したときのlegacy値選択（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）
+# だけである（2026-09-08モデル定義ファイルと候補指定対応・D-13: 実在する
+# 旧版はlegacy委譲されずPROFILE_INVALID:T4-LEGACYで解決失敗する）。
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 #       本スクリプトは既存の実ファイルをsymlinkへ置き換えるため、ユーザー本人が
@@ -169,10 +171,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 「値出力口の一本化」と同じ設計思想の横展開＝値表を3箇所に増やさない）。
 # 2026-09-01 配役表解凍 §4.2-d 改訂: 固定で許可するのは以下2キーだけへ縮小。
 # 旧版はANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODELも無条件固定で許可していたが、
-# それらは「プロファイルのrole.*/fallback.*がprovider=bedrockで実際にその別名を
-# 使っているときだけ」動的に許可する側へ移した（compute_allowed_bedrock_env_keys()
-# 参照）。名前だけ許可リストのパターンに合う任意キーへ秘密値を入れる穴を、
-# 人がピン留めの論理名を書けない設計と組み合わせて塞ぐ（迂回もできない）。
+# それらは「プロファイルのrole.*/fallback.*が参照する定義名の実効providerが
+# bedrockで、実際にその別名を使っているときだけ」動的に許可する側へ移した
+# （compute_allowed_bedrock_env_keys()参照。2026-09-08モデル定義ファイルと
+# 候補指定対応でproviderは役割の行自身ではなくモデル定義ファイル側の属性に
+# なった＝list-rolesの解決結果を見る）。名前だけ許可リストのパターンに合う
+# 任意キーへ秘密値を入れる穴を、人がピン留めの論理名を書けない設計と
+# 組み合わせて塞ぐ（迂回もできない）。
 AIENV_ALLOWED_BEDROCK_ENV_KEYS=(
   "CLAUDE_CODE_USE_BEDROCK"
   "AWS_REGION"
@@ -180,15 +185,15 @@ AIENV_ALLOWED_BEDROCK_ENV_KEYS=(
 
 # compute_allowed_bedrock_env_keys — 固定2キー＋動的キーの和集合を1行1キーで
 # 標準出力へ書く（2026-09-01 §4.2-d）。動的キー＝ローカル実体プロファイルの
-# role.*/fallback.*にprovider=bedrockの行（configured/unavailableのどちらも
-# 意図を残す設計＝V8-aに合わせ両方見る）があれば、その model 別名を共有lib
-# のlist-rolesサブコマンドへ渡してbedrock_pin_<別名>のenvキー名を導出した
-# ものの重複排除。list-rolesは自己完結（存在確認・symlink拒否・preflight・
-# 分類・全validatorをlib側が内部で行う契約＝担当A確定）。
+# role.*/fallback.*の候補が参照するモデル定義（configured/unavailableの
+# どちらも意図を残す設計＝V8-aに合わせ両方見る）のうちproviderがbedrockの
+# ものがあれば、その model 別名を共有libのlist-rolesサブコマンドへ渡して
+# bedrock_pin_<別名>のenvキー名を導出したものの重複排除。list-rolesは
+# 自己完結（存在確認・symlink拒否・preflight・全validatorをlib側が内部で
+# 行う契約＝担当A確定）。
 #
 # 戻り値の契約（2026-09-01 Codex差分レビュー・MAJOR対応で明確化）:
-#   exit 0: 成功。動的キー0件（プロファイルが無い／v1／実体はあるが
-#           schema_version:2未満＝PROFILE_LEGACY_V1・PROFILE_NOT_FOUND）は
+#   exit 0: 成功。動的キー0件（プロファイルが無い＝PROFILE_NOT_FOUND）は
 #           「Bedrock役職を使っていない」ことの正しい表現であり失敗ではない。
 #   exit 1: 算出そのものに失敗（mktemp失敗・実体がv2として妥当なのに
 #           list-rolesが予期せず失敗・bedrock-pin-varの解決失敗）。標準出力
@@ -220,17 +225,17 @@ compute_allowed_bedrock_env_keys() {
         fi
         [ -z "$var" ] && continue
         dynamic+=("$var")
-      done < <(awk -F'\t' '($3=="configured"||$3=="unavailable") && $4=="bedrock" {print $5}' "$rows_tmp" | sort -u)
+      done < <(awk -F'\t' '($3=="configured"||$3=="unavailable") && $5=="bedrock" {print $6}' "$rows_tmp" | sort -u)
     else
       case "$rows_err" in
-        PROFILE_LEGACY_V1*|PROFILE_NOT_FOUND*)
-          # v1・実体なしはBedrock役職の入力元(role.*行)自体が無い正常な
-          # 状態。動的キー0件が正しい結果であり失敗ではない。
+        PROFILE_NOT_FOUND*)
+          # 実体なしはBedrock役職の入力元(role.*行)自体が無い正常な状態。
+          # 動的キー0件が正しい結果であり失敗ではない。
           :
           ;;
         *)
-          # PROFILE_MIXED・PROFILE_INVALID:*・PROFILE_UNREADABLE等＝実体は
-          # あるがv2として妥当でない、または想定外の失敗。「算出不能」を
+          # PROFILE_INVALID:*（旧版=T4-LEGACYを含む）・PROFILE_UNREADABLE等＝
+          # 実体はあるがv2として妥当でない、または想定外の失敗。「算出不能」を
           # 「Bedrock役職なし」と区別するため非0で返す。
           rm -f "$rows_tmp"
           printf 'BEDROCK_KEYS_COMPUTE_ERROR\t%s\n' "${rows_err%%$'\n'*}" >&2
@@ -390,19 +395,21 @@ PROFILE_SAMPLE_SRC="$DIR/vault-public/Preferences/profile-sample.md"
 # check-drift.shも同じ契約の`--print-leader-runtime`だけを呼ぶ設計）。
 #
 # 2026-09-01 契約更新（担当A確定）: `resolve-leader`は**自己完結**
-# （存在確認・symlink拒否・preflight(V15)・分類・parse・全validatorを
-# lib内部で行う）。呼び出し側（本関数）は事前チェックを一切重複させず、
-# そのまま呼ぶだけでよい（判定式を2箇所に増やさない・BLOCKING対応：
-# 従来はここで独自にsymlink/存在/classify判定を行っており、V6/V7/V8/V16等
-# leader以外のvalidator違反が有ってもsettings生成へ進みうる欠陥があった）。
-# lib自身がv1プロファイルを`PROFILE_LEGACY_V1`として区別して返すため、
-# ここでその場合と実体が存在しない`PROFILE_NOT_FOUND`の場合だけ、現行実装
-# （AIENV_MODEL_MAIN/AIENV_MODEL_SUBを--sub-delegateの有無で選ぶ）へ委譲し、
-# effortはlegacy値"high"を返す（v1委譲期間の後方互換・P1ロールアウト未完了
-# 機を落とさないため＝設計§3.5「v1と分類されたときの挙動＝現行実装へ丸ごと
-# 委譲する」の一般原則をこの新しい値出力口にも適用する）。それ以外の失敗
-# （PROFILE_UNREADABLE・PROFILE_MIXED・PROFILE_INVALID:*・LEADER_*等）は
-# そのまま非0で伝播する。
+# （存在確認・symlink拒否・preflight(V15)・parse・全validatorをlib内部で
+# 行う）。呼び出し側（本関数）は事前チェックを一切重複させず、そのまま
+# 呼ぶだけでよい（判定式を2箇所に増やさない・BLOCKING対応：従来はここで
+# 独自にsymlink/存在/版判定を行っており、V6/V7/V8/V16等leader以外の
+# validator違反が有ってもsettings生成へ進みうる欠陥があった）。
+# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）: 旧版
+# （schema 6未満・schema_versionの行が無い実体を含む）をP1ロールアウト
+# 未完了機として現行実装へ委譲する経路（v1委譲）を撤去した——schema 6の
+# コードは旧版を`PROFILE_INVALID:T4-LEGACY`として一律解決失敗にするため
+# （no-backward-compat）。実体が本当に存在しない`PROFILE_NOT_FOUND`の
+# 場合だけ、現行実装（AIENV_MODEL_MAIN/AIENV_MODEL_SUBを--sub-delegateの
+# 有無で選ぶ）へ委譲し、effortはlegacy値"high"を返す（こちらはP1導入前の
+# 機体を落とさないための別の委譲で、本案件の対象外）。それ以外の失敗
+# （PROFILE_UNREADABLE・PROFILE_INVALID:*・LEADER_*等）はそのまま非0で
+# 伝播する。
 # _print_legacy_leader_runtime_json <model> — v1委譲時のJSON
 # {"model": "<model>", "effort": "high"}を安全に組み立てて標準出力へ書く。
 # ⚠️ printfでの生文字列埋め込みは、値に`"`・`\`が含まれると不正JSONになる
@@ -437,10 +444,6 @@ resolve_leader_runtime() {
   errline="$(cat "$err_file" 2>/dev/null)"
   rm -f "$err_file"
   case "$errline" in
-    PROFILE_LEGACY_V1*)
-      _print_legacy_leader_runtime_json "$AIENV_MODEL_VALUE"
-      return 0
-      ;;
     PROFILE_NOT_FOUND*)
       # ⚠️ libは「存在しない」と「存在するが通常ファイルではない
       # （ディレクトリ等）」の両方をPROFILE_NOT_FOUNDへ丸める。前者だけを
@@ -536,15 +539,32 @@ print(f'LINENO={found}')
 " "$1"
 }
 
+# model_defs_display_path — resolverの model_defs_path() と同じ判定
+# （AIENV_MODEL_DEFS_FILE未設定なら既定値・絶対パスか~/始まりでなければ
+# 不正）をシェル側で複製し、表示専用の展開後パスを返す（2026-09-08 モデル
+# 定義ファイルと候補指定対応・同設計§5.2・§5.3）。⚠️ これは表示専用の
+# 複製であり、実際の解決可否はpython3側のmodel_defs_path()が唯一の正本の
+# まま判定する（本関数はゲートに使わない）。
+model_defs_display_path() {
+  local raw="${AIENV_MODEL_DEFS_FILE:-$HOME/.config/takumi009-ai-env/models.conf}"
+  case "$raw" in
+    /*) printf '%s\n' "$raw" ;;
+    "~/"*) printf '%s\n' "${raw/#\~/$HOME}" ;;
+    *) printf '(不正なAIENV_MODEL_DEFS_FILE: %s。絶対パスか~/始まりで指定してください)\n' "$raw" ;;
+  esac
+}
+
 # parse_leader_role_env <value> — AIENV_LEADER_ROLE（形式:
-# "provider=... model=... [effort=...]"・§3.1属性文法と同じ）をデータとして
-# 解析する（⚠️ evalしない・§3.9注記）。成功時はENV_PROVIDER/ENV_MODEL/
-# ENV_EFFORTを設定してreturn 0。不正な形式・provider/model欠落・属性重複は
-# return 1。
+# "model=<定義名>[,<定義名>...]"）をデータとして解析する（⚠️ evalしない・
+# §3.9注記）。2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.3）:
+# 役割の行が`model=<定義名>[,…]`だけになったため、受理する属性を`model`だけへ
+# 畳んだ（`provider=`・`effort=`は形式エラー）。成功時はENV_MODEL_DEFS
+# （カンマ区切りの生の並び）を設定してreturn 0。不正な形式・model欠落・
+# 属性重複はreturn 1。
 parse_leader_role_env() {
   local raw="$1" tok name val rc=0
-  ENV_PROVIDER=""; ENV_MODEL=""; ENV_EFFORT=""
-  local seen_provider=0 seen_model=0 seen_effort=0
+  ENV_MODEL_DEFS=""
+  local seen_model=0
   # ⚠️ `for tok in $raw`は単語分割に加えpathname展開(globbing)も行う
   # （evalではないため直接のコード実行には至らないが、カレントディレクトリの
   # ファイル名次第でトークンが変わりうる＝純粋なデータ解析ではなくなる。
@@ -566,46 +586,55 @@ parse_leader_role_env() {
       break
     fi
     case "$name" in
-      provider) [ "$seen_provider" = "1" ] && { rc=1; break; }; ENV_PROVIDER="$val"; seen_provider=1 ;;
-      model) [ "$seen_model" = "1" ] && { rc=1; break; }; ENV_MODEL="$val"; seen_model=1 ;;
-      effort) [ "$seen_effort" = "1" ] && { rc=1; break; }; ENV_EFFORT="$val"; seen_effort=1 ;;
+      model) [ "$seen_model" = "1" ] && { rc=1; break; }; ENV_MODEL_DEFS="$val"; seen_model=1 ;;
       *) rc=1; break ;;
     esac
   done
   [ "$restore_glob" = "1" ] && set +f
   [ "$rc" -eq 0 ] || return 1
-  [ -n "$ENV_PROVIDER" ] && [ -n "$ENV_MODEL" ] || return 1
+  [ -n "$ENV_MODEL_DEFS" ] || return 1
   return 0
 }
 
+# leader_attrs_match <既存の定義名の並び> <env指定の定義名の並び> —
+# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.3）: 定義名の生の
+# 並びを文字列比較するだけにする（属性はmodelだけになったため）。
 leader_attrs_match() {
-  # $1-3: 既存(provider,model,effort) $4-6: env指定(provider,model,effort)
-  [ "$1" = "$4" ] && [ "$2" = "$5" ] && [ "${3:-}" = "${6:-}" ]
+  [ "$1" = "$2" ]
 }
 
-# write_and_verify_leader <provider> <model> <effort> — §3.9の書込み手順:
-# 専用ロック取得→再検証(check-candidate --for-leader)→role.leader行1行だけを
-# 置換/挿入→commit直前のpreimage一致確認→原子的place。既存のファイルmode・
-# 所有者を維持し、書換前にbackup_once()でbackupを取る。他の行には一切触れない。
+# write_and_verify_leader <定義名の並び> <preimage> — §3.9の書込み手順
+# （2026-09-08 モデル定義ファイルと候補指定対応で§5.3のとおり改訂）:
+# ①並びを分解し全定義をcheck-candidate --model-def … --for-leader
+# --role-name leaderで検査（1件でも落ちたら中止）②role.leader:
+# configured model=<生の並び>を一時ファイルへ書く③その一時ファイルに対して
+# resolve-leaderを1回走らせ、先頭候補が実際に解決できることを確認する
+# （check-candidateは1定義の形式とリーダー専用規則しか見ず、「先頭候補で
+# settings.jsonを作れるか」はresolve-leaderでしか確かめられない＝
+# fallback.leaderとの相互作用を含む）④preimage一致確認⑤原子的place。
+# 既存のファイルmode・所有者を維持し、書換前にbackup_once()でbackupを取る。
+# 他の行には一切触れない。
 write_and_verify_leader() {
-  # $4=preimage: 呼び出し元（ensure_leader_configured）がロック取得後・
+  # $2=preimage: 呼び出し元（ensure_leader_configured）がロック取得後・
   # 「未確定かどうかを読む」その時点で採取したSHA-256を必ず渡す
   # （2026-09-01 Codex二次レビュー指摘・BLOCKING対応: 従来はこの関数の冒頭で
   # 都度再計算しており、「読取→対話→再検証→書込み」の間に他プロセス／本人が
   # profileを編集していても、対話終了後にここで“今の”内容を新たなpreimageと
   # して受理してしまい、commit直前の一致確認が意味を持たなくなっていた。
   # ロック取得後の最初の読取り時点を正本のpreimageとして固定する）。
-  local provider="$1" model="$2" effort="$3" preimage="$4" path="$AIENV_LOCAL_PROFILE_PATH"
+  local model_defs="$1" preimage="$2" path="$AIENV_LOCAL_PROFILE_PATH"
 
   [ -n "$preimage" ] || fail "role.leaderの書込み準備に失敗しました（プロファイルのpreimageがありません）: $path"
+  [ -n "$model_defs" ] || fail "role.leaderの書込み準備に失敗しました（定義名が指定されていません）: $path"
 
-  if ! python3 "$AIENV_PROFILE_RESOLVE_LIB" check-candidate \
-        --provider "$provider" --model "$model" ${effort:+--effort "$effort"} \
-        --for-leader --role-name leader \
-        --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" \
-        >/dev/null 2>&1; then
-    fail "LEADER_CANDIDATE_INVALID: 指定された配役の検証(check-candidate)に失敗しました（provider/model/effortの組み合わせを見直してください）"
-  fi
+  local _wavl_d
+  IFS=',' read -r -a _wavl_defs <<< "$model_defs"
+  for _wavl_d in "${_wavl_defs[@]}"; do
+    [ -z "$_wavl_d" ] && continue
+    if ! python3 "$AIENV_PROFILE_RESOLVE_LIB" check-candidate           --model-def "$_wavl_d" --for-leader --role-name leader           --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR"           >/dev/null 2>&1; then
+      fail "LEADER_CANDIDATE_INVALID: 指定された定義（${_wavl_d}）の検証(check-candidate)に失敗しました"
+    fi
+  done
 
   local pos_out leader_lineno=0 leader_end_lineno=0 k v
   pos_out="$(find_leader_line_position "$path")"
@@ -618,8 +647,7 @@ write_and_verify_leader() {
 $pos_out
 EOF_POS
 
-  local newline="role.leader:               configured provider=${provider} model=${model}"
-  [ -n "$effort" ] && newline="${newline} effort=${effort}"
+  local newline="role.leader:               configured model=${model_defs}"
 
   backup_once "$path"
 
@@ -669,9 +697,17 @@ with open(outpath, 'w', encoding='utf-8') as f:
     chown "$orig_uid:$orig_gid" "$tmp" 2>/dev/null || true
   fi
 
+  if ! python3 "$AIENV_PROFILE_RESOLVE_LIB" resolve-leader "$tmp" \
+        --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" \
+        >/dev/null 2>&1; then
+    rm -f "$tmp"
+    fail "LEADER_CANDIDATE_INVALID: 先頭候補（${model_defs%%,*}）でリーダー配役を解決できませんでした（fallback.leaderの候補が複数ある場合はFALLBACK_AMBIGUOUSの可能性があります）"
+  fi
+
   local now_hash
   now_hash="$(shasum -a 256 "$path" 2>/dev/null | awk '{print $1}')" || true
   if [ "$now_hash" != "$preimage" ]; then
+    rm -f "$tmp"
     fail "並行installerを検出しました（書込み直前にプロファイルが変更されていました）。中止します: $path"
   fi
 
@@ -699,228 +735,77 @@ _read_with_timeout() {
   return 0
 }
 
-# sample_model_candidates <provider> — 配布済みサンプル
-# （$PROFILE_SAMPLE_SRC）の```yamlブロックを既存の抽出処理
-# （extract_profile_schema_block・step①の定義箇所参照）で取り出し、
-# 同じprofile parser（共有lib・list_roles_rows()経由）でconfiguredな行を
-# 解析して、指定providerのmodel値を重複排除して1行1候補で返す（§3.9 Q2）。
-# ⚠️ list-rolesはサンプルの全行を構造検証し、1行でも不正なら出力全体を
-# 失敗させる契約（contract §4.5）。**不正な行だけを落として残りを候補に
-# することはしない**——候補一覧を丸ごと使わず「自分で入力」へ倒す
-# （呼び出し側=ask_q2側の設計。壊れたサンプルからたまたま形式に適合した
-# 行だけを提示すると、それ自体が誤った既定値の押し付けになるため）。
-# ⚠️ 候補が0件のとき（サンプルが読めない・yaml抽出に失敗・list-rolesの
-# 構造検証に失敗・選んだproviderのconfigured行が0件のいずれか）は、
-# 呼び出し側が理由を区別して表示できるよう `SAMPLE_CANDIDATES_REASON` へ
-# 4区分のいずれか（`SAMPLE_UNREADABLE` / `YAML_EXTRACT_FAILED` /
-# `STRUCTURE_INVALID` / `PROVIDER_NO_CANDIDATES`）を設定して返す
-# （F-22・設計書v11 §3.9 Q2「候補を出せないときは理由を必ず区別して出す」。
-# 黙って「候補なし」にしない）。共有libが見つからない場合
-# （list_roles_rows()のPROFILE_RESOLVER_MISSING）は構造検証自体ができない
-# ため`STRUCTURE_INVALID`側へ倒す。
-sample_model_candidates() {
-  local provider="$1" tmp roles_out out extract_rc
-  SAMPLE_CANDIDATES_REASON=""
-  if [ ! -f "$PROFILE_SAMPLE_SRC" ]; then
-    SAMPLE_CANDIDATES_REASON="SAMPLE_UNREADABLE"
-    return 0
-  fi
-  tmp="$(mktemp 2>/dev/null)" || {
-    SAMPLE_CANDIDATES_REASON="SAMPLE_UNREADABLE"
-    return 0
-  }
-  # ⚠️ `[ -f ]`は存在確認だけで読取可能性を保証しない（2026-09-01工程横断
-  # レビュー指摘・MINOR-1対応）。実在するのに権限不足・不正UTF-8で読めない
-  # サンプルは、extract_profile_schema_block()がexit 2（読取/デコード失敗）
-  # を返すので、フェンス不在のexit 1（YAML_EXTRACT_FAILED）とここで区別する。
-  extract_rc=0
-  extract_profile_schema_block "$PROFILE_SAMPLE_SRC" > "$tmp" 2>/dev/null || extract_rc=$?
-  if [ "$extract_rc" -ne 0 ]; then
-    rm -f "$tmp"
-    if [ "$extract_rc" -eq 2 ]; then
-      SAMPLE_CANDIDATES_REASON="SAMPLE_UNREADABLE"
-    else
-      SAMPLE_CANDIDATES_REASON="YAML_EXTRACT_FAILED"
-    fi
-    return 0
-  fi
-  if ! roles_out="$(list_roles_rows "$tmp" 2>/dev/null)"; then
-    rm -f "$tmp"
-    SAMPLE_CANDIDATES_REASON="STRUCTURE_INVALID"
-    return 0
-  fi
-  rm -f "$tmp"
-  out="$(printf '%s\n' "$roles_out" \
-    | awk -F'\t' -v p="$provider" '$3=="configured" && $4==p {print $5}' \
-    | awk '!seen[$0]++')"
-  if [ -z "$out" ]; then
-    SAMPLE_CANDIDATES_REASON="PROVIDER_NO_CANDIDATES"
-    return 0
-  fi
-  printf '%s\n' "$out"
-}
-
-ask_q1() {
-  local default_provider="$1" input default_no=""
-  case "$default_provider" in
-    anthropic-api) default_no=1 ;;
-    bedrock) default_no=2 ;;
-    bedrock-mantle) default_no=3 ;;
-  esac
+# ask_leader_models <default_defs> — Q（唯一の質問。2026-09-08 モデル定義
+# ファイルと候補指定対応・同設計§5.3・D-11）: 役割の行が`model=<定義名>[,…]`
+# だけになったので、旧Q1(provider)・Q2(model候補)・Q3(effort)の3問を
+# 「モデル定義名（カンマ区切りで複数可）」の1問へ畳む。⚠️
+# 旧サンプル候補生成関数（配布サンプルからの候補生成）は廃止した——
+# 定義名は本人が定義ファイルへ書いた任意の名前であり、配布サンプルから
+# 機械的に提示できる候補ではないため。プロンプトに定義ファイルのパスを
+# 出す（model_defs_display_path()）。
+ask_leader_models() {
+  local default_defs="$1" input
   {
-    echo "Q1) リーダーの provider を選んでください:"
-    echo "  1) anthropic-api"
-    echo "  2) bedrock"
-    echo "  3) bedrock-mantle"
-    [ -n "$default_no" ] && echo "  (Enterで既存値を維持)"
-    printf '番号> '
+    echo "リーダーに使うモデル定義名を指定してください（カンマ区切りで複数可・先頭がsettings.json用に使われます）"
+    echo "定義ファイル: $(model_defs_display_path)"
+    [ -n "$default_defs" ] && echo "  (Enterで既存値を維持: ${default_defs})"
+    printf '定義名> '
   } >&2
   _read_with_timeout input "$AIENV_LEADER_DIALOG_TIMEOUT" || return 2
-  if [ -z "$input" ] && [ -n "$default_no" ]; then
-    input="$default_no"
+  if [ -z "$input" ] && [ -n "$default_defs" ]; then
+    echo "$default_defs"
+    return 0
   fi
-  case "$input" in
-    1) echo "anthropic-api" ;;
-    2) echo "bedrock" ;;
-    3) echo "bedrock-mantle" ;;
-    *) return 1 ;;
-  esac
+  [ -z "$input" ] && return 1
+  echo "$input"
 }
 
-ask_q2() {
-  local provider="$1" default_model="$2" input candidates count=0 c i=1 reason_text cand_tmp
-  # ⚠️ sample_model_candidates()をコマンド置換`$( )`で直接呼ぶと、関数が
-  # サブシェルで実行されSAMPLE_CANDIDATES_REASONへの代入が呼び出し側へ
-  # 反映されない（bashの既知の挙動。実測: set -u下でunbound variableに
-  # なった＝2026-09-01実装時に発見）。標準出力だけを一時ファイルへ
-  # リダイレクトする形（サブシェルを作らない）で呼び、候補は後からその
-  # ファイルを読んで得る。
-  cand_tmp="$(mktemp 2>/dev/null)" || cand_tmp="/dev/null"
-  sample_model_candidates "$provider" > "$cand_tmp" 2>/dev/null
-  if [ "$cand_tmp" != "/dev/null" ]; then
-    candidates="$(cat "$cand_tmp" 2>/dev/null)"
-    rm -f "$cand_tmp"
-  else
-    candidates=""
-  fi
-  {
-    echo "Q2) model を選んでください（provider=${provider}）:"
-    if [ -n "$candidates" ]; then
-      while IFS= read -r c; do
-        [ -z "$c" ] && continue
-        echo "  $i) $c"
-        i=$((i + 1))
-      done <<EOF_CANDIDATES
-$candidates
-EOF_CANDIDATES
-      count=$((i - 1))
-    else
-      # ⚠️ 候補一覧を生成できない理由は必ず4区分のいずれかで区別して表示
-      # する（F-22・設計書v11 §3.9 Q2）。黙って「候補なし」とだけ出さない。
-      # 不正行の全文・属性値は出さない（§3.1-8。SAMPLE_CANDIDATES_REASONは
-      # 区分コードのみを持ち、list-rolesのエラー詳細文字列は保持しない）。
-      case "$SAMPLE_CANDIDATES_REASON" in
-        SAMPLE_UNREADABLE) reason_text="サンプル読取不能" ;;
-        YAML_EXTRACT_FAILED) reason_text="yaml 抽出失敗" ;;
-        PROVIDER_NO_CANDIDATES) reason_text="選択した provider の候補が0件" ;;
-        *) reason_text="構造検証失敗" ;;
-      esac
-      echo "  候補一覧を生成できません（理由: ${reason_text}）。候補は使わず model を手入力してください"
-    fi
-    echo "  0) 自分で入力する"
-    [ -n "$default_model" ] && echo "  (Enterで既存値を維持)"
-    printf '番号> '
-  } >&2
-  _read_with_timeout input "$AIENV_LEADER_DIALOG_TIMEOUT" || return 2
-  if [ -z "$input" ] && [ -n "$default_model" ]; then
-    echo "$default_model"
-    return 0
-  fi
-  if [ "$input" = "0" ]; then
-    printf 'model の値を入力してください> ' >&2
-    _read_with_timeout input "$AIENV_LEADER_DIALOG_TIMEOUT" || return 2
-    [ -z "$input" ] && return 1
-    echo "$input"
-    return 0
-  fi
-  if [[ "$input" =~ ^[0-9]+$ ]] && [ "$count" -gt 0 ] && [ "$input" -ge 1 ] && [ "$input" -le "$count" ]; then
-    printf '%s\n' "$candidates" | sed -n "${input}p"
-    return 0
-  fi
-  return 1
-}
-
-ask_q3() {
-  local default_effort="$1" input
-  {
-    echo "Q3) effort を選んでください:"
-    echo "  1) 未指定（セッション既定を継承）"
-    echo "  2) low"
-    echo "  3) medium"
-    echo "  4) high"
-    echo "  5) xhigh"
-    [ -n "$default_effort" ] && echo "  (Enterで既存値を維持)"
-    printf '番号> '
-  } >&2
-  _read_with_timeout input "$AIENV_LEADER_DIALOG_TIMEOUT" || return 2
-  if [ -z "$input" ] && [ -n "$default_effort" ]; then
-    echo "$default_effort"
-    return 0
-  fi
-  case "$input" in
-    1) echo "" ;;
-    2) echo "low" ;;
-    3) echo "medium" ;;
-    4) echo "high" ;;
-    5) echo "xhigh" ;;
-    *) return 1 ;;
-  esac
-}
-
-# run_leader_dialog <default_provider> <default_model> <default_effort> <preimage> —
-# Q1→Q2→Q3の1組を検査し、3回失敗したら中止する（§3.9「回数はこの組単位で
-# 数える」）。EOF・タイムアウト・端末切断は即時非0（リトライしない）。
+# run_leader_dialog <default_model_defs> <preimage> — 質問1組（ask_leader_
+# models）を検査し、3回失敗したら中止する（§3.9「回数はこの組単位で数える」。
+# 2026-09-08 モデル定義ファイルと候補指定対応で質問が1つへ畳まれたのに
+# 合わせて簡素化）。EOF・タイムアウト・端末切断は即時非0（リトライしない）。
 # <preimage>はensure_leader_configuredがロック取得後の最初の読取り時点で
 # 採取した値をそのままwrite_and_verify_leaderへ引き継ぐ。
 run_leader_dialog() {
-  local default_provider="$1" default_model="$2" default_effort="$3" preimage="$4"
-  local attempt provider model effort rc
+  local default_model_defs="$1" preimage="$2"
+  local attempt model_defs rc
 
   for attempt in 1 2 3; do
     # ⚠️ `x="$(f)"; rc=$?`は`set -e`下で危険（`f`が非0を返すとこの代入文
     # 自体の終了コードが非0になり、`rc=$?`へ辿り着く前にerrexitで即終了する）。
     # 必ず`|| rc=$?`で代入コマンドそのものをガードする。
     rc=0
-    provider="$(ask_q1 "$default_provider")" || rc=$?
+    model_defs="$(ask_leader_models "$default_model_defs")" || rc=$?
     if [ "$rc" -eq 2 ]; then fail "LEADER_DIALOG_ABORTED: 対話が中断されました（EOF/タイムアウト/端末切断）"; fi
-    if [ "$rc" -ne 0 ]; then warn "Q1(provider)の入力が不正でした（${attempt}/3回目）。もう一度お答えください。"; continue; fi
+    if [ "$rc" -ne 0 ]; then warn "定義名の入力が不正でした（${attempt}/3回目）。もう一度お答えください。"; continue; fi
 
-    rc=0
-    model="$(ask_q2 "$provider" "$default_model")" || rc=$?
-    if [ "$rc" -eq 2 ]; then fail "LEADER_DIALOG_ABORTED: 対話が中断されました（EOF/タイムアウト/端末切断）"; fi
-    if [ "$rc" -ne 0 ]; then warn "Q2(model)の入力が不正でした（${attempt}/3回目）。もう一度お答えください。"; continue; fi
-
-    rc=0
-    effort="$(ask_q3 "$default_effort")" || rc=$?
-    if [ "$rc" -eq 2 ]; then fail "LEADER_DIALOG_ABORTED: 対話が中断されました（EOF/タイムアウト/端末切断）"; fi
-    if [ "$rc" -ne 0 ]; then warn "Q3(effort)の入力が不正でした（${attempt}/3回目）。もう一度お答えください。"; continue; fi
-
-    if python3 "$AIENV_PROFILE_RESOLVE_LIB" check-candidate \
-         --provider "$provider" --model "$model" ${effort:+--effort "$effort"} \
-         --for-leader --role-name leader \
-         --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" \
-         >/dev/null 2>&1; then
-      write_and_verify_leader "$provider" "$model" "$effort" "$preimage"
+    local _rld_d _rld_ok=1
+    IFS=',' read -r -a _rld_defs <<< "$model_defs"
+    for _rld_d in "${_rld_defs[@]}"; do
+      [ -z "$_rld_d" ] && continue
+      if ! python3 "$AIENV_PROFILE_RESOLVE_LIB" check-candidate \
+           --model-def "$_rld_d" --for-leader --role-name leader \
+           --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" \
+           >/dev/null 2>&1; then
+        _rld_ok=0
+        break
+      fi
+    done
+    if [ "$_rld_ok" = "1" ]; then
+      write_and_verify_leader "$model_defs" "$preimage"
       return 0
     fi
-    warn "入力された配役の検証に失敗しました（${attempt}/3回目）。もう一度お答えください。"
+    warn "入力された定義の検証に失敗しました（${attempt}/3回目）。もう一度お答えください。"
   done
   fail "LEADER_DIALOG_FAILED: リーダー配役の対話が3回とも検証に失敗したため中止しました"
 }
 
 # ensure_leader_configured — §3.9の入力優先順位表（10行）どおりにrole.leader
-# を確定させる。v1/混在プロファイル・DRY_RUN・実体不在・lib不在ではv2の
-# ときだけ動く対話には踏み込まない（それぞれ理由は各分岐のコメント参照）。
+# を確定させる。DRY_RUN・実体不在・lib不在ではv2のときだけ動く対話には
+# 踏み込まない（それぞれ理由は各分岐のコメント参照）。2026-09-08 モデル
+# 定義ファイルと候補指定対応（同設計§3.8・D-13）: 旧版（v1委譲）への特別
+# 分岐を撤去した——schema 6のコードは旧版をPROFILE_INVALID:T4-LEGACYとして
+# 一律解決失敗にするため、その他の実体エラーと同じ扱いになる。
 ensure_leader_configured() {
   local path="$AIENV_LOCAL_PROFILE_PATH"
 
@@ -929,16 +814,13 @@ ensure_leader_configured() {
     return 0
   fi
 
-  # list-rolesは自己完結（存在確認・symlink拒否・preflight・分類・全
-  # validatorをlib内部で行う契約）。ここでの独自の事前チェックは重複させ
-  # ない。PROFILE_LEGACY_V1／PROFILE_NOT_FOUND（実体無し・P1未整備機）は
-  # 対話しない（v1委譲・legacy委譲はresolve_leader_runtime側の責務）。
-  # それ以外の失敗（PROFILE_MIXED・PROFILE_INVALID:*等＝実体そのものが
-  # 壊れている）も、ここでは書き込みを試みず、後段のresolve_leader_runtime
-  # が同じエラーを検出してsettings生成を中止する（判定式を2箇所に増やさ
-  # ない）。⚠️ 例外＝AIENV_LEADER_ROLE/--reconfigure-leader指定時は
-  # PROFILE_LEGACY_V1で明示的にfail（v1実体へv2の行を書き足して混在を
-  # 自分で作ってしまう経路を塞ぐ・§3.9）。
+  # list-rolesは自己完結（存在確認・symlink拒否・preflight・全validatorを
+  # lib内部で行う契約）。ここでの独自の事前チェックは重複させない。
+  # PROFILE_NOT_FOUND（実体無し・P1未整備機）は対話しない（legacy委譲は
+  # resolve_leader_runtime側の責務）。それ以外の失敗（PROFILE_INVALID:*
+  # 〈旧版=T4-LEGACYを含む〉等＝実体そのものが壊れている）も、ここでは
+  # 書き込みを試みず、後段のresolve_leader_runtimeが同じエラーを検出して
+  # settings生成を中止する（判定式を2箇所に増やさない）。
   #
   # ⚠️ BLOCKING対応（2026-09-01 Codex一次レビュー指摘）: ロックは「未確定
   # かどうかを読む」時点から取得し、settings生成完了まで（プロセス終了時の
@@ -978,15 +860,6 @@ ensure_leader_configured() {
 
   if [ "$rows_rc" -ne 0 ]; then
     case "$rows_err" in
-      PROFILE_LEGACY_V1*)
-        # v1実体が既にある。v2の行を書き足すと混在(T3')を自分で作って
-        # しまうため、AIENV_LEADER_ROLE/--reconfigure-leader指定時は明示的に
-        # fail（§3.9「v1と分類されたら対話しない」）。
-        if [ -n "${AIENV_LEADER_ROLE:-}" ] || [ "$RECONFIGURE_LEADER" = "1" ]; then
-          fail "プロファイルがv2形式ではありません（v1）。先に schema_version: 2 と職種行への移行を行ってから、リーダー配役の指定/対話をやり直してください: $path"
-        fi
-        return 0
-        ;;
       PROFILE_NOT_FOUND*)
         # ⚠️ libは「存在しない」と「存在するが通常ファイルではない
         # （ディレクトリ等）」の両方をPROFILE_NOT_FOUNDへ丸める
@@ -1006,15 +879,20 @@ ensure_leader_configured() {
     esac
   fi
 
-  LEADER_STATE=""; LEADER_PROVIDER=""; LEADER_MODEL=""; LEADER_EFFORT=""
-  local kind name state provider model execution effort
-  while IFS=$'\t' read -r kind name state provider model execution effort; do
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.1 B-6）: list-roles
+  # が8列（kind,name,state,定義名,provider,model,execution,effort）・
+  # 1候補1行になったので`break`をやめてrole/leaderの全行を走査し、定義名を
+  # 記述順に`,`で連結してLEADER_MODEL_DEFSにする（1候補1行になったので、
+  # breakすると候補列の2件目以降が消える）。LEADER_STATEは最初の行から取る。
+  # 旧provider/model/effort別変数は廃止（比較・対話・書込みが
+  # 使うのは定義名の並びだけ）。
+  LEADER_STATE=""
+  local kind name state model_def provider model execution effort
+  local _elc_defs=()
+  while IFS=$'	' read -r kind name state model_def provider model execution effort; do
     if [ "$kind" = "role" ] && [ "$name" = "leader" ]; then
-      LEADER_STATE="$state"
-      LEADER_PROVIDER="$provider"
-      LEADER_MODEL="$model"
-      LEADER_EFFORT="$effort"
-      break
+      [ -z "$LEADER_STATE" ] && LEADER_STATE="$state"
+      [ -n "$model_def" ] && _elc_defs+=("$model_def")
     fi
   done <<EOF_ROWS
 $rows
@@ -1022,21 +900,30 @@ EOF_ROWS
   # 行そのものが無い＝§3.1規約6「未記載・空はunknown」と同じ扱い（挿入が
   # 必要な状態としてwrite_and_verify_leaderが処理する）。
   [ -n "$LEADER_STATE" ] || LEADER_STATE="unknown"
+  LEADER_MODEL_DEFS=""
+  local _elc_d
+  for _elc_d in "${_elc_defs[@]:-}"; do
+    [ -z "$_elc_d" ] && continue
+    if [ -z "$LEADER_MODEL_DEFS" ]; then
+      LEADER_MODEL_DEFS="$_elc_d"
+    else
+      LEADER_MODEL_DEFS="$LEADER_MODEL_DEFS,$_elc_d"
+    fi
+  done
 
   if [ -n "${AIENV_LEADER_ROLE:-}" ]; then
     parse_leader_role_env "$AIENV_LEADER_ROLE" \
-      || fail "AIENV_LEADER_ROLE の形式が不正です（'provider=... model=... [effort=...]' の形で指定してください）"
+      || fail "AIENV_LEADER_ROLE の形式が不正です（'model=<定義名>[,<定義名>...]' の形で指定してください）"
   fi
 
   case "$LEADER_STATE" in
     configured)
       if [ -n "${AIENV_LEADER_ROLE:-}" ]; then
         if [ "$RECONFIGURE_LEADER" = "1" ]; then
-          write_and_verify_leader "$ENV_PROVIDER" "$ENV_MODEL" "$ENV_EFFORT" "$leader_preimage"
+          write_and_verify_leader "$ENV_MODEL_DEFS" "$leader_preimage"
           return 0
         fi
-        if leader_attrs_match "$LEADER_PROVIDER" "$LEADER_MODEL" "$LEADER_EFFORT" \
-             "$ENV_PROVIDER" "$ENV_MODEL" "$ENV_EFFORT"; then
+        if leader_attrs_match "$LEADER_MODEL_DEFS" "$ENV_MODEL_DEFS"; then
           return 0
         fi
         fail "LEADER_ROLE_CONFLICT: AIENV_LEADER_ROLE が既存の role.leader と一致しません（変えるには --reconfigure-leader を付けてください）"
@@ -1046,7 +933,7 @@ EOF_ROWS
         return 0
       fi
       if can_interact; then
-        run_leader_dialog "$LEADER_PROVIDER" "$LEADER_MODEL" "$LEADER_EFFORT" "$leader_preimage"
+        run_leader_dialog "$LEADER_MODEL_DEFS" "$leader_preimage"
       else
         fail "LEADER_UNCONFIGURED_NONINTERACTIVE: 非対話環境のため --reconfigure-leader でのリーダー変更はできません（AIENV_LEADER_ROLE を指定するか、対話可能な端末から実行してください）"
       fi
@@ -1060,11 +947,11 @@ EOF_ROWS
       ;;
     unknown|not_adopted)
       if [ -n "${AIENV_LEADER_ROLE:-}" ]; then
-        write_and_verify_leader "$ENV_PROVIDER" "$ENV_MODEL" "$ENV_EFFORT" "$leader_preimage"
+        write_and_verify_leader "$ENV_MODEL_DEFS" "$leader_preimage"
         return 0
       fi
       if can_interact; then
-        run_leader_dialog "" "" "" "$leader_preimage"
+        run_leader_dialog "" "$leader_preimage"
       else
         fail "LEADER_UNCONFIGURED_NONINTERACTIVE: リーダー配役が未確定です（role.leader: ${LEADER_STATE}）。対話できない環境のため中止しました（AIENV_LEADER_ROLE を指定するか、対話可能な端末から実行してください）"
       fi
@@ -1097,9 +984,40 @@ check_profile_cmd() {
     exit 1
   fi
 
-  # list-rolesは自己完結（存在確認・symlink拒否・preflight・分類・全
-  # validatorをlib内部で行う契約＝担当A確定）。成功すればそれだけでv2かつ
-  # 妥当と分かるため、独自の事前チェック・classify呼び出しを重複させない。
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.2・FR-19①）:
+  # list-rolesの前に定義ファイルの状態を1行出す。⚠️ 表示するパスは
+  # resolve-candidate等が実際に見に行くパスと同じもの（model_defs_display_
+  # path()＝model_defs_path()の表示専用複製）。専用の検査コマンドは
+  # 足さない——list-roles/resolveがT7/T12を返すので、既存のエラー表示経路が
+  # そのまま定義ファイルの検査になっている。雛形は自動生成しない（D-12）。
+  # ⚠️ この案内行は`log`（stdout）ではなく必ずstderrへ出す（2026-09-08
+  # Codexレビュー指摘・Major対応: check-drift.shはstdoutの1行目を機械可読行
+  # として`head -1`する契約（§4.2-e・契約書§4）のため、--check-profileの
+  # stdoutは常にOK/MINIMAL/PROFILE_NOT_FOUND等の機械可読行から始まる必要が
+  # ある。この案内行がstdoutの1行目に出ると、check-driftが誤ってPROFILE-
+  # VALIDATION-FAILEDと判定してしまう＝実装記録の担当C所見）。
+  local _cpc_defs_path _cpc_defs_state
+  _cpc_defs_path="$(model_defs_display_path)"
+  case "$_cpc_defs_path" in
+    /*)
+      if [ -f "$_cpc_defs_path" ]; then _cpc_defs_state="存在する"; else _cpc_defs_state="ありません"; fi
+      if [ -n "${AIENV_MODEL_DEFS_FILE:-}" ]; then
+        log "モデル定義ファイル: ${_cpc_defs_path}（${_cpc_defs_state}）[環境変数の生の値: ${AIENV_MODEL_DEFS_FILE}]" >&2
+      else
+        log "モデル定義ファイル: ${_cpc_defs_path}（${_cpc_defs_state}）" >&2
+      fi
+      if [ "$_cpc_defs_state" = "ありません" ]; then
+        log "  雛形は自動生成しません。Vaultの Preferences/model-definitions-sample.md をコピーして本人が作成してください。" >&2
+      fi
+      ;;
+    *)
+      log "モデル定義ファイル: ${_cpc_defs_path}" >&2
+      ;;
+  esac
+
+  # list-rolesは自己完結（存在確認・symlink拒否・preflight・全validatorを
+  # lib内部で行う契約＝担当A確定）。成功すればそれだけでv2かつ妥当と分かる
+  # ため、独自の事前チェックを重複させない。
   local roles_tsv roles_rc=0 roles_err_tmp roles_err
   roles_err_tmp="$(mktemp 2>/dev/null)" || fail "一時ファイルを作成できません"
   if ! roles_tsv="$(python3 "$lib" list-roles "$path" 2>"$roles_err_tmp")"; then
@@ -1109,16 +1027,8 @@ check_profile_cmd() {
   rm -f "$roles_err_tmp"
 
   if [ "$roles_rc" -ne 0 ]; then
-    case "$roles_err" in
-      PROFILE_LEGACY_V1*)
-        log "プロファイルはv2形式ではありません（v1）。v1互換のまま運用されています。v2へ移行してください（§3.5）。"
-        exit 0
-        ;;
-      *)
-        printf '%s\n' "$roles_err"
-        exit 1
-        ;;
-    esac
+    printf '%s\n' "$roles_err"
+    exit 1
   fi
 
   local resolve_line rc=0
@@ -1135,21 +1045,24 @@ check_profile_cmd() {
   fi
 
   log "配役一覧（provider/modelでグループ化。値は再掲であり§4.1-f一般則の例外＝人が手編集を確認するための唯一の非AI向け表示）:"
-  # ⚠️ effortが実行値になるのはrole.leader（実効候補）だけで、ワーカー行は
-  # 「参考値（実行値ではない）」（§3.8）。leader行にはこの注記を付けない
-  # （2026-09-01 Codex二次レビュー指摘・MAJOR対応）。
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.1）: list-rolesが
+  # 8列（kind,name,state,定義名,provider,model,execution,effort）になった
+  # ので3箇所すべての列を1つずつ後ろへずらす。⚠️ effortが実行値になるのは
+  # role.leader（実効候補）だけで、ワーカー行は「参考値（実行値ではない）」
+  # （§3.8）。leader行にはこの注記を付けない（2026-09-01 Codex二次レビュー
+  # 指摘・MAJOR対応）。グループ見出しの行に定義名（$4）を足す。
   printf '%s\n' "$roles_tsv" \
     | awk -F'\t' '
         $3=="configured" || $3=="unavailable" {
-          line = $1"."$2"("$3")"
-          if ($7 != "") {
+          line = $1"."$2"("$3")[" $4 "]"
+          if ($8 != "") {
             if ($1 == "role" && $2 == "leader") {
-              line = line " effort=" $7
+              line = line " effort=" $8
             } else {
-              line = line " effort=" $7 "（参考値・実行値ではない）"
+              line = line " effort=" $8 "（参考値・実行値ではない）"
             }
           }
-          print $4"/"$5"\t" line
+          print $5"/"$6"\t" line
         }' \
     | sort \
     | awk -F'\t' '{
@@ -1202,8 +1115,9 @@ done
 # --sub-delegate の有無（＝install-sub.sh経由か、直接実行か）だけで決まる。
 # 配役表の`machine_role`の読み返しには依存しない（本値はどちらのインストーラ
 # 経路で呼ばれたかから直接決まる一次情報のため。⚠️ この値の決め方が効くのは
-# v1実体・実体不在に縮退したときのlegacy値選択だけであり、v2実体では
-# settings.jsonの"model"は配役表の`role.leader`から決まる＝§5.2の実測）。
+# 実体が本当に存在しない場合に縮退したときのlegacy値選択だけであり（実在する
+# 旧版はD-13によりlegacy委譲されずT4-LEGACYで解決失敗する）、schema 6の
+# 実体ではsettings.jsonの"model"は配役表の`role.leader`から決まる＝§5.2の実測）。
 if [ "$IS_SUB_DELEGATE" = "1" ]; then
   AIENV_MODEL_VALUE="$AIENV_MODEL_SUB"
 else
@@ -1605,7 +1519,7 @@ extract_profile_schema_block() {
   # 対応）: exit 1＝読めた内容の中にフェンスが見つからない（YAML抽出失敗
   # 相当）／exit 2＝ファイル自体が読めない・デコードできない（読取不能
   # 相当）。⚠️ 従来はどちらも`sys.exit(1)`または素通しの例外（デフォルトで
-  # exit 1相当）に丸められており、呼び出し側（sample_model_candidates()）が
+  # exit 1相当）に丸められており、呼び出し側（旧サンプル候補生成関数）が
   # 「実在するが権限不足・不正UTF-8のサンプル」を`YAML_EXTRACT_FAILED`
   # （F-22の4区分の1つ）と誤分類していた。`[ -f ]`は読取可能性を保証しない
   # （存在確認だけ）ため、実際の読取り時点で失敗を検出しここで初めて区別する。
@@ -1727,10 +1641,10 @@ print(d.get("effort", ""))
     # 「保持」を断定しない中立な表現にする。
     fail_settings_generation "リーダー実行値を解決できませんでした（${_leader_runtime_errline:-不明なエラー}）。settings.jsonの生成を中止します。"
   fi
-  # 動的Bedrock許可キー（§4.2-d）。プロファイルのrole.*/fallback.*が
-  # 実際にprovider=bedrockで使っている別名だけをここで確定させ、
-  # generate_settings_json()・compute_bedrock_env_json()が唯一の値表として
-  # 参照する配列を更新する。
+  # 動的Bedrock許可キー（§4.2-d）。プロファイルのrole.*/fallback.*が参照
+  # する定義（モデル定義ファイル側）のproviderが実際にbedrockで使っている
+  # 別名だけをここで確定させ、generate_settings_json()・
+  # compute_bedrock_env_json()が唯一の値表として参照する配列を更新する。
   # ⚠️ 算出に失敗した場合は、settings.json本体の生成そのものをスキップし
   # 既存ファイルを保持したうえでAIENV_DEFERRED_EXIT_CODEを立てる（設計書
   # §6.2-B S18そのもの＝2026-09-01工程横断レビュー差し戻し・MAJOR対応で

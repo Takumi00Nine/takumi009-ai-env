@@ -23,7 +23,7 @@ SCRIPT="$REPO_ROOT/scripts/install-main.sh"
 # テスト）は、この既定値をexportしておくことで「未確定→envの値を検査して
 # 採用（質問しない）」経路を常に通り、決定的にsettings.json生成まで進む。
 # §3.9固有のテストブロックでは、必要に応じてunset/上書きする。
-export AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5'
+export AIENV_LEADER_ROLE='model=sonnet-main'
 
 PASS=0
 FAIL=0
@@ -89,6 +89,53 @@ assert_agents_line() {
   esac
 }
 
+# write_models_conf_at <dir> — モデル定義ファイル（models.conf）を
+# <dir>/models.conf へ書く（モデル定義ファイルと候補指定-設計-2026-09-08.md
+# §2.3・§2.4）。schema 6のrole/fallback行は`model=<定義名>[,...]`で定義名を
+# 参照するだけになったため、role.leaderの解決を伴うテストは全てこの定義
+# ファイルを必要とする（無いとT7で解決不能になり、テストの主眼と無関係な
+# 理由で失敗する）。本ファイルの多くのテストで共通に使う最小の定義セット
+# （sonnet-main／opus-main／opus-high／opus-medium／opus-low／bedrock-opus）を
+# 1箇所にまとめる。
+write_models_conf_at() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/models.conf" <<'EOF'
+[sonnet-main]
+provider=anthropic-api
+model=claude-sonnet-5
+
+[opus-main]
+provider=anthropic-api
+model=claude-opus-5
+
+[opus-high]
+provider=anthropic-api
+model=claude-opus-5
+effort=high
+
+[opus-medium]
+provider=anthropic-api
+model=claude-opus-5
+effort=medium
+
+[opus-low]
+provider=anthropic-api
+model=claude-opus-5
+effort=low
+
+[bedrock-opus]
+provider=bedrock
+model=opus
+
+[codex-high]
+provider=external
+execution=external-cli
+model=default
+effort=high
+EOF
+}
+
 # make_fake_home_no_profile <home> — $home/.config/takumi009-ai-env/profile.md
 # を置かない版（雛形配置＝profile.mdの生成・非破壊性そのものを検証する
 # テスト専用。make_fake_home()が既定で書く実体があると「実体が無い」前提の
@@ -109,15 +156,16 @@ make_fake_home() {
   # role.leaderの状態・machine_roleの値等を個別に検証するテストは、この
   # 既定値を上書きする（後勝ち）。
   mkdir -p "$home/.config/takumi009-ai-env"
+  write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
-role.leader: configured provider=anthropic-api model=claude-sonnet-5
+role.leader: configured model=sonnet-main
 ---
 EOF
 }
@@ -303,12 +351,14 @@ echo "=== 6. ローカル実体プロファイルの雛形配置: サンプル�
   TMP_REPO="$(mktemp -d)"
   make_repo_with_profile_sample_fixture "$TMP_REPO"
 
-  # このfixtureはv1形式（schema_version・role.*行を持たない6キーのみ）。
-  # 2026-09-01 配役表解凍§3.9「v1と分類されたら対話しない（AIENV_LEADER_ROLE
-  # 指定時も非0終了）」に該当するため、本ファイル冒頭のexportを打ち消す
-  # （このテストの主眼＝雛形コピーの正しさとは無関係な理由でinstallerを
-  # 失敗させないため）。
-  env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  # このfixtureは値がプレースホルダのまま（schema_versionを持たない6キーの
+  # yamlブロック）であり、コピー後の実体はschema 6のvalidatorを通らない
+  # （2026-09-08 モデル定義ファイルと候補指定対応・同設計§3.8・D-13でv1委譲が
+  # 「実体が本当に存在しない」場合だけに縮小されたため、コピー後に実体が
+  # 存在する状態ではT4-LEGACY等で非0終了する＝本体側の既知の仕様。本テストの
+  # 主眼＝雛形コピー自体の正しさとは無関係なため、installer本体の終了コードは
+  # 見ない（`|| true`）。
+  env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1 || true
 
   assert_true "profile.mdが作成される" \
     "$([[ -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
@@ -353,25 +403,21 @@ echo "=== 7. ローカル実体プロファイルの雛形配置: 非破壊性�
     [[ -L "$PROFILE_DEST" ]] && before_kind_is_symlink=1
     before_readlink="$( [[ -L "$PROFILE_DEST" ]] && readlink "$PROFILE_DEST" || echo "" )"
 
-    # fileとdirは既存実体がv1相当（schema_version・role.*行を持たない）に
-    # 分類されるため、AIENV_LEADER_ROLEを指定したまま実行すると
-    # 「v1と分類されたら対話しない」規則で非0終了してしまう
-    # （symlink/broken_symlinkはsymlink判定で早期returnするため元々無関係）。
-    # 本テストの主眼＝非破壊性の検証とは無関係なので打ち消しておく。
-    # 2026-09-01 配役表解凍: dir/symlink/broken_symlinkのkindは、既存の
-    # profile.mdが「通常ファイルとして読めない」状態そのものであり、
-    # resolve_leader_runtime()がPROFILE_UNREADABLEとして正しく非0終了する
-    # ようになった（S2「プロファイル解決不能→生成しない・既存があれば保持・
-    # 非0終了」）。fileのみ内容がv1相当に分類され legacy 委譲で成功する。
+    # dir/symlink/broken_symlinkのkindは、既存のprofile.mdが「通常ファイルとして
+    # 読めない」状態そのものであり、resolve_leader_runtime()がPROFILE_UNREADABLEと
+    # して正しく非0終了する（S2「プロファイル解決不能→生成しない・既存があれば
+    # 保持・非0終了」）。fileのkindは中身が有効なfrontmatterではない
+    # プレースホルダ文字列のため、T6（frontmatterの開始区切りが無い）で非0終了
+    # する（2026-09-08 モデル定義ファイルと候補指定対応・同設計§3.8・D-13でv1
+    # 委譲が「実体が本当に存在しない」場合だけに縮小されたため、旧アサーション
+    # 「fileはv1相当としてlegacy委譲されexit 0で完走する」は成立しなくなった＝
+    # 実測でPROFILE_INVALID:T6になることを確認済み。4種とも非0終了へ統一する）。
     # `|| true`でrcを捕まえ、`set -e`で全体を落とさないようにする。
     rc=0
     out="$(env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
 
-    case "$kind" in
-      file) assert_eq "[$kind] v1相当としてlegacy委譲されexit 0で完走する" "0" "$rc" ;;
-      *) assert_true "[$kind] profile.mdが読めない状態のためexit非0で中止する（既存settings.json等は保持）" \
-           "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)" ;;
-    esac
+    assert_true "[$kind] profile.mdが読めない/有効でない状態のためexit非0で中止する（既存settings.json等は保持）" \
+      "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
     assert_true "[$kind] 既存が壊れずに残る（上書きされない）" \
       "$([[ -e "$PROFILE_DEST" || -L "$PROFILE_DEST" ]] && echo 1 || echo 0)"
     if [[ "$before_kind_is_symlink" = "1" ]]; then
@@ -421,19 +467,34 @@ echo "=== 9. ローカル実体プロファイルの雛形配置: --dry-run で�
 }
 
 # write_v2_profile_with_bedrock_role <dest> <alias> — role.researcherを
-# provider=bedrock model=<alias>で配役したv2プロファイルを書く（§4.2-d動的
-# Bedrock許可キーのテスト用フィクスチャ）。role.leaderはグローバルexportの
-# AIENV_LEADER_ROLE（provider=anthropic-api model=claude-sonnet-5）と一致する
-# 値をあらかじめconfigured済みにしておき、対話に入らず冪等に通す。
+# provider=bedrock model=<alias>（定義名bedrock-<alias>経由）で配役したschema 6
+# プロファイルを書く（§4.2-d動的Bedrock許可キーのテスト用フィクスチャ）。
+# role.leaderはグローバルexportのAIENV_LEADER_ROLE（model=sonnet-main）と
+# 一致する値をあらかじめconfigured済みにしておき、対話に入らず冪等に通す。
+# 併せて<dest>と同じディレクトリへmodels.confを書く（bedrock-<alias>は
+# 標準セットに無いaliasのときだけ追記する。標準セットのbedrock-opusと
+# 名前が重複するとT12になるため）。
 write_v2_profile_with_bedrock_role() {
   local dest="$1" alias="$2"
   mkdir -p "$(dirname "$dest")"
+  write_models_conf_at "$(dirname "$dest")"
+  if [ "$alias" != "opus" ]; then
+    cat >> "$(dirname "$dest")/models.conf" <<EOF
+
+[bedrock-${alias}]
+provider=bedrock
+model=${alias}
+EOF
+  fi
   cat > "$dest" <<EOF
 ---
-schema_version: 2
+schema_version: 6
 profile_slug: test
-role.leader: configured provider=anthropic-api model=claude-sonnet-5
-role.researcher: configured provider=bedrock model=${alias}
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+role.leader: configured model=sonnet-main
+role.researcher: configured model=bedrock-${alias}
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
@@ -872,8 +933,8 @@ echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-
 
     missing_keys=0
     # 配役表-能力軸整理-設計-2026-09-07.md §3・§4.1対応: 能力軸5キーを撤去し
-    # machine_roleを新設。LOCAL_PROFILE_KNOWN_KEYS/CAPABILITY_KEYSの現行3キー
-    # 集合に合わせる。
+    # machine_roleを新設。bootstrap-vault.sh側の既知キー配列本体・
+    # profile_resolve.py側のCAPABILITY_KEYSいずれの現行3キー集合にも合わせる。
     for k in team_mode no_read_paths machine_role; do
       if ! grep -q "^${k}:" "$PROFILE_PATH"; then
         fail_case "実サンプルから最小能力表3キーの1つ(${k})がノートmetadataと取り違えられ抽出できていない"
@@ -1027,11 +1088,15 @@ echo "=== 18. --print-leader-runtime: effort指定時はJSONに含める ==="
 {
   FAKE_HOME="$(mktemp -d)"
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
+  write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 2
+schema_version: 6
 profile_slug: test
-role.leader: configured provider=anthropic-api model=claude-opus-5 effort=high
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+role.leader: configured model=opus-high
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
@@ -1047,10 +1112,14 @@ echo "=== 19. --print-leader-runtime: role.leaderがunknownなら失敗時stdout
 {
   FAKE_HOME="$(mktemp -d)"
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
+  write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 2
+schema_version: 6
 profile_slug: test
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
 role.leader: unknown
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
@@ -1068,7 +1137,7 @@ EOF
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 20. --print-leader-runtime: v1プロファイル（schema_versionなし）はlegacy委譲し、effortはlegacy値highになる（回帰） ==="
+echo "=== 20. --print-leader-runtime: v1プロファイル（実在するがschema_versionなし）はlegacy委譲されずT4-LEGACYで解決失敗する（2026-09-08 モデル定義ファイルと候補指定対応・同設計§3.8・D-13: legacy委譲は実体が本当に存在しない場合だけに限定された。実在する旧版は他のPROFILE_INVALIDと同様に非0終了する。旧アサーション「effort=highへlegacy委譲される」は本変更で削除した＝実測でPROFILE_INVALID:T4-LEGACYになることを確認済み） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
@@ -1078,10 +1147,10 @@ reviewer: configured(codex-mcp)
 ---
 EOF
 
-  out_main="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime)"
-  out_sub="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime --sub-delegate)"
-  assert_eq "main既定値+legacy effort=high" '{"model": "claude-fable-5[1m]", "effort": "high"}' "$out_main"
-  assert_eq "sub既定値+legacy effort=high（--sub-delegateで切り替わる）" '{"model": "claude-opus-5", "effort": "high"}' "$out_sub"
+  rc=0
+  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime 2>&1)" || rc=$?
+  assert_true "exit非0（legacy委譲されない）" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+  assert_true "PROFILE_INVALID:T4-LEGACYが出る（実在する旧版はlegacy委譲されない）"     "$(echo "$out" | grep -q 'PROFILE_INVALID:T4-LEGACY' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1122,13 +1191,17 @@ echo "=== 23. --print-leader-runtime: 実効リーダーがfallback採用のと�
 {
   FAKE_HOME="$(mktemp -d)"
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  # 本命はunavailable（provider/modelは残すのが契約）、fallbackがconfigured。
+  write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
+  # 本命はunavailable（定義名は残すのが契約）、fallbackがconfigured。
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 2
+schema_version: 6
 profile_slug: test
-role.leader: unavailable provider=bedrock model=opus
-fallback.leader: configured provider=anthropic-api model=claude-opus-5 effort=medium
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+role.leader: unavailable model=bedrock-opus
+fallback.leader: configured model=opus-medium
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
@@ -1167,7 +1240,7 @@ echo "=== 25. --check-profile --print-schema-version: 値なし・schema_version
   rc=0
   out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile --print-schema-version 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
-  assert_eq "schema_versionの値だけを1行返す" "2" "$out"
+  assert_eq "schema_versionの値だけを1行返す" "6" "$out"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1206,7 +1279,7 @@ echo "=== 27. §3.9対話: role.leader未確定・--non-interactiveなら非0終
   # make_fake_home()の既定プロファイル（role.leader確定済み）を上書きする。
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
@@ -1243,7 +1316,7 @@ echo "=== 28. §3.9対話: role.leader未確定・非TTY実行（--non-interacti
   # make_fake_home()の既定プロファイル（role.leader確定済み）を上書きする。
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
@@ -1287,18 +1360,22 @@ with open(sys.argv[2], "w", encoding="utf-8") as f:
 PYEOF
   PRE_CONTENT="$(cat "$PROFILE_PATH")"
 
-  # Q1=1(anthropic-api) Q2=0(自分で入力)+claude-opus-5 Q3=3(medium)
-  # ⚠️ 段階2（vault-scribeによるvault-public/Preferences/profile-sample.md
-  # のschema 5追随・設計書§9.1）が終わるまでは、実サンプルがschema 4の
-  # ままのためno_read_pathsの旧書式でV8-bになりうる。set -e下で全体を
-  # 落とさないよう`|| true`で受ける。
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.3・D-11）: 質問が
+  # 「モデル定義名（カンマ区切り）」の1問へ畳まれた。既定値を持つmake_fake_home()の
+  # models.confに定義済みの opus-medium（claude-opus-5・effort=medium）を1行で
+  # 指定する。
+  # ⚠️ 本テストはvault-public/Preferences/profile-sample.mdの実サンプルからの
+  # 雛形コピー経路を使う。同サンプルは本案件時点でまだschema 5・旧role文法の
+  # ままで新schema 6へ追随していないため（段階2・設計書§9.1が未着手）、
+  # コピーされた実体がgate_schema_version()でT4-LEGACYになり、本テストは
+  # 現時点で赤のまま（サンプル側の追随待ち＝担当外。リーダーへ報告済み）。
   rc=0
-  out="$(printf '1\n0\nclaude-opus-5\n3\n' \
+  out="$(printf 'opus-medium\n' \
     | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
       HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
   assert_eq "対話完了後exit 0" "0" "$rc"
-  assert_true "role.leader行がconfigured provider=anthropic-api model=claude-opus-5 effort=mediumになる" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=medium' "$PROFILE_PATH" && echo 1 || echo 0)"
+  assert_true "role.leader行がconfigured model=opus-mediumになる" \
+    "$(grep -qE '^role\.leader:.*configured model=opus-medium' "$PROFILE_PATH" && echo 1 || echo 0)"
   DIFF_LINES="$(diff <(printf '%s\n' "$PRE_CONTENT") "$PROFILE_PATH" | grep -c '^[<>]')" || true
   assert_eq "role.leader以外の行は変化しない（差分は置換した1行のみ＝旧行1・新行1の2エントリ）" "2" "$DIFF_LINES"
   # role.leader確定のログ行自体は値を再掲しない設計（write_and_verify_leader
@@ -1306,7 +1383,7 @@ PYEOF
   # 同種の情報表示であり秘密ではないため、そちらに値が出ること自体は問題ない
   # （pin実値の非露出はテスト26で別途検証済み）。
   assert_true "role.leader確定のログ行自体には値を再掲しない" \
-    "$(echo "$out" | grep 'role.leader を確定しました' | grep -q 'claude-opus-5' && echo 0 || echo 1)"
+    "$(echo "$out" | grep 'role.leader を確定しました' | grep -q 'opus-medium' && echo 0 || echo 1)"
   assert_true "settings.jsonのmodelが対話で選んだ値になる" \
     "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('model')=='claude-opus-5' else 1)" && echo 1 || echo 0)"
   assert_true "settings.jsonのeffortLevelが対話で選んだ値になる" \
@@ -1386,7 +1463,7 @@ echo "=== 32. §3.9対話: configuredなrole.leaderにAIENV_LEADER_ROLEが不一
   write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
 
   rc=0
-  out="$(AIENV_LEADER_ROLE='provider=anthropic-api model=claude-opus-5' \
+  out="$(AIENV_LEADER_ROLE='model=opus-main' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
   assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "LEADER_ROLE_CONFLICTが出る" \
@@ -1403,14 +1480,14 @@ echo "=== 33. §3.9対話: --reconfigure-leader付きならAIENV_LEADER_ROLEの�
   write_v2_profile_with_bedrock_role "$PROFILE_PATH" "opus" >/dev/null
 
   rc=0
-  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-opus-5 effort=low' \
+  AIENV_LEADER_ROLE='model=opus-low' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1
   rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "role.leaderが新しい値へ書き換わる" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=low' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=opus-low' "$PROFILE_PATH" && echo 1 || echo 0)"
   assert_true "role.researcher行は変化しない（他の行は触らない）" \
-    "$(grep -q '^role.researcher: configured provider=bedrock model=opus$' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -q '^role.researcher: configured model=bedrock-opus$' "$PROFILE_PATH" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1444,23 +1521,26 @@ echo "=== 35. §3.9対話: role.leader行が欠落している実体には挿入
   mkdir -p "$(dirname "$PROFILE_PATH")"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 2
+schema_version: 6
 profile_slug: test
-role.researcher: configured provider=anthropic-api model=claude-sonnet-5
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+role.researcher: configured model=sonnet-main
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
 
   rc=0
-  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-opus-5' \
+  AIENV_LEADER_ROLE='model=opus-main' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
   rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "role.leader行が新規に挿入される" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=opus-main' "$PROFILE_PATH" && echo 1 || echo 0)"
   assert_true "role.researcher行は変化しない" \
-    "$(grep -q '^role.researcher: configured provider=anthropic-api model=claude-sonnet-5$' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -q '^role.researcher: configured model=sonnet-main$' "$PROFILE_PATH" && echo 1 || echo 0)"
   assert_true "フロントマターの終端---が保たれている" \
     "$([[ "$(tail -1 "$PROFILE_PATH")" == "---" ]] && echo 1 || echo 0)"
 
@@ -1475,10 +1555,10 @@ echo "=== 36. §3.9対話: role.leaderが2行ある実体は非0終了する（�
   mkdir -p "$(dirname "$PROFILE_PATH")"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 2
+schema_version: 6
 profile_slug: test
 role.leader: unknown
-role.leader: configured provider=anthropic-api model=claude-opus-5
+role.leader: configured model=opus-main
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
@@ -1519,13 +1599,13 @@ EOF
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
 
   rc=0
-  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-opus-5' \
+  AIENV_LEADER_ROLE='model=opus-main' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1 || rc=$?
 
   assert_true "installer全体は非0終了する（設計書S16・S4）" \
     "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "profile.mdは新しいリーダー値へ更新されている（profile更新自体は成功）" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=opus-main' "$PROFILE_PATH" && echo 1 || echo 0)"
   POST_SETTINGS_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
   assert_eq "settings.jsonは旧内容のまま保持される（バイト単位で不変）" "$PRE_SETTINGS_SHA" "$POST_SETTINGS_SHA"
 
@@ -1558,10 +1638,13 @@ echo "=== 39. §3.9優先順位表 行2: 未確定+AIENV_LEADER_ROLE有(任意re
   mkdir -p "$(dirname "$PROFILE_PATH")"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 2
+schema_version: 6
 profile_slug: test
-role.leader: unknown
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
 excluded_models: configured value=none
+role.leader: unknown
 reviewer: configured value=codex-mcp
 ---
 EOF
@@ -1570,11 +1653,11 @@ EOF
   # --non-interactive を付けていても（対話可否によらず）質問されずに
   # env値がそのまま採用されることを確認する（表の「対話可否」列が「—」＝
   # 無関係であることの直接確認）。
-  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-opus-5' \
+  AIENV_LEADER_ROLE='model=opus-main' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --non-interactive >/dev/null 2>&1 || rc=$?
   assert_eq "exit code 0（質問されない）" "0" "$rc"
   assert_true "role.leaderがAIENV_LEADER_ROLEの値で確定する" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=opus-main' "$PROFILE_PATH" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1588,7 +1671,7 @@ echo "=== 40. §3.9優先順位表 行5: configured+AIENV_LEADER_ROLE有(既存�
   PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
 
   rc=0
-  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5' \
+  AIENV_LEADER_ROLE='model=sonnet-main' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1 || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
@@ -1609,23 +1692,27 @@ echo "=== 41. §3.9優先順位表 行9: configured+AIENV_LEADER_ROLE無+reconfi
   # Enterのみが有効な組み合わせになるようeffort=mediumを持つ実体を使う）。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 2
+schema_version: 6
 profile_slug: test
-role.leader: configured provider=anthropic-api model=claude-sonnet-5 effort=medium
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+role.leader: configured model=opus-medium
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
 
-  # 全問Enterのみ（空行）で答え、既存値(anthropic-api/claude-sonnet-5/
-  # effort=medium)がそのまま既定候補として採用されることを確認する。
+  # 質問1問のみEnter（空行）で答え、既存値(opus-medium)がそのまま既定候補
+  # として採用されることを確認する（2026-09-08 モデル定義ファイルと候補
+  # 指定対応・同設計§5.3・D-11でQ1〜Q3が1問へ畳まれた）。
   rc=0
-  out="$(printf '\n\n\n' \
+  out="$(printf '\n' \
     | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
       HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
-  assert_true "Q1〜Q3すべてEnterで既存値(claude-sonnet-5・effort=medium)がそのまま採用される" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-sonnet-5 effort=medium$' "$PROFILE_PATH" && echo 1 || echo 0)"
+  assert_true "Enterのみで既存値(opus-medium)がそのまま採用される" \
+    "$(grep -qE '^role\.leader:.*configured model=opus-medium$' "$PROFILE_PATH" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1743,15 +1830,16 @@ echo "=== 43d. 設計書S7×S8: settings.json配置先の親ディレクトリ�
   # 段階2で新schemaへ追随予定＝設計書§9.1であり、本テストの主眼＝mkdir失敗
   # 経路の検証とは無関係）。
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
+  write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
-role.leader: configured provider=anthropic-api model=claude-sonnet-5
+role.leader: configured model=sonnet-main
 ---
 EOF
 
@@ -1824,229 +1912,6 @@ echo "=== 44. 設計書S8: 生成物が存在しない状態でS2〜S7（bedrock
   rm -rf "$FAKE_HOME"
 }
 
-# 45a〜45d: §3.9 Q2 v11契約（F-22）: 候補一覧を生成できない4区分
-# （サンプル読取不能／yaml抽出失敗／構造検証失敗／選択したproviderの候補
-# 0件）のそれぞれで、理由が区別して表示され、かつ『0) 自分で入力する』が
-# 必ず残って対話が止まらず完了することを固定する（従来は一律「候補は
-# ありません」でWARN文言のみだったため専用テストを追加・§10「結合（対話・
-# U-1）」の新検証項目に1対1対応）。
-
-_write_test_leader_profile() {
-  local path="$1"
-  mkdir -p "$(dirname "$path")"
-  cat > "$path" <<'EOF'
----
-schema_version: 2
-profile_slug: test
-role.leader: unknown
-role.researcher: configured provider=anthropic-api model=claude-sonnet-5
-excluded_models: configured value=none
-reviewer: configured value=codex-mcp
----
-EOF
-}
-
-echo "=== 45a. §3.9 Q2対話(F-22): サンプル本体が存在しない(SAMPLE_UNREADABLE)ときは理由『サンプル読取不能』が表示され、『0) 自分で入力する』で対話が完了する ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  rm -f "$TMP_REPO/vault-public/Preferences/profile-sample.md"
-
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  _write_test_leader_profile "$PROFILE_PATH"
-
-  rc=0
-  # Q1=1(anthropic-api) Q2=候補0件のはずなので0(自分で入力)+claude-opus-5 Q3=3(medium)
-  out="$(printf '1\n0\nclaude-opus-5\n3\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_eq "対話完了後exit 0（候補0件でも対話は止まらない）" "0" "$rc"
-  assert_true "理由『サンプル読取不能』が表示される（4区分の他の理由文言は出ない）" \
-    "$(echo "$out" | grep -q '候補一覧を生成できません（理由: サンプル読取不能）。候補は使わず model を手入力してください' && echo 1 || echo 0)"
-  assert_true "『0) 自分で入力する』が残る" \
-    "$(echo "$out" | grep -q '0) 自分で入力する' && echo 1 || echo 0)"
-  assert_true "role.leaderが自分で入力した値（claude-opus-5）で確定する" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=medium' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 45a2. §3.9 Q2対話(F-22): サンプルが不正UTF-8で読めない(SAMPLE_UNREADABLE)ときも理由『サンプル読取不能』が表示される（[ -f ]は存在確認のみで読取可能性を保証しない・2026-09-01工程横断レビュー指摘・MINOR-1対応の回帰テスト） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  # 有効なUTF-8として読めないバイト列（0xff 0xfe）を書く。ファイルは実在
-  # するが`open(..., encoding='utf-8')`がUnicodeDecodeErrorで失敗する。
-  printf '\xff\xfe invalid utf8 bytes\n' > "$TMP_REPO/vault-public/Preferences/profile-sample.md"
-
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  _write_test_leader_profile "$PROFILE_PATH"
-
-  rc=0
-  out="$(printf '1\n0\nclaude-opus-5\n3\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_eq "対話完了後exit 0（候補0件でも対話は止まらない）" "0" "$rc"
-  assert_true "理由『サンプル読取不能』が表示される（誤って『yaml 抽出失敗』にならない）" \
-    "$(echo "$out" | grep -q '候補一覧を生成できません（理由: サンプル読取不能）。候補は使わず model を手入力してください' && echo 1 || echo 0)"
-  assert_true "role.leaderが自分で入力した値（claude-opus-5）で確定する" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=medium' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 45a3. §3.9 Q2対話(F-22): サンプルが実在する通常ファイルなのに権限不足で読めない(SAMPLE_UNREADABLE)ときも理由『サンプル読取不能』が表示される（[ -f ]は通過するがopen()がPermissionErrorになるケース・2026-09-01工程横断レビュー指摘・MINOR-1対応の回帰テスト） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  # ⚠️ ディレクトリではなく実在する通常ファイルへchmod 000する（[ -f ]が
-  # 真を返す＝旧実装のバグが実際に発火していた経路そのものを再現するため。
-  # ディレクトリだと[ -f ]の時点で偽になり「実在しない」経路と区別できず
-  # 本テストの意図を満たさない）。chmod 000はroot実行環境では読めてしまい
-  # 未検証になりうる（test 16のコメント参照）が、本テストの実行ユーザーは
-  # 非rootを前提とする。
-  printf -- '---\nrole.leader: unknown\n---\n' > "$TMP_REPO/vault-public/Preferences/profile-sample.md"
-  chmod 000 "$TMP_REPO/vault-public/Preferences/profile-sample.md"
-
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  _write_test_leader_profile "$PROFILE_PATH"
-
-  rc=0
-  out="$(printf '1\n0\nclaude-opus-5\n3\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_eq "対話完了後exit 0（候補0件でも対話は止まらない）" "0" "$rc"
-  assert_true "理由『サンプル読取不能』が表示される（誤って『yaml 抽出失敗』にならない）" \
-    "$(echo "$out" | grep -q '候補一覧を生成できません（理由: サンプル読取不能）。候補は使わず model を手入力してください' && echo 1 || echo 0)"
-  assert_true "role.leaderが自分で入力した値（claude-opus-5）で確定する" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=medium' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  chmod 644 "$TMP_REPO/vault-public/Preferences/profile-sample.md" 2>/dev/null
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 45b. §3.9 Q2対話(F-22): サンプルにyamlフェンスが無い(YAML_EXTRACT_FAILED)ときは理由『yaml 抽出失敗』が表示され、対話が完了する ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  mkdir -p "$TMP_REPO/vault-public/Preferences"
-  # yamlフェンスを持たない壊れたサンプルへ差し替える（extract_profile_schema_
-  # block自体が失敗する＝sample_model_candidates()がfallback経路を通る）。
-  echo "no yaml fence in this fixture" > "$TMP_REPO/vault-public/Preferences/profile-sample.md"
-
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  _write_test_leader_profile "$PROFILE_PATH"
-
-  rc=0
-  # Q1=1(anthropic-api) Q2=候補0件のはずなので0(自分で入力)+claude-opus-5 Q3=3(medium)
-  out="$(printf '1\n0\nclaude-opus-5\n3\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_eq "対話完了後exit 0（候補0件でも対話は止まらない）" "0" "$rc"
-  assert_true "理由『yaml 抽出失敗』が表示される" \
-    "$(echo "$out" | grep -q '候補一覧を生成できません（理由: yaml 抽出失敗）。候補は使わず model を手入力してください' && echo 1 || echo 0)"
-  assert_true "role.leaderが自分で入力した値（claude-opus-5）で確定する" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=medium' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 45c. §3.9 Q2対話(F-22): サンプルにrole.leaderの重複行がある(STRUCTURE_INVALID・list-rolesの構造検証失敗)ときは理由『構造検証失敗』が表示され、不正な行は候補として拾わずに対話が完了する ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  mkdir -p "$TMP_REPO/vault-public/Preferences"
-  # ```yaml抽出自体は成功するが、role.leaderが2行あるため§3.1-7の重複キー
-  # 検査でlist-rolesの構造検証自体が落ちる（1行でも不正なら出力全体を
-  # 失敗させる契約＝contract §4.5）。role.researcherの行自体は形式上正しい
-  # が、「不正な行だけ落として残りを候補にする」ことをしない設計のため、
-  # この行も候補には出ない。
-  cat > "$TMP_REPO/vault-public/Preferences/profile-sample.md" <<'EOF'
-```yaml
----
-schema_version: 2
-profile_slug: broken
-role.leader: unknown
-role.leader: unknown
-role.researcher: configured provider=anthropic-api model=claude-sonnet-5
-excluded_models: configured value=none
-reviewer: configured value=codex-mcp
----
-```
-EOF
-
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  _write_test_leader_profile "$PROFILE_PATH"
-
-  rc=0
-  # Q1=1(anthropic-api) Q2=候補0件のはずなので0(自分で入力)+claude-opus-5 Q3=3(medium)
-  out="$(printf '1\n0\nclaude-opus-5\n3\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_eq "対話完了後exit 0（候補0件でも対話は止まらない）" "0" "$rc"
-  assert_true "理由『構造検証失敗』が表示される（role.researcherの行も候補に出ない）" \
-    "$(echo "$out" | grep -q '候補一覧を生成できません（理由: 構造検証失敗）。候補は使わず model を手入力してください' && echo 1 || echo 0)"
-  assert_true "不正行の全文・属性値はログに出ない（§3.1-8）" \
-    "$(echo "$out" | grep -q 'role.leader: unknown' && echo 0 || echo 1)"
-  assert_true "role.leaderが自分で入力した値（claude-opus-5）で確定する" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=medium' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 45d. §3.9 Q2対話(F-22): サンプルは構造上健全だが選んだprovider向けのconfigured行が無い(PROVIDER_NO_CANDIDATES)ときは理由『選択した provider の候補が0件』が表示され、対話が完了する ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  mkdir -p "$TMP_REPO/vault-public/Preferences"
-  # サンプル自体は構造上健全だがrole.researcherがprovider=bedrockのみ。
-  # Q1でanthropic-apiを選ぶため、この provider の configured 行は0件になる
-  # （⚠️ Q1でbedrock/bedrock-mantleを選ぶと、最終確定時のcheck-candidate
-  # --for-leaderがV9-d③〈bedrock.envでCLAUDE_CODE_USE_BEDROCK有効〉を要求
-  # してしまい、本テストの主眼〈候補0件の理由表示〉と無関係な前提を増やす
-  # ため、最終選択はbedrock.env不要なanthropic-apiのままにする）。
-  cat > "$TMP_REPO/vault-public/Preferences/profile-sample.md" <<'EOF'
-```yaml
----
-schema_version: 2
-profile_slug: ok
-role.leader: unknown
-role.researcher: configured provider=bedrock model=opus
-excluded_models: configured value=none
-reviewer: configured value=codex-mcp
----
-```
-EOF
-
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  _write_test_leader_profile "$PROFILE_PATH"
-
-  rc=0
-  # Q1=1(anthropic-api) Q2=候補0件のはずなので0(自分で入力)+claude-opus-5 Q3=3(medium)
-  out="$(printf '1\n0\nclaude-opus-5\n3\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_eq "対話完了後exit 0（候補0件でも対話は止まらない）" "0" "$rc"
-  assert_true "理由『選択した provider の候補が0件』が表示される" \
-    "$(echo "$out" | grep -q '候補一覧を生成できません（理由: 選択した provider の候補が0件）。候補は使わず model を手入力してください' && echo 1 || echo 0)"
-  assert_true "role.leaderが自分で入力した値（claude-opus-5）で確定する" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-opus-5 effort=medium' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
 echo "=== 46. 動的Bedrock許可キーの算出失敗時はfail-openで固定2キーへ縮退せず、settings.json生成をスキップして既存ファイルを保持したうえで非0終了する（2026-09-01工程横断レビュー差し戻し・MAJOR対応の回帰テスト。旧実装はWARNのみで固定2キーへ縮退し生成を続行しており、未知のworker別名1件でも他の正常な動的pinキーが許可集合から落ち、既存settingsのpinが静かに消え得た） ==="
 {
   FAKE_HOME="$(mktemp -d)"
@@ -2058,7 +1923,8 @@ EOF
 
   # resolve-leaderは成功させ（後段のcompute_allowed_bedrock_env_keys()に
   # 到達させるため）、list-rolesだけが「算出そのものの失敗」
-  # （PROFILE_LEGACY_V1/PROFILE_NOT_FOUND以外のエラー）を返す偽libで、
+  # （PROFILE_NOT_FOUND以外の、旧v1委譲状態コードでもない汎用エラー）を
+  # 返す偽libで、
   # 「動的キー0件（正常）」と「算出不能（異常）」の区別を呼び出し側で
   # 再現する（実プロファイルでこの組み合わせ＝leaderは解決できるのに
   # list-rolesだけ失敗、を自然発生させるのが困難なため専用の偽libを使う）。

@@ -235,13 +235,6 @@ echo "=== 6. AC-11追加分: profile-sample.md（Vault正本・公開スナッ�
   # しまい、重複行があっても連結結果に含まれれば検出できなかった。対象行が
   # ちょうど1行であることを先に確認し、空白区切りのトークンをexact matchで
   # 比較する（値の途中一致を許さない）。
-  has_exact_token() {
-    local line="$1" want="$2" tok
-    for tok in $line; do
-      [ "$tok" = "$want" ] && return 0
-    done
-    return 1
-  }
   check_verifier_fr21() {
     local label="$1" f="$2"
     if [ ! -f "$f" ]; then
@@ -256,19 +249,25 @@ echo "=== 6. AC-11追加分: profile-sample.md（Vault正本・公開スナッ�
     [ "$role_count" != "1" ] || [ "$fb_count" != "1" ] && return
     role_line="$(grep -E '^role\.verifier:' "$f")"
     fb_line="$(grep -E '^fallback\.verifier:' "$f")"
-    assert_true "${label}: role.verifierがprovider=external（完全一致）" "$(has_exact_token "$role_line" 'provider=external' && echo 1 || echo 0)"
-    assert_true "${label}: role.verifierがexecution=external-cli（完全一致）" "$(has_exact_token "$role_line" 'execution=external-cli' && echo 1 || echo 0)"
-    assert_true "${label}: role.verifierがmodel=codex-review-default（完全一致）" "$(has_exact_token "$role_line" 'model=codex-review-default' && echo 1 || echo 0)"
-    assert_true "${label}: fallback.verifierがprovider=anthropic-api（完全一致）" "$(has_exact_token "$fb_line" 'provider=anthropic-api' && echo 1 || echo 0)"
-    assert_true "${label}: fallback.verifierがmodel=claude-opus-5（完全一致）" "$(has_exact_token "$fb_line" 'model=claude-opus-5' && echo 1 || echo 0)"
-    # FR-21の確定行はexecutionを書かない（既定subagentへ委ねる）。
-    # 明記されていたら誤りとして検出する（トークン先頭が`execution=`で
-    # 始まるものが1つも無いこと）。
-    local has_execution_attr=0 tok
-    for tok in $fb_line; do
-      case "$tok" in execution=*) has_execution_attr=1 ;; esac
-    done
-    assert_eq "${label}: fallback.verifierにexecution=属性が明記されていない（既定subagentのまま）" "0" "$has_execution_attr"
+    # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§12.2・FR-21）:
+    # provider=/execution=/effort=は定義ファイル側の属性へ移り、role/fallback
+    # 行が持てる属性はmodel（定義名のカンマ列挙）だけになった
+    # （ROLE_ATTR_NAMES={"model"}）。role.verifierの確定値はFX-B1と同じ
+    # 定義名`codex-high`で行そのものを完全一致させる（`key:`と値の間の
+    # 桁揃え目的の連続空白は正規化してから比較する＝profile-sample.mdの
+    # 実書式に合わせる）。
+    role_line_norm="$(printf '%s' "$role_line" | sed -E 's/^role\.verifier:[[:space:]]+/role.verifier: /')"
+    assert_eq "${label}: role.verifierがconfigured model=codex-high（行完全一致）" \
+      "role.verifier: configured model=codex-high" "$role_line_norm"
+    # fallback.verifierの確定的な定義名は本人裁定待ち（リーダー指示・未確定）
+    # のため固定しない。「configured・定義名ちょうど1件（カンマ無し＝候補は
+    # 1件だけ）」という構造だけを見る。⚠️ executionの明記チェックは、新文法で
+    # 行にexecution属性を書くこと自体が構文エラーになった（parse_v2の
+    # 「許可されない属性です」）ため、意味を失い削除した。
+    # ⚠️ Vault正本の実体行は末尾にコメント（`# 候補は1件だけ…`）を持つため、
+    # 行末アンカーの手前で任意の空白+コメントを許容する（行完全一致にしない）。
+    assert_true "${label}: fallback.verifierがconfigured・定義名ちょうど1件（カンマ無し）" \
+      "$(printf '%s' "$fb_line" | grep -qE '^fallback\.verifier:[[:space:]]+configured model=[a-z0-9][a-z0-9-]*([[:space:]]+#.*)?$' && echo 1 || echo 0)"
   }
   check_verifier_fr21 "Vault正本profile-sample.md" "$HOME/Data/obsidian/Preferences/profile-sample.md"
   check_verifier_fr21 "公開スナップショットprofile-sample.md" "$REPO_ROOT/vault-public/Preferences/profile-sample.md"

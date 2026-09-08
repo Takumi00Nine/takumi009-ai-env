@@ -90,40 +90,12 @@ BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 # S10/S11/S16対応（check_leader_settings_drift参照）の比較先として読むだけ
 # ＝副作用ゼロ。
 : "${AIENV_SETTINGS_JSON_FILE:=$HOME/.claude/settings.json}"
-# 最小能力表の能力軸3キー（§3.3.0。2026-09-07能力軸整理でmachine_role新設・
-# 廃止5キー撤去により7→3キーへ縮小＝配役表-能力軸整理-設計-2026-09-07.md
-# §4.1）。ここに列挙した3つが「今のスキーマが要求するキー」＝これが欠けて
-# いれば§9.0 A-1最低契約④⑤どおり最小能力+⚠️へ倒す（T5＝既存キー欠落）。
-# 逆にfrontmatterにこの3つ以外の見慣れないキーが有っても、それは「まだこの
-# コードが追随していない新しいキー」とみなしunknown扱いで無視するだけに
-# 留め、最小能力へは倒さない（T4＝新キー未追随。
-# schema_version／版管理を作らない以上、キー集合の前方互換をこの非対称な
-# 扱いで担保する＝リーダー指示）。
-# 2026-09-05 P3段階4差し戻し対応: profile_resolve.py（v2）のCAPABILITY_KEYSへ
-# no_read_pathsを追加したのに合わせてこちら（v1・第2正本）にも追加した
-# （両者は歴史的に同一集合を保つ運用＝片方だけ増減するとドリフトになる）。
-# 2026-09-07 3モード体制対応（3モード体制-設計-2026-09-06.md §4.3(a)）:
-# profile_resolve.pyのCAPABILITY_KEYSから`reviewer`を削り`team_mode`を
-# 同じ位置に足したのに合わせて、こちら（v1・第2正本）も同じ位置で差し替えた。
-# 2026-09-07 能力軸整理対応（配役表-能力軸整理-設計-2026-09-07.md §4.1。
-# 本人決定＝Decisions/2026-09-07-profile-axes-consolidation）:
-# profile_resolve.pyのCAPABILITY_KEYSを廃止対象5キー撤去・machine_role新設で
-# 3キーへ整理したのに合わせて、こちら（v1・第2正本）も同じ3キーへ揃えた。
-LOCAL_PROFILE_KNOWN_KEYS=(
-  "team_mode"
-  "no_read_paths"
-  "machine_role"
-)
-# テスト専用: BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1のとき、最小能力表の能力軸3キー
-# （LOCAL_PROFILE_KNOWN_KEYS）を1行1キーで標準出力へ返して即終了する。
-# stdin JSON読み込み・ヘルス行計算等の本処理には一切進まない。本番では
-# 未設定のため無効（2026-08-30追加・MINOR-D対応: test-core-docs-placeholder-
-# schema.shがこのキー集合を独自にハードコード再列挙し3重管理になっていたため、
-# ハードコードの代わりにこの実行時ソースを参照させる）。
-if [ "${BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY:-0}" = "1" ]; then
-  printf '%s\n' "${LOCAL_PROFILE_KNOWN_KEYS[@]}"
-  exit 0
-fi
+# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）:
+# v1由来の既知キー配列（7→3キーの第2正本だったもの）と、それを読むだけの
+# テスト専用フックBOOTSTRAP_PRINT_KNOWN_KEYS_ONLYを撤去した。唯一の消費先
+# だったtest-core-docs-placeholder-schema.shのテスト8（v1/v2の能力軸キー
+# 集合の突合）も同じコミットで削除する（突合相手が消えるため）。能力軸の
+# 正本は profile_resolve.py の CAPABILITY_KEYS 側だけになる。
 
 # 3モード体制（3モード体制-設計-2026-09-06.md §4.3(b)）: team_mode能力軸の値
 # （solo|lean|full|unknown）から開幕1行の文面を組み立てる。builtinだけで書き
@@ -187,100 +159,12 @@ fi
 # ~/work/takumi009-ai-env-private/docs/core-split/profile-sample-draft.md）。
 LOCAL_PROFILE_SENTINEL='<fill-in>'
 
-# resolve_local_profile_v1 <path> — v1（7キー・状態を持たない自由値）実体を
-# fail-softに解決する。§3.5「v1と分類されたときの挙動＝現行実装へ丸ごと委譲する」
-# の"現行実装"そのもの＝v2解凍後もロジックを一切変えない（v1の値は日本語自由文
-# なのでv2文法を当てると必ず落ちるため）。標準出力へタブ区切り1行を返す:
-#   MINIMAL\t<T1|T2-MINIMAL|T5|T6|SYMLINK>\t<理由>   … 最小能力+⚠️で扱うべきケース
-#     （SYMLINK＝実体がsymlinkだった。マシンローカル・repo管理外という正本の
-#      定義に反するため受理しない＝2026-08-30 Codex一次レビュー指摘・Major対応）
-#   OK\t<key1=val1>\x1e<key2=val2>...[\tUNKNOWN_EXTRA:<k1>,<k2>,...]
-# 判定はキーの有無・YAMLとして壊れていないかまで（validatorは作らない＝
-# 最低契約②）。既定値を発明しない（欠けたキーで補完しない＝最低契約④⑤）。
-resolve_local_profile_v1() {
-  local path="$1"
-  # symlinkは実体として受理しない（2026-08-30 Codex一次レビュー指摘・Major対応:
-  # 「マシンローカル・repo管理外」という正本の定義（§11.2）に反し、repo管理下や
-  # Vault配下のファイルへのsymlinkを経由してリモート更新が能力表へ暗黙に
-  # 反映される経路になりうるため。installer側の非破壊コピーは既存symlinkを
-  # 「既に存在する」として保護するだけで、symlinkを実体として生成することは
-  # 無い＝この判定はinstaller側の設計と矛盾しない）。`[ -L ]`を`[ -f ]`より先に
-  # 判定する（symlink先が通常ファイルの場合`-f`も真になるため）。
-  [ -L "$path" ] && { printf 'MINIMAL\tSYMLINK\t実体はsymlinkであってはいけません（マシンローカルの通常ファイルとして直接作成してください）: %s\n' "$path"; return; }
-  [ -f "$path" ] || { printf 'MINIMAL\tT1\t実体ファイルが存在しません: %s\n' "$path"; return; }
-  local known_joined
-  known_joined="$(printf '%s\x1f' "${LOCAL_PROFILE_KNOWN_KEYS[@]}")"
-  python3 -c "
-import re, sys
-
-path = sys.argv[1]
-sentinel = sys.argv[2]
-known_keys = [k for k in sys.argv[3].split(chr(0x1f)) if k]
-
-try:
-    with open(path, encoding='utf-8') as f:
-        text = f.read()
-except OSError as e:
-    print(f'MINIMAL\tT1\t実体ファイルを読めません: {e}')
-    sys.exit(0)
-
-lines = text.splitlines()
-if not lines or lines[0].strip() != '---':
-    print('MINIMAL\tT6\tfrontmatterの開始区切り(---)がありません')
-    sys.exit(0)
-try:
-    end_idx = lines[1:].index('---') + 1
-except ValueError:
-    print('MINIMAL\tT6\tfrontmatterの終端区切り(---)がありません')
-    sys.exit(0)
-
-values = {}
-for raw in lines[1:end_idx]:
-    if not raw.strip():
-        continue
-    m = re.match(r'^([A-Za-z0-9_.]+):[ \t]?(.*)\$', raw)
-    if not m:
-        print(f'MINIMAL\tT6\t解析できない行があります: {raw!r}')
-        sys.exit(0)
-    values[m.group(1)] = m.group(2).strip()
-
-# 注意: このコメント文中ではバッククォート・二重引用符のどちらも一切
-# 使わない（check-drift.shの既知の落とし穴と同じ理由＝bash側のpython3 -cに
-# 続く二重引用符文字列の内側にあるため、どちらの文字も本来閉じるべき
-# 境界の途中に現れるとbashの構文解釈が壊れる。実装中にkey:という文字列を
-# バッククォートで囲んだ結果、bashがコマンド置換として実行しようとして
-# 「command not found」が出る実バグを踏んで気付いた）。
-# 値が空（key: のように書かれてはいるが中身が無い）場合はunknownへ
-# 正規化する（2026-08-30 工程横断レビュー指摘・Major対応。従来は空文字列の
-# ままOK扱いで通過させており、最低契約④＝未記載・空はunknownとして扱う、に
-# 反していた）。⚠️ これはキー自体が無いケース＝T5とは別物——キーは存在するので
-# missing判定には影響させない。sentinel(未記入固定文言)とも別物——sentinelは
-# 明示的な埋め忘れの印としてT2-MINIMALで最小能力へ倒すが、単なる空値はコア側が既に
-# unknown値を読んで空席等へ倒す設計（core-workflow.md）に委ねるため、
-# ここでは値の正規化だけに留め最小能力へは倒さない。
-for k in known_keys:
-    if k in values and values[k] == '':
-        values[k] = 'unknown'
-
-missing = [k for k in known_keys if k not in values]
-if missing:
-    print('MINIMAL\tT5\t既知キーが欠落しています: ' + ','.join(missing))
-    sys.exit(0)
-
-sentinel_keys = [k for k in known_keys if values.get(k) == sentinel]
-if sentinel_keys:
-    print('MINIMAL\tT2-MINIMAL\t未記入のままのキーがあります: ' + ','.join(sentinel_keys))
-    sys.exit(0)
-
-extra_keys = sorted(set(values) - set(known_keys))
-resolved = chr(0x1e).join(f'{k}={values[k]}' for k in known_keys)
-out = 'OK\t' + resolved
-if extra_keys:
-    out += '\tUNKNOWN_EXTRA:' + ','.join(extra_keys)
-print(out)
-" "$path" "$LOCAL_PROFILE_SENTINEL" "$known_joined" 2>/dev/null \
-    || printf 'MINIMAL\tT6\tprofile.mdの解析自体に失敗しました（python3不在・実行時エラー等）\n'
-}
+# 2026-09-08 モデル定義ファイルと候補指定対応（モデル定義ファイルと候補指定-
+# 設計-2026-09-08.md §3.8・D-13）: 旧v1解決関数（7キー・
+# 状態を持たない自由値の実体を解決していた旧経路）を撤去した。schema 6の
+# コードはv1形式そのもの（schema_versionの行が無い実体）を含む6未満の
+# 全実体をT4-LEGACYで一律解決失敗にするため、v1委譲という経路そのものが
+# 成立しなくなった（no-backward-compat）。
 
 # is_v2_resolve_output_well_formed <line> <exit_code> — v2 resolve の出力が
 # §5 stdout契約のフィールド文法どおりか（固定順・既知フィールドのみ・
@@ -307,6 +191,13 @@ is_v2_resolve_output_well_formed() {
   # ⚠️ POSIX ERE（bashの=~が使うバックエンド）はブラケット式内で\tを
   # タブへ解釈しない。実際のタブ文字を埋め込む必要がある。
   notab="[^${tab}]+"
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.3(b)・D-9）:
+  # ADVISORY:には`MODEL_MISMATCH:<職種名>:<定義名>`（コロン区切り2段）が
+  # 追加されたため、ADVISORYの1要素だけ`code`より広い`adv_code`を使う
+  # （VACANT_REASON等の他フィールドはコロンを含まないので`code`のまま）。
+  # 定義名は既存のMODEL_DEF_NAME_RE（^[a-z0-9][a-z0-9-]*$）に一致する文字列
+  # なので`[A-Za-z0-9_.-]+`（name）で十分包含できる。
+  local adv_code="${code}(:${name}(:${name})?)?"
   case "$s" in
     OK"$tab"*)
       [ "$rc" = "0" ] || return 1
@@ -315,7 +206,7 @@ is_v2_resolve_output_well_formed() {
       # を文法が受理してしまい、位置が一意に決まらなくなる。MACHINE_ROLE:は
       # TEAM_MODE:の直後・同じく必須（配役表-能力軸整理-設計-2026-09-07.md
       # §2.1・D-2）。
-      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)${tab}MACHINE_ROLE:(main|sub|unknown|unavailable)(${tab}FALLBACK:${name}(,${name})*)?(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${code}(,${code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
+      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)${tab}MACHINE_ROLE:(main|sub|unknown|unavailable)(${tab}FALLBACK:${name}(,${name})*)?(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${adv_code}(,${adv_code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
       [[ "$s" =~ $re ]]
       ;;
     MINIMAL"$tab"*)
@@ -332,16 +223,16 @@ is_v2_resolve_output_well_formed() {
   esac
 }
 
-# resolve_local_profile <path> — v1/v2/混在を分類し、適切な経路へ委譲する
-# ディスパッチャ（配役表解凍-設計-2026-09-01.md §3.5「評価順を契約として固定
-# する」の①〜⑥をここで実行する）。標準出力へタブ区切り1行:
-#   MINIMAL\t<コード>\t<理由>          … 最小能力+⚠️（§6.2状態機械A）
-#   LEGACY_V1\t<v1のOK生payload>       … v1委譲・現行実装がOKだった場合のみ
+# resolve_local_profile <path> — 実体を解決する（配役表解凍-設計-2026-09-01.md
+# §3.5の①〜⑥のうち、v1委譲・分類の部分を撤去したもの＝
+# 「symlink拒否／存在確認→preflight(V15)→resolve」の3段だけになった
+# （2026-09-08 モデル定義ファイルと候補指定対応・同設計§3.8・§4(a)。
+# 版・形式の分類呼び出しが1つ減る＝外部プロセス数への影響は§11.3参照）。
+# 標準出力へタブ区切り1行:
+#   MINIMAL\t<コード>\t<理由>          … 最小能力+⚠️（§6.2状態機械A。
+#     schema_version無し・6未満の実体はT4-LEGACYとしてここに含まれる）
 #   OK\t<解決値>[\tFALLBACK:...][\tVACANT:...][\tVACANT_REASON:...]
 #        [\tVACANT_UNKNOWN:...][\tADVISORY:...][\tUNKNOWN_EXTRA:...]
-# ⚠️ v1/v2いずれの分類でも「①存在/symlink→②preflight(V15)」は共通で必ず
-# 通す（v1の現行実装には元々V15が無かったため、これはv1経路にとって新規の
-# 検査＝意図的な仕様変更）。
 resolve_local_profile() {
   local path="$1"
   [ -L "$path" ] && { printf 'MINIMAL\tSYMLINK\t実体はsymlinkであってはいけません（マシンローカルの通常ファイルとして直接作成してください）: %s\n' "$path"; return; }
@@ -364,73 +255,16 @@ resolve_local_profile() {
     return
   fi
 
-  local classification classify_rc=0
-  classification="$(python3 "$PROFILE_RESOLVE_LIB" classify "$path" 2>/dev/null)"
-  classify_rc=$?
-  if [ "$classify_rc" != "0" ] || [ -z "$classification" ]; then
-    printf 'MINIMAL\tT10\tresolver本体の実行に失敗しました（classify）\n'
-    return
+  local v2_out v2_rc=0
+  v2_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$path" \
+    --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)"
+  v2_rc=$?
+  if is_v2_resolve_output_well_formed "$v2_out" "$v2_rc"; then
+    printf '%s\n' "$v2_out"
+  else
+    printf 'MINIMAL\tT10\tresolver本体の出力が契約違反です（resolve）\n'
   fi
-
-  case "$classification" in
-    v1)
-      local v1_out
-      v1_out="$(resolve_local_profile_v1 "$path")"
-      case "$v1_out" in
-        OK*)
-          # トップレベルだけLEGACY_V1へ差し替える（7キーの生値は再包装しない
-          # ＝§3.5）。UNKNOWN_EXTRA等の後続フィールドはそのまま引き継ぐ。
-          printf 'LEGACY_V1\t%s\n' "${v1_out#OK$'\t'}"
-          ;;
-        *)
-          printf '%s\n' "$v1_out"
-          ;;
-      esac
-      ;;
-    mixed)
-      printf 'MINIMAL\tT3-PRIME\tschema_versionが無いのに職種行(role./fallback.)があります（混在）\n'
-      ;;
-    v2)
-      local v2_out v2_rc=0
-      v2_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$path" \
-        --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)"
-      v2_rc=$?
-      if is_v2_resolve_output_well_formed "$v2_out" "$v2_rc"; then
-        printf '%s\n' "$v2_out"
-      else
-        printf 'MINIMAL\tT10\tresolver本体の出力が契約違反です（resolve）\n'
-      fi
-      ;;
-    *)
-      printf 'MINIMAL\tT10\tresolver本体が不明な分類結果を返しました\n'
-      ;;
-  esac
 }
-
-# テスト専用: BOOTSTRAP_RESOLVE_PROFILE_ONLY=1のとき、resolve_local_profile_v1()の
-# 生出力（MINIMAL/OK行）だけを標準出力へ返して即終了する。stdin JSON読み込み・
-# ヘルス行計算等の本処理には一切進まない。本番では未設定のため無効
-# （2026-08-30追加・MAJOR-8b「値が空=unknownへの正規化」のユニットテスト用。
-# OK分岐の生出力はDIRECTIVE本文に現れないため、直接呼び出す経路が無いと
-# 正規化結果を検証できなかった）。⚠️ v2解凍(2026-09-01)でresolve_local_profile()は
-# v1/v2/混在の分類ディスパッチャに役割が変わった（OKをLEGACY_V1へ差し替える等）
-# ため、このテスト専用フックはv1固有の正規化ロジックを直接検証するべく
-# resolve_local_profile_v1()を直接呼ぶよう据え置く（分類・委譲そのものは
-# `classify`/`resolve_local_profile()`の別テストで検証する）。
-if [ "${BOOTSTRAP_RESOLVE_PROFILE_ONLY:-0}" = "1" ]; then
-  resolve_local_profile_v1 "$AIENV_LOCAL_PROFILE_PATH"
-  exit 0
-fi
-
-# テスト専用: BOOTSTRAP_RESOLVE_PROFILE_DISPATCH_ONLY=1のとき、新設の
-# resolve_local_profile()（v1/v2/混在の分類ディスパッチャそのもの）の生出力
-# だけを標準出力へ返して即終了する（2026-09-01追加。T12=LEGACY_V1トップ
-# レベル差し替え・T3-PRIME=混在・T10=lib欠落を直接検証する経路が無かった
-# ため。tester独立検証・§10欠落指摘対応）。本番では未設定のため無効。
-if [ "${BOOTSTRAP_RESOLVE_PROFILE_DISPATCH_ONLY:-0}" = "1" ]; then
-  resolve_local_profile "$AIENV_LOCAL_PROFILE_PATH"
-  exit 0
-fi
 
 # check_leader_settings_drift <path> — 配役表解凍-設計-2026-09-01.md
 # §6.2-B（状態機械B）のS10（settings.jsonを手で直した/`/model`で保存した）・
@@ -990,8 +824,7 @@ else
     profile_has_unknown_extra=0
     printf '%s' "$profile_status" | grep -q 'UNKNOWN_EXTRA:' && profile_has_unknown_extra=1
 
-    if { [ "$profile_kind" = "OK" ] || [ "$profile_kind" = "LEGACY_V1" ]; } \
-       && [ "$profile_has_unknown_extra" = "0" ]; then
+    if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
       profile_lines=$(wc -l < "$AIENV_LOCAL_PROFILE_PATH" | tr -d ' ')
       list="$list
   - $AIENV_LOCAL_PROFILE_PATH  （全${profile_lines}行：Readで全文を読むこと。ローカル実体プロファイル＝非配布）"
@@ -1036,8 +869,6 @@ else
       # ワーカー起動時に何をすべきかが伝わらない）。
       unknown_extra="${profile_status#*UNKNOWN_EXTRA:}"
       LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイルに未知のキーがあります（${unknown_extra}）。機械側（resolver/installer）は既知キー部分のみ有効ですが、**プロファイル利用不可＝最小能力**としてAI向けには必読から除外します（U-8裁定・秘匿優先。まだこのマシンのコードが追随していない新しいキーの可能性があります）。配役の状態が確認できない以上、**ワーカー起動は本人確認へ倒してください**（Preferences/core-workflow.md §7 職種が空席のとき）。"
-    elif [ "$profile_kind" = "LEGACY_V1" ]; then
-      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイルはv1形式です。配役表を使うにはv2へ移行してください（${AIENV_LOCAL_PROFILE_PATH}）。"
     elif printf '%s' "$profile_status" | grep -q -E '(FALLBACK|VACANT|VACANT_REASON|VACANT_UNKNOWN|ADVISORY):'; then
       # 4.1-f: 配役の値そのものは再掲しないが、縮退・fallback・未確定の
       # 職種名と条件番号はDIRECTIVEへ必ず注入する（静かな失敗を防ぐ）。
@@ -1050,8 +881,7 @@ else
     # settings.jsonがその解決値へ追随しているかを毎回軽く比較する。
     # ⚠️ UNKNOWN_EXTRAの有無を問わない（上のAI向け必読可否＝§4a・U-8とは
     # 独立の判定。resolve-leaderはUNKNOWN_EXTRAを見ないため機械側は既知キー
-    # 部分が有効＝§4aの表のとおり）。LEGACY_V1（v1委譲）はスコープ外
-    # （関数コメント参照。週次drift＝check-drift.shのV13が既にv1をカバー）。
+    # 部分が有効＝§4aの表のとおり）。
     if [ "$profile_kind" = "OK" ]; then
       leader_settings_drift_warning="$(check_leader_settings_drift "$AIENV_LOCAL_PROFILE_PATH")"
       if [ -n "$leader_settings_drift_warning" ]; then
@@ -1061,6 +891,23 @@ ${leader_settings_drift_warning}"
         else
           LOCAL_PROFILE_WARNING="$leader_settings_drift_warning"
         fi
+      fi
+    fi
+
+    # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§4(b)・FR-19②）:
+    # 配役表の状態行の直後に「候補の1行」を足す。⚠️ 出すのは職種名と定義名
+    # だけ（provider/model/execution/effortは出さない＝配役の値を再掲しない
+    # 原則。定義名だけはD-10によりこの原則の対象外）。`list-roles`を1回だけ
+    # 呼ぶ（`resolve`のOK行には載せない＝FR-18。外部プロセスは旧分類呼び出し
+    # が1つ減った分と相殺され差し引き0＝§11.3）。role.表の職種のみが対象
+    # （fallback.表は出さない）。
+    if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
+      candidates_line="$(python3 "$PROFILE_RESOLVE_LIB" list-roles "$AIENV_LOCAL_PROFILE_PATH" 2>/dev/null \
+        | awk -F'\t' '$1=="role" && $4!="" {if(!( $2 in a)) order[++n]=$2; a[$2]=(a[$2]==""?$4:a[$2]","$4)} \
+                      END{for(i=1;i<=n;i++) printf "%s%s=%s", (i>1?" / ":""), order[i], a[order[i]]}')"
+      if [ -n "$candidates_line" ]; then
+        LOCAL_PROFILE_WARNING="${LOCAL_PROFILE_WARNING:+$LOCAL_PROFILE_WARNING
+}ℹ️ 職種ごとのモデル候補（定義名のみ）: ${candidates_line}。⚠️ spawn のたびに候補から定義名を1つ選ぶこと（Preferences/core-workflow.md §1）。"
       fi
     fi
   fi

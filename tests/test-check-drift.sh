@@ -297,25 +297,80 @@ p.write_text(json.dumps({'started_at': '$(d_ts "$ts_offset")'}), encoding='utf-8
 "
 }
 
+# write_model_defs <dest> — モデル定義ファイル（本ファイル内のwrite_v2_profile
+# 呼び出しが参照する定義名の全集合）を書く。2026-09-08 モデル定義ファイルと
+# 候補指定対応（同設計§2.3・§11.3）。role.leaderに書ける属性がmodel（定義名）
+# だけになったため、実体（provider/model/effort）はここへ集約する。
+write_model_defs() {
+  local dest="$1"
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest" <<'EOF'
+[sonnet-main]
+provider=anthropic-api
+model=claude-sonnet-5
+
+[opus-main]
+provider=anthropic-api
+model=claude-opus-5
+
+[fable-1m-high]
+provider=anthropic-api
+model=claude-fable-5[1m]
+effort=high
+
+[opus-46-xhigh]
+provider=anthropic-api
+model=claude-opus-4.6
+effort=xhigh
+
+[bedrock-sonnet]
+provider=bedrock
+model=sonnet
+
+[bedrock-opus-xhigh]
+provider=bedrock
+model=opus
+effort=xhigh
+EOF
+}
+
 # write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
 # を書く（tests/test-update-sub.shのwrite_v2_profile()と同じ最小セットの
-# 流儀に揃える＝担当Cの他ファイルと様式を合わせる）。
+# 流儀に揃える＝担当Cの他ファイルと様式を合わせる）。2026-09-08 モデル定義
+# ファイルと候補指定対応: schema_versionを6へ・role.leaderの属性をmodel=
+# <定義名>だけへ・HOMEがfixture専用のためmodel_defs_path()の既定パス
+# （$HOME/.config/takumi009-ai-env/models.conf）へ定義ファイルを同梱する
+# （run_check()がHOMEを切り替えるので実ファイルへは触れない）。schema 6は
+# team_mode/no_read_paths/machine_roleの3能力軸すべてが既知キーとして必須
+# （欠落はT5）になったため、呼び出し元がmachine_roleを明示しない場合の既定値
+# （main）も足す。
 write_v2_profile() {
   local dest="$1" leader_line="$2"
   shift 2
   mkdir -p "$(dirname "$dest")"
+  local has_machine_role=0
+  local extra
+  for extra in "$@"; do
+    case "$extra" in machine_role:*) has_machine_role=1 ;; esac
+  done
   {
     echo "---"
-    echo "schema_version: 2"
+    echo "schema_version: 6"
     echo "profile_slug: test"
+    echo "team_mode: configured value=full"
+    echo "no_read_paths: unavailable"
     echo "role.leader: ${leader_line}"
     for extra in "$@"; do
       printf '%s\n' "$extra"
     done
+    if [ "$has_machine_role" = "0" ]; then
+      echo "machine_role: configured value=main"
+    fi
     echo "excluded_models: configured value=none"
     echo "reviewer: configured value=codex-mcp"
     echo "---"
   } > "$dest"
+  write_model_defs "$(dirname "$dest")/models.conf"
 }
 
 echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
@@ -486,7 +541,7 @@ echo "=== 4j. ①-2 v2実体ではsettings.jsonのmodel期待値はrole.leader�
   # driftするはずだが、v2実体ではrole.leaderが唯一の正本であり機役割にも
   # --sub-delegateにも依存しないため、driftしないことを確認する。
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "configured model=fable-1m-high" \
     "machine_role: configured value=sub"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -504,7 +559,7 @@ echo "=== 4j2. FX-M1/FX-M2対照(配役表-能力軸整理-設計-2026-09-07.md 
   install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
   # 4jとの唯一の違いはmachine_roleの値（sub→main）。role.leaderの値は同じ。
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "configured model=fable-1m-high" \
     "machine_role: configured value=main"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -521,7 +576,7 @@ echo "=== 4j3. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJ
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "configured model=fable-1m-high" \
     "machine_role: configured value=main"
   mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
   printf 'sub\n' > "$HOME_DIR/.config/takumi009-ai-env/machine-role"  # AC5-ALLOW:FX-M1
@@ -540,7 +595,7 @@ echo "=== 4j4. FX-M2(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJ
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "configured model=fable-1m-high" \
     "machine_role: configured value=sub"
 
   # ⚠️ 廃止済みマーカーのファイル名をソースへ直接書かない（AC-5の0件検査に
@@ -568,7 +623,7 @@ echo "=== 4j5. FX-M1直接検証(Codex一次レビュー指摘・MAJOR-1・第2�
   # 差分でこのテストの意図が濁る。
   install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5" ""
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-opus-5" \
+    "configured model=opus-main" \
     "machine_role: configured value=main"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -591,7 +646,7 @@ echo "=== 4j6. FX-M2直接検証(Codex一次レビュー指摘・MAJOR-1・第2�
   # するため）。
   install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5" ""
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-opus-5" \
+    "configured model=opus-main" \
     "machine_role: configured value=sub"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -1110,7 +1165,13 @@ EOF
   # 読まれないまま消えるため、maintenance.sh側が拾える機械可読な値として
   # 追加した。exit code契約（drift_excluding_item4>0でexit 1）には含めない
   # ＝driftではないため無関係のまま）。
-  json_out="$(run_check_json "$REPO" "$HOME_DIR")"
+  # ⚠️ 2026-09-08 モデル定義ファイルと候補指定対応の変換時に発見: run_check_json()
+  # はdrift_excluding_item4>0でexit 1する契約（下記コメントどおり）のため、
+  # `set -e`下でこの代入行が非0終了すると本テストの後続はおろかファイル全体の
+  # 実行がここで即座に打ち切られていた（本ケースはdrift 0を期待する陰性
+  # コントロールだが、⑧セクションの別件の不具合〈本体側・報告済み〉で
+  # drift>0になり得るため、代入自体はexit codeに関わらず必ず完走させる）。
+  json_out="$(run_check_json "$REPO" "$HOME_DIR" || true)"
   json_line="$(last_line "$json_out")"
   rc=0
   run_check_json "$REPO" "$HOME_DIR" >/dev/null 2>&1 || rc=$?
@@ -2893,8 +2954,8 @@ echo "=== 68. ⑧ --check-profileが非0終了するとPROFILE-VALIDATION-FAILED
   # V15（禁止キー名ガード）に違反する行を書く＝fail区分のvalidator違反を
   # 決定的に起こす（構文エラーの中でも最も再現しやすいケースを選ぶ）。
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5" \
-    "role.leader_api_token: configured provider=anthropic-api model=claude-sonnet-5"
+    "configured model=sonnet-main" \
+    "role.leader_api_token: configured model=sonnet-main"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "PROFILE-VALIDATION-FAILEDとして検知される" "$out" "[PROFILE-VALIDATION-FAILED]"
@@ -2927,8 +2988,8 @@ echo "=== 70. ⑧ advisory（V1-a・V9-f）がdriftとして週次通知に出�
   install_fake_home "$REPO" "$HOME_DIR"
   echo "# researcher" > "$REPO/claude/agents/researcher.md"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5" \
-    "role.researcher: configured provider=anthropic-api model=claude-opus-4.6 effort=xhigh" \
+    "configured model=sonnet-main" \
+    "role.researcher: configured model=opus-46-xhigh" \
     "mystery_key: configured value=abc"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -2947,21 +3008,22 @@ echo "=== 70b. ⑧ advisory T4-PRIME（実体の版がコードの期待版よ�
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  # EXPECTED_SCHEMA_VERSION(=5・配役表-能力軸整理-設計-2026-09-07.md §3対応で
-  # 4→5へ引き上げ済み)より新しいschema_versionを書くとT4-PRIME（このマシンの
+  # EXPECTED_SCHEMA_VERSION(=6・2026-09-08 モデル定義ファイルと候補指定対応で
+  # 5→6へ引き上げ済み)より新しいschema_versionを書くとT4-PRIME（このマシンの
   # コードが古い可能性）が発生する（profile_resolve.py reconcile_schema_version()
   # のdeclared>EXPECTED分岐。declared>EXPECTED分岐は固定キーの過不足を検査
   # しないため、no_read_paths・machine_roleを書かなくてもT5にはならない）。
   mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
   cat > "$HOME_DIR/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
-role.leader: configured provider=anthropic-api model=claude-sonnet-5
+role.leader: configured model=sonnet-main
 excluded_models: configured value=none
 team_mode: configured value=full
 ---
 EOF
+  write_model_defs "$HOME_DIR/.config/takumi009-ai-env/models.conf"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "T4-PRIMEがPROFILE-ADVISORYとして検知される" "$out" "[PROFILE-ADVISORY:T4-PRIME]"
@@ -2983,8 +3045,8 @@ echo "=== 70c. ⑧ advisory JUDGEMENT_UNKNOWN（ワーカーのBedrock経路有�
   # advisoryへ積む＝profile_resolve.py _evaluate_single_candidate()）。
   mkdir -p "$HOME_DIR/.config/takumi009-ai-env/bedrock.env"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5" \
-    "role.researcher: configured provider=bedrock model=sonnet"
+    "configured model=sonnet-main" \
+    "role.researcher: configured model=bedrock-sonnet"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "JUDGEMENT_UNKNOWNがPROFILE-ADVISORYとして検知される" "$out" "[PROFILE-ADVISORY:JUDGEMENT_UNKNOWN]"
@@ -3005,8 +3067,8 @@ echo "=== 70d. ⑧ advisory EFFORT_COMPATIBILITY_UNVERIFIED（Bedrock別名で�
   # EFFORT_COMPATIBILITY_UNVERIFIEDになる（profile_resolve.py
   # model_effort_advisory()）。
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-sonnet-5" \
-    "role.researcher: configured provider=bedrock model=opus effort=xhigh"
+    "configured model=sonnet-main" \
+    "role.researcher: configured model=bedrock-opus-xhigh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_not_contains "EFFORT_COMPATIBILITY_UNVERIFIEDはPROFILE-ADVISORYとして計上されない（driftにしない）" "$out" "[PROFILE-ADVISORY:EFFORT_COMPATIBILITY_UNVERIFIED]"
@@ -3213,7 +3275,7 @@ echo "=== 75. 配役表-能力軸整理: AIENV_AGENTS_DIRが未設定でもset -
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured provider=anthropic-api model=claude-fable-5[1m] effort=high" \
+    "configured model=fable-1m-high" \
     "machine_role: configured value=main"
 
   rc=0

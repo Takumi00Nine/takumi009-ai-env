@@ -48,57 +48,16 @@ ensure_extract_profile_schema_block_fn() {
   declare -F extract_profile_schema_block >/dev/null 2>&1
 }
 
-# 最小能力表の能力軸3キー（§3.3.0）。ハードコードで再列挙せず、claude/hooks/
-# bootstrap-vault.sh の LOCAL_PROFILE_KNOWN_KEYS（正本）を実行時ソースとして
-# 参照する（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応: 従来はここに独自の
-# 配列を再列挙しており、正本が増減してもこのテストが追随せず気づけない
-# 3重管理の一角になっていた）。BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1は
-# bootstrap-vault.sh側のテスト専用早期exitフック（stdin読込・ヘルス行計算
-# 等の本処理には進まない）。
+# 最小能力表の能力軸3キー（§3.3.0）。2026-09-08 モデル定義ファイルと候補
+# 指定対応（同設計§3.8・D-13）: 旧v1側の正本（bootstrap-vault.shが持って
+# いた既知キー配列本体と、それを単独出力する専用フック）を撤去した
+# ため、能力軸キー集合はprofile_resolve.pyのCAPABILITY_KEYS（known-keysの
+# FIXEDからschema_version/profile_slug/excluded_modelsを除いたもの）だけを
+# 唯一の正本として実行時ソースで取得する（ハードコード再列挙しない）。
+# ⚠️ 旧v1/v2の突合テスト（旧section 8）は突合相手が消えたため削除した。
 BOOTSTRAP_VAULT_SH="$REPO_ROOT/claude/hooks/bootstrap-vault.sh"
-KNOWN_KEYS=()
-while IFS= read -r k; do
-  [ -n "$k" ] && KNOWN_KEYS+=("$k")
-done < <(BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY=1 bash "$BOOTSTRAP_VAULT_SH" </dev/null)
-if [ "${#KNOWN_KEYS[@]}" -eq 0 ]; then
-  echo "FATAL: bootstrap-vault.sh から最小能力表キー集合を取得できませんでした（BOOTSTRAP_PRINT_KNOWN_KEYS_ONLY フックの破損の可能性）" >&2
-  exit 1
-fi
-
-# v2配役表解凍で新規に正当化された参照名（2026-09-02追加）。プロファイル
-# YAMLのキー名ではなく、コア本文が配役表という概念そのものを指す散文上の
-# 参照であるため、LOCAL_PROFILE_KNOWN_KEYS（実プロファイルのfrontmatterキー
-# 集合・resolve_local_profile_v1()のT4/T5判定でも使われる正本）へは混ぜず、
-# 別カテゴリの許可リストとしてここに明示する（設計書
-# 配役表解凍-設計-2026-09-01.md §7 冒頭注記差分「採用の有無も配役も
-# {{配役表}} を見る」で規定済み。同じ行が「表を統合したので {{採用表}} と
-# いう参照名は作らない」とも明記しているため、{{採用表}} はこのリストに
-# 加えない＝Vault文言側の懸念は別途リーダーへ報告）。
-DOC_REFERENCE_KNOWN_KEYS=(
-  "配役表"
-)
-
-# v2でのみ新設され、v1側にはまだ合流していない能力軸キーを拾う枠
-# （2026-09-05 P3段階4当初はno_read_pathsがここに該当していたが、同日の
-# 差し戻し対応でLOCAL_PROFILE_KNOWN_KEYS（v1・正本）側にもno_read_pathsを
-# 追加し、v1/v2のキー集合を再び1:1に揃えた＝リーダー裁定。これにより
-# no_read_pathsはKNOWN_KEYS側に既に含まれ、以後この配列には合流しなくなった。
-# ⚠️ この裁定はv1互換性とのトレードオフを伴う——v1は元々「必須キーを増やすと
-# 既存のv1実体profile.mdが軒並みT5（既知キー欠落）で壊れる」フォーマットで
-# あり、v2のようなschema_versionによる後方互換の仮想補完機構を持たない。
-# 実際の対象2機（メイン・サブ）は既にv2へ移行済みのため今回は実害が無いが、
-# 将来v1のまま残るマシンが現れた場合、次回SessionStartで無警告に近い形で
-# 最小能力+⚠️へ縮退する（Codex一次レビュー指摘・Major。採否はリーダー）。
-# この枠自体は、今後v1/v2が再び分岐した場合（v2専用の新キーを追加し、v1へは
-# 意図的に合流させない選択をした場合）に備えて残す。profile_resolve.pyの
-# known-keys（正本）から動的に取得し、META_KEYS/EXTRA_FIXED_KEYSを除いた
-# 能力軸部分だけをここに合流させる（ハードコード再列挙しない＝KNOWN_KEYSと
-# 同じ「正本を実行時ソースとして参照する」方針）。
-# ⚠️ KNOWN_KEYS（v1側）に既に存在するキーはここへ入れない（単なる重複除去の
-# ためのフィルタ）。v1/v2のキー集合ドリフトそのものの機械検証は、この配列
-# ではなく後述の section 8（v1/v2の能力軸キー集合の完全一致テスト）が担う。
 PROFILE_RESOLVE_PY_FOR_KEYS="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
-V2_ONLY_CAPABILITY_KEYS=()
+KNOWN_KEYS=()
 if [ -f "$PROFILE_RESOLVE_PY_FOR_KEYS" ]; then
   _fixed_line="$(python3 "$PROFILE_RESOLVE_PY_FOR_KEYS" known-keys 2>/dev/null | grep '^FIXED:' || true)"
   _fixed_line="${_fixed_line#FIXED:}"
@@ -108,25 +67,29 @@ if [ -f "$PROFILE_RESOLVE_PY_FOR_KEYS" ]; then
       case "$_k" in
         schema_version|profile_slug|excluded_models) continue ;;
       esac
-      _already_in_v1=0
-      for _v1k in "${KNOWN_KEYS[@]}"; do
-        [ "$_v1k" = "$_k" ] && { _already_in_v1=1; break; }
-      done
-      [ "$_already_in_v1" = "1" ] && continue
-      V2_ONLY_CAPABILITY_KEYS+=("$_k")
+      KNOWN_KEYS+=("$_k")
     done
   fi
 fi
+if [ "${#KNOWN_KEYS[@]}" -eq 0 ]; then
+  echo "FATAL: profile_resolve.py known-keys から能力軸キー集合を取得できませんでした" >&2
+  exit 1
+fi
+
+# v2配役表解凍で新規に正当化された参照名（2026-09-02追加）。プロファイル
+# YAMLのキー名ではなく、コア本文が配役表という概念そのものを指す散文上の
+# 参照であるため、能力軸キー集合へは混ぜず、別カテゴリの許可リストとして
+# ここに明示する（設計書配役表解凍-設計-2026-09-01.md §7 冒頭注記差分
+# 「採用の有無も配役も {{配役表}} を見る」で規定済み。同じ行が「表を統合
+# したので {{採用表}} という参照名は作らない」とも明記しているため、
+# {{採用表}} はこのリストに加えない＝Vault文言側の懸念は別途リーダーへ報告）。
+DOC_REFERENCE_KNOWN_KEYS=(
+  "配役表"
+)
 
 is_known_key() {
   local target="$1" k
-  # ⚠️ V2_ONLY_CAPABILITY_KEYSは要素0件になりうる（no_read_paths追加後、
-  # v1のKNOWN_KEYSとv2のCAPABILITY_KEYSが完全一致した場合等）。macOS既定の
-  # bash 3.2はset -u下で本当に空の配列を"${arr[@]}"展開するとunbound
-  # variableエラーになる既知の癖があるため、install-main.sh/pid-lock.shと
-  # 同じ`"${arr[@]:-}"`回避イディオムを使う（2026-09-05 P3段階4差し戻し対応で
-  # 実際にこのエラーを踏んで判明）。
-  for k in "${KNOWN_KEYS[@]:-}" "${DOC_REFERENCE_KNOWN_KEYS[@]:-}" "${V2_ONLY_CAPABILITY_KEYS[@]:-}"; do
+  for k in "${KNOWN_KEYS[@]:-}" "${DOC_REFERENCE_KNOWN_KEYS[@]:-}"; do
     [ "$k" = "$target" ] && return 0
   done
   return 1
@@ -177,7 +140,7 @@ check_file() {
       # 3モード体制対応で{{reviewer}}が未解決参照になった実例（公開スナップ
       # ショット未再生成の間）で、ここが無guardのままset -u下でunbound
       # variableエラーとなりスイート全体を落としていたのを機に追加した。
-      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表キー＝${KNOWN_KEYS[*]:-}／v2追加の能力軸キー＝${V2_ONLY_CAPABILITY_KEYS[*]:-}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]:-}）"
+      fail_case "$relpath: {{${ph}}} は既知の参照名に含まれない（未解決参照。最小能力表キー＝${KNOWN_KEYS[*]:-}／配役表解凍で正当化された参照名＝${DOC_REFERENCE_KNOWN_KEYS[*]:-}）"
       unknown=$((unknown + 1))
     fi
   done <<EOF
@@ -510,62 +473,10 @@ PYEOF
   fi
 }
 
-echo "=== 8. 静的: v1能力軸キー集合(bootstrap-vault.shのLOCAL_PROFILE_KNOWN_KEYS)とv2能力軸キー集合(profile_resolve.pyのCAPABILITY_KEYS＝known-keysのFIXEDからメタ2キー・excluded_modelsを除いたもの)が完全一致する（2026-09-05 P3段階4差し戻し対応・リーダー指摘: no_read_paths追加時にv1側だけ更新漏れが起きたため、両者のドリフトを機械的に検知する静的テストを新設） ==="
-{
-  if [ ! -f "$PROFILE_RESOLVE_PY_FOR_KEYS" ]; then
-    fail_case "claude/hooks/lib/profile_resolve.py が見つからないためv1/v2キー集合の突合ができない"
-  else
-    _v2_fixed_line="$(python3 "$PROFILE_RESOLVE_PY_FOR_KEYS" known-keys 2>/dev/null | grep '^FIXED:' || true)"
-    _v2_fixed_line="${_v2_fixed_line#FIXED:}"
-    if [ -z "$_v2_fixed_line" ]; then
-      fail_case "profile_resolve.py known-keys からFIXED行を取得できない"
-    else
-      v1_joined="$(printf '%s,' "${KNOWN_KEYS[@]}")"
-      RESULT8="$(python3 - "$v1_joined" "$_v2_fixed_line" <<'PYEOF'
-import sys
-
-v1_raw, v2_raw = sys.argv[1:3]
-v1_keys = {k for k in v1_raw.split(',') if k}
-v2_all = {k for k in v2_raw.split(',') if k}
-v2_meta_and_extra = {"schema_version", "profile_slug", "excluded_models"}
-v2_capability = v2_all - v2_meta_and_extra
-
-results8 = []
-if v1_keys == v2_capability:
-    results8.append(("PASS", f"v1(LOCAL_PROFILE_KNOWN_KEYS)とv2(CAPABILITY_KEYS)の能力軸キー集合が完全一致する（{len(v1_keys)}件）"))
-else:
-    only_v1 = sorted(v1_keys - v2_capability)
-    only_v2 = sorted(v2_capability - v1_keys)
-    results8.append(("FAIL", f"v1/v2の能力軸キー集合が不一致（v1のみ: {only_v1} / v2のみ: {only_v2}）"))
-
-# ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 上の比較は「v1とv2が
-# 互いに一致するか」しか見ておらず、両方が同じ誤った3キーへ同時に変わっても
-# 通る。要件AC-1の期待6キーからメタ2キー・excluded_modelsを除いた期待能力軸
-# 3キー（team_mode・no_read_paths・machine_role）のリテラル集合とv2を独立に
-# 比較する。
-expected_capability_literal = {"team_mode", "no_read_paths", "machine_role"}
-if v2_capability == expected_capability_literal:
-    results8.append(("PASS", "AC-1: v2(CAPABILITY_KEYS)が要件の期待能力軸3キー(リテラル集合)と完全一致する"))
-else:
-    only_expected = sorted(expected_capability_literal - v2_capability)
-    only_actual = sorted(v2_capability - expected_capability_literal)
-    results8.append(("FAIL", f"AC-1: v2(CAPABILITY_KEYS)が期待3キーと不一致（期待のみ: {only_expected} / 実際のみ: {only_actual}）"))
-
-for status, desc in results8:
-    print(f"{status}\t{desc}")
-PYEOF
-)"
-      while IFS=$'\t' read -r _status8 _desc8; do
-        [ -z "$_status8" ] && continue
-        if [ "$_status8" = "PASS" ]; then
-          pass "$_desc8"
-        else
-          fail_case "$_desc8"
-        fi
-      done <<< "$RESULT8"
-    fi
-  fi
-}
+# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）: 旧
+# section 8（v1能力軸キー集合とv2能力軸キー集合の突合）を削除した。突合相手
+# だったbootstrap-vault.shの既知キー配列本体（v1側の第2正本）が撤去され、
+# 能力軸の正本はprofile_resolve.pyのCAPABILITY_KEYS側だけになったため。
 
 echo "=== 9. AC-14: core-workflow.md §7の統合行がVault正本・公開スナップショットの両方にあり、旧2行と{{reviewer}}が現れない ==="
 {
@@ -659,7 +570,7 @@ echo "=== 10. AC-5: 廃止した能力軸・マーカー・別名トークンが
   fi
 }
 
-echo "=== 11. AC-2: known-keysの3行目がSCHEMA_VERSION:5に完全一致する（配役表-能力軸整理-要件-2026-09-07.md §7.2） ==="
+echo "=== 11. AC-2/AC-8: known-keysの3行目がSCHEMA_VERSION:6に完全一致する（モデル定義ファイルと候補指定-要件-2026-09-08.md §7.2 AC-8。旧・配役表-能力軸整理-要件-2026-09-07.md §7.2 AC-2のSCHEMA_VERSION:5から2026-09-08に6へ引き上げ） ==="
 {
   PROFILE_RESOLVE_PY_AC2="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
   if [ ! -f "$PROFILE_RESOLVE_PY_AC2" ]; then
@@ -667,10 +578,10 @@ echo "=== 11. AC-2: known-keysの3行目がSCHEMA_VERSION:5に完全一致する
   else
     kk_ac2="$(python3 "$PROFILE_RESOLVE_PY_AC2" known-keys)"
     line3="$(printf '%s\n' "$kk_ac2" | sed -n '3p')"
-    if [ "$line3" = "SCHEMA_VERSION:5" ]; then
-      pass "known-keysの3行目がSCHEMA_VERSION:5に完全一致する"
+    if [ "$line3" = "SCHEMA_VERSION:6" ]; then
+      pass "known-keysの3行目がSCHEMA_VERSION:6に完全一致する"
     else
-      fail_case "known-keysの3行目がSCHEMA_VERSION:5に完全一致しない（実際: ${line3}）"
+      fail_case "known-keysの3行目がSCHEMA_VERSION:6に完全一致しない（実際: ${line3}）"
     fi
   fi
 }
@@ -766,6 +677,102 @@ echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃�
       fi
     done
   done
+}
+
+echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC-14: repoに旧記法(role|fallback)\.[a-z-]+:.*provider=が0件（Codexレビュー指摘・BLOCKING-1対応・1巡目） ==="
+{
+  # ⚠️ 探索語は要件§7.1のとおり縦棒をエスケープせずに書く（実測で一致を
+  # 確認済み）。repo 0件を判定する前に、この式が「わざと書いた1行」に
+  # 一致すること（1件以上）を先に確認する（要件AC-14の注記）。
+  # 2026-09-08 Codexレビュー指摘・MAJOR対応（2巡目）: 陽性対照は要件§8-3の
+  # 実測どおり「引用符つき・インデントつき」の現行fixture行形に一致させる
+  # （旧記法の役割行fixtureがrepoに実在していたときの実際の書かれ方＝sed
+  # パターン・heredoc内の字下げされた引用符付き文字列を再現する。⚠️
+  # 具体的な完成文字列を本コメント自身にも書かない——下の printf の断片
+  # 組み立てが実際に生成する1行がその文字列そのものであり、コメントへ
+  # 重ねて書くと本ファイル自身がAC-14のrepo検索に一致してしまうため）。
+  AC14_PATTERN='(role|fallback)\.[a-z-]+:.*provider='
+  POS_FIXTURE="$(mktemp)"
+  # ⚠️ 完成文字列をソースへ直書きすると、本ファイル自身がAC-14のrepo検索に
+  # 一致してしまう（自己言及の罠）。断片を変数へ分けてから展開する。
+  legacy_attr_frag="provider="
+  printf '    "role.verifier: configured %sexternal model=codex-review-default"\n' "$legacy_attr_frag" > "$POS_FIXTURE"
+  rc_pos=0
+  pos_hit="$(grep -nE "$AC14_PATTERN" "$POS_FIXTURE" 2>&1)" || rc_pos=$?
+  if [ "$rc_pos" -eq 0 ] && [ -n "$pos_hit" ]; then
+    pass "AC-14: 探索語の陽性対照（わざと書いた1行に一致する）"
+  else
+    fail_case "AC-14: 探索語が陽性対照の1行にすら一致しない（式が壊れている）"
+  fi
+
+  rc_repo=0
+  repo_hits="$(git -C "$REPO_ROOT" grep -nE "$AC14_PATTERN" -- . 2>&1)" || rc_repo=$?
+  if [ "$rc_repo" -eq 1 ] && [ -z "$repo_hits" ]; then
+    pass "AC-14: repoに旧記法の役割行が0件"
+  else
+    fail_case "AC-14: repoに旧記法の役割行が残っている(rc=${rc_repo}): ${repo_hits}"
+  fi
+}
+
+echo "=== 16. モデル定義ファイルと候補指定-要件-2026-09-08.md AC-15: 公開サンプル（Vault正本・公開スナップショット）の静的検査＝FX-B14a〜c（Codexレビュー指摘・MAJOR-3対応・1巡目） ==="
+{
+  for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/model-definitions-sample.md" \
+                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/model-definitions-sample.md"; do
+    label="${label_path%%:*}"; f="${label_path#*:}"
+    if [ ! -f "$f" ]; then
+      fail_case "AC-15(${label}): ファイルが見つからない"
+      continue
+    fi
+
+    rc1=0; hit1="$(grep -nF '/Users/' "$f" 2>&1)" || rc1=$?
+    if [ "$rc1" -eq 1 ] && [ -z "$hit1" ]; then
+      pass "AC-15①(${label}): 絶対パス(/Users/)が0件"
+    else
+      fail_case "AC-15①(${label}): 絶対パスが残っている: ${hit1}"
+    fi
+
+    rc2=0; hit2="$(grep -nE '(API_KEY|SECRET|TOKEN|PASSWORD)' "$f" 2>&1)" || rc2=$?
+    if [ "$rc2" -eq 1 ] && [ -z "$hit2" ]; then
+      pass "AC-15②(${label}): 認証情報キー語が0件"
+    else
+      fail_case "AC-15②(${label}): 認証情報キー語が残っている: ${hit2}"
+    fi
+
+    # AC-15③（要件§8-4）: modelの値は雛形トークンXXXXだけ（機体依存の実値は書かない）。
+    bad_model="$(grep -nE '^model=' "$f" | grep -vF 'model=XXXX' || true)"
+    if [ -z "$bad_model" ]; then
+      pass "AC-15③(${label}): model=の値が雛形トークンXXXXだけ"
+    else
+      fail_case "AC-15③(${label}): 機体依存の値がXXXX以外で書かれている: ${bad_model}"
+    fi
+
+    excli_count="$(grep -c '^execution=external-cli$' "$f" 2>/dev/null || true)"
+    if [ -n "${excli_count:-}" ] && [ "${excli_count:-0}" -ge 1 ] 2>/dev/null; then
+      pass "AC-15(${label}): execution=external-cliの例が1回以上ある"
+    else
+      fail_case "AC-15(${label}): execution=external-cliの例が無い"
+    fi
+  done
+
+  # FX-B14a〜c: 陰性fixture（悪い例）を一時ファイルへ書き、上と同じ検査器
+  # （探索語）が実際に検出できることを確認する（設計§11.1「悪い例を検査器
+  # へ食わせる」）。公開スナップショットのサンプルを土台にする。
+  BASE14="$REPO_ROOT/vault-public/Preferences/model-definitions-sample.md"
+  if [ -f "$BASE14" ]; then
+    B14A="$(mktemp)"; cp "$BASE14" "$B14A"; printf '# /Users/takumi009/leak\n' >> "$B14A"
+    hit_a="$(grep -nF '/Users/' "$B14A" || true)"
+    if [ -n "$hit_a" ]; then pass "FX-B14a: 絶対パスの混入を検出できる"; else fail_case "FX-B14a: 絶対パスの混入を検出できない"; fi
+
+    B14B="$(mktemp)"; cp "$BASE14" "$B14B"; printf 'ANTHROPIC_API_KEY=sk-fake\n' >> "$B14B"
+    hit_b="$(grep -nE '(API_KEY|SECRET|TOKEN|PASSWORD)' "$B14B" || true)"
+    if [ -n "$hit_b" ]; then pass "FX-B14b: 認証情報キーの混入を検出できる"; else fail_case "FX-B14b: 認証情報キーの混入を検出できない"; fi
+
+    B14C="$(mktemp)"; cp "$BASE14" "$B14C"; printf 'model=claude-opus-5\n' >> "$B14C"
+    hit_c="$(grep -nE '^model=' "$B14C" | grep -vF 'model=XXXX' || true)"
+    if [ -n "$hit_c" ]; then pass "FX-B14c: 実モデルIDの混入を検出できる"; else fail_case "FX-B14c: 実モデルIDの混入を検出できない"; fi
+  else
+    fail_case "FX-B14a〜c: 公開スナップショットのサンプルが見つからないため陰性fixtureを構成できない"
+  fi
 }
 
 echo

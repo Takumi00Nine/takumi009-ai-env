@@ -112,6 +112,26 @@ assert_agents_line() {
   esac
 }
 
+# write_models_conf_at <dir> — モデル定義ファイル（models.conf）を<dir>/
+# models.conf へ書く（モデル定義ファイルと候補指定-設計-2026-09-08.md
+# §2.3・§2.4）。schema 6のrole/fallback行は`model=<定義名>[,...]`で定義名を
+# 参照するだけになったため、role.leaderの解決を伴うテストは全てこの定義
+# ファイルを必要とする（無いとT7で解決不能になる）。tests/test-install-main.sh
+# と同じ最小の定義セットを使う。
+write_models_conf_at() {
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/models.conf" <<'EOF'
+[sonnet-main]
+provider=anthropic-api
+model=claude-sonnet-5
+
+[opus-main]
+provider=anthropic-api
+model=claude-opus-5
+EOF
+}
+
 make_fake_home() {
   local home="$1"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
@@ -123,15 +143,16 @@ make_fake_home() {
   # seed_v1_profile()・seed_v2_profile()・個別のcat上書きで置き換えるテストは
   # この既定値を上書きする（後勝ち）。
   mkdir -p "$home/.config/takumi009-ai-env"
+  write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-install-sub-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
 excluded_models: configured value=none
-role.leader: configured provider=anthropic-api model=claude-sonnet-5
+role.leader: configured model=sonnet-main
 ---
 EOF
 }
@@ -142,28 +163,39 @@ EOF
 # 対話可否の判定で止まる。本ファイルの主眼＝Vault骨格配置・symlink化・
 # 機役割の案内ログとは無関係なテストは、この既定値をexportしておくことで
 # 「未確定→envの値を検査して採用（質問しない）」経路を常に通す。
-export AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5'
+export AIENV_LEADER_ROLE='model=sonnet-main'
 
-# seed_v1_profile <home> — v1形式（schema_version・role.*行のいずれも持たない）
-# のプロファイルをあらかじめ置く。§4.2-a「v1と分類されたらlegacy実装
-# （AIENV_MODEL_MAIN/AIENV_MODEL_SUB）へ委譲する」経路を強制し、
-# AIENV_LEADER_ROLEやv2の対話確定を経由させたくないテスト
-# （model値そのものの置換ロジックを検証する4b/4c/4d/4f）で使う。
-# ⚠️ classify_profile()はschema_version・role.*行の有無だけで分類するため
-# （claude/hooks/lib/profile_resolve.py参照）、frontmatterの中身自体は
-# v1委譲経路の判定に無関係。テスト用のダミー行を1つ置くだけで足りる。
+# seed_v1_profile <home> — ローカル実体プロファイルを不在にする。
+# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）: legacy
+# 実装（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）への委譲は「実体が本当に存在しない
+# （PROFILE_NOT_FOUND）」場合だけに縮小された——実在するがschema_versionを
+# 持たない実体はT4-LEGACYとして解決失敗する（委譲されない）。そのため
+# 「v1相当を強制する」とは、make_fake_home()が書いたprofile.mdを消して
+# 不在にすることを意味する。
+# 呼び出し側は必ずrun_v1_legacy_repo()経由でTMP_REPO（vault-public/
+# Preferences/profile-sample.mdを除いた実repoの複製）に対して実行すること
+# （$REPO_ROOTを直接使うと、install-main.sh自身のP1雛形自動配置が実サンプルを
+# コピーしてしまい、コピー後に「実在するschema 5の実体」という別の非委譲
+# ケースへ倒れて本テストの意図＝legacy値置換ロジックの検証を阻害するため）。
 seed_v1_profile() {
   local home="$1"
   local dest="$home/.config/takumi009-ai-env/profile.md"
-  mkdir -p "$(dirname "$dest")"
-  cat > "$dest" <<'EOF'
----
-legacy_marker: configured(v1)
----
-EOF
+  [ -e "$dest" ] && command rm "$dest"
+  return 0
 }
 
-# seed_v2_profile <home> — v2形式（schema_version:5・新3キー・role.leaderが
+# run_v1_legacy_repo() — vault-public/Preferences/profile-sample.mdを除いた
+# repoの複製を作り、そのパスを標準出力へ書く（seed_v1_profile()と対で使う。
+# 4b/4c/4d/4fの共通前処理）。
+run_v1_legacy_repo() {
+  local tmp_repo
+  tmp_repo="$(mktemp -d)"
+  cp -R "$REPO_ROOT/." "$tmp_repo/"
+  command rm "$tmp_repo/vault-public/Preferences/profile-sample.md"
+  printf '%s\n' "$tmp_repo"
+}
+
+# seed_v2_profile <home> — v2形式（schema_version:6・新3キー・role.leaderが
 # configured）のプロファイルをあらかじめ置く。--check-profile系テスト
 # （13・14番）で使う。role.leaderは既にconfiguredのため、AIENV_LEADER_ROLEの
 # 値には依存しない。
@@ -171,11 +203,12 @@ seed_v2_profile() {
   local home="$1"
   local dest="$home/.config/takumi009-ai-env/profile.md"
   mkdir -p "$(dirname "$dest")"
+  write_models_conf_at "$(dirname "$dest")"
   cat > "$dest" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test
-role.leader: configured provider=anthropic-api model=claude-opus-5
+role.leader: configured model=opus-main
 excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable
@@ -258,10 +291,12 @@ echo "=== 4b. install-sub.sh 経由で生成されるsettings.jsonのmodelはサ
   make_fake_home "$FAKE_HOME"
   # v1相当に固定してlegacy委譲を強制する（本テストの主眼＝
   # AIENV_MODEL_MAIN/SUBの置換ロジックであり、v2配役表のリーダー確定とは
-  # 無関係なため）。
+  # 無関係なため）。TMP_REPOはsample不在にして自動雛形配置を封じる
+  # （seed_v1_profileのコメント参照）。
   seed_v1_profile "$FAKE_HOME"
+  TMP_REPO="$(run_v1_legacy_repo)"
 
-  env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+  env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null
 
   settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
   assert_true "modelがclaude-opus-5になっている" \
@@ -271,7 +306,7 @@ echo "=== 4b. install-sub.sh 経由で生成されるsettings.jsonのmodelはサ
   assert_true "[1m]サフィックスは付かない（リーダー指示：サブはFable専用の1M contextを付けない）" \
     "$(printf '%s' "$settings_content" | grep -q '\[1m\]' && echo 0 || echo 1)"
 
-  rm -rf "$FAKE_HOME"
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
 echo "=== 4c. install-main.sh単体実行(--sub-delegate無し)で生成されるsettings.jsonのmodelはメイン既定値(claude-fable-5[1m])に置換される ==="
@@ -279,14 +314,15 @@ echo "=== 4c. install-main.sh単体実行(--sub-delegate無し)で生成され�
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
   seed_v1_profile "$FAKE_HOME"
+  TMP_REPO="$(run_v1_legacy_repo)"
 
-  env -u AIENV_LEADER_ROLE SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/install-main.sh" >/dev/null
+  env -u AIENV_LEADER_ROLE SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null
 
   settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
   assert_true "modelがclaude-fable-5[1m]になっている" \
     "$(printf '%s' "$settings_content" | grep -q '"model": "claude-fable-5\[1m\]"' && echo 1 || echo 0)"
 
-  rm -rf "$FAKE_HOME"
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
 echo "=== 4d. AIENV_MODEL_MAIN/AIENV_MODEL_SUB環境変数でmodel値を上書きできる（テスト用） ==="
@@ -294,14 +330,15 @@ echo "=== 4d. AIENV_MODEL_MAIN/AIENV_MODEL_SUB環境変数でmodel値を上書�
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
   seed_v1_profile "$FAKE_HOME"
+  TMP_REPO="$(run_v1_legacy_repo)"
 
-  env -u AIENV_LEADER_ROLE AIENV_MODEL_SUB="custom-test-model" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+  env -u AIENV_LEADER_ROLE AIENV_MODEL_SUB="custom-test-model" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null
 
   settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
   assert_true "AIENV_MODEL_SUBで上書きした値が反映される" \
     "$(printf '%s' "$settings_content" | grep -q '"model": "custom-test-model"' && echo 1 || echo 0)"
 
-  rm -rf "$FAKE_HOME"
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
 echo "=== 4e. settings.json生成後も他のキー（permissions等）はテンプレの中身を保っている（プレースホルダ以外は無変更であることの確認） ==="
@@ -327,8 +364,9 @@ echo "=== 4f. model値に引用符・バックスラッシュが含まれても�
   # 通らないため、v2配役表経由では本テストの意図＝JSON生成側のエスケープ
   # 耐性を検証できない）。
   seed_v1_profile "$FAKE_HOME"
+  TMP_REPO="$(run_v1_legacy_repo)"
 
-  env -u AIENV_LEADER_ROLE AIENV_MODEL_SUB='weird"model\value' SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
+  env -u AIENV_LEADER_ROLE AIENV_MODEL_SUB='weird"model\value' SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null
 
   assert_true "生成物が有効なJSONとしてパースできる（引用符・バックスラッシュを含む値でも壊れない）" \
     "$(python3 -c "import json; json.load(open('$FAKE_HOME/.claude/settings.json'))" 2>/dev/null && echo 1 || echo 0)"
@@ -339,7 +377,7 @@ d = json.load(open('$FAKE_HOME/.claude/settings.json'))
 print(1 if d.get('model') == 'weird\"model\\\\value' else 0)
 " 2>/dev/null)"
 
-  rm -rf "$FAKE_HOME"
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
 echo "=== 5. LaunchAgent類は一切インストールされない（メイン専用機能に加え、旧サブ専用の定期自動pull運用も2026-07-23廃止済み） ==="
@@ -421,7 +459,7 @@ echo "=== 10. §3.9対話フラグの転送: --non-interactiveがinstall-main.sh
   # role.leader未確定へ上書きする。
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-install-sub-machine
 team_mode: configured value=full
 no_read_paths: unavailable
@@ -454,9 +492,9 @@ echo "=== 11. §3.9対話フラグの転送: --reconfigure-leaderがinstall-main
   mkdir -p "$(dirname "$PROFILE_PATH")"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test
-role.leader: configured provider=anthropic-api model=claude-opus-5
+role.leader: configured model=opus-main
 excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable
@@ -465,11 +503,11 @@ machine_role: configured value=sub
 EOF
 
   rc=0
-  AIENV_LEADER_ROLE='provider=anthropic-api model=claude-sonnet-5' \
+  AIENV_LEADER_ROLE='model=sonnet-main' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1 || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "--reconfigure-leaderがinstall-main.shへ転送され、AIENV_LEADER_ROLEの新しい値が採用される" \
-    "$(grep -qE '^role\.leader:.*configured provider=anthropic-api model=claude-sonnet-5' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=sonnet-main' "$PROFILE_PATH" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -503,11 +541,19 @@ echo "=== 13. --check-profile: install-main.sh へ転送され、直接呼び出
   FAKE_HOME_MAIN="$(mktemp -d)"
   make_fake_home "$FAKE_HOME_MAIN"
   seed_v2_profile "$FAKE_HOME_MAIN"
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.2 FR-19①）:
+  # --check-profileはモデル定義ファイルの絶対パスを1行ログへ出すようになった。
+  # $FAKE_HOME_SUB/$FAKE_HOME_MAINはmktempで異なる絶対パスになるため、
+  # AIENV_MODEL_DEFS_FILEを共通の1ファイルへ固定し、出力の完全一致比較が
+  # HOMEの違いだけに左右されないようにする。
+  SHARED_MODEL_DEFS_DIR="$(mktemp -d)"
+  write_models_conf_at "$SHARED_MODEL_DEFS_DIR"
+  SHARED_MODEL_DEFS="$SHARED_MODEL_DEFS_DIR/models.conf"
 
   rc_sub=0
-  out_sub="$(HOME="$FAKE_HOME_SUB" bash "$SCRIPT" --check-profile 2>&1)" || rc_sub=$?
+  out_sub="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_SUB" bash "$SCRIPT" --check-profile 2>&1)" || rc_sub=$?
   rc_main=0
-  out_main="$(HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/scripts/install-main.sh" --check-profile 2>&1)" || rc_main=$?
+  out_main="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/scripts/install-main.sh" --check-profile 2>&1)" || rc_main=$?
 
   assert_eq "install-sub.sh経由もexit code 0" "0" "$rc_sub"
   assert_eq "exit codeがinstall-main.sh直接呼び出しと一致" "$rc_main" "$rc_sub"
@@ -520,7 +566,7 @@ echo "=== 13. --check-profile: install-main.sh へ転送され、直接呼び出
   assert_true "settings.json・config.tomlも生成されない（step2の委譲先でcheck-profileが自身exitするため）" \
     "$([[ ! -e "$FAKE_HOME_SUB/.claude/settings.json" && ! -e "$FAKE_HOME_SUB/.codex/config.toml" ]] && echo 1 || echo 0)"
 
-  rm -rf "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN"
+  rm -rf "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN" "$SHARED_MODEL_DEFS_DIR"
 }
 
 echo "=== 13b. --check-profile: 不正プロファイル（role.leader重複=T6）でも非0終了コード・エラー内容がinstall-main.sh直接呼び出しと一致する・副作用ゼロ（Codex一次レビュー指摘・Minor対応: 正常系だけでは委譲先の非0を誤ってexit 0へ変換する回帰を検出できないため） ==="
@@ -530,24 +576,32 @@ echo "=== 13b. --check-profile: 不正プロファイル（role.leader重複=T6�
   FAKE_HOME_MAIN="$(mktemp -d)"
   make_fake_home "$FAKE_HOME_MAIN"
   invalid_profile='---
-schema_version: 5
+schema_version: 6
 profile_slug: test
 role.leader: unknown
-role.leader: configured provider=anthropic-api model=claude-opus-5
+role.leader: configured model=opus-main
 excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
 ---'
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.2 FR-19①）:
+  # --check-profileはlist-roles呼び出しより前にモデル定義ファイルの絶対パスを
+  # 1行ログへ出すため、T6検出前でもこの行が出力に含まれる。$FAKE_HOME_SUBと
+  # $FAKE_HOME_MAINで絶対パスが異なると完全一致比較が壊れるため、
+  # AIENV_MODEL_DEFS_FILEを共通の1ファイルへ固定する（テスト13と同じ方針）。
+  SHARED_MODEL_DEFS_DIR="$(mktemp -d)"
+  write_models_conf_at "$SHARED_MODEL_DEFS_DIR"
+  SHARED_MODEL_DEFS="$SHARED_MODEL_DEFS_DIR/models.conf"
   for h in "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN"; do
     mkdir -p "$h/.config/takumi009-ai-env"
     printf '%s\n' "$invalid_profile" > "$h/.config/takumi009-ai-env/profile.md"
   done
 
   rc_sub=0
-  out_sub="$(HOME="$FAKE_HOME_SUB" bash "$SCRIPT" --check-profile 2>&1)" || rc_sub=$?
+  out_sub="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_SUB" bash "$SCRIPT" --check-profile 2>&1)" || rc_sub=$?
   rc_main=0
-  out_main="$(HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/scripts/install-main.sh" --check-profile 2>&1)" || rc_main=$?
+  out_main="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/scripts/install-main.sh" --check-profile 2>&1)" || rc_main=$?
 
   assert_true "install-sub.sh経由も非0終了する（委譲先の非0をexit 0へ握り潰さない）" \
     "$([[ "$rc_sub" -ne 0 ]] && echo 1 || echo 0)"
@@ -560,7 +614,7 @@ machine_role: configured value=sub
   assert_true "機役割の案内ログは出ない（副作用ゼロ）" \
     "$(echo "$out_sub" | grep -qF 'machine_role: configured value=sub を1行書いてください' && echo 0 || echo 1)"
 
-  rm -rf "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN"
+  rm -rf "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN" "$SHARED_MODEL_DEFS_DIR"
 }
 
 echo "=== 14. --check-profile --print-schema-version: install-sub.sh経由でもschema_versionの値だけを1行返す・副作用ゼロ（2026-09-02追加） ==="
@@ -573,7 +627,7 @@ echo "=== 14. --check-profile --print-schema-version: install-sub.sh経由でも
   out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile --print-schema-version 2>&1)" || rc=$?
 
   assert_eq "exit code 0" "0" "$rc"
-  assert_eq "schema_versionの値だけを1行返す（見出しログ等が混ざらない）" "5" "$out"
+  assert_eq "schema_versionの値だけを1行返す（見出しログ等が混ざらない）" "6" "$out"
   assert_true "Vaultは作られない（副作用ゼロ）" \
     "$([[ ! -e "$FAKE_HOME/Data/obsidian" ]] && echo 1 || echo 0)"
   assert_true "機役割の案内ログは出ない（副作用ゼロ）" \

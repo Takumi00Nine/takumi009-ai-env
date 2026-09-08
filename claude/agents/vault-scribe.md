@@ -2,7 +2,7 @@
 name: vault-scribe
 description: 外部脳（Obsidian Vault）の執筆代行ワーカー。リーダーが確定した内容を受け取り、Vault の掟（フロントマター・aliases・SSOT・public の掟）に従って書き込む。内容の新規判断はしない。常駐チームメイト運用が既定。
 tools: Read, Grep, Glob, Edit, Write, SendMessage
-model: sonnet
+model: claude-sonnet-5
 color: green
 ---
 

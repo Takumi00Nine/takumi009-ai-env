@@ -14,10 +14,11 @@ install-main.sh から `python3 <このファイル> <subcommand> ...` として
 `if __name__ == "__main__"` の中に閉じる）。
 
 ⚠️ 秘匿方針（絶対厳守③）: bedrock.env のうち読むのは「許可された特定キーの
-存在・非空」だけ。値そのものをstdout/stderrへ書かない。role/fallback行の
-model=/provider= の値は resolve() の出力へ再掲しない（配役の値をDIRECTIVE
-へ再掲しない＝4.1-f。resolve-leader だけは settings.json 生成用に値を返す
-＝これは元々installerが書く値であり、AI向けDIRECTIVEには流用しない）。
+存在・非空」だけ。値そのものをstdout/stderrへ書かない。role/fallback行が
+参照する定義（モデル定義ファイル側）のmodel=/provider=の値は resolve() の
+出力へ再掲しない（配役の値をDIRECTIVEへ再掲しない＝4.1-f。resolve-leader
+だけは settings.json 生成用に値を返す＝これは元々installerが書く値であり、
+AI向けDIRECTIVEには流用しない）。
 """
 
 from __future__ import annotations
@@ -36,34 +37,22 @@ from typing import Optional
 # ============================================================
 
 # ⚠️ 環境変数からは差し替えない（§3.4「期待版はコードが持つ」の唯一の正本を
-# 継承環境の値で動かせる穴を作らない＝Codexレビュー指摘・Major対応。以前は
-# テスト専用の環境変数オーバーライドを持たせていたが、本番プロセスの継承
-# 環境に紛れ込んだ場合にresolver・bootstrap・known-keys全てのexpected版が
-# 静かに変わってしまうため撤去した。テストで仮想補完分岐に到達させたい
-# 場合はサブプロセス内でモジュール属性
+# 継承環境の値で動かせる穴を作らない＝Codexレビュー指摘・Major対応。テストで
+# 版境界分岐に到達させたい場合はサブプロセス内でモジュール属性
 # `profile_resolve.EXPECTED_SCHEMA_VERSION`を直接上書きしてから呼ぶこと
 # （本番の起動経路には一切影響しない）。
-# 2026-09-05 P3段階4対応（Decisions/2026-09-03-p3-staged-execution 段階2の
-# 裁定＝`{{no_read_paths}}`スロット方式を採用）: 能力軸へ`no_read_paths`を
-# 新設するのに合わせて2→3へ引き上げた。既存の実体（declared=2）は
-# reconcile_schema_version()のT4仮想補完分岐（declared<EXPECTED）に入り、
-# `no_read_paths`をunknown状態で仮想補完してT4 advisoryを出す＝実体の
-# 書き換えを強制しない後方互換の入口（この分岐は元々将来のキー追加に
-# 備えて実装済みだった。今回で初めて実運用に到達する）。
-# 2026-09-07 3モード体制対応（3モード体制-設計-2026-09-06.md §4.1）: 能力軸
-# `reviewer`を`team_mode`へ差し替えるのに合わせて3→4へ引き上げた。enumの
-# 廃止値も同時に変わる（executionの旧MCP経路の値→CLI経路の値）ため固定キー・
-# 文法・enumが変わったときだけ版を上げる規約どおり1回で版上げする
-# （同設計§4.1a。⚠️ 廃止値の文字列そのものはこのファイルへ残さない＝AC-11）。
-# 2026-09-07 能力軸整理対応（配役表-能力軸整理-設計-2026-09-07.md §3。
-# 本人決定＝Decisions/2026-09-07-profile-axes-consolidation・
-# Decisions/2026-09-07-retire-vault-write-axis）: 廃止対象5キー
-# （同決定ノート参照）を撤去し`machine_role`を新設する固定キーの追加を
-# 伴うため4→5へ引き上げた（旧`vault_scope`撤去は削除だけだったので版を
-# 上げなかったのと異なり、今回は新キーが欠けた既存実体を「壊れている」
-# ではなく「追随待ち」として扱わせる必要がある＝FR-14）。⚠️ 廃止した
-# キー名の文字列そのものはこのファイルへ残さない＝AC-5。
-EXPECTED_SCHEMA_VERSION = 5
+# 2026-09-08 モデル定義ファイルと候補指定対応（モデル定義ファイルと候補指定-
+# 設計-2026-09-08.md §3.1・D-8）: 役割の行の文法を`model=<定義名>[,…]`（候補の
+# カンマ列挙）へ変えたのに合わせて5→6へ引き上げた。⚠️ 旧記法
+# `model=claude-opus-5`は新文法でも「定義名`claude-opus-5`」として文法的に
+# 妥当に読めてしまうため、schema 6のコードは6未満の実体（`schema_version`の
+# 行が無い実体を含む）を「追随待ち」として仮想補完せず、一律
+# `T4-LEGACY`で解決失敗にする（FR-15）。この非対称（他のキー追加は仮想補完・
+# 今回は仮想補完しない）は、文法があいまいに読めてしまう版境界だけの特例
+# である。旧`declared<EXPECTED`の仮想補完分岐とT4 advisoryは本案件で撤去した
+# （§3.7・T4 advisoryの発生源はここだけだったので、この変更でT4は完全に
+# 消える）。
+EXPECTED_SCHEMA_VERSION = 6
 
 META_KEYS = ("schema_version", "profile_slug")
 CAPABILITY_KEYS = (
@@ -85,8 +74,20 @@ ROLE_STATES = frozenset({"configured", "unavailable", "not_adopted", "unknown"})
 CAPABILITY_STATES = frozenset({"configured", "unavailable", "unknown"})
 PROVIDERS = frozenset({"anthropic-api", "bedrock", "bedrock-mantle", "external"})
 EXECUTIONS = frozenset({"subagent", "external-cli", "external-api"})
-ROLE_ATTR_NAMES = frozenset({"provider", "model", "execution", "effort"})
+# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.1・FR-8）: role/fallback
+# 行が持てる属性は`model`（定義名のカンマ列挙＝候補）だけになった。
+# provider/execution/effortは定義ファイル側（MODEL_DEF_ATTR_NAMES）へ移った。
+# ⚠️ 互換のために残さない（no-backward-compat）——これだけでFX-B2a
+# （role行にprovider=を書く）はparse_v2の「許可されない属性です」でT6に落ちる。
+ROLE_ATTR_NAMES = frozenset({"model"})
 CAPABILITY_ATTR_NAMES = frozenset({"value"})
+
+# モデル定義ファイル（models.conf）の定義名の形式（同設計§2.3規約4・FR-3）。
+MODEL_DEF_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# モデル定義ファイルの1ブロックが持てる属性名（同設計§2.4）。
+MODEL_DEF_ATTR_NAMES = frozenset({"provider", "model", "execution", "effort"})
+# モデル定義ファイルの既定パスと注入口（同設計§2.1・§2.2・D-1・D-2）。
+DEFAULT_MODEL_DEFS_PATH = "~/.config/takumi009-ai-env/models.conf"
 
 EFFORT_CLAUDE = frozenset({"low", "medium", "high", "xhigh", "max"})
 EFFORT_SETTINGS = frozenset({"low", "medium", "high", "xhigh"})  # max不可（V9-e）
@@ -105,9 +106,16 @@ BEDROCK_DISALLOWED_MODEL_PREFIXES = ("us.", "eu.", "global.", "arn:")
 
 # V9-d① 実装済みハンドラの写像（execution!=subagentのものだけを列挙する。
 # subagent実行は経路そのものがTask toolのspawnであり写像は不要＝常に①を満たす）。
+# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§2.4）: 従来は
+# (provider,execution,model)の三つ組で`codex-review-default`という1個の
+# モデル名だけを許可していたが、FR-13で`execution=external-cli`のmodelは
+# 「外部CLIが受理する実IDか予約語default」になり、ハンドラ
+# （scripts/codex-exec.sh）はmodel IDを問わず1つしか無いため、写像を
+# (provider,execution)の対へ縮める。⚠️ external-apiは対に含めない（未実装の
+# まま＝V9-d②は生きている）。
 IMPLEMENTED_HANDLERS = frozenset(
     {
-        ("external", "external-cli", "codex-review-default"),
+        ("external", "external-cli"),
     }
 )
 
@@ -149,8 +157,8 @@ CORE_ROLES_WITHOUT_REPO_AGENT_FILE = frozenset(
 ROLE_EXEMPT_FROM_DEFINITION_CHECK = frozenset({"leader"})
 
 # Bedrockピン留め論理名の導出（§1-3・§6.1）。人はこの名前を書けない
-# （role.*のprovider=bedrock行はmodel別名しか持てないためbedrock_pin_*は
-# 常にコードが導出する側）。
+# （role.*が参照する定義のproviderがbedrockのとき、その定義のmodelは
+# 別名しか持てないためbedrock_pin_*は常にコードが導出する側）。
 BEDROCK_PIN_ENV_VAR = {
     "opus": "ANTHROPIC_DEFAULT_OPUS_MODEL",
     "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
@@ -229,6 +237,52 @@ def _strip_comment(raw: str) -> str:
     return raw[: m.start()] if m else raw
 
 
+def _peek_declared_schema_version(lines: list[tuple[int, str]]) -> Optional[str]:
+    """schema_versionキーの生値だけを緩く走査して取り出す（値の形式検査は
+    しない）。役割の行を厳格parseする前段のバージョンゲート専用。"""
+    for _lineno, raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        body = _strip_comment(raw).strip()
+        if not body:
+            continue
+        m = LINE_RE.match(body)
+        if not m:
+            continue
+        key, rest = m.group(1), m.group(2).strip()
+        if key == "schema_version":
+            return rest
+    return None
+
+
+def gate_schema_version(path: str) -> None:
+    """2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.7・D-8・FR-15）:
+    役割の行の文法が`model=<定義名>[,…]`だけになったため、旧記法
+    （`provider=… model=… effort=…`）で書かれた6未満の実体はparse_v2の
+    ROLE_ATTR_NAMES検査に先に引っかかり、一般的な`T6`（「許可されない属性
+    です」）になってしまう——これだとFR-15が要求する「理由から実体が旧版で
+    あることが読める」を満たせない。そこで役割の行を厳格parseする<u>前</u>に
+    宣言versionだけを緩く読み、EXPECTED未満または欠落なら直ちに
+    `T4-LEGACY`で止める（旧記法の構文がどうであれ、版だけで即座に弾く）。
+    ⚠️ schema_versionの値がそもそも数値として不正（非数値・0以下）な場合は
+    ここでは判定せず、通常のparse_v2→validate_meta()のT3へ委ねる
+    （このゲートは「版が低い/無い」の2ケースだけを先取りする）。
+    """
+    lines = _read_frontmatter_lines(path)  # T1/T6（frontmatter区切り等）はここで素通り
+    raw = _peek_declared_schema_version(lines)
+    if raw is None:
+        raise ProfileError(
+            "T4-LEGACY",
+            f"実体が旧版です（schema_versionの行がありません・このコードはschema {EXPECTED_SCHEMA_VERSION} のみを受理します）",
+        )
+    if re.match(r"^[0-9]+$", raw) and int(raw) > 0 and int(raw) < EXPECTED_SCHEMA_VERSION:
+        raise ProfileError(
+            "T4-LEGACY",
+            f"実体が旧版です（schema_version={int(raw)}・このコードはschema {EXPECTED_SCHEMA_VERSION} のみを受理します）",
+        )
+
+
 def preflight_forbidden_keys(path: str) -> list[tuple[int, str]]:
     """V15（§3.5 評価順②）。frontmatterの内外・v1/v2の別を問わず、ファイル全体を
     キー名だけ緩く走査する（値は一切読まない）。分類・parserより前に実行する
@@ -253,43 +307,11 @@ def preflight_forbidden_keys(path: str) -> list[tuple[int, str]]:
     return hits
 
 
-def classify_profile(path: str) -> str:
-    """§3.5 の分類規則。'v1' | 'v2' | 'mixed' のいずれかを返す。
-    frontmatterが壊れている場合も、ここでは判定を諦めずベストエフォートで
-    生テキストを直接走査する（後続のparserがT6として正式に検出するため、
-    分類自体は失敗させない）。
-    """
-    try:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-    except (OSError, UnicodeDecodeError):
-        # 呼び出し側が存在確認を済ませている前提だが、フェイルセーフとして
-        # v1側（現行実装）へ委ねる＝現行のT1/T6処理に任せる（v1側のbashラッパは
-        # python3の非0終了をMINIMAL/T6へ丸める既存のfail-safeを持つ）。
-        return "v1"
-
-    lines = text.splitlines()
-    has_dynamic = False
-    schema_version_raw: Optional[str] = None
-    for raw in lines:
-        stripped = raw.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        body = _strip_comment(raw).rstrip()
-        m = LINE_RE.match(body.strip())
-        if not m:
-            continue
-        key, val = m.group(1), m.group(2).strip()
-        if key.startswith(DYNAMIC_PREFIXES):
-            has_dynamic = True
-        elif key == "schema_version":
-            schema_version_raw = val
-
-    if schema_version_raw is None:
-        return "mixed" if has_dynamic else "v1"
-    if schema_version_raw == "1":
-        return "mixed" if has_dynamic else "v1"
-    return "v2"
+# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）:
+# 旧・版分類関数（v1/v2/mixed判定）を撤去した。schema 6のコードは
+# schema_versionの行が無い実体（v1形式そのもの）を含む6未満の全実体を
+# T4-LEGACYで一律解決失敗にするため（FR-15）、分類そのものが不要になった
+# （no-backward-compat。v1委譲経路の撤去範囲＝同設計§3.8）。
 
 
 # ============================================================
@@ -298,7 +320,7 @@ def classify_profile(path: str) -> str:
 
 
 class RoleLine:
-    __slots__ = ("name", "state", "attrs", "lineno", "kind")
+    __slots__ = ("name", "state", "attrs", "lineno", "kind", "candidates")
 
     def __init__(self, name: str, state: str, attrs: dict, lineno: int, kind: str):
         self.name = name
@@ -306,6 +328,14 @@ class RoleLine:
         self.attrs = attrs
         self.lineno = lineno
         self.kind = kind  # "role" | "fallback"
+        # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.1 RoleLine差分）:
+        # role/fallback行の`model=`はカンマ区切りの定義名候補になった。attrsは
+        # 生文字列のまま保持し、ここで候補一覧を派生させる（capability行等
+        # `model`属性を持たない行はcandidates=[]のまま）。
+        raw_model = attrs.get("model")
+        self.candidates: list[str] = (
+            [c.strip() for c in raw_model.split(",")] if raw_model else []
+        )
 
 
 class ParsedProfile:
@@ -420,7 +450,15 @@ def validate_meta(parsed: ParsedProfile) -> int:
     """
     raw = parsed.meta.get("schema_version")
     if raw is None:
-        raise ProfileError("T3", "schema_versionがありません")
+        # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.1・§3.7・D-8）:
+        # schema_versionの行が無い実体はv1形式そのものなので、T3（メタ欠落）
+        # ではなくT4-LEGACY（旧版）として扱う。FR-15の固定語「旧版」をここで
+        # 満たす（5口すべてが同じコードに落ちる＝reconcile_schema_versionの
+        # declared<EXPECTED分岐と同じコード）。
+        raise ProfileError(
+            "T4-LEGACY",
+            f"実体が旧版です（schema_versionの行がありません・このコードはschema {EXPECTED_SCHEMA_VERSION} のみを受理します）",
+        )
     if not re.match(r"^[0-9]+$", raw) or int(raw) <= 0:
         raise ProfileError("T3", "schema_versionの形式が不正です")
     version = int(raw)
@@ -435,7 +473,15 @@ def validate_meta(parsed: ParsedProfile) -> int:
 def reconcile_schema_version(parsed: ParsedProfile, declared: int) -> list[str]:
     """T4'（実体の版>コードの版）・T5（版が同じなのに固定キーが欠落）・
     T9'（UNKNOWN_EXTRA）を判定する。戻り値はadvisory文言のリスト
-    （呼び出し側がstderr相当のwarningとして使う）。T5はProfileErrorを送出する。
+    （呼び出し側がstderr相当のwarningとして使う）。T5・T4-LEGACYはProfileErrorを
+    送出する。
+    2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.1・§3.7・D-8）:
+    `declared < EXPECTED`の仮想補完分岐（欠落キーをunknownで補って通す・
+    T4 advisory）を撤去した。役割の行の文法が`model=<定義名>[,…]`へ変わり、
+    旧記法（`model=claude-opus-5`等）が新文法でも「定義名」として文法的に
+    妥当に読めてしまうため、6未満はすべて`T4-LEGACY`で解決失敗にする
+    （FR-15。追随待ちとして通さない）。この分岐がT4 advisoryの唯一の
+    発生源だったので、T4は本案件でコードから完全に消える。
     """
     warnings: list[str] = []
     known_present = set(parsed.meta) | set(parsed.capability)
@@ -453,21 +499,13 @@ def reconcile_schema_version(parsed: ParsedProfile, declared: int) -> list[str]:
     elif declared > EXPECTED_SCHEMA_VERSION:
         warnings.append("T4-PRIME:このマシンのコードが古い可能性があります（版がコードの期待より新しい）")
     else:
-        # declared < EXPECTED_SCHEMA_VERSION（2026-09-05 P3段階4でno_read_paths
-        # 追加に伴いEXPECTED=3へ引き上げたため、schema_version:2のまま
-        # no_read_pathsを持たない既存v2実体がこの分岐へ実際に到達する本番の
-        # 後方互換経路になった）。欠落した固定キーだけをunknownで仮想補完し、
-        # 止めない。
-        missing = sorted(k for k in FIXED_KEYS if k not in known_present)
-        if missing:
-            for k in missing:
-                if k == "excluded_models":
-                    parsed.excluded_models = RoleLine(k, "unknown", {}, 0, "meta-state")
-                elif k in CAPABILITY_KEYS:
-                    parsed.capability[k] = RoleLine(k, "unknown", {}, 0, "capability")
-                elif k in META_KEYS:
-                    parsed.meta.setdefault(k, "unknown")
-            warnings.append("T4:仮想補完しました（欠落キー: " + ",".join(missing) + "）")
+        # declared < EXPECTED_SCHEMA_VERSION（schema_versionの行自体が無い
+        # ケースはvalidate_meta()が先にT4-LEGACYで捕まえるので、ここに来る
+        # のは数値として書かれてはいるが6未満の実体だけ）。
+        raise ProfileError(
+            "T4-LEGACY",
+            f"実体が旧版です（schema_version={declared}・このコードはschema {EXPECTED_SCHEMA_VERSION} のみを受理します）",
+        )
 
     if parsed.extras:
         # T9': 機械側は既知キー部分のみ有効・AI側は必読除外（§4a）。
@@ -589,8 +627,196 @@ def _excluded_pairs(parsed: ParsedProfile) -> set[tuple[str, str]]:
     return pairs
 
 
+# ============================================================
+# モデル定義ファイル（models.conf）（同設計§2.2〜§2.4）
+# ============================================================
+
+
+def model_defs_path() -> str:
+    """モデル定義ファイルの位置を決める唯一の関数。⚠️ このファイルで
+    os.environ を読むのはここだけ（D-2）。⚠️ 相対パスは受理しない——受理すると、
+    同じ変数を見ていても呼び出し元のcwd（bootstrapはHOME・installerはrepo
+    ルート・CLIは任意）ごとに別のファイルを指し、FR-1の「すべてが同じ変数を
+    見る」が「同じ実体を指す」を意味しなくなる（同設計§2.2）。
+    """
+    raw = os.environ.get("AIENV_MODEL_DEFS_FILE") or DEFAULT_MODEL_DEFS_PATH
+    if not (raw.startswith("/") or raw.startswith("~/")):
+        raise ProfileError("T13", "AIENV_MODEL_DEFS_FILEは絶対パスか~/始まりで指定してください")
+    return os.path.expanduser(raw)
+
+
+class ModelDef:
+    """モデル定義ファイルの1ブロック（同設計§2.3）。宣言順を保つため
+    dict[定義名, ModelDef]の値として保持される想定（呼び出し側がdictの
+    挿入順を維持する）。"""
+
+    __slots__ = ("name", "provider", "model", "execution", "effort", "lineno")
+
+    def __init__(self, name: str, lineno: int):
+        self.name = name
+        self.provider: Optional[str] = None
+        self.model: Optional[str] = None
+        self.execution: Optional[str] = None
+        self.effort: Optional[str] = None
+        self.lineno = lineno
+
+
+_MODEL_DEF_BLOCK_RE = re.compile(r"^\[(.*)\]$")
+_MODEL_DEF_ATTR_RE = re.compile(r"^([a-z][a-z0-9_-]*)=(\S+)$")
+
+
+def parse_model_defs(path: str) -> dict[str, ModelDef]:
+    """§2.3の文法規約に従って models.conf を parse する。⚠️ 配役表のパーサ
+    （parse_v2）とは別関数（文法が違うので分岐で混ぜない）。
+    違反はすべて ProfileError(T12) にする（行番号つき）。ファイルが無い・
+    読めない・UTF-8として壊れている場合は ProfileError(T7)。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        raise ProfileError(
+            "T7", f"モデル定義ファイルを読めません（{path}）: {type(e).__name__}"
+        ) from e
+
+    defs: dict[str, ModelDef] = {}
+    current: Optional[ModelDef] = None
+    seen_attrs: set[str] = set()
+
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        stripped = raw.strip()
+        if not stripped:  # rule 1
+            continue
+        if stripped.startswith("#"):  # rule 2
+            continue
+
+        block_m = _MODEL_DEF_BLOCK_RE.match(stripped)
+        if block_m:
+            name = block_m.group(1)
+            if not MODEL_DEF_NAME_RE.match(name):  # rule 4
+                raise ProfileError("T12", f"{lineno}行目: 定義名の形式が不正です")
+            if name in defs:  # rule 7
+                raise ProfileError("T12", f"{lineno}行目: 定義名が重複しています（{name}）")
+            current = ModelDef(name, lineno)
+            defs[name] = current
+            seen_attrs = set()
+            continue
+
+        attr_m = _MODEL_DEF_ATTR_RE.match(stripped)  # rule 3・5（行末コメント・
+        # 空白混じりの値はこの正規表現に一致せず自動的にT12へ落ちる）
+        if not attr_m:
+            raise ProfileError("T12", f"{lineno}行目: 解析できない行です")
+        aname, aval = attr_m.group(1), attr_m.group(2)
+        if current is None:  # rule 6
+            raise ProfileError("T12", f"{lineno}行目: 定義ブロックの外に属性行があります")
+        if aname in seen_attrs:  # rule 8
+            raise ProfileError(
+                "T12", f"{lineno}行目: 属性が重複しています（{current.name}.{aname}）"
+            )
+        seen_attrs.add(aname)
+        if aname not in MODEL_DEF_ATTR_NAMES:
+            raise ProfileError("T12", f"{lineno}行目: 未知の属性名です（{aname}）")
+        setattr(current, aname, aval)
+
+    return defs
+
+
+def validate_model_def(d: ModelDef) -> None:
+    """§2.4の属性検査。1定義（ModelDef）を検査する。違反はProfileError(T12)。
+    ⚠️ 検査は定義ファイル側で行い、行番号は定義ファイルの行番号を出す（D-4）。
+    """
+    if d.provider is None:
+        raise ProfileError("T12", f"{d.lineno}行目: providerがありません（{d.name}）")
+    if d.provider not in PROVIDERS:
+        raise ProfileError("T12", f"{d.lineno}行目: providerが不正です（{d.name}）")
+    if d.model is None:
+        raise ProfileError("T12", f"{d.lineno}行目: modelがありません（{d.name}）")
+
+    pattern = MODEL_PATTERNS[d.provider]
+    if not pattern.match(d.model):
+        raise ProfileError("T12", f"{d.lineno}行目: model形式が不正です（{d.name}）")
+    if d.provider == "bedrock" and d.model.startswith(BEDROCK_DISALLOWED_MODEL_PREFIXES):
+        raise ProfileError("T12", f"{d.lineno}行目: modelが別名ではありません（{d.name}）")
+
+    execution = d.execution or "subagent"
+    if execution not in EXECUTIONS:
+        raise ProfileError("T12", f"{d.lineno}行目: executionが不正です（{d.name}）")
+    if d.provider == "external":
+        if d.execution is None:
+            raise ProfileError(
+                "T12", f"{d.lineno}行目: providerがexternalなのにexecutionが未指定です（{d.name}）"
+            )
+    else:
+        if execution != "subagent":
+            raise ProfileError(
+                "T12", f"{d.lineno}行目: このproviderでこのexecutionは指定できません（{d.name}）"
+            )
+    d.execution = execution  # 既定値を確定させる
+
+    if d.effort is not None:
+        # execution=external-cliならCodex方言・それ以外はClaude方言
+        # （§2.4「同時にeffortの許可集合を…execution=external-cliならCodex方言へ
+        # 広げる」）。
+        allowed_effort = EFFORT_CODEX if execution == "external-cli" else EFFORT_CLAUDE
+        if d.effort not in allowed_effort:
+            raise ProfileError("T12", f"{d.lineno}行目: effortが不正です（{d.name}）")
+
+
+def validate_model_defs(defs: dict[str, ModelDef]) -> None:
+    for d in defs.values():
+        validate_model_def(d)
+
+
+def load_model_defs(path: str) -> dict[str, ModelDef]:
+    """読取→parse→validateをまとめる。失敗はProfileError("T7"/"T12", …)。"""
+    defs = parse_model_defs(path)
+    validate_model_defs(defs)
+    return defs
+
+
+def agent_declared_model(role: str, agents_dir: Optional[str]) -> Optional[str]:
+    """claude/agents/<role>.md の frontmatter の model: を返す。ファイルが無い・
+    model: 行が無い・agents_dirがNoneならNone（＝突合しない）。
+    突合は文字列の完全一致で行う（前後の空白と引用符だけ除去する。⚠️ 別名へ
+    翻訳しない・[1m]を正規化しない＝FR-12）。
+    """
+    if not agents_dir:
+        return None
+    path = os.path.join(agents_dir, f"{role}.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    end_idx = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end_idx = i
+            break
+    if end_idx is None:
+        return None
+    for raw in lines[1:end_idx]:
+        m = re.match(r"^model:\s*(.*)$", raw.strip())
+        if m:
+            return m.group(1).strip().strip("\"'")
+    return None
+
+
+# ============================================================
+# role/fallback行の候補解決（同設計§3.2 評価順①〜⑤）
+# ============================================================
+
+
 def validate_role_line_format(line: RoleLine) -> None:
-    """V8-a（role/fallback側）・V9-b・V9-d①②。configured/unavailableにのみ適用。"""
+    """②役割の行の文法検査（V7・V8-a）。2026-09-08 モデル定義ファイルと候補
+    指定対応: role/fallback行の属性は`model`（定義名のカンマ列挙）だけになった
+    （FR-8）。provider/execution/effortの形式検査は定義ファイル側
+    （validate_model_def）へ移った。ここで見るのは状態enum・属性の有無・
+    候補名の形式（MODEL_DEF_NAME_RE）・候補名の重複だけ。
+    """
     if line.state not in ROLE_STATES:
         raise _fail("V7", f"role.{line.name}の状態が不正です（{line.lineno}行目）")
 
@@ -603,87 +829,92 @@ def validate_role_line_format(line: RoleLine) -> None:
         return
 
     # configured / unavailable
-    if "provider" not in line.attrs or "model" not in line.attrs:
-        raise _fail("V8-a", f"role.{line.name}にprovider/modelがありません（{line.lineno}行目）")
-    provider = line.attrs["provider"]
-    model = line.attrs["model"]
-    execution = line.attrs.get("execution", "subagent")
-    effort = line.attrs.get("effort")
-
-    if provider not in PROVIDERS:
-        raise _fail("V9-b", f"role.{line.name}のproviderが不正です（{line.lineno}行目）")
-    if execution not in EXECUTIONS:
-        raise _fail("V9-b", f"role.{line.name}のexecutionが不正です（{line.lineno}行目）")
-
-    if provider == "external":
-        if "execution" not in line.attrs:
-            raise _fail(
-                "V9-b", f"role.{line.name}はexternalなのにexecutionが未指定です（{line.lineno}行目）"
-            )
-    else:
-        if execution != "subagent":
-            raise _fail(
-                "V9-b",
-                f"role.{line.name}はこのproviderでこのexecutionを指定できません（{line.lineno}行目）",
-            )
-
-    pattern = MODEL_PATTERNS[provider]
-    if not pattern.match(model):
-        raise _fail("V9-b", f"role.{line.name}のmodel形式が不正です（{line.lineno}行目）")
-    if provider == "bedrock" and model.startswith(BEDROCK_DISALLOWED_MODEL_PREFIXES):
-        raise _fail("V9-b", f"role.{line.name}のmodelが別名ではありません（{line.lineno}行目）")
-
-    if effort is not None:
-        if provider == "external":
-            if (provider, execution, model) == ("external", "external-cli", "codex-review-default"):
-                allowed_effort = EFFORT_CODEX
-            else:
-                raise _fail(
-                    "V9-b",
-                    f"role.{line.name}のexternalハンドラはeffortを書けません（{line.lineno}行目）",
-                )
-        else:
-            allowed_effort = EFFORT_CLAUDE
-        if effort not in allowed_effort:
-            raise _fail("V9-b", f"role.{line.name}のeffortが不正です（{line.lineno}行目）")
-
-    # V9-d①②（構造的なハンドラ写像違反。単独で職種を縮退させるのではなく
-    # 実体全体をMINIMALへ倒す＝exit契約でV9-d①②はfail区分）。
-    # ⚠️ V9-d②は「configuredにできない」という規定であり、unavailable（＝
-    # 使いたいが今は動かせないという意図の記録）までは塞がない
-    # （設計§5「unknownかunavailableにせよと促す」の逃げ道を残す）。
-    if execution == "external-api" and line.state == "configured":
+    if "model" not in line.attrs:
+        raise _fail("V8-a", f"role.{line.name}にmodelがありません（{line.lineno}行目）")
+    candidates = line.candidates
+    if not candidates or any(c == "" for c in candidates):
+        raise _fail("V8-a", f"role.{line.name}のmodelに空の候補があります（{line.lineno}行目）")
+    if len(candidates) != len(set(candidates)):
         raise _fail(
-            "V9-d",
-            f"role.{line.name}のexecution=external-apiはハンドラ未実装です（{line.lineno}行目）",
+            "V8-a", f"role.{line.name}のmodelに同じ定義名が重複しています（{line.lineno}行目）"
         )
-    if execution != "subagent" and line.state == "configured":
-        if (provider, execution, model) not in IMPLEMENTED_HANDLERS:
+    for c in candidates:
+        # ⚠️ 形式に一致しない文字列はエコーしない（値・任意文字列を理由に
+        # 含めない原則の例外にしない＝§3.2「2段構えを崩さないこと」）。
+        if not MODEL_DEF_NAME_RE.match(c):
+            raise _fail("V8-a", f"role.{line.name}の候補名の形式が不正です（{line.lineno}行目）")
+
+
+def resolve_role_candidates(
+    line: RoleLine, model_defs: dict[str, ModelDef], excluded: set[tuple[str, str]]
+) -> list[ModelDef]:
+    """③候補名の解決（V17）・④除外判定（V16）・⑤ハンドラ未実装（V9-d②）。
+    lineはvalidate_role_line_format済み（state in configured/unavailable・
+    candidatesが非空で形式検査済み）である前提。戻り値は記述順の解決済み
+    ModelDef一覧。違反はProfileError(T8)を送出する（その行ごとエラー）。
+    """
+    prefix = "fallback." if line.kind == "fallback" else "role."
+    resolved: list[ModelDef] = []
+    for cand in line.candidates:
+        d = model_defs.get(cand)
+        if d is None:
             raise _fail(
-                "V9-d",
-                f"role.{line.name}の(provider,execution,model)組がハンドラ未実装です（{line.lineno}行目）",
+                "V17",
+                f"{prefix}{line.name} が未定義の定義名を参照しています（{cand}・{line.lineno}行目）",
             )
+        resolved.append(d)
+
+    for d in resolved:
+        pair = (d.provider, _normalize_model_for_exclusion(d.model))
+        if pair in excluded:
+            raise _fail("V16", f"{prefix}{line.name}が禁止モデルを使っています（{line.lineno}行目）")
+
+    if line.state == "configured":
+        # V9-d①②（構造的なハンドラ写像違反。単独で職種を縮退させるのではなく
+        # 実体全体をMINIMALへ倒す＝exit契約でV9-d①②はfail区分）。⚠️ V9-d②は
+        # 「configuredにできない」という規定であり、unavailable（＝使いたいが
+        # 今は動かせないという意図の記録）までは塞がない。
+        for d in resolved:
+            execution = d.execution or "subagent"
+            if execution == "external-api":
+                raise _fail(
+                    "V9-d",
+                    f"{prefix}{line.name}のexecution=external-apiはハンドラ未実装です（{line.lineno}行目）",
+                )
+            if execution != "subagent" and (d.provider, execution) not in IMPLEMENTED_HANDLERS:
+                raise _fail(
+                    "V9-d",
+                    f"{prefix}{line.name}の(provider,execution)組がハンドラ未実装です（{line.lineno}行目）",
+                )
+
+    return resolved
 
 
-def validate_roles_and_fallbacks(parsed: ParsedProfile) -> None:
+def resolve_roles_and_fallbacks(
+    parsed: ParsedProfile, model_defs: dict[str, ModelDef]
+) -> dict[tuple[str, str], list[ModelDef]]:
+    """role.表・fallback.表のすべての行についてV7/V8-a（②）を検査し、
+    configured/unavailable状態の行は候補解決・除外判定・ハンドラ検査
+    （③④⑤）まで行う。戻り値: {(kind, name): [解決済みModelDef, ...]}
+    （configured/unavailableの行だけがキーを持つ。記述順を保つ）。
+    """
     excluded = _excluded_pairs(parsed)
+    resolved: dict[tuple[str, str], list[ModelDef]] = {}
 
     for name, line in parsed.roles.items():
         validate_role_line_format(line)
         if line.state in ("configured", "unavailable"):
-            pair = (line.attrs["provider"], _normalize_model_for_exclusion(line.attrs["model"]))
-            if pair in excluded:
-                raise _fail("V16", f"role.{name}が禁止モデルを使っています（{line.lineno}行目）")
+            resolved[("role", name)] = resolve_role_candidates(line, model_defs, excluded)
 
     for name, line in parsed.fallbacks.items():
         validate_role_line_format(line)
         if line.state in ("configured", "unavailable"):
-            pair = (line.attrs["provider"], _normalize_model_for_exclusion(line.attrs["model"]))
-            if pair in excluded:
-                raise _fail("V16", f"fallback.{name}が禁止モデルを使っています（{line.lineno}行目）")
+            resolved[("fallback", name)] = resolve_role_candidates(line, model_defs, excluded)
         # V6: fallbackが指す職種はrole.表にも存在すること。
         if name not in parsed.roles:
             raise _fail("V6", f"fallback.{name}に対応するrole.{name}がありません（{line.lineno}行目）")
+
+    return resolved
 
 
 def role_and_core_manifest_diff(parsed: ParsedProfile, agents_dir: Optional[str]) -> tuple[list[str], list[str]]:
@@ -837,19 +1068,46 @@ def check_candidate(
     """1組の(provider, model, effort)を検査する。違反はCandidateFailを送出する。
     role_nameが指定されたときだけV1-b/V9-d③/V12まで評価する
     （契約書§5の評価順どおり）。
+    2026-09-08 モデル定義ファイルと候補指定対応: role/fallback行がもう
+    provider/execution/effortを持たない（validate_role_line_formatの意味が
+    変わった）ため、旧`fake = RoleLine(...)`経由での検査をやめ、
+    validate_model_def()と同じ規則をここへ複製する（新しい判定規則は
+    作らない・§2.4の規則をそのまま使う）。
     """
     execution = execution or "subagent"
-    fake = RoleLine(role_name or "candidate", "configured",
-                     {"provider": provider, "model": model, "execution": execution},
-                     0, "role")
-    if effort is not None:
-        fake.attrs["effort"] = effort
+    label = role_name or "candidate"
 
-    try:
-        validate_role_line_format(fake)
-    except ProfileError as e:
-        code = e.reason.split(":", 1)[0].strip()
-        raise CandidateFail(code, e.reason) from e
+    if provider not in PROVIDERS:
+        raise CandidateFail("V9-b", f"role.{label}のproviderが不正です")
+    if execution not in EXECUTIONS:
+        raise CandidateFail("V9-b", f"role.{label}のexecutionが不正です")
+    if provider != "external" and execution != "subagent":
+        raise CandidateFail(
+            "V9-b", f"role.{label}はこのproviderでこのexecutionを指定できません"
+        )
+
+    pattern = MODEL_PATTERNS[provider]
+    if not pattern.match(model):
+        raise CandidateFail("V9-b", f"role.{label}のmodel形式が不正です")
+    if provider == "bedrock" and model.startswith(BEDROCK_DISALLOWED_MODEL_PREFIXES):
+        raise CandidateFail("V9-b", f"role.{label}のmodelが別名ではありません")
+
+    if effort is not None:
+        if provider == "external":
+            if execution == "external-cli":
+                allowed_effort = EFFORT_CODEX
+            else:
+                raise CandidateFail("V9-b", f"role.{label}のexternalハンドラはeffortを書けません")
+        else:
+            allowed_effort = EFFORT_CLAUDE
+        if effort not in allowed_effort:
+            raise CandidateFail("V9-b", f"role.{label}のeffortが不正です")
+
+    # V9-d①②（構造的なハンドラ写像違反。fakeの状態は常にconfigured相当）。
+    if execution == "external-api":
+        raise CandidateFail("V9-d", f"role.{label}のexecution=external-apiはハンドラ未実装です")
+    if execution != "subagent" and (provider, execution) not in IMPLEMENTED_HANDLERS:
+        raise CandidateFail("V9-d", f"role.{label}の(provider,execution)組がハンドラ未実装です")
 
     if for_leader:
         # 契約書§5の評価順どおりV9-eをleader専用「provider≠external」規則より
@@ -892,10 +1150,28 @@ class Candidacy:
         self.unknown_note: Optional[str] = None  # §3.7 判定不能（leader以外は通す）
 
 
+class Candidate:
+    """1候補（配役表の1行×解決済みModelDef 1つ）を表す軽量ビュー。
+    2026-09-08 モデル定義ファイルと候補指定対応: role/fallback行が複数候補を
+    持てるようになったため、_evaluate_single_candidate()等の既存関数
+    （RoleLine.attrsの{provider,model,execution,[effort]}形状を期待する）を
+    そのまま再利用できるよう、1候補ぶんだけこの形へ写す。
+    """
+
+    __slots__ = ("name", "def_name", "attrs")
+
+    def __init__(self, role_name: str, d: "ModelDef"):
+        self.name = role_name  # role_definition_exists()が引く職種名
+        self.def_name = d.name
+        self.attrs = {"provider": d.provider, "model": d.model, "execution": d.execution}
+        if d.effort is not None:
+            self.attrs["effort"] = d.effort
+
+
 def _evaluate_single_candidate(
-    line: RoleLine, agents_dir: Optional[str], bedrock_env: Optional[str], is_leader: bool
+    line, agents_dir: Optional[str], bedrock_env: Optional[str], is_leader: bool
 ) -> tuple[bool, Optional[str], Optional[str]]:
-    """1本の候補行（provider/model確定済み・configured前提）を§3.6の3条件で評価する。
+    """1本の候補（Candidate。provider/model確定済み）を§3.6の3条件で評価する。
     戻り値: (使用可か, 縮退理由の条件番号(最初に確定したもの), 判定不能メモ)
     優先順: V1-b -> V9-d3(Bedrock有効性) -> V12(ピン留め)
     """
@@ -933,35 +1209,54 @@ _REASON_PRIORITY = {"V1-b": 0, "V9-d": 1, "V12": 2}
 
 
 def evaluate_worker_candidate(
-    name: str, roles: dict, fallbacks: dict, agents_dir, bedrock_env
+    name: str,
+    roles: dict,
+    fallbacks: dict,
+    resolved: dict,
+    agents_dir,
+    bedrock_env,
 ) -> Candidacy:
+    """§3.3(a)。2026-09-08 モデル定義ファイルと候補指定対応: 1行が複数候補を
+    持てるようになったため「1行1候補」から「1行n候補」へ広げる。役割の行
+    （configured）の候補を記述順に評価し、1つでも使用可なら空席でない。
+    全候補が使用不可のときだけfallback行（configured）の候補を同じ規則で
+    評価する。⚠️ ここでの「記述順に評価」は選択ではない（返すのは真偽値
+    だけ。選択を行うのはresolve-candidateだけ＝D-6）。resolvedは
+    resolve_roles_and_fallbacks()の戻り値（{(kind,name): [ModelDef,...]}）。
+    """
     result = Candidacy()
     primary = roles.get(name)
     fb = fallbacks.get(name)
-    primary_reason: Optional[str] = None
-    fallback_reason: Optional[str] = None
+    reasons: list[str] = []
 
     if primary is not None and primary.state == "configured":
-        ok, reason, note = _evaluate_single_candidate(primary, agents_dir, bedrock_env, False)
-        if ok:
-            result.usable = primary
-            result.unknown_note = note
-            return result
-        primary_reason = reason
+        for d in resolved.get(("role", name), []):
+            ok, reason, note = _evaluate_single_candidate(
+                Candidate(name, d), agents_dir, bedrock_env, False
+            )
+            if ok:
+                result.usable = primary
+                result.unknown_note = note
+                return result
+            if reason is not None:
+                reasons.append(reason)
     # ⚠️ primary.state == "unavailable" は§3.6のとおり評価しない
-    # （primary_reasonはNoneのまま＝「意図的な不使用」であって縮退理由ではない）。
+    # （「意図的な不使用」であって縮退理由ではない）。
 
     if fb is not None and fb.state == "configured":
-        ok, reason, note = _evaluate_single_candidate(fb, agents_dir, bedrock_env, False)
-        if ok:
-            result.usable = fb
-            result.used_fallback = True
-            result.unknown_note = note
-            return result
-        fallback_reason = reason
+        for d in resolved.get(("fallback", name), []):
+            ok, reason, note = _evaluate_single_candidate(
+                Candidate(name, d), agents_dir, bedrock_env, False
+            )
+            if ok:
+                result.usable = fb
+                result.used_fallback = True
+                result.unknown_note = note
+                return result
+            if reason is not None:
+                reasons.append(reason)
 
     result.vacant = True
-    reasons = [r for r in (primary_reason, fallback_reason) if r is not None]
     if reasons:
         reasons.sort(key=lambda r: _REASON_PRIORITY.get(r, 99))
         result.vacant_reason = reasons[0]
@@ -982,59 +1277,70 @@ _LEADER_REASON_PRIORITY = {
 
 
 def resolve_leader_candidate(
-    parsed: ParsedProfile, agents_dir, bedrock_env
-) -> tuple[Optional[RoleLine], bool, Optional[str]]:
-    """§3.5-L。戻り値: (実効リーダー候補 or None, fallbackを採用したか,
-    失敗コード or None)。失敗コードは契約書§4のresolve-leader用コード体系
-    （LEADER_UNCONFIGURED/LEADER_UNAVAILABLE_NO_FALLBACK/
-    LEADER_CANDIDATE_INVALID:<V番号>）に合わせる。
+    parsed: ParsedProfile, resolved: dict, agents_dir, bedrock_env
+) -> tuple[Optional[RoleLine], Optional["ModelDef"], bool, Optional[str]]:
+    """§3.5-L・FR-16。2026-09-08 モデル定義ファイルと候補指定対応:
+    リーダー行の<u>先頭の候補だけ</u>を解決・評価する（settings.jsonが値を
+    1つしか持てないため。⚠️ 2件目以降はsettings.jsonの値に影響しない——
+    優先度の意味づけではない＝RV-2）。fallback.leaderの候補が2件以上なら
+    D-7と同じ規則でLEADER_FALLBACK_AMBIGUOUSにする。
+    戻り値: (実効リーダー行(RoleLine) or None, 実効ModelDef or None,
+    fallbackを採用したか, 失敗コード or None)。
     """
     leader = parsed.roles.get("leader")
     if leader is None or leader.state not in ("configured", "unavailable"):
-        return None, False, "LEADER_UNCONFIGURED"
+        return None, None, False, "LEADER_UNCONFIGURED"
 
     fb = parsed.fallbacks.get("leader")
 
-    def _leader_extra_checks(line: RoleLine) -> Optional[str]:
+    def _leader_extra_checks(d: "ModelDef") -> Optional[str]:
         # 契約書§5の評価順どおりV9-eをprovider≠external規則より先に判定する
         # （check_candidate()と同じ順序に揃える。Codexレビュー指摘・Major対応）。
-        effort = line.attrs.get("effort")
+        effort = d.effort
         if effort is not None and effort not in EFFORT_SETTINGS:
             return "V9-e"
-        if line.attrs.get("provider") == "external":
+        if d.provider == "external":
             return "LEADER_PROVIDER_EXTERNAL"
         return None
 
-    def _try(line: RoleLine) -> tuple[bool, Optional[str]]:
-        ok, reason, _note = _evaluate_single_candidate(line, agents_dir, bedrock_env, True)
+    def _try_head(role_name: str, candidates: list) -> tuple[Optional["ModelDef"], Optional[str]]:
+        if not candidates:
+            return None, "V1-b"  # 防御的（V8-aが非空を既に保証している）
+        head = candidates[0]
+        ok, reason, _note = _evaluate_single_candidate(
+            Candidate(role_name, head), agents_dir, bedrock_env, True
+        )
         if not ok:
-            return False, reason
-        extra = _leader_extra_checks(line)
+            return None, reason
+        extra = _leader_extra_checks(head)
         if extra is not None:
-            return False, extra
-        return True, None
+            return None, extra
+        return head, None
 
     primary_reason: Optional[str] = None
     if leader.state == "configured":
-        ok, reason = _try(leader)
-        if ok:
-            return leader, False, None
+        d, reason = _try_head("leader", resolved.get(("role", "leader"), []))
+        if d is not None:
+            return leader, d, False, None
         primary_reason = reason
     # leader.state == "unavailable" は§3.6のとおり評価しない（primary_reasonは
     # Noneのまま＝意図的な不使用であって縮退理由ではない）。
 
     fallback_reason: Optional[str] = None
     if fb is not None and fb.state == "configured":
-        ok, reason = _try(fb)
-        if ok:
-            return fb, True, None
+        fb_candidates = resolved.get(("fallback", "leader"), [])
+        if len(fb_candidates) >= 2:
+            return None, None, False, "LEADER_FALLBACK_AMBIGUOUS"
+        d, reason = _try_head("leader", fb_candidates)
+        if d is not None:
+            return fb, d, True, None
         fallback_reason = reason
 
     reasons = [r for r in (primary_reason, fallback_reason) if r is not None]
     if reasons:
         reasons.sort(key=lambda r: _LEADER_REASON_PRIORITY.get(r, 99))
-        return None, False, f"LEADER_CANDIDATE_INVALID:{reasons[0]}"
-    return None, False, "LEADER_UNAVAILABLE_NO_FALLBACK"
+        return None, None, False, f"LEADER_CANDIDATE_INVALID:{reasons[0]}"
+    return None, None, False, "LEADER_UNAVAILABLE_NO_FALLBACK"
 
 
 KNOWN_NO_XHIGH_ANTHROPIC = frozenset({"claude-opus-4.6", "claude-sonnet-4.6"})
@@ -1105,6 +1411,7 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
         lineno, key = forbidden_hits[0]
         return f"MINIMAL\tT11\t{lineno}行目: 禁止キー名です（{key}）", 1
     try:
+        gate_schema_version(path)
         parsed = parse_v2(path)
         declared = validate_meta(parsed)
         warnings = reconcile_schema_version(parsed, declared)
@@ -1114,16 +1421,19 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
                 "T2-MINIMAL", "未記入のままのキーがあります: " + ",".join(sorted(sentinel_hit))
             )
         validate_capability_keys(parsed)
-        validate_roles_and_fallbacks(parsed)
+        # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.2①・D-2）:
+        # 定義ファイルの読取・検証は5口すべてがmodel_defs_path()経由で行う。
+        model_defs = load_model_defs(model_defs_path())
+        resolved = resolve_roles_and_fallbacks(parsed, model_defs)
     except ProfileError as e:
         return f"MINIMAL\t{e.code}\t{e.reason}", 1
 
     # V1-a advisory
     only_in_profile, only_in_manifest = role_and_core_manifest_diff(parsed, agents_dir)
 
-    # §3.5-L リーダー確定
-    leader_line, leader_used_fallback, leader_fail_code = resolve_leader_candidate(
-        parsed, agents_dir, bedrock_env
+    # §3.5-L リーダー確定（先頭候補のみ・FR-16）
+    leader_line, leader_def, leader_used_fallback, leader_fail_code = resolve_leader_candidate(
+        parsed, resolved, agents_dir, bedrock_env
     )
     if leader_line is None:
         return f"MINIMAL\tT8\tV4: {leader_fail_code}", 1
@@ -1150,7 +1460,9 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
         if line.state == "unknown":
             vacant_unknown_roles.append(name)
             continue
-        cand = evaluate_worker_candidate(name, parsed.roles, parsed.fallbacks, agents_dir, bedrock_env)
+        cand = evaluate_worker_candidate(
+            name, parsed.roles, parsed.fallbacks, resolved, agents_dir, bedrock_env
+        )
         if cand.usable is not None:
             if cand.used_fallback:
                 fallback_roles.append(name)
@@ -1174,11 +1486,26 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
     for w in warnings:
         advisory_codes.append(w.split(":", 1)[0])
 
-    for line in list(parsed.roles.values()) + list(parsed.fallbacks.values()):
-        if line.state in ("configured", "unavailable"):
-            adv = model_effort_advisory(
-                line.attrs.get("provider", ""), line.attrs.get("model", ""), line.attrs.get("effort")
-            )
+    # D-9・FR-12: 役割の行とfallback行の全候補（configured/unavailable）を
+    # claude/agents/<職種>.md のmodel:と突合する。⚠️ leaderは対象外
+    # （ROLE_EXEMPT_FROM_DEFINITION_CHECK）。agent_declared_model()がNoneを
+    # 返す職種（判定材料が無い）も対象外。
+    for (_kind, name), defs_list in resolved.items():
+        if name in ROLE_EXEMPT_FROM_DEFINITION_CHECK:
+            continue
+        declared_model = agent_declared_model(name, agents_dir)
+        if declared_model is None:
+            continue
+        for d in defs_list:
+            if d.provider != "anthropic-api" or d.execution != "subagent":
+                continue
+            actual = (d.model or "").strip().strip("\"'")
+            if actual != declared_model:
+                advisory_codes.append(f"MODEL_MISMATCH:{name}:{d.name}")
+
+    for defs_list in resolved.values():
+        for d in defs_list:
+            adv = model_effort_advisory(d.provider, d.model, d.effort)
             if adv:
                 advisory_codes.append(adv)
 
@@ -1203,40 +1530,44 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
 
 def _load_and_validate_v2_self_contained(
     path: str,
-) -> tuple[Optional[ParsedProfile], Optional[int], Optional[tuple[str, str]]]:
-    """`resolve-leader`・`list-roles` が共有する自己完結ロード処理
-    （存在確認・symlink拒否・実読取・preflight(V15)・分類・parse・validate）。
-    戻り値: 成功時 (parsed, declared_version, None) / 失敗時 (None, None, (コード, 理由))。
+) -> tuple[
+    Optional[ParsedProfile],
+    Optional[dict],
+    Optional[dict],
+    Optional[int],
+    Optional[tuple[str, str]],
+]:
+    """`resolve-leader`・`list-roles`・`resolve-candidate` が共有する自己完結
+    ロード処理（存在確認・symlink拒否・実読取・preflight(V15)・parse・
+    validate・モデル定義ファイルの読取検証・候補解決）。
+    2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）:
+    v1/mixed分類（旧分類関数の呼び出し）と、それに伴う2種の早期returnを撤去した——schema 6のコードはv1/版なしの実体も含めて6未満を
+    一律T4-LEGACYで解決失敗にするため、分類そのものが不要になった
+    （no-backward-compat）。
+    戻り値: 成功時 (parsed, model_defs, resolved, declared_version, None) /
+    失敗時 (None, None, None, None, (コード, 理由))。
     判定式を2箇所に増やさない（U-5・A-0-3と同じ考え方の横展開）。
     """
     if os.path.islink(path):
-        return None, None, ("PROFILE_UNREADABLE", "実体がsymlinkです")
+        return None, None, None, None, ("PROFILE_UNREADABLE", "実体がsymlinkです")
     if not os.path.isfile(path):
-        return None, None, ("PROFILE_NOT_FOUND", "実体ファイルが存在しません")
+        return None, None, None, None, ("PROFILE_NOT_FOUND", "実体ファイルが存在しません")
     # 実際に読めるかをここで確定させる（Codexレビュー指摘・Major対応:
-    # isfile()はパーミッション不足を検出しない。preflight/classifyは内部で
-    # OSErrorをfail-soft/フォールバックとして飲み込む契約のため、ここで
-    # 先に読めることを確認しないと権限不足がPROFILE_LEGACY_V1等へ誤分類される）。
+    # isfile()はパーミッション不足を検出しない）。
     try:
         with open(path, encoding="utf-8") as f:
             f.read()  # Codex二次レビュー指摘・Major対応: open()だけでは実際の
             # デコードは行われない。不正なUTF-8はread()まで進めないと検出
-            # できず、後続のpreflight/classifyで未処理のUnicodeDecodeError
-            # （OSErrorの派生ではない）が漏れる経路になっていた。
+            # できない。
     except (OSError, UnicodeDecodeError):
-        return None, None, ("PROFILE_UNREADABLE", "実体ファイルを読めません")
+        return None, None, None, None, ("PROFILE_UNREADABLE", "実体ファイルを読めません")
 
     forbidden_hits = preflight_forbidden_keys(path)
     if forbidden_hits:
-        return None, None, ("PROFILE_INVALID:T11", "禁止キー名を検出しました")
-
-    classification = classify_profile(path)
-    if classification == "v1":
-        return None, None, ("PROFILE_LEGACY_V1", "v1形式です。v2へ移行してください")
-    if classification == "mixed":
-        return None, None, ("PROFILE_MIXED", "schema_versionが無いのに職種行があります")
+        return None, None, None, None, ("PROFILE_INVALID:T11", "禁止キー名を検出しました")
 
     try:
+        gate_schema_version(path)
         parsed = parse_v2(path)
         declared = validate_meta(parsed)
         reconcile_schema_version(parsed, declared)
@@ -1244,33 +1575,33 @@ def _load_and_validate_v2_self_contained(
         if sentinel_hit:
             raise ProfileError("T2-MINIMAL", "未記入のキーがあります")
         validate_capability_keys(parsed)
-        validate_roles_and_fallbacks(parsed)
+        model_defs = load_model_defs(model_defs_path())
+        resolved = resolve_roles_and_fallbacks(parsed, model_defs)
     except ProfileError as e:
-        return None, None, (f"PROFILE_INVALID:{e.code}", e.reason)
+        return None, None, None, None, (f"PROFILE_INVALID:{e.code}", e.reason)
 
-    return parsed, declared, None
+    return parsed, model_defs, resolved, declared, None
 
 
 def do_resolve_leader(path: str, bedrock_env: Optional[str], agents_dir: Optional[str]) -> tuple[Optional[dict], Optional[tuple[str, str]]]:
     """戻り値: (成功時のJSON辞書 or None, (機械可読コード, 短い理由) or None)。
-    契約書§4のとおり自己完結（存在確認・symlink拒否・preflight・分類まで
-    このコマンド自身が行う。呼び出し元＝install-main.shの`--print-leader-
-    runtime`が`classify`を別途呼ばずに使える単発の呼び出し口にするため）。
+    契約書§4のとおり自己完結（存在確認・symlink拒否・preflight・parse・
+    validateまでこのコマンド自身が行う）。出力の形（JSONのキー集合）は
+    変えない（`model`・`effort`。effort未指定ならキーごと出さない＝AC-9）。
     """
-    parsed, _declared, err = _load_and_validate_v2_self_contained(path)
+    parsed, _model_defs, resolved, _declared, err = _load_and_validate_v2_self_contained(path)
     if err is not None:
         return None, err
 
-    leader_line, _leader_used_fallback, leader_fail_code = resolve_leader_candidate(
-        parsed, agents_dir, bedrock_env
+    leader_line, leader_def, _used_fallback, leader_fail_code = resolve_leader_candidate(
+        parsed, resolved, agents_dir, bedrock_env
     )
-    if leader_line is None:
+    if leader_def is None:
         return None, (leader_fail_code or "LEADER_UNCONFIGURED", "リーダー配役を確定できません")
 
-    result = {"model": leader_line.attrs["model"]}
-    effort = leader_line.attrs.get("effort")
-    if effort is not None:
-        result["effort"] = effort
+    result = {"model": leader_def.model}
+    if leader_def.effort is not None:
+        result["effort"] = leader_def.effort
     return result, None
 
 
@@ -1281,10 +1612,12 @@ def do_list_roles(path: str) -> tuple[Optional[list[tuple]], Optional[tuple[str,
     2026-09-01でこの例外を承認）。ピン留めの実値（bedrock.env側）は一切
     扱わない——role/fallback行にはBedrockの別名（opus/sonnet等）しか
     書けないため、値を再掲してもピン実値の秘匿設計とは矛盾しない。
+    2026-09-08 モデル定義ファイルと候補指定対応（FR-17）: 1候補1行・8列
+    （kind,name,state,定義名,provider,model,execution,effort）。⚠️ 突合は
+    しない（一致状態もadvisoryも持たない＝resolveだけが行う。FR-12）。
     戻り値: (成功時のタプル一覧 or None, (機械可読コード, 短い理由) or None)。
-    各タプル: (kind, name, state, provider, model, execution, effort)
     """
-    parsed, _declared, err = _load_and_validate_v2_self_contained(path)
+    parsed, _model_defs, resolved, _declared, err = _load_and_validate_v2_self_contained(path)
     if err is not None:
         return None, err
 
@@ -1293,20 +1626,105 @@ def do_list_roles(path: str) -> tuple[Optional[list[tuple]], Optional[tuple[str,
         for name in sorted(table):
             line = table[name]
             if line.state in ("not_adopted", "unknown"):
-                rows.append((kind, name, line.state, "", "", "", ""))
+                rows.append((kind, name, line.state, "", "", "", "", ""))
             else:
-                rows.append(
-                    (
-                        kind,
-                        name,
-                        line.state,
-                        line.attrs.get("provider", ""),
-                        line.attrs.get("model", ""),
-                        line.attrs.get("execution", "subagent"),
-                        line.attrs.get("effort", ""),
+                for d in resolved.get((kind, name), []):
+                    rows.append(
+                        (
+                            kind,
+                            name,
+                            line.state,
+                            d.name,
+                            d.provider,
+                            d.model,
+                            d.execution,
+                            d.effort or "",
+                        )
                     )
-                )
     return rows, None
+
+
+def do_resolve_candidate(
+    path: str, role: str, model_def_name: Optional[str], bedrock_env: Optional[str], agents_dir: Optional[str]
+) -> tuple[Optional["ModelDef"], Optional[tuple[str, str]]]:
+    """`resolve-candidate`本体（新設・候補指定の口＝C。同設計§3.6）。
+    戻り値: (実効ModelDef or None, (機械可読コード, 短い理由) or None)。
+    ⚠️ `--model-def`が受理するのは`role.<職種>`の候補だけ（D-5）。fallbackの
+    定義名を直接渡した場合を含め、候補外はCANDIDATE_NOT_IN_LISTにする
+    （FR-10の迂回を塞ぐ）。
+    2026-09-08 Codexレビュー指摘・MAJOR対応（1巡目）:
+    - AC-11「定義名の省略は無条件でexit 2」を満たすため、`model_def_name`の
+      省略判定をプロファイル読取・検証より前に行う（壊れた/不在の配役表・
+      定義ファイルでも省略時は常にCANDIDATE_UNSPECIFIED）。
+    - `role.<職種>`が`unavailable`（本人が「使いたいが今は動かせない」と
+      申告した状態）でも、指定した定義名がその行の候補に実在するなら
+      「候補にある」と判定する（FR-7）。ただしunavailableな本命は
+      §3.6のとおり評価せず（意図的な不使用）、直ちにfallbackへ進む
+      （FR-10）。fallbackも使用不可なら`CANDIDATE_UNUSABLE:ROLE_UNAVAILABLE`
+      という安定コードで確定する（本命側にV-codeが存在しないため新設）。
+    """
+    if model_def_name is None:
+        return None, ("CANDIDATE_UNSPECIFIED", "定義名を指定してください")
+
+    parsed, _model_defs, resolved, _declared, err = _load_and_validate_v2_self_contained(path)
+    if err is not None:
+        return None, err
+
+    role_line = parsed.roles.get(role)
+    role_candidates = resolved.get(("role", role), [])
+    if (
+        role_line is None
+        or role_line.state not in ("configured", "unavailable")
+        or model_def_name not in [d.name for d in role_candidates]
+    ):
+        return None, ("CANDIDATE_NOT_IN_LIST", f"{model_def_name}はrole.{role}の候補にありません")
+
+    def _mismatch(d: "ModelDef") -> bool:
+        # D-14: 突合が一致しないanthropic-api/subagentの定義は返さない。
+        if d.provider != "anthropic-api" or d.execution != "subagent":
+            return False
+        if role in ROLE_EXEMPT_FROM_DEFINITION_CHECK:
+            return False
+        declared_model = agent_declared_model(role, agents_dir)
+        if declared_model is None:
+            return False
+        return (d.model or "").strip().strip("\"'") != declared_model
+
+    selected = next(d for d in role_candidates if d.name == model_def_name)
+    if role_line.state == "configured":
+        ok, reason, _note = _evaluate_single_candidate(
+            Candidate(role, selected), agents_dir, bedrock_env, False
+        )
+        if ok:
+            if _mismatch(selected):
+                return None, ("CANDIDATE_UNUSABLE:MODEL_MISMATCH", f"{selected.name}のmodelが職種定義と一致しません")
+            return selected, None
+        primary_reason = reason
+    else:
+        # role_line.state == "unavailable"：§3.6のとおり本命は評価せず
+        # （意図的な不使用であって縮退理由ではない）、直ちにfallbackへ進む。
+        primary_reason = "ROLE_UNAVAILABLE"
+
+    fb_line = parsed.fallbacks.get(role)
+    fb_candidates = resolved.get(("fallback", role), [])
+    if fb_line is None or fb_line.state != "configured" or not fb_candidates:
+        return None, (f"CANDIDATE_UNUSABLE:{primary_reason}", "候補が使用不可です")
+    if len(fb_candidates) >= 2:
+        fb_names = ",".join(d.name for d in fb_candidates)
+        return None, (
+            "FALLBACK_AMBIGUOUS",
+            f"fallback.{role}の候補が複数あります（{fb_names}）。本人が1件へ絞ってください",
+        )
+
+    fb_def = fb_candidates[0]
+    fb_ok, fb_reason, _note2 = _evaluate_single_candidate(
+        Candidate(role, fb_def), agents_dir, bedrock_env, False
+    )
+    if not fb_ok:
+        return None, (f"CANDIDATE_UNUSABLE:{fb_reason}", "fallbackの候補も使用不可です")
+    if _mismatch(fb_def):
+        return None, ("CANDIDATE_UNUSABLE:MODEL_MISMATCH", f"{fb_def.name}のmodelが職種定義と一致しません")
+    return fb_def, None
 
 
 # ============================================================
@@ -1325,9 +1743,6 @@ def main(argv: list[str]) -> int:
     p_preflight = sub.add_parser("preflight")
     p_preflight.add_argument("path")
 
-    p_classify = sub.add_parser("classify")
-    p_classify.add_argument("path")
-
     p_resolve = sub.add_parser("resolve")
     p_resolve.add_argument("path")
     p_resolve.add_argument("--bedrock-env")
@@ -1341,9 +1756,21 @@ def main(argv: list[str]) -> int:
     p_list_roles = sub.add_parser("list-roles")
     p_list_roles.add_argument("path")
 
+    # resolve-candidate（新設・候補指定の口＝C。同設計§3.6）。
+    p_resolve_candidate = sub.add_parser("resolve-candidate")
+    p_resolve_candidate.add_argument("path")
+    p_resolve_candidate.add_argument("--role", required=True)
+    p_resolve_candidate.add_argument("--model-def")
+    p_resolve_candidate.add_argument("--bedrock-env")
+    p_resolve_candidate.add_argument("--agents-dir")
+
+    # check-candidate: --model-defを受け付ける（--provider/--model/--effort/
+    # --executionと排他）。定義を引いてから既存の検査へ渡すだけ（同設計§5.3）。
+    # ⚠️ --provider+--modelの呼び方も残す（resolve内部と契約書§5の既存利用）。
     p_check = sub.add_parser("check-candidate")
-    p_check.add_argument("--provider", required=True)
-    p_check.add_argument("--model", required=True)
+    p_check.add_argument("--provider")
+    p_check.add_argument("--model")
+    p_check.add_argument("--model-def")
     p_check.add_argument("--effort")
     p_check.add_argument("--execution")
     p_check.add_argument("--for-leader", action="store_true")
@@ -1367,12 +1794,6 @@ def main(argv: list[str]) -> int:
             lineno, key = hits[0]
             _print_out(f"T11\t{lineno}行目: 禁止キー名です（{key}）")
             return 1
-        return 0
-
-    if args.cmd == "classify":
-        if not os.path.isfile(args.path):
-            return 2
-        _print_out(classify_profile(args.path))
         return 0
 
     if args.cmd == "resolve":
@@ -1399,13 +1820,53 @@ def main(argv: list[str]) -> int:
             _print_out("\t".join(row))
         return 0
 
+    if args.cmd == "resolve-candidate":
+        selected, err = do_resolve_candidate(
+            args.path, args.role, args.model_def, args.bedrock_env, args.agents_dir
+        )
+        if err is not None:
+            code, reason = err
+            sys.stderr.write(f"{code}\t{reason}\n")
+            return 2 if code in ("CANDIDATE_UNSPECIFIED", "CANDIDATE_NOT_IN_LIST", "FALLBACK_AMBIGUOUS") else 1
+        _print_out(f"OK\t{selected.name}\t{selected.model}\t{selected.execution}\t{selected.effort or ''}")
+        if selected.execution == "external-cli":
+            parts = []
+            if selected.model != "default":
+                parts.append(f"--model {selected.model}")
+            if selected.effort:
+                parts.append(f"--effort {selected.effort}")
+            _print_out("CODEX_ARGS\t" + " ".join(parts))
+        return 0
+
     if args.cmd == "check-candidate":
+        if args.model_def is not None:
+            if any(
+                v is not None
+                for v in (args.provider, args.model, args.effort, args.execution)
+            ):
+                _print_out("FAIL\tT12\t--model-defは--provider/--model/--effort/--executionと同時に指定できません")
+                return 1
+            try:
+                model_defs = load_model_defs(model_defs_path())
+            except ProfileError as e:
+                _print_out(f"FAIL\t{e.code}\t{e.reason}")
+                return 1
+            d = model_defs.get(args.model_def)
+            if d is None:
+                _print_out(f"FAIL\tV17\t未定義の定義名です（{args.model_def}）")
+                return 1
+            provider, model, effort, execution = d.provider, d.model, d.effort, d.execution
+        else:
+            if args.provider is None or args.model is None:
+                _print_out("FAIL\tT12\t--provider/--modelまたは--model-defのどちらかを指定してください")
+                return 1
+            provider, model, effort, execution = args.provider, args.model, args.effort, args.execution
         try:
             check_candidate(
-                args.provider,
-                args.model,
-                args.effort,
-                args.execution,
+                provider,
+                model,
+                effort,
+                execution,
                 args.for_leader,
                 args.role_name,
                 args.bedrock_env,

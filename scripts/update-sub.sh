@@ -381,12 +381,6 @@ else
       PROFILE_NOT_FOUND|PROFILE_UNREADABLE)
         msg="プロファイル実体を読み取れませんでした（不在・symlink・権限不足等の可能性）"
         ;;
-      PROFILE_MIXED)
-        msg="プロファイルのschema_versionが職種行と整合していません（v2の職種行があるのにschema_versionが1のまま）"
-        ;;
-      PROFILE_LEGACY_V1)
-        msg="プロファイルがv1形式のままです。v2へ移行してください"
-        ;;
       PROFILE_INVALID:*)
         msg="プロファイルの構文または検証エラーです（${code#PROFILE_INVALID:}）"
         ;;
@@ -494,7 +488,7 @@ def is_clean_str(s):
 # 対応: 構文的にcleanなだけの未知コードを無条件で通すと、将来の実装不具合で
 # 任意文字列が「コード」として素通りしログへ再掲されうる）。
 KNOWN_CODE_RE = re.compile(
-    r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|PROFILE_MIXED|PROFILE_LEGACY_V1|"
+    r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|"
     r"PROFILE_RESOLVER_MISSING|PROFILE_RESOLVER_ERROR|LEADER_UNCONFIGURED|"
     r"LEADER_UNAVAILABLE_NO_FALLBACK|"
     r"PROFILE_INVALID:[A-Za-z0-9_-]+|LEADER_CANDIDATE_INVALID:[A-Za-z0-9_-]+)$"

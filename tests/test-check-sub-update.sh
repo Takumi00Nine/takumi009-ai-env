@@ -87,14 +87,24 @@ write_profile() {
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<EOF
 ---
-schema_version: 5
+schema_version: 6
 profile_slug: test-check-sub-update-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: ${mr}
 excluded_models: configured value=none
-role.leader: configured provider=anthropic-api model=claude-sonnet-5
+role.leader: configured model=sonnet-main
 ---
+EOF
+  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§11.3・schema6）:
+  # role.leaderがmodel=<定義名>だけになったため、定義の実体（provider/model）
+  # をこのプロファイルと同じディレクトリのmodels.confへ置く。run_hook()/
+  # run_hook_home()がAIENV_MODEL_DEFS_FILEをこのパスへ向ける（向け忘れると
+  # 本人の実ファイルを読みに行くため必ず対にする）。
+  cat > "$(dirname "$path")/models.conf" <<'EOF'
+[sonnet-main]
+provider=anthropic-api
+model=claude-sonnet-5
 EOF
 }
 
@@ -106,6 +116,7 @@ run_hook() {
   local dir="$1" profile="$2" log="$3" timeout_secs="${4:-5}" stdin_json="${5:-\{\}}"
   printf '%s' "$stdin_json" \
     | CHECK_SUB_UPDATE_DIR="$dir" AIENV_LOCAL_PROFILE_PATH="$profile" \
+      AIENV_MODEL_DEFS_FILE="$(dirname "$profile")/models.conf" \
       AIENV_BEDROCK_ENV_FILE="$(dirname "$log")/nonexistent-bedrock.env" \
       CHECK_SUB_UPDATE_LOG="$log" CHECK_SUB_UPDATE_TIMEOUT="$timeout_secs" "$SCRIPT"
 }
@@ -118,6 +129,7 @@ run_hook_home() {
   local dir="$1" profile="$2" log="$3" home="$4" timeout_secs="${5:-5}" stdin_json="${6:-\{\}}"
   printf '%s' "$stdin_json" \
     | HOME="$home" CHECK_SUB_UPDATE_DIR="$dir" AIENV_LOCAL_PROFILE_PATH="$profile" \
+      AIENV_MODEL_DEFS_FILE="$(dirname "$profile")/models.conf" \
       AIENV_BEDROCK_ENV_FILE="$(dirname "$log")/nonexistent-bedrock.env" \
       CHECK_SUB_UPDATE_LOG="$log" CHECK_SUB_UPDATE_TIMEOUT="$timeout_secs" "$SCRIPT"
 }
@@ -439,6 +451,7 @@ EOF
   START=$(date +%s)
   rc=0
   out="$(printf '%s' '{}' | PATH="$STUB_BIN:$PATH" CHECK_SUB_UPDATE_DIR="$SUB" AIENV_LOCAL_PROFILE_PATH="$PROFILE" \
+    AIENV_MODEL_DEFS_FILE="$(dirname "$PROFILE")/models.conf" \
     CHECK_SUB_UPDATE_LOG="$WORK/log.txt" CHECK_SUB_UPDATE_TIMEOUT="$TIMEOUT_SECS" "$SCRIPT")" || rc=$?
   END=$(date +%s)
   ELAPSED=$((END - START))
@@ -564,6 +577,7 @@ EOF
 
   rc=0
   out="$(printf '%s' '{}' | PATH="$STUB_BIN:$PATH" CHECK_SUB_UPDATE_DIR="$SUB" AIENV_LOCAL_PROFILE_PATH="$PROFILE" \
+    AIENV_MODEL_DEFS_FILE="$(dirname "$PROFILE")/models.conf" \
     CHECK_SUB_UPDATE_LOG="$WORK/log.txt" "$SCRIPT")" || rc=$?
   assert_eq "exit 0(fail-open)" "0" "$rc"
   assert_eq "jq異常終了時は(壊れた出力ではなく)無出力" "" "$out"
