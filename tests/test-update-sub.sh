@@ -2680,6 +2680,112 @@ echo "=== 41. 版境界の1回通し(設計§10.3・§11.3 B-2): af72d16時点(m
   rm -rf "$WORK"
 }
 
+echo "=== 42. 4d. 使用率取得器（scripts/install-usage-fetch.sh）が導入済み（plistが実在する）ときだけ再実行して追随させる（B1-b・使用率取得器移設） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  LOCK="$WORK/lock"
+
+  # origin側に scripts/install-usage-fetch.sh のスタブを追加してpush（この
+  # pushが「repoの更新あり」を作り、4系の処理へ到達させる）。
+  MARKER="$WORK/usage-fetch-invoked.marker"
+  mkdir -p "$SRC/scripts"
+  cat > "$SRC/scripts/install-usage-fetch.sh" <<EOF
+#!/usr/bin/env bash
+echo "invoked" >> "$MARKER"
+exit 0
+EOF
+  chmod +x "$SRC/scripts/install-usage-fetch.sh"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add install-usage-fetch.sh stub"
+  git -C "$SRC" push -q origin HEAD:main
+
+  # このサブ機は使用率取得器を導入済み（plistが実在する）ことにする。
+  : > "$FAKE_HOME/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
+  assert_true "導入済みなら再実行のログが出る" \
+    "$(echo "$out" | grep -q "使用率取得器が導入済みのため再実行" && echo 1 || echo 0)"
+  assert_true "install-usage-fetch.shが実際に呼ばれる" \
+    "$([[ -f "$MARKER" ]] && echo 1 || echo 0)"
+  assert_true "完了メッセージが出る" \
+    "$(echo "$out" | grep -q "使用率取得器の再実行が完了しました" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 43. 4d. plistが無い（未導入）サブ機ではinstall-usage-fetch.shを実行しない（install-sub.shの『LaunchAgentを一切設置しない』方針を崩さない） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+
+  MARKER="$WORK/usage-fetch-invoked.marker"
+  mkdir -p "$SRC/scripts"
+  cat > "$SRC/scripts/install-usage-fetch.sh" <<EOF
+#!/usr/bin/env bash
+echo "invoked" >> "$MARKER"
+exit 0
+EOF
+  chmod +x "$SRC/scripts/install-usage-fetch.sh"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add install-usage-fetch.sh stub"
+  git -C "$SRC" push -q origin HEAD:main
+
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
+  assert_true "未導入なら再実行しない（ログが出ない）" \
+    "$(echo "$out" | grep -q "使用率取得器が導入済み" && echo 0 || echo 1)"
+  assert_true "install-usage-fetch.shは呼ばれない" \
+    "$([[ ! -f "$MARKER" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 44. 4d. install-usage-fetch.shが非0終了しても update-sub.sh 自体は失敗にしない（soft-fail） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  LOCK="$WORK/lock"
+
+  mkdir -p "$SRC/scripts"
+  cat > "$SRC/scripts/install-usage-fetch.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$SRC/scripts/install-usage-fetch.sh"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "add failing install-usage-fetch.sh stub"
+  git -C "$SRC" push -q origin HEAD:main
+
+  : > "$FAKE_HOME/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+
+  rc=0
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
+  assert_eq "install-usage-fetch.shの非0終了でもupdate-sub.sh自体はexit 0（soft-fail）" "0" "$rc"
+  assert_true "WARNとして記録される" \
+    "$(echo "$out" | grep -q "使用率取得器の再実行が非0終了しました" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

@@ -860,6 +860,28 @@ if [ -d "$DIR/vault-public" ]; then
   done
 fi
 
+# --- 4d. 使用率取得器（scripts/install-usage-fetch.sh）が導入済み（plistが
+#     実在する）のときだけ再実行して追随させる。未導入のサブ機に勝手に
+#     入れない（B1-b・使用率取得器移設 設計書§2.4「呼び出し口」・§8 Q-7=(C)
+#     ＝install-sub.shの「LaunchAgentを一切設置しない」方針は崩さず、導入は
+#     本人が個別に scripts/install-usage-fetch.sh を実行する）。launchctl
+#     操作を伴う実システムへの操作であり失敗しても致命的ではない
+#     （dotfiles/install.shと同じsoft-fail方針）ため、失敗してもEXIT_CODEは
+#     変えずwarnに留める（次回のupdate-sub.sh実行時に再試行される） ---
+USAGE_FETCH_PLIST="$HOME/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+if [ -e "$USAGE_FETCH_PLIST" ]; then
+  if [ -x "$DIR/scripts/install-usage-fetch.sh" ]; then
+    log "使用率取得器が導入済みのため再実行して追随させます: scripts/install-usage-fetch.sh"
+    if "$DIR/scripts/install-usage-fetch.sh"; then
+      log "使用率取得器の再実行が完了しました。"
+    else
+      warn "使用率取得器の再実行が非0終了しました（詳細は上記の出力を参照）。次回の update-sub.sh 実行時に再試行されます。"
+    fi
+  else
+    warn "使用率取得器のplistは導入済みですが scripts/install-usage-fetch.sh が見つかりません（checkout破損の可能性）。"
+  fi
+fi
+
 log "done."
 # ⚠️ EXIT_CODEは2b.でリーダー実行値の取得に失敗した場合、またはBedrock env
 # ファイルが実在するのに読めない／解析できない場合（BEDROCK_STATUS=

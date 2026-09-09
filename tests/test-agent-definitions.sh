@@ -9,9 +9,12 @@
 #
 # ⚠️ このスイートは Vault（~/Data/obsidian）・vault-public/・本人のローカル
 # 実体（~/.config/takumi009-ai-env/profile.md）にも依存する項目を含む。
-# これらは worker-role-prompts.md の権限表新設（W5）・profile-sample.md の
-# 改名（W5）・本人による実体更新（§9.2）が終わるまでは赤が正常（設計の
-# 段階分割どおり）。該当項目には理由をコメントで明記する。
+# これらは worker-role-prompts.md の権限表新設（W5）・本人による実体更新
+# （§9.2）が終わるまでは赤が正常（設計の段階分割どおり）。該当項目には
+# 理由をコメントで明記する。⚠️ 2026-09-08 本人裁定A案で、role.verifier/
+# fallback.verifierのFR-21確定値検査・退役キー検査はVault正本／公開
+# スナップショットのprofile-sample.md読取をやめ、repo管理下の
+# config/profile.md.sampleへ一本化した（詳細＝セクション5・6のコメント）。
 #
 # 実行方法: bash tests/test-agent-definitions.sh
 
@@ -185,31 +188,29 @@ echo "=== 5. AC-11: 退役キー(role|fallback).(primary-reviewer|tester): がcl
   core_manifest="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c 'import profile_resolve as pr; print("primary-reviewer" in pr.CORE_ROLES_WITHOUT_REPO_AGENT_FILE)')"
   assert_eq "CORE_ROLES_WITHOUT_REPO_AGENT_FILEにprimary-reviewerを含まない" "False" "$core_manifest"
 
-  # ⚠️ 以下3件はVault・本人ローカル実体に依存する検査。W5（Vaultのprofile-
-  # sample.md改名）・本人の§9.2実体更新が済むまでは赤が正常。
+  # ⚠️ 2026-09-08 本人裁定A案（設定ファイルsample配布）: Vault正本
+  # （~/Data/obsidian/Preferences/profile-sample.md）・公開スナップショット
+  # （vault-public/Preferences/profile-sample.md）は「正本はrepoの
+  # config/*.sample」という案内ノートへ縮める前提になり、schema本体の
+  # ```yamlブロックを持たなくなる（vault-scribeの別担当）。したがって
+  # この2ファイルを読むassertは削除し、repo管理下で実際にschema本体を
+  # 持つ`config/profile.md.sample`を読む検査へ一本化した（そちらは
+  # 本ファイルの担当範囲＝公開repo）。
+  # ⚠️ 以下2件は本人ローカル実体に依存する検査。本人の§9.2実体更新
+  # （schema 4→6）が済むまでは赤が正常。
   # ⚠️ 廃止execution値(MCP_EXEC_PAT)の走査は当初claude/hooks・claude/agents・
-  # tests/・契約書だけで、この3実体（Vault正本・公開スナップショット・
+  # tests/・契約書だけで、この実体（config/profile.md.sample・
   # メイン機ローカル実体）を通っていなかった（検証職・第3巡MAJOR指摘3の
-  # 反映）。3実体それぞれに退役キー検査と同じifブロック内でMCP_EXEC_PAT
+  # 反映）。それぞれに退役キー検査と同じifブロック内でMCP_EXEC_PAT
   # 検査も追加する。
-  VAULT_SAMPLE="$HOME/Data/obsidian/Preferences/profile-sample.md"
-  if [ -f "$VAULT_SAMPLE" ]; then
-    v_hits="$(grep -En '^(role|fallback)\.(primary-reviewer|tester):' "$VAULT_SAMPLE" || true)"
-    assert_eq "Vault正本profile-sample.mdに退役キーが0件（W5反映後に緑化想定）" "" "$v_hits"
-    v_mcp_hits="$(grep -n "$MCP_EXEC_PAT" "$VAULT_SAMPLE" || true)"
-    assert_eq "Vault正本profile-sample.mdに廃止したMCP経路のexecution値が0件" "" "$v_mcp_hits"
+  CONFIG_SAMPLE="$REPO_ROOT/config/profile.md.sample"
+  if [ -f "$CONFIG_SAMPLE" ]; then
+    c_hits="$(grep -En '^(role|fallback)\.(primary-reviewer|tester):' "$CONFIG_SAMPLE" || true)"
+    assert_eq "config/profile.md.sampleに退役キーが0件" "" "$c_hits"
+    c_mcp_hits="$(grep -n "$MCP_EXEC_PAT" "$CONFIG_SAMPLE" || true)"
+    assert_eq "config/profile.md.sampleに廃止したMCP経路のexecution値が0件" "" "$c_mcp_hits"
   else
-    fail_case "Vault正本profile-sample.mdが見つからない"
-  fi
-
-  PUBLIC_SAMPLE="$REPO_ROOT/vault-public/Preferences/profile-sample.md"
-  if [ -f "$PUBLIC_SAMPLE" ]; then
-    p_hits="$(grep -En '^(role|fallback)\.(primary-reviewer|tester):' "$PUBLIC_SAMPLE" || true)"
-    assert_eq "公開スナップショットprofile-sample.mdに退役キーが0件（export-public-vault.sh再生成後に緑化想定）" "" "$p_hits"
-    p_mcp_hits="$(grep -n "$MCP_EXEC_PAT" "$PUBLIC_SAMPLE" || true)"
-    assert_eq "公開スナップショットprofile-sample.mdに廃止したMCP経路のexecution値が0件" "" "$p_mcp_hits"
-  else
-    fail_case "公開スナップショットprofile-sample.mdが見つからない"
+    fail_case "config/profile.md.sampleが見つからない"
   fi
 
   LOCAL_ENTITY="$HOME/.config/takumi009-ai-env/profile.md"
@@ -223,7 +224,7 @@ echo "=== 5. AC-11: 退役キー(role|fallback).(primary-reviewer|tester): がcl
   fi
 }
 
-echo "=== 6. AC-11追加分: profile-sample.md（Vault正本・公開スナップショット）・メイン機ローカル実体のrole.verifier/fallback.verifierがFR-21の確定値と一致する ==="
+echo "=== 6. AC-11追加分: config/profile.md.sample・メイン機ローカル実体のrole.verifier/fallback.verifierがFR-21の確定値と一致する ==="
 {
   # role.verifier/fallback.verifierの属性をFR-21の確定値と突合する
   # （Codex一次レビュー指摘・MAJOR対応（1巡目）: 当初はVault正本しか見ておらず、
@@ -252,13 +253,16 @@ echo "=== 6. AC-11追加分: profile-sample.md（Vault正本・公開スナッ�
     # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§12.2・FR-21）:
     # provider=/execution=/effort=は定義ファイル側の属性へ移り、role/fallback
     # 行が持てる属性はmodel（定義名のカンマ列挙）だけになった
-    # （ROLE_ATTR_NAMES={"model"}）。role.verifierの確定値はFX-B1と同じ
-    # 定義名`codex-high`で行そのものを完全一致させる（`key:`と値の間の
-    # 桁揃え目的の連続空白は正規化してから比較する＝profile-sample.mdの
-    # 実書式に合わせる）。
+    # （ROLE_ATTR_NAMES={"model"}）。role.verifierの確定値は実機の実値
+    # （設定ファイルsample配布・2026-09-08）に合わせた定義名
+    # `codex-review-default`で行そのものを完全一致させる（`codex-high`は
+    # Vault旧サンプルの例示名であり実値ではなかった＝A案でconfig/
+    # profile.md.sampleへ読み元を付け替えるのに合わせて訂正。`key:`と値の
+    # 間の桁揃え目的の連続空白は正規化してから比較する＝サンプルの実書式に
+    # 合わせる）。
     role_line_norm="$(printf '%s' "$role_line" | sed -E 's/^role\.verifier:[[:space:]]+/role.verifier: /')"
-    assert_eq "${label}: role.verifierがconfigured model=codex-high（行完全一致）" \
-      "role.verifier: configured model=codex-high" "$role_line_norm"
+    assert_eq "${label}: role.verifierがconfigured model=codex-review-default（行完全一致）" \
+      "role.verifier: configured model=codex-review-default" "$role_line_norm"
     # fallback.verifierの確定的な定義名は本人裁定待ち（リーダー指示・未確定）
     # のため固定しない。「configured・定義名ちょうど1件（カンマ無し＝候補は
     # 1件だけ）」という構造だけを見る。⚠️ executionの明記チェックは、新文法で
@@ -269,8 +273,11 @@ echo "=== 6. AC-11追加分: profile-sample.md（Vault正本・公開スナッ�
     assert_true "${label}: fallback.verifierがconfigured・定義名ちょうど1件（カンマ無し）" \
       "$(printf '%s' "$fb_line" | grep -qE '^fallback\.verifier:[[:space:]]+configured model=[a-z0-9][a-z0-9-]*([[:space:]]+#.*)?$' && echo 1 || echo 0)"
   }
-  check_verifier_fr21 "Vault正本profile-sample.md" "$HOME/Data/obsidian/Preferences/profile-sample.md"
-  check_verifier_fr21 "公開スナップショットprofile-sample.md" "$REPO_ROOT/vault-public/Preferences/profile-sample.md"
+  # ⚠️ 2026-09-08 本人裁定A案: Vault正本・公開スナップショットは案内ノート化
+  # されschema本体を持たなくなる前提のため、それらを読むcheck_verifier_fr21
+  # 呼び出しは削除し、repo管理下でschema本体を持つconfig/profile.md.sample
+  # （公開repo・本ファイルの担当範囲）への1本化へ差し替えた。
+  check_verifier_fr21 "config/profile.md.sample" "$REPO_ROOT/config/profile.md.sample"
   check_verifier_fr21 "メイン機ローカル実体" "$HOME/.config/takumi009-ai-env/profile.md"
 
   # 廃止したMCP経路のexecution値がtests/内に1件も無いこと（意図的な陰性

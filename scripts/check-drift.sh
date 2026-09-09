@@ -1958,6 +1958,251 @@ fi
 
 echo
 echo "======================================================================"
+echo "⑨ 使用率取得器（com.takumi009.usage-fetch）の移行・死活（B1-b・設計書§2.5）"
+echo "======================================================================"
+
+# ⚠️ Vault系の全体ゲートの外側に独立した1節として置く（対象範囲がVault系と
+# 違うため。設計書§2.5＝現物のMAINTENANCE-NOT-LOADED型では足りない）。
+# ⚠️ launchctlが無い環境の扱いは検知ごとに違う（設計書§2.5の表）＝
+#   USAGE-MIGRATION-INCOMPLETE: 対象外＋fail-open（例外＝state.json破損・
+#     phase:confirmingはファイルだけで判るので実行する）
+#   USAGE-FETCH-STALE/USAGE-LOCK-STUCK: そのまま実行（ファイルだけで判る）
+#   USAGE-FETCH-NOT-LOADED/USAGE-FETCH-DISABLED: 対象外＋fail-open
+#   USAGE-FETCH-DUPLICATE: 対象外＋fail-open
+#   USAGE-FETCH-REVIVABLE: 半分だけ実行（旧plistの実在はファイルだけで判る）
+#   USAGE-FETCH-NOCACHE: 「ジョブが有効」の判定にlaunchctlが要るので、
+#     plistの実在だけを条件にして実行する（緩く鳴らす側を選ぶ）
+: "${USAGE_CACHE_DIR:=${XDG_CACHE_HOME:-$HOME/.cache}/claude-codex-usage}"
+: "${USAGE_MIGRATION_STATE_DIR:=$HOME/.local/state/takumi009-ai-env/usage-migration}"
+: "${USAGE_CONFIG_FILE:=${XDG_CONFIG_HOME:-$HOME/.config}/claude-codex-usage/config.sh}"
+: "${USAGE_STALE_MINUTES:=30}"
+USAGE_NEW_LABEL="com.takumi009.usage-fetch"
+USAGE_OLD_LABEL="com.claude-codex-usage.refresh"
+USAGE_NEW_PLIST="${LAUNCH_AGENTS_DIR}/${USAGE_NEW_LABEL}.plist"
+USAGE_OLD_PLIST="${LAUNCH_AGENTS_DIR}/${USAGE_OLD_LABEL}.plist"
+USAGE_STATE_FILE="${USAGE_MIGRATION_STATE_DIR}/state.json"
+USAGE_CLAUDE_CACHE="${USAGE_CACHE_DIR}/claude-cache.json"
+USAGE_CODEX_CACHE="${USAGE_CACHE_DIR}/codex-cache.json"
+USAGE_DOMAIN="gui/$(id -u)"
+
+usage_launchctl_available() { command -v launchctl >/dev/null 2>&1; }
+
+# true/false/unknown（照会不能）。⚠️ launchctlが無ければ呼ばない。
+usage_label_loaded() {
+  launchctl print "${USAGE_DOMAIN}/$1" >/dev/null 2>&1 && echo true || echo false
+}
+# true/false/unknown。⚠️ launchctlが無ければ呼ばない。overrideが無いラベルは
+# 既定でenabled（launchctl(1)）。
+usage_label_active() {
+  local ld out
+  ld="$(usage_label_loaded "$1")"
+  [ "$ld" = "unknown" ] && { echo unknown; return; }
+  [ "$ld" = "false" ] && { echo false; return; }
+  out="$(launchctl print-disabled "${USAGE_DOMAIN}" 2>/dev/null)" || { echo unknown; return; }
+  case "$out" in
+    *"\"$1\" => disabled"*) echo false ;;
+    *) echo true ;;
+  esac
+}
+
+usage_state_valid() { [ -f "$USAGE_STATE_FILE" ] && jq -e . "$USAGE_STATE_FILE" >/dev/null 2>&1; }
+usage_state_field() {
+  usage_state_valid || { echo ""; return; }
+  jq -r --arg f "$1" 'if (has($f) and (.[$f] != null)) then (.[$f] | tostring) else empty end' "$USAGE_STATE_FILE" 2>/dev/null
+}
+
+# --- [USAGE-MIGRATION-INCOMPLETE] ---
+if [ -f "$USAGE_STATE_FILE" ]; then
+  if ! usage_state_valid; then
+    item_drift "[USAGE-MIGRATION-INCOMPLETE] ${USAGE_STATE_FILE} が壊れていて読めません。手動確認: cat ${USAGE_STATE_FILE} ／ 復旧: scripts/install-usage-fetch.sh をもう一度実行するか、内容を手動で修復してください"
+  else
+    usage_phase="$(usage_state_field phase)"
+    if [ "$usage_phase" = "confirming" ]; then
+      item_drift "[USAGE-MIGRATION-INCOMPLETE] 移行の確定（退避物の削除）が中断しています（phase=confirming）。再開: scripts/install-usage-fetch.sh --confirm"
+    elif usage_launchctl_available; then
+      usage_ol="$(usage_label_loaded "$USAGE_OLD_LABEL")"
+      usage_na="$(usage_label_active "$USAGE_NEW_LABEL")"
+      if [ "$usage_ol" != "unknown" ] && [ "$usage_na" != "unknown" ] && [ "$usage_ol" != "true" ] && [ "$usage_na" != "true" ]; then
+        item_drift "[USAGE-MIGRATION-INCOMPLETE] 有効な使用率取得ジョブが0件のまま移行が止まっています（phase=${usage_phase:-不明}）。使用率が更新されません。続行: scripts/install-usage-fetch.sh ／ やめる: scripts/install-usage-fetch.sh --rollback"
+      else
+        log "  -> ✅ 使用率取得の移行: 有効なジョブがあります（phase=${usage_phase:-不明}）"
+      fi
+    else
+      log "  -> 使用率取得の移行状態: launchctlが見つからないため確認できません（macOS以外の実行環境の可能性）"
+    fi
+  fi
+else
+  log "  -> 使用率取得器の移行状態ファイルが無いため対象外（未導入、または移行が完了して確定済み）"
+fi
+
+# --- [USAGE-FETCH-NOT-LOADED]・[USAGE-FETCH-DISABLED] ---
+if [ -f "$USAGE_NEW_PLIST" ]; then
+  if usage_launchctl_available; then
+    usage_ls="$(usage_label_loaded "$USAGE_NEW_LABEL")"
+    case "$usage_ls" in
+      false)
+        item_drift "[USAGE-FETCH-NOT-LOADED] ${USAGE_NEW_PLIST} は存在しますが、launchd上にロードされていません＝bootstrap未実行か手動でbootoutされた可能性。確認: launchctl print ${USAGE_DOMAIN}/${USAGE_NEW_LABEL} ／ 再導入: scripts/install-usage-fetch.sh"
+        ;;
+      true)
+        usage_na2="$(usage_label_active "$USAGE_NEW_LABEL")"
+        if [ "$usage_na2" = "false" ]; then
+          item_drift "[USAGE-FETCH-DISABLED] ${USAGE_NEW_LABEL} はロード済みですがdisabledです。解除: launchctl enable ${USAGE_DOMAIN}/${USAGE_NEW_LABEL}"
+        else
+          log "  -> ✅ 使用率取得器（${USAGE_NEW_LABEL}）: ロード済み・有効です"
+        fi
+        ;;
+      unknown)
+        log "  -> 使用率取得器のロード状態を確認できません（launchd照会不能）"
+        ;;
+    esac
+  else
+    log "  -> 使用率取得器: launchctlが見つからないためロード状態を確認できません"
+  fi
+else
+  log "  -> 使用率取得器のplistが無いため対象外（未導入）"
+fi
+
+# --- [USAGE-FETCH-STALE]（正常な数値のfetched_atが古いだけのケース。
+#     欠如・壊れたJSON・非数・未来はNOCACHE側で扱う） ---
+usage_check_stale() {
+  local cache="$1" name="$2" fetched_at now age_min
+  [ -f "$cache" ] || return 0
+  jq -e . "$cache" >/dev/null 2>&1 || return 0
+  fetched_at="$(jq -r '.fetched_at // empty' "$cache" 2>/dev/null)"
+  case "$fetched_at" in ''|*[!0-9]*) return 0 ;; esac
+  now="$(date -u +%s)"
+  [ "$fetched_at" -le "$now" ] || return 0
+  age_min=$(( (now - fetched_at) / 60 ))
+  if [ "$age_min" -gt "$USAGE_STALE_MINUTES" ]; then
+    item_drift "[USAGE-FETCH-STALE] ${name} の最終取得から ${age_min} 分経過（目安 ${USAGE_STALE_MINUTES} 分）。確認: ${HOME}/Library/Logs/takumi009-ai-env/usage-fetch.log"
+  else
+    log "  -> ✅ ${name}: 最終取得 ${age_min} 分前"
+  fi
+}
+usage_check_stale "$USAGE_CLAUDE_CACHE" "Claude使用率キャッシュ"
+usage_check_stale "$USAGE_CODEX_CACHE" "Codex使用率キャッシュ"
+
+# --- [USAGE-FETCH-NOCACHE]（ジョブが有効なのに、一度も正常に取得できて
+#     いない状態を拾う。STALEは「正常なキャッシュが既にある」前提のため
+#     これを拾えない＝設計書§2.5） ---
+usage_new_job_effectively_active() {
+  if [ -f "$USAGE_NEW_PLIST" ]; then
+    if usage_launchctl_available; then
+      [ "$(usage_label_active "$USAGE_NEW_LABEL")" = "true" ] && echo true || echo false
+    else
+      echo true
+    fi
+  else
+    echo false
+  fi
+}
+usage_check_nocache() {
+  local cache="$1" name="$2" fetched_at now
+  [ "$(usage_new_job_effectively_active)" = "true" ] || return 0
+  if [ ! -f "$cache" ]; then
+    item_drift "[USAGE-FETCH-NOCACHE] ${name} が一度も生成されていません（${cache}）＝ジョブは有効ですが取得に一度も成功していない疑いがあります。確認: ${HOME}/Library/Logs/takumi009-ai-env/usage-fetch.log"
+    return
+  fi
+  if ! jq -e . "$cache" >/dev/null 2>&1; then
+    item_drift "[USAGE-FETCH-NOCACHE] ${name} がJSONとして読めません（${cache}）。確認: cat ${cache}"
+    return
+  fi
+  fetched_at="$(jq -r '.fetched_at // empty' "$cache" 2>/dev/null)"
+  if [ -z "$fetched_at" ]; then
+    item_drift "[USAGE-FETCH-NOCACHE] ${name} に fetched_at がありません（${cache}）＝一度も正常に取得できていない可能性。確認: ${HOME}/Library/Logs/takumi009-ai-env/usage-fetch.log"
+    return
+  fi
+  case "$fetched_at" in
+    ''|*[!0-9]*)
+      item_drift "[USAGE-FETCH-NOCACHE] ${name} の fetched_at が数値ではありません（${cache}）。確認: cat ${cache}"
+      return
+      ;;
+  esac
+  now="$(date -u +%s)"
+  if [ "$fetched_at" -gt "$now" ]; then
+    item_drift "[USAGE-FETCH-NOCACHE] ${name} の fetched_at が未来です（${cache}）＝システム時計のズレか壊れたキャッシュの可能性。確認: jq .fetched_at ${cache}"
+  fi
+}
+usage_check_nocache "$USAGE_CLAUDE_CACHE" "Claude使用率キャッシュ"
+usage_check_nocache "$USAGE_CODEX_CACHE" "Codex使用率キャッシュ"
+
+# --- [USAGE-LOCK-STUCK] ---
+usage_lock_max_age() {
+  local out
+  # ⚠️ case パターンの先頭に `(` を付ける（`''|*[!0-9]*)` のような裸の
+  # 閉じ括弧で終わるパターンを、この関数のように $(...) コマンド置換の
+  # 内側でネストしたサブシェル内に書くと、bash のパーサがcaseの`)`と
+  # サブシェルの`)`を混同して構文エラーになる既知の癖がある＝実測で
+  # 発見。回避策として case 全体を`(`で始める）。
+  out="$( (
+    REQUEST_TIMEOUT=15; RETRY_COUNT=2; HOOK_TIMEOUT=60
+    # shellcheck disable=SC1090
+    [ -f "$USAGE_CONFIG_FILE" ] && . "$USAGE_CONFIG_FILE" 2>/dev/null
+    case "$REQUEST_TIMEOUT" in (''|*[!0-9]*) REQUEST_TIMEOUT=15 ;; esac
+    case "$RETRY_COUNT" in (''|*[!0-9]*) RETRY_COUNT=2 ;; esac
+    case "$HOOK_TIMEOUT" in (''|*[!0-9]*) HOOK_TIMEOUT=60 ;; esac
+    echo $(( REQUEST_TIMEOUT * (RETRY_COUNT + 1) + 32 * RETRY_COUNT + HOOK_TIMEOUT + 30 ))
+  ) 2>/dev/null )"
+  case "$out" in (''|*[!0-9]*) echo 199 ;; (*) echo "$out" ;; esac
+}
+usage_check_lock_stuck() {
+  local lock_dir="${USAGE_CACHE_DIR}/locks" f name created now age max_age
+  [ -d "$lock_dir" ] || return 0
+  max_age=$(( $(usage_lock_max_age) * 3 ))
+  now="$(date -u +%s)"
+  for f in "$lock_dir"/*.lock.d; do
+    [ -d "$f" ] || continue
+    name="$(basename "$f")"
+    created="$(cat "$f/created_at" 2>/dev/null)"
+    case "$created" in
+      ''|*[!0-9]*)
+        item_drift "[USAGE-LOCK-STUCK] ロック ${name} の created_at が読めません（${f}）。掃除: rm -rf ${f}"
+        continue
+        ;;
+    esac
+    age=$(( now - created ))
+    if [ "$age" -gt "$max_age" ]; then
+      item_drift "[USAGE-LOCK-STUCK] ロック ${name} が固着しています（${age}秒前・目安 ${max_age}秒）。掃除: rm -rf ${f}"
+    fi
+  done
+}
+usage_check_lock_stuck
+
+# --- [USAGE-FETCH-DUPLICATE]（INV-1違反そのもの。旧が単独で1件動いている
+#     だけの機は含めない＝移行前・巻き戻し後の正常な状態を誤報しないため） ---
+if usage_launchctl_available; then
+  usage_ol2="$(usage_label_loaded "$USAGE_OLD_LABEL")"
+  usage_na3="$(usage_label_active "$USAGE_NEW_LABEL")"
+  if [ "$usage_ol2" = "true" ] && [ "$usage_na3" = "true" ]; then
+    item_drift "[USAGE-FETCH-DUPLICATE] 旧（${USAGE_OLD_LABEL}）と新（${USAGE_NEW_LABEL}）が両方 launchd にロードされています＝二重取得。復旧（この順）＝①launchctl bootout ${USAGE_DOMAIN}/${USAGE_OLD_LABEL} ②そのplistを退避または削除 ③新ラベルが1件だけ有効であることを確認 ④復活元（旧repoのinstall.sh・dotfilesのinstall.sh・手で置いたplist）を突き止める。または: scripts/install-usage-fetch.sh --heal"
+  else
+    log "  -> ✅ 二重取得ではありません（OLD_LOADED=${usage_ol2} NEW_ACTIVE=${usage_na3}）"
+  fi
+else
+  log "  -> 二重取得の検知: launchctlが見つからないため確認できません"
+fi
+
+# --- [USAGE-FETCH-REVIVABLE]（まだ二重ではないが復活の予兆。確定前
+#     （verified/confirming等）は退避物が意図的に残っているので正常＝
+#     phase=confirmedのときだけ鳴らす） ---
+if [ -f "$USAGE_STATE_FILE" ] && [ "$(usage_state_field phase)" = "confirmed" ]; then
+  usage_old_plist_dest="$(usage_state_field old_plist_dest)"
+  usage_old_present=0
+  [ -e "$USAGE_OLD_PLIST" ] && usage_old_present=1
+  [ -n "$usage_old_plist_dest" ] && [ -e "$usage_old_plist_dest" ] && usage_old_present=1
+  if [ "$usage_old_present" = "1" ]; then
+    if usage_launchctl_available; then
+      if [ "$(usage_label_active "$USAGE_NEW_LABEL")" = "true" ]; then
+        item_drift "[USAGE-FETCH-REVIVABLE] 移行済み（新ジョブが有効・phase=confirmed）なのに旧plistがまだ実在します＝復活の予兆。確認: ls -la ${USAGE_OLD_PLIST} ${usage_old_plist_dest} ／ 意図的な残置でなければ削除してください"
+      fi
+    else
+      item_drift "[USAGE-FETCH-REVIVABLE] 移行が確定済み（phase=confirmed）なのに旧plistがまだ実在します＝復活の予兆（launchctl不在のためロード状態は未確認）。確認: ls -la ${USAGE_OLD_PLIST} ${usage_old_plist_dest}"
+    fi
+  fi
+fi
+
+echo
+echo "======================================================================"
 log "総drift件数: ${TOTAL_DRIFT}"
 echo "======================================================================"
 

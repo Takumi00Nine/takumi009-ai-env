@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-08
+updated: 2026-09-09
 tags: [preference, core, workflow, roles, quality-gate]
 project: takumi009-ai-env
 related:
@@ -10,6 +10,7 @@ related:
   - "[[Preferences/absolute-rules]]"
   - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
   - "[[Preferences/worker-role-prompts]]"
+  - "[[Preferences/model-catalog]]"
   - "[[Preferences/coding-doc-style]]"
   - "[[Preferences/core-worker]]"
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
@@ -43,7 +44,7 @@ aliases:
 > spawn 時の条文（設計書§3.2 §1 復活）:
 > 1. 命名は `<配役>-<職種名>`
 > 2. spawn 時に渡す7点（配役の明示指定を含む）
-> 3. 配役表の `model` は**定義名の候補**である。spawn の前に候補の中から定義名を**ちょうど1つ**指定する（機構は選ばない）。指定した定義の実効値は `profile_resolve.py resolve-candidate` が返す。エイリアスを発明しない
+> 3. 配役表の `model` は**定義名の候補**である。spawn の前に候補の中から定義名を**ちょうど1つ**指定する（機構は選ばない）。指定した定義の実効値は `profile_resolve.py resolve-candidate` が返す。エイリアスを発明しない。判断材料＝[[Preferences/model-catalog]]（モデルとサービスの特性）と【使用率】ブロック
 > 4. Bedrock の別名はピン留めが効いている確認が取れなければ渡さず本人へ上げる
 > 5. 配役表を読むのはセッション開始時（起動のたびに読み直さない）
 > 6. `execution` が `subagent` 以外の職種は spawn せず、決められた呼び出し口から依頼する（`resolve-candidate` の出力をそのままラッパーへ渡す。exit が0でなければ1つも起動しない）

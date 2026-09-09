@@ -2728,8 +2728,19 @@ EOF
   # ない。設計§10.3の意図＝NFR-1「外部プロセスを増やさない」を判定式として
   # 固定するため、判定は「増加しない」（`after <= before`）とする（設計側は
   # v1.5でこの字面へ揃える予定）。
-  assert_eq "外部プロセス数(変更後)が変更前から増加しない（設計§10.3・NFR-1・AC-1②）" "1" \
-    "$([ "$after_count" -le "$before_count" ] && echo 1 || echo 0)"
+  # 2026-09-08 B1a「使用率の見える化」（FR-108①・使用率提示B1a-実装-
+  # 2026-09-08.md）追記: 本案件はSessionStart注入へ【使用率】ブロックを
+  # 新設し、その構築のためpython3 usage_snapshot.pyを1回呼ぶ（実測29→30）。
+  # これはprofile_resolve.py側の既存複数呼び出しと同じ設計パターンの新規
+  # 機能追加であり、NFR-4（team_mode行の組み立てをbuiltinのみで行う制約）の
+  # 対象範囲（配役表-能力軸整理-要件-2026-09-07.md）には含まれない別要件書
+  # （ローカルLLM段階経路-要件-2026-09-03.md v20 FR-108①）が要求する新規の
+  # 提示口であり、リーダー裁定「設計相当」の範囲内で許容された増加として
+  # 承認済みの予算+1を明示的に計上する（無条件で閾値を緩めない＝これ以上の
+  # 増加はこの判定式が引き続き検出する）。
+  AC1_2_APPROVED_DELTA_2026_09_08=1  # python3 usage_snapshot.py 呼び出し1回（B1a）
+  assert_eq "外部プロセス数(変更後)が変更前から承認済み予算(+1・B1a使用率提示)を超えて増加しない（設計§10.3・NFR-1・AC-1②）" "1" \
+    "$([ "$after_count" -le "$((before_count + AC1_2_APPROVED_DELTA_2026_09_08))" ] && echo 1 || echo 0)"
   # 設計§10.5⑥「基準値はテスト内に定数として記録する」への対応。
   # 2026-09-08 モデル定義ファイルと候補指定対応の実測値へ更新（変更前29は
   # 不変。変更後は28→29——旧分類呼び出し1回の削減とlist-roles呼び出し
@@ -2737,10 +2748,12 @@ EOF
   # awkで加工する1段（外部プロセス1回）を追加で使うため、net -1+1+1(awk)=+1
   # となり28→29になる。設計側のnet0見積もりはpython3呼び出し数だけを数えて
   # おりawk等のパイプ段を含めていなかった実装レベルの差分＝実装記録
-  # モデル定義ファイルと候補指定-実装-2026-09-08.md参照）。増やす変更を
-  # 入れるときはNFR-4との突合を経てから更新すること。
+  # モデル定義ファイルと候補指定-実装-2026-09-08.md参照）。
+  # 2026-09-08 B1a「使用率の見える化」対応で29→30へ更新（上記の承認済み
+  # +1予算どおり）。増やす変更を入れるときはNFR-4との突合を経てから更新
+  # すること。
   AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07=29
-  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=29
+  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=30
   if [ "$before_count" != "$AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07" ] || [ "$after_count" != "$AC1_2_REFERENCE_COUNT_AFTER_2026_09_07" ]; then
     echo "  info - 参考値: 変更前${AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07}・変更後${AC1_2_REFERENCE_COUNT_AFTER_2026_09_07}を記録していたが今回は変更前${before_count}・変更後${after_count}だった"
   fi
@@ -2933,6 +2946,121 @@ echo "=== 78. 設計§11.3新設2件の②: 同じ絶対パスのAIENV_MODEL_DEF
   assert_eq "I(cwd不変性): /tmp とREPO_ROOTで同じ結果" "$ctx78_tmp" "$ctx78_repo"
   assert_eq "I(cwd不変性): /tmp とVault作業ディレクトリで同じ結果" "$ctx78_tmp" "$ctx78_vd"
   rm -rf "$VD78"
+}
+
+echo "=== 79. B1a「使用率の見える化」AC-91④⑤: 【使用率】ブロックが枠あたり1行で出る（正常キャッシュ） ==="
+{
+  VD79="$(mktemp -d)"; make_full_vault "$VD79"
+  UC79="$(mktemp -d)"
+  NOW79=1788858365
+  python3 -c "import json; open('$UC79/claude-cache.json','w').write(json.dumps({'fetched_at':$NOW79-60,'five_hour':{'used_percent':25.0,'resets_at_epoch':$NOW79+1000},'seven_day':{'used_percent':46.0,'resets_at_epoch':$NOW79+90000},'model_weekly':{'used_percent':34,'resets_at_epoch':$NOW79+90000,'label':'Fable'},'last_error':None}))"
+  python3 -c "import json; open('$UC79/codex-cache.json','w').write(json.dumps({'fetched_at':$NOW79-30,'five_hour':{'used_percent':66,'resets_at_epoch':$NOW79+2000},'seven_day':{'used_percent':10,'resets_at_epoch':$NOW79+90000},'last_error':None}))"
+
+  ctx79="$(AIENV_USAGE_CACHE_DIR="$UC79" AIENV_USAGE_NOW="$NOW79" run_bootstrap "$VD79")"
+  assert_contains "79: 【使用率】見出しが出る" "$ctx79" "【使用率】"
+  n_claude79="$(printf '%s\n' "$ctx79" | grep -c '^Claude枠:' || true)"
+  n_codex79="$(printf '%s\n' "$ctx79" | grep -c '^Codex枠:' || true)"
+  n_unlimited79="$(printf '%s\n' "$ctx79" | grep -Fxc 'unlimited（Bedrock・ローカル）: 使用率なし' || true)"
+  assert_eq "79: Claude枠は枠あたり1行" "1" "$n_claude79"
+  assert_eq "79: Codex枠は枠あたり1行" "1" "$n_codex79"
+  assert_eq "79: unlimited行はちょうど1行" "1" "$n_unlimited79"
+  assert_contains "79: 委任前の同一口の案内が末尾に出る" "$ctx79" "委任の前に見直すときは同じ口＝usage_snapshot.py"
+
+  # 2026-09-08 worker-driven一次レビューMAJOR-4対応: 見出し・接頭辞だけで
+  # なく、5h/7d残量・リセット時刻・鮮度の実内容を厳密一致で検査する
+  # （python3 claude/hooks/lib/usage_snapshot.pyを同じfixture・同じNOW79で
+  # 直接実行し裏取り済みの期待値。tests/test-usage-snapshot.shのFX-1と
+  # 同一NOW値・同種fixtureで独立に検証済みの値と一致する）。
+  assert_contains "79: Claude枠の実内容（5h/7d/Fable週の残量・リセット・鮮度）が厳密一致" "$ctx79" \
+    "Claude枠: 5h 残75%（リセット 18:22）／7d 残54%（09-09 19:06）／Fable週 残66%・取得 1分前"
+  assert_contains "79: Codex枠の実内容（5h/7dの残量・リセット・鮮度）が厳密一致" "$ctx79" \
+    "Codex枠: 5h 残34%（リセット 18:39）／7d 残90%（09-09 19:06）・取得 0分前"
+
+  rm -rf "$VD79" "$UC79"
+}
+
+echo "=== 80. B1a「使用率の見える化」AC-91④⑤: キャッシュ欠落（未導入）でも起動が止まらない ==="
+{
+  VD80="$(mktemp -d)"; make_full_vault "$VD80"
+  UC80="$(mktemp -d)"  # claude-cache.json/codex-cache.jsonのどちらも置かない
+
+  ctx80="$(AIENV_USAGE_CACHE_DIR="$UC80" run_bootstrap "$VD80")"
+  assert_contains "80: キャッシュ欠落でも必読ファイル案内は出る（起動は止まらない）" "$ctx80" "① タスクに着手する前に"
+  assert_contains "80: 【使用率】見出しは出る" "$ctx80" "【使用率】"
+  assert_contains "80: Claude枠は未導入の固定文言" "$ctx80" "Claude枠: 取得できません（キャッシュ無し＝claude-codex-usage 未導入。導入手順: README §使用率）"
+  assert_contains "80: Codex枠は未導入の固定文言" "$ctx80" "Codex枠: 取得できません（キャッシュ無し＝claude-codex-usage 未導入。導入手順: README §使用率）"
+  n_unlimited80="$(printf '%s\n' "$ctx80" | grep -Fxc 'unlimited（Bedrock・ローカル）: 使用率なし' || true)"
+  assert_eq "80: unlimited行はちょうど1行（欠落でも行数を変えない）" "1" "$n_unlimited80"
+
+  rm -rf "$VD80" "$UC80"
+}
+
+echo "=== 81. B1a「使用率の見える化」compute_usage_block()のfail-open3分岐: lib不在（worker-driven一次レビューMAJOR-3対応） ==="
+{
+  VD81="$(mktemp -d)"; make_full_vault "$VD81"
+  ctx81="$(USAGE_SNAPSHOT_LIB="/nonexistent-dir/usage_snapshot.py" run_bootstrap "$VD81")"
+  assert_contains "81: lib不在でも必読ファイル案内は出る（起動は止まらない）" "$ctx81" "① タスクに着手する前に"
+  n_line81="$(printf '%s\n' "$ctx81" | grep -Fxc '【使用率】取得口が使えません（usage_snapshot.py が見つかりません）' || true)"
+  assert_eq "81: 「見つかりません」の1行に縮退する（見出しと本文を分けない）" "1" "$n_line81"
+
+  rm -rf "$VD81"
+}
+
+echo "=== 82. B1a「使用率の見える化」compute_usage_block()のfail-open3分岐: 非ゼロ終了（stdout有り/無しの両方・worker-driven一次レビューMAJOR-3対応） ==="
+{
+  # (a) 非ゼロ終了・stdoutは空（usage_snapshot.py自身の契約どおりのクラッシュ）。
+  VD82A="$(mktemp -d)"; make_full_vault "$VD82A"
+  FAKE_LIB_82A="$(mktemp -d)/fake-usage-snapshot-empty.py"
+  cat > "$FAKE_LIB_82A" <<'EOF'
+import sys
+sys.exit(1)
+EOF
+  ctx82a="$(USAGE_SNAPSHOT_LIB="$FAKE_LIB_82A" run_bootstrap "$VD82A")"
+  n_line82a="$(printf '%s\n' "$ctx82a" | grep -Fxc '【使用率】取得口が使えません（usage_snapshot.py の実行に失敗しました）' || true)"
+  assert_eq "82a: 非ゼロ終了・stdout空なら「実行に失敗しました」の1行に縮退する" "1" "$n_line82a"
+
+  # (b) 非ゼロ終了・stdoutは非空（従来はexit codeを見ておらずstdoutが
+  # あれば正常ブロックとして注入してしまっていた＝MAJOR-3の指摘そのもの）。
+  VD82B="$(mktemp -d)"; make_full_vault "$VD82B"
+  FAKE_LIB_82B="$(mktemp -d)/fake-usage-snapshot-partial.py"
+  cat > "$FAKE_LIB_82B" <<'EOF'
+import sys
+print("Claude枠: 5h 残99%・取得 0分前")
+sys.exit(1)
+EOF
+  ctx82b="$(USAGE_SNAPSHOT_LIB="$FAKE_LIB_82B" run_bootstrap "$VD82B")"
+  n_line82b="$(printf '%s\n' "$ctx82b" | grep -Fxc '【使用率】取得口が使えません（usage_snapshot.py の実行に失敗しました）' || true)"
+  assert_eq "82b: 非ゼロ終了・stdout有りでも終了コードを見て失敗扱いにする（部分出力を正常ブロックとして注入しない）" "1" "$n_line82b"
+  assert_not_contains "82b: 部分出力（stdoutにあった偽のClaude枠行）がそのまま注入されていない" "$ctx82b" "残99%"
+
+  rm -rf "$VD82A" "$VD82B"
+}
+
+echo "=== 83. B1a「使用率の見える化」compute_usage_block()のfail-open3分岐: python3が真に不在（worker-driven一次レビューMAJOR-3対応） ==="
+{
+  # PATH上の全実行ファイルをsymlinkで複製し、python*系だけを除外した
+  # 制限PATHを作る（run_bootstrap()はBOOTSTRAP_ENABLE_LOCAL_PROFILE=0固定
+  # なのでprofile_resolve.py側のpython3呼び出しは発生しない＝
+  # compute_usage_block()だけがpython3を必要とする状態を作れる）。
+  NOPY_PATH_DIR="$(mktemp -d)"
+  IFS=':' read -ra _path_dirs <<< "$PATH"
+  for _pd in "${_path_dirs[@]}"; do
+    [ -d "$_pd" ] || continue
+    for _f in "$_pd"/*; do
+      [ -x "$_f" ] || continue
+      _base="$(basename "$_f")"
+      case "$_base" in python3|python3.*|python|python2*) continue ;; esac
+      [ -e "$NOPY_PATH_DIR/$_base" ] || ln -s "$_f" "$NOPY_PATH_DIR/$_base" 2>/dev/null
+    done
+  done
+
+  VD83="$(mktemp -d)"; make_full_vault "$VD83"
+  ctx83="$(PATH="$NOPY_PATH_DIR" USAGE_SNAPSHOT_LIB="$REPO_ROOT/claude/hooks/lib/usage_snapshot.py" run_bootstrap "$VD83")"
+  assert_contains "83: python3不在でも必読ファイル案内は出る（起動は止まらない）" "$ctx83" "① タスクに着手する前に"
+  n_line83="$(printf '%s\n' "$ctx83" | grep -Fxc '【使用率】取得口が使えません（python3 なし）' || true)"
+  assert_eq "83: 「python3 なし」の1行に縮退する" "1" "$n_line83"
+
+  rm -rf "$VD83" "$NOPY_PATH_DIR"
 }
 
 echo

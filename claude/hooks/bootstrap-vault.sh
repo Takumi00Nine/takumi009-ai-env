@@ -50,7 +50,15 @@ TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 
 # ローカル実体プロファイル（2026-08-30 共通コア分離 §9.0 A-1 P1機構）。
 # 正本は各マシンのローカル（$HOME/.config/takumi009-ai-env/profile.md）で
-# repo管理外・非配布（§11.2 source of truth定義）。Vault外の固定パスを必読
+# repo管理外のまま（§11.2 source of truth定義）。推奨経路は repo の
+# config/profile.md.sample を手でコピーして作ること＝実値入り。
+# 2026-09-08 本人裁定A案（設定ファイルsample配布）: 実体が無いときだけ動く
+# 既存の雛形自動生成（scripts/install-main.sh）は、読み元を
+# vault-public/Preferences/profile-sample.md から repo の
+# config/profile.md.sample へ付け替えた（挙動＝「実体が無いときだけ雛形を
+# 置く」は変えていない）。本人が事前にコピーしておけば雛形配置の非破壊性
+# によりそれを上書きしない。
+# Vault外の固定パスを必読
 # リストへ載せる小改修だが、有効化そのものはA-1-3の順序厳守対象（移送先
 # core-workflow.mdが未整備のうちに必読へ加えると「どちらも読まれない窓」が
 # 開く＝§7.3③）だったため、当初は既定を無効(0)のまま実装し、Vault側改訂
@@ -80,6 +88,10 @@ resolve_bootstrap_self_dir() {
 }
 BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 : "${PROFILE_RESOLVE_LIB:=$BOOTSTRAP_SELF_DIR/lib/profile_resolve.py}"
+# 使用率スナップショット（B1a「使用率の見える化」-実装-2026-09-08.md・
+# FR-104/FR-108①）: bootstrap-vault.sh自身のsymlinkを解決した実体ディレクトリ
+# 直下のlib/を見る（PROFILE_RESOLVE_LIBと同じ二重管理防止の考え方）。
+: "${USAGE_SNAPSHOT_LIB:=$BOOTSTRAP_SELF_DIR/lib/usage_snapshot.py}"
 # Bedrockのピン留め実値ファイル（install-main.shと同じ既定値。§6.1）。
 # V9-d③・V12の判定にだけ使う＝値そのものは読まず特定キーの有無/非空だけ見る。
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
@@ -149,10 +161,13 @@ if [ "${BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY:-0}" = "1" ]; then
 fi
 # 未記入のまま残っていると壊れているのと同じ扱いにする印（T2-MINIMAL。
 # 設計書v10.3で確定した表記＝凍結側の別のT2と識別子が衝突しないよう分離）。
-# サンプル（Preferences/profile-sample.md）は本人裁定（2026-08-30「初期値は
-# メイン機の実値を既定値に戻す」）により全キー（裁定当時は7キー・2026-09-07
-# 能力軸整理後は能力軸3キー）とも実運用値（メイン機の確認済み実値）を入れて
-# 配布し、このsentinelはどのキーにも使わない。
+# サンプルは本人裁定（2026-08-30「初期値はメイン機の実値を既定値に戻す」・
+# 2026-09-08「正本はrepoのconfig/*.sample」＝設定ファイルsample配布）に
+# より全キー（能力軸3キーを含む）とも実運用値（メイン機の確認済み実値）を
+# 入れて配布する（正本＝repoの`config/profile.md.sample`。Vaultの
+# `Preferences/profile-sample.md`は2026-09-08以降、schema本体を持たない
+# 案内ノートへ縮小され「正本はrepoのconfig/profile.md.sample」を指すだけに
+# なった）ため、このsentinelはどのキーにも使わない。
 # fail-soft機構（sentinel検出・未記入判定）自体はコード契約として維持する
 # （サブ機・別マシンで値を書き換えず出荷した場合や、将来キーが増えた場合の
 # 安全弁のため）。詳細は
@@ -683,6 +698,50 @@ compute_health_lines() {
   printf '%s' "$lines"
 }
 
+# 使用率ブロック（B1a「使用率の見える化」-実装-2026-09-08.md・FR-108①）:
+# usage_snapshot.pyの既定出力（枠あたり1行・常に3行）に見出しと末尾1行を
+# 添えて返す。⚠️ timeoutは使わない（macOSに無い＝設計指示書§2.2）。
+# ⚠️ AIENV_USAGE_CACHE_DIRはこの関数が明示的に転送しなくても、bashの子
+# プロセス（python3）へ環境変数として自然に継承される（テストで
+# fixtureディレクトリを差すときは呼び出し元でこの変数をexportするだけでよい）。
+# ⚠️ AIENV_USAGE_NOW（テスト専用・2026-09-08 worker-driven一次レビュー
+# MAJOR-4対応で新設）: 設定されていれば`--now`としてusage_snapshot.pyへ
+# そのまま渡す。年齢計算・リセット時刻表示（同日/翌日の書式分岐）を
+# 実時刻から切り離して決定的にテストできるようにするため
+# （resolve_local_profile()の--nowに相当する既存の設計則をこの新機能にも
+# 踏襲した）。本番では未設定のため無効＝常に実時刻を使う。
+# fail-open: python3不在・lib不在・実行失敗のいずれでも1行のメッセージへ
+# 縮退するだけで、ブートストラップ本文は必ず出す（呼び出し側が
+# `compute_usage_block 2>/dev/null`する二重の安全網もある）。
+compute_usage_block() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '【使用率】取得口が使えません（python3 なし）'
+    return
+  fi
+  if [ ! -f "$USAGE_SNAPSHOT_LIB" ]; then
+    printf '【使用率】取得口が使えません（usage_snapshot.py が見つかりません）'
+    return
+  fi
+  local body rc
+  if [ -n "${AIENV_USAGE_NOW:-}" ]; then
+    body="$(python3 "$USAGE_SNAPSHOT_LIB" --now "$AIENV_USAGE_NOW" 2>/dev/null)"
+  else
+    body="$(python3 "$USAGE_SNAPSHOT_LIB" 2>/dev/null)"
+  fi
+  rc=$?
+  # ⚠️ 2026-09-08 worker-driven一次レビューMAJOR-3対応: 従来は`$body`が
+  # 空かどうかだけを見ており、終了コードを確認していなかった（usage_
+  # snapshot.py自身の契約は「exit常に0」だが、想定外のクラッシュで一部
+  # 出力を吐いてから非0で落ちるような将来の実装変化があっても、ここで
+  # 拾えるようにする多重防御）。空出力に加えて非0終了コードも失敗として
+  # 扱う。
+  if [ -z "$body" ] || [ "$rc" != "0" ]; then
+    printf '【使用率】取得口が使えません（usage_snapshot.py の実行に失敗しました）'
+    return
+  fi
+  printf '【使用率】\n%s\n委任の前に見直すときは同じ口＝usage_snapshot.py（配役表・Preferencesの規則参照）' "$body"
+}
+
 INPUT=$(cat 2>/dev/null || true)
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // ""' 2>/dev/null)
 AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // ""' 2>/dev/null)
@@ -827,7 +886,7 @@ else
     if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
       profile_lines=$(wc -l < "$AIENV_LOCAL_PROFILE_PATH" | tr -d ' ')
       list="$list
-  - $AIENV_LOCAL_PROFILE_PATH  （全${profile_lines}行：Readで全文を読むこと。ローカル実体プロファイル＝非配布）"
+  - $AIENV_LOCAL_PROFILE_PATH  （全${profile_lines}行：Readで全文を読むこと。ローカル実体プロファイル＝機ごとのローカル通常ファイル。推奨経路はrepoのconfig/profile.md.sampleを手でコピー）"
       present_count=$((present_count + 1))
     elif [ "$profile_kind" = "MINIMAL" ]; then
       profile_reason_code="${profile_rest%%$'\t'*}"
@@ -955,6 +1014,12 @@ ${leader_settings_drift_warning}"
   # 外部脳ヘルス行（fail-open: 失敗してもブートストラップ本文は必ず出す）。
   HEALTH_LINES="$(compute_health_lines 2>/dev/null)" || HEALTH_LINES=""
 
+  # 使用率ブロック（B1a・FR-108①）: 外部脳ヘルスの直後・常に出す
+  # （HEALTH_LINESと違い空になることはない＝AC-91④「起動注入に枠あたり
+  # 1行のブロックが現れる」は取得失敗時でも行数を変えない設計のため）。
+  USAGE_BLOCK="$(compute_usage_block 2>/dev/null)"
+  [ -z "$USAGE_BLOCK" ] && USAGE_BLOCK='【使用率】取得口が使えません（内部エラー）'
+
   read -r -d '' DIRECTIVE <<EOF
 【セッション開始ブートストラップ｜ハーネス強制注入】
 
@@ -977,6 +1042,8 @@ ${MACHINE_ROLE_HOLD_LINE}}
 ${HEALTH_LINES:+
 【外部脳ヘルス】（scripts/check-drift.sh ⑥の簡易版。詳細確認は本体を実行）
 $HEALTH_LINES}
+
+$USAGE_BLOCK
 ${LOCAL_PROFILE_WARNING:+
 【ローカル実体プロファイル】
 $LOCAL_PROFILE_WARNING}

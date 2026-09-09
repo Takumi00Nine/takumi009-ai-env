@@ -43,8 +43,10 @@ takumi009-ai-env/
 │   ├── install-sub.sh           # Installer for the sub environment (sets up the Vault skeleton, then delegates to install-main.sh)
 │   ├── install-backup.sh        # Installer for the Vault-backup LaunchAgent
 │   ├── install-maintenance.sh   # Installer for the weekly maintenance-runner LaunchAgent (main only)
+│   ├── install-usage-fetch.sh   # Installer/migrator for the usage-fetch LaunchAgent (from claude-codex-usage; run manually per machine)
 │   ├── codex-exec.sh            # The sole entry point for invoking Codex (wraps `codex exec`; replaces the old MCP registration)
 │   ├── backup-vault.sh          # Periodically git commits (+pushes) the Vault
+│   ├── usage-fetch.sh           # Fetches Claude/Codex usage and writes the usage caches read by claude-codex-usage's display scripts
 │   ├── maintenance.sh           # Weekly maintenance runner (backup snapshot + detection + headless-Claude apply + summary; main only)
 │   ├── update-sub.sh            # Manually-run command that refreshes the sub's rules (sub only; invoked on demand from the check-sub-update.sh SessionStart hook's guidance)
 │   ├── export-public-vault.sh   # Exports the Vault's public folder to vault-public/
@@ -94,16 +96,23 @@ Claude Code / Codex themselves are outside brew's management, so install them se
 ```sh
 git clone <URL of this repository> ~/work/takumi009-ai-env
 cd ~/work/takumi009-ai-env
+mkdir -p ~/.config/takumi009-ai-env
+cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # Local role-cast profile (real main-machine values)
+cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # Model definitions (real main-machine values)
 scripts/install-main.sh          # Symlinks claude/ and codex/ into ~/.claude and ~/.codex
 scripts/install-backup.sh        # Installs the Vault-backup LaunchAgent
 scripts/install-maintenance.sh   # Installs the weekly maintenance-runner LaunchAgent (main only)
+scripts/install-usage-fetch.sh --dry-run  # Preview the usage-fetch migration/install plan first
+scripts/install-usage-fetch.sh            # Installs (or migrates from claude-codex-usage/refresh.sh)
 ```
 
+- `config/*.sample` is the source for these three local config files' real values. `config/profile.md.sample` and `config/models.conf.sample` ship with the real values used on the maintainer's main machine, so a fresh main machine can copy them as-is; a sub machine should copy them too and then edit at least `machine_role` (and, if it plays a different leader role, `role.leader`). `config/bedrock.env.sample` (→ `~/.config/takumi009-ai-env/bedrock.env`, permission 0600) is only for machines that actually use Bedrock — don't place it on a subscription-only machine; there is no auto-copy for it, you always copy it yourself. `config/models.conf.sample` likewise has no auto-copy — copy it yourself. `config/profile.md.sample` is different: if `~/.config/takumi009-ai-env/profile.md` doesn't exist yet, `install-main.sh` automatically copies `config/profile.md.sample` there for you the first time it runs (an existing skeleton-placement step from before `config/*.sample` existed; it never overwrites a profile that's already there). Copying it yourself beforehand has the same effect — either way you end up with this machine's real values, not a placeholder.
 - `install-main.sh` moves any existing real file to `<dest>.pre-aienv.bak` only the first time before replacing it with a symlink (safe to re-run = idempotent). Use the `--dry-run` option to preview the plan only.
 - `codex/config.toml` and `claude/settings.json` are generated as real files — not symlinks. `config.toml`'s placeholder (`__AIENV_HOME__`) is replaced by the actual home path (plain TOML doesn't support shell variable expansion). `settings.json`'s placeholder (`__AIENV_MODEL__`) is replaced by the model/effort actually resolved from the local profile's `role.leader` (via `profile_resolve.py resolve-leader`) — it does not depend on machine role or on `--sub-delegate`. The `--sub-delegate`-selected legacy values (`AIENV_MODEL_MAIN`/`AIENV_MODEL_SUB`) only kick in when the profile is v1 format or missing entirely. Generating rather than symlinking `settings.json` also avoids a side effect where running `/model` interactively rewrites the *repository's* `claude/settings.json` in place (Claude Code writes its saved model choice into the live user settings file, which used to be a symlink straight into this repo).
 - Both `install-backup.sh` and `install-maintenance.sh` only place the LaunchAgents (bootstrap+enable) — they do **not** trigger an immediate run (kickstart) (because initializing the Vault as a Git repository for the first time is meant to be a staged rollout. Either wait for the next scheduled run, or once you're ready, run `launchctl kickstart -k` manually).
 - Codex is invoked exclusively through `scripts/codex-exec.sh` (a wrapper around `codex exec`, i.e. the CLI, not an MCP server). There is no registration step for `install-main.sh` to run: as long as `codex` is on `PATH`, the wrapper works. The wrapper enforces reading the Vault's `Preferences/absolute-rules.md` note (it refuses to run — exit code 2 — if the request text doesn't reference it), which used to be enforced by a Claude Code PreToolUse hook on the old MCP tools; see `Preferences/codex-exec-worker.md` in the Vault for the invocation pattern.
 - The weekly drift-notification LaunchAgent (`com.takumi009.drift-check.plist` / `scripts/drift-notify.sh`) that `install-main.sh` used to install, and the standalone Vault-cultivation LaunchAgents (`vault-inventory`/`fragments-log`/`knowledge-merge-detect`) formerly installed by `install-vault-agents.sh`, were all removed/consolidated on 2026-07-16 (see [[Decisions/2026-07-16-nightly-batch-direct-write]] in the Vault). `install-maintenance.sh` migrates any of these 4 retired LaunchAgent labels still loaded on the machine (bootout + remove) before installing the new `com.takumi009.maintenance` LaunchAgent. The unattended weekly path now lives entirely in the new `maintenance.sh` runner.
+- `install-usage-fetch.sh` is not a plain bootstrap+enable installer like `install-backup.sh`/`install-maintenance.sh`: it moved the Claude/Codex usage-percentage fetcher from the separate `claude-codex-usage` repository's `refresh.sh` into this repository (`scripts/usage-fetch.sh`, LaunchAgent `com.takumi009.usage-fetch`, once per minute; 2026-09 migration). On a machine that already had the old `com.claude-codex-usage.refresh` job running, it stops the old job first, installs the new one, and prints a display comparison for you to confirm — never running both at once (avoids the double-fetch/429 storm that happened once before). See "Usage fetcher" below for the full switch-over sequence (`--dry-run` → run → `--verify` → `--confirm`) and how to roll back (`--rollback`) or recover from an accidental double-fetch (`--heal`). The cache files it writes (`~/.cache/claude-codex-usage/{claude,codex}-cache.json`) and their format are unchanged, so `claude-codex-usage`'s `tmux-usage.sh`/`cmux-usage-watch.sh` display scripts keep working without modification.
 - On the main environment, a **private patch (a separate private repository)** is layered on top of this base package. The private patch contains the Vault's substance (`~/Data/obsidian`) and settings that cannot be made public. See that repository's own documentation for its setup steps.
 
 #### Sub environment
@@ -111,15 +120,18 @@ scripts/install-maintenance.sh   # Installs the weekly maintenance-runner Launch
 ```sh
 git clone <URL of this repository> ~/work/takumi009-ai-env
 cd ~/work/takumi009-ai-env
+mkdir -p ~/.config/takumi009-ai-env
+cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # then edit machine_role (and role.leader if needed)
+cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # then trim/enable the model defs this machine actually uses
 scripts/install-sub.sh
 ```
 
-The sub environment is self-contained with just the base package and does not install the private patch (it also has no edit permission = pull only). `install-sub.sh` does the following:
+The sub environment is self-contained with just the base package and does not install the private patch (it also has no edit permission = pull only). As with the main environment, `models.conf` and `bedrock.env` have no auto-copy — copy `config/models.conf.sample` yourself before running `install-sub.sh` (and `config/bedrock.env.sample` too, if this machine uses Bedrock). `profile.md` is auto-copied from `config/profile.md.sample` on first run if it doesn't exist yet (same mechanism as the main environment, since `install-sub.sh` calls `install-main.sh` internally) — but for a sub machine you should copy it yourself first anyway, so you can edit `machine_role` to `value=sub` (and `role.leader` if this machine plays a different leader) before the installer runs. `install-sub.sh` does the following:
 
 1. If `$HOME/Data/obsidian` doesn't exist, copies the contents of `vault-public/` (public snapshot + private skeleton) to build the Vault skeleton (does not overwrite if it already exists).
 2. Symlinking of `claude/`/`codex/` and codex MCP registration are done by calling `install-main.sh` directly (shared logic).
 3. The Vault-cultivation and backup LaunchAgents are **not installed** (main-only features).
-4. **Rule-update check on every session start**: the source of truth for machine role is the local profile's `machine_role` capability axis (`$HOME/.config/takumi009-ai-env/profile.md`) — you write it yourself (`machine_role: configured value=main` or `value=sub`); the installers never write to the profile. `claude/hooks/check-sub-update.sh`, `scripts/update-sub.sh`, `scripts/check-drift.sh`, and `claude/hooks/bootstrap-vault.sh` all read it via `profile_resolve.py resolve`'s `MACHINE_ROLE:` field. Only a value that resolves to exactly `sub` is treated as a sub machine — resolution failure, `unknown`, `unavailable`, or a missing line are all treated as *not* sub (fail-closed). `claude/hooks/check-sub-update.sh` (a SessionStart hook) checks this on every Claude Code session start; if it isn't `sub` it does nothing and exits silently (fail-closed). On an actual sub machine it does a time-boxed `git fetch` (fail-open: any failure/timeout/offline situation is silently ignored so it never blocks session startup, though failures are logged to `/tmp/check-sub-update.log`), and if the repository is behind `origin/main`, prints a notice telling you to run `scripts/update-sub.sh` yourself. `scripts/update-sub.sh` itself also checks the same `machine_role` at the very start and refuses to run (via `fail()`) if it isn't `sub` — this is the last line of defense against accidentally running it on the main machine, where its `rsync --delete` step would wipe out the main Vault's `Preferences/`. Beyond that check, `scripts/update-sub.sh`'s own behavior is unchanged: it `git pull --ff-only`s this repository, and if there are changes, automatically regenerates `codex/config.toml`, re-syncs `vault-public/Preferences/` (**touches nothing outside Preferences**, so local `Fragments` etc. on the sub machine are not deleted), and fills in any new skeleton folders. If there are no changes, it exits quietly (since subs aren't meant to be edited, a `git pull` that can't fast-forward normally shouldn't happen, but if it does, it just prints a warning and stops rather than force-overwriting).
+4. **Rule-update check on every session start**: the source of truth for machine role is the local profile's `machine_role` capability axis (`$HOME/.config/takumi009-ai-env/profile.md`) — you write it yourself (`machine_role: configured value=main` or `value=sub`); the installers never rewrite an existing profile or its `machine_role` value (if `profile.md` doesn't exist yet, `install-main.sh` creates it fresh from `config/profile.md.sample` — see "Setup" above — but it never touches one that's already there). `claude/hooks/check-sub-update.sh`, `scripts/update-sub.sh`, `scripts/check-drift.sh`, and `claude/hooks/bootstrap-vault.sh` all read it via `profile_resolve.py resolve`'s `MACHINE_ROLE:` field. Only a value that resolves to exactly `sub` is treated as a sub machine — resolution failure, `unknown`, `unavailable`, or a missing line are all treated as *not* sub (fail-closed). `claude/hooks/check-sub-update.sh` (a SessionStart hook) checks this on every Claude Code session start; if it isn't `sub` it does nothing and exits silently (fail-closed). On an actual sub machine it does a time-boxed `git fetch` (fail-open: any failure/timeout/offline situation is silently ignored so it never blocks session startup, though failures are logged to `/tmp/check-sub-update.log`), and if the repository is behind `origin/main`, prints a notice telling you to run `scripts/update-sub.sh` yourself. `scripts/update-sub.sh` itself also checks the same `machine_role` at the very start and refuses to run (via `fail()`) if it isn't `sub` — this is the last line of defense against accidentally running it on the main machine, where its `rsync --delete` step would wipe out the main Vault's `Preferences/`. Beyond that check, `scripts/update-sub.sh`'s own behavior is unchanged: it `git pull --ff-only`s this repository, and if there are changes, automatically regenerates `codex/config.toml`, re-syncs `vault-public/Preferences/` (**touches nothing outside Preferences**, so local `Fragments` etc. on the sub machine are not deleted), and fills in any new skeleton folders. If there are no changes, it exits quietly (since subs aren't meant to be edited, a `git pull` that can't fast-forward normally shouldn't happen, but if it does, it just prints a warning and stops rather than force-overwriting).
 
 On sub machines, private notes such as `Personal/profile-personal.md` and `Knowledge/mistakes.md` don't exist, but since `bootstrap-vault.sh` (the SessionStart hook) is designed to only list **files that actually exist** as required reading, no "not found" warnings appear.
 
@@ -147,6 +159,32 @@ The user creates and configures the remote for the Vault's backup destination (a
 - **Phase 3** — appends a one-line summary to today's Fragments file, updates `last-run.json` (`last_success_at` only on a fully clean run; `last_result` — success/warn/fail — is always recorded, and a warning or failure shows up as a ⚠️ line in the next session's startup health check), takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
 
 All intermediate files and machine-readable status files for a given run live under `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/`, with `~/.claude/logs/maintenance/latest` always pointing at the most recent run.
+
+### Usage Monitoring (usage_snapshot.py)
+
+Every session start shows a **【使用率】** block with one line per quota pool (`claude-subscription` / `codex-subscription` / `unlimited`), so the orchestrator can see remaining usage without hunting for a file. This is presentation-only: the mechanism never picks candidates based on usage, ranks pools against each other, or computes a "bias" — it just lays the remaining percentages side by side and lets the orchestrator decide.
+
+- **Prerequisite**: a usage fetcher (see "Usage fetcher" below) refreshes `~/.cache/claude-codex-usage/claude-cache.json` / `codex-cache.json` once a minute; `usage_snapshot.py` only reads those files and never touches the network itself.
+- **Manual check**: `python3 claude/hooks/lib/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot). Run this again right before delegating a task if you want a fresher read than the one shown at session start.
+- If the cache is missing (fetcher not installed) or stale, the block still shows exactly 3 lines with a plain-language explanation instead of failing silently.
+
+### Usage fetcher (scripts/usage-fetch.sh / scripts/install-usage-fetch.sh)
+
+`scripts/usage-fetch.sh` fetches Claude's OAuth usage percentages and Codex's `rateLimits` once a minute (LaunchAgent `com.takumi009.usage-fetch`, installed by `scripts/install-usage-fetch.sh`) and writes them atomically to `~/.cache/claude-codex-usage/{claude,codex}-cache.json` — the same paths and JSON schema (`schema_version: 1`) the `claude-codex-usage` repository's display scripts (`tmux-usage.sh`, `cmux-usage-watch.sh`) already read, so those scripts need no changes. It replaced `claude-codex-usage/refresh.sh` in 2026-09 (only one fetcher is ever meant to run, to avoid a repeat of a past double-fetch/429 storm). A rate-limited (429) response is a complete no-op (not a byte of the cache changes); any other failure (timeout, network error, malformed response, missing `codex` command) is recorded as `last_error` without touching `fetched_at`, so a display reading a stale-but-`ok` cache and a display reading a freshly-recorded failure are always distinguishable.
+
+On a machine that already has the old job running, switch over with:
+
+```sh
+scripts/install-usage-fetch.sh --capture-display   # optional: record today's tmux/cmux output for later comparison
+scripts/install-usage-fetch.sh --dry-run            # see the plan (which route it will take) without changing anything
+scripts/install-usage-fetch.sh                      # stop the old job, install and load the new one, wait for the new job to touch both caches (a recorded failure counts too, e.g. if this machine has no codex command)
+scripts/install-usage-fetch.sh --verify             # re-check the cache, show a before/after display comparison, and ask you to confirm
+scripts/install-usage-fetch.sh --confirm             # after running for a few days: delete the stashed old plist and finalize
+```
+
+The old LaunchAgent's `plist` is stashed (never deleted outright) under `~/.local/state/takumi009-ai-env/usage-migration/`, so `scripts/install-usage-fetch.sh --rollback` can restore it at any point before `--confirm`. If the two jobs ever end up loaded at the same time (e.g. the old job's install path revived it), `scripts/install-usage-fetch.sh --heal` is the one command that safely stops the old one again — it never deletes the old repo's installer itself, so you still have a way back until you deliberately retire it. On a machine that never had the old job, the same command just installs fresh (no `--confirm` step needed — rolling back simply removes the new job). None of this touches a real LaunchAgent unless you run it yourself; `check-drift.sh` reports drift under `[USAGE-FETCH-*]`/`[USAGE-MIGRATION-INCOMPLETE]`/`[USAGE-LOCK-STUCK]` codes if a switch-over is left half-done or the job stops updating. Sub machines are not given this LaunchAgent automatically (`install-sub.sh` never installs LaunchAgents) — run `scripts/install-usage-fetch.sh` there yourself if you want usage tracking on that machine too.
+
+If a rerun (or `--heal`) fails with a message saying it loaded the new job but can't confirm whether `enable` finished (this can happen right after `bootstrap`, or if a re-run raced with a competing `enable`), the message names the exact command to run: `launchctl enable gui/<uid>/com.takumi009.usage-fetch`. Run it once, then re-run `scripts/install-usage-fetch.sh` (or `--heal`); this is a fail-closed check, not an error in the new job itself, so it never auto-retries on its own.
 
 ### Drift Detection (check-drift.sh)
 
@@ -186,9 +224,14 @@ cd ~/work/takumi009-ai-env && brew bundle
 ~/work/takumi009-ai-env-private/install-private.sh   # Restores docs/ and ngwords
 
 # 4. Rebuild the environment
+mkdir -p ~/.config/takumi009-ai-env
+cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # local config isn't part of any backup — recreate it
+cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # (edit machine_role/model defs back to what this machine had)
 scripts/install-main.sh --with-dotfiles   # symlinks + dotfiles + codex MCP registration
 scripts/install-backup.sh                 # Resume periodic backups
 scripts/install-maintenance.sh            # Resume the weekly maintenance runner
+scripts/install-usage-fetch.sh --dry-run  # Resume usage tracking: preview the plan first
+scripts/install-usage-fetch.sh            # Resume usage tracking
 
 # 5. Log in to each app (manual): Claude Code / Codex / others
 ```
@@ -211,6 +254,8 @@ bash tests/test-bootstrap-vault.sh
 bash tests/test-install-sub.sh
 bash tests/test-install-backup.sh
 bash tests/test-install-maintenance.sh
+bash tests/test-usage-fetch.sh
+bash tests/test-install-usage-fetch.sh
 bash tests/test-with-dotfiles.sh
 bash tests/test-check-drift.sh
 bash tests/test-codex-exec.sh
@@ -265,8 +310,10 @@ takumi009-ai-env/
 │   ├── install-sub.sh           # サブ環境用インストーラ（Vault骨格配置＋install-main.shへ委譲）
 │   ├── install-backup.sh        # Vaultバックアップ用LaunchAgentのインストーラ
 │   ├── install-maintenance.sh   # 週次メンテナンスランナー用LaunchAgentのインストーラ（メイン専用）
+│   ├── install-usage-fetch.sh   # 使用率取得器用LaunchAgentのインストーラ／移行（claude-codex-usageから移設・機ごとに手動実行）
 │   ├── codex-exec.sh            # Codexを呼び出す唯一の口（`codex exec`のラッパー。旧MCP登録に代わるもの）
 │   ├── backup-vault.sh          # Vaultを定期的にgit commit（+push）するスクリプト
+│   ├── usage-fetch.sh           # Claude/Codexの使用率を取得し、claude-codex-usageの表示スクリプトが読むキャッシュへ書き出す
 │   ├── maintenance.sh           # 週次メンテナンスランナー（バックアップ＋検出＋ヘッドレスClaude適用＋サマリ。メイン専用）
 │   ├── update-sub.sh            # サブのルールを最新化する手動実行コマンド（サブ専用。check-sub-update.shの案内から本人が実行）
 │   ├── export-public-vault.sh   # Vaultのpublicフォルダを vault-public/ へエクスポートするスクリプト
@@ -316,16 +363,23 @@ Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイ
 ```sh
 git clone <このリポジトリのURL> ~/work/takumi009-ai-env
 cd ~/work/takumi009-ai-env
+mkdir -p ~/.config/takumi009-ai-env
+cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # 配役表（メイン機の実値）
+cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # モデル定義（メイン機の実値）
 scripts/install-main.sh          # claude/・codex/ を ~/.claude・~/.codex へ symlink 化
 scripts/install-backup.sh        # Vaultバックアップ用LaunchAgentを配置
 scripts/install-maintenance.sh   # 週次メンテナンスランナー用LaunchAgentを配置（メイン専用機能）
+scripts/install-usage-fetch.sh --dry-run  # 使用率取得器: まず計画だけ確認
+scripts/install-usage-fetch.sh            # 使用率取得器（claude-codex-usageからの移行 or 新規導入）
 ```
 
+- この3本のローカル設定ファイルの実値の入手元は `config/*.sample` です。`config/profile.md.sample`・`config/models.conf.sample` にはメンテナ本人のメイン機の実値がそのまま入っているため、新しいメイン機はそのままコピーして使えます。サブ機もコピーしたうえで、少なくとも `machine_role`（本人が別のリーダー配役を担うなら `role.leader` も）を書き換えます。`config/bedrock.env.sample`（コピー先＝`~/.config/takumi009-ai-env/bedrock.env`・パーミッション0600）は実際にBedrockを使う機だけが置くもので、サブスク本命機には置きません。自動コピーは無いので必ず自分でコピーします。`config/models.conf.sample` も同様に自動コピーは無く、自分でコピーします。`config/profile.md.sample` だけは別で、`~/.config/takumi009-ai-env/profile.md` がまだ無ければ `install-main.sh` が初回実行時に `config/profile.md.sample` を自動でそこへコピーします（`config/*.sample` 新設より前からある既存の雛形配置ステップで、既にある実体は上書きしません）。事前に自分でコピーしても結果は同じで、どちらの経路でも placeholder ではなくこのマシンの実値が入ります。
 - `install-main.sh` は既存の実ファイルを初回だけ `<dest>.pre-aienv.bak` に退避してから symlink に置き換えます（再実行しても安全＝冪等）。`--dry-run` オプションで計画だけを確認できます。
 - `codex/config.toml`・`claude/settings.json` は symlink ではなく実ファイルとして生成されます。`config.toml` はプレースホルダ（`__AIENV_HOME__`）を実ホームパスへ置換します（plain TOML はシェル変数展開されないため）。`settings.json` はプレースホルダ（`__AIENV_MODEL__`）を、ローカル実体プロファイルの `role.leader` から実際に解決された model/effort（`profile_resolve.py resolve-leader` 経由）へ置換します — 機役割にも `--sub-delegate` にも依存しません。`--sub-delegate` が選ぶlegacy値（`AIENV_MODEL_MAIN`/`AIENV_MODEL_SUB`）が効くのは、プロファイルがv1形式のとき・または実体が無いときだけです。symlinkではなく生成にしているのは、symlinkのままだとセッション内で `/model` を実行した際にClaude Code自身がユーザー設定ファイルへ保存した選択を書き込む仕様により、symlink先＝このリポジトリの `claude/settings.json` が直接書き換わってしまう副作用を避けるためでもあります。
 - `install-backup.sh`・`install-maintenance.sh` はどちらも LaunchAgent の配置（bootstrap+enable）までを行い、**即時実行（kickstart）はしません**（Vault の初回git化は段階的ロールアウトが前提のため。初回実行は次回の定期発火を待つか、準備が整ってから手動で `launchctl kickstart -k` してください）。
 - Codexは `scripts/codex-exec.sh`（`codex exec`＝CLIのラッパーであり、MCPサーバーではない）を通じてのみ呼び出します。`codex` がPATH上にありさえすれば動くため、`install-main.sh` 側に登録ステップはありません。ラッパー自身がVaultの `Preferences/absolute-rules.md` 参照を強制します（依頼文にその参照が無ければ実行せずexit code 2で終了する。旧MCPツールに対するClaude CodeのPreToolUseフックが担っていた検査をこちらへ移したもの）。起動の型はVaultの `Preferences/codex-exec-worker.md` を参照してください。
 - `install-main.sh` が配置していた**週次drift通知LaunchAgent**（`com.takumi009.drift-check.plist`／`scripts/drift-notify.sh`）と、`install-vault-agents.sh`（撤去済み）が配置していたVault育成系LaunchAgent3種（`vault-inventory`／`fragments-log`／`knowledge-merge-detect`）は、いずれも2026-07-16の簡素化で撤去・統合しました（Vault内 `Decisions/2026-07-16-nightly-batch-direct-write` 参照）。`install-maintenance.sh` はこの旧4ラベルがまだマシンに残っていれば移行（bootout＋削除）してから新設の `com.takumi009.maintenance` LaunchAgentを設置します。週次無人実行の経路は新設の `maintenance.sh` ランナーへ完全に移りました。
+- `install-usage-fetch.sh` は `install-backup.sh`・`install-maintenance.sh` のような単純なbootstrap+enableインストーラではありません。Claude/Codexの使用率取得器を、別リポジトリ `claude-codex-usage` の `refresh.sh` からこのリポジトリ（`scripts/usage-fetch.sh`・LaunchAgent `com.takumi009.usage-fetch`・毎分）へ移設したもの（2026-09移行。取得器は常に1つだけという方針のため）。旧ジョブ（`com.claude-codex-usage.refresh`）が既に動いている機では、旧を止めてから新を入れ、表示の比較を出して本人の確認を求めます（二重取得の429ストーム再発を防ぐため）。切替の全手順（`--dry-run` → 実行 → `--verify` → `--confirm`）・巻き戻し（`--rollback`）・誤って二重になったときの復旧（`--heal`）は下記「使用率取得器」節を参照してください。書き出すキャッシュのパス・形式は不変なので、`claude-codex-usage` の `tmux-usage.sh`／`cmux-usage-watch.sh` は無改修のまま動き続けます。
 - メイン環境では、この基本パッケージの上に**私的パッチ（別のprivateリポジトリ）**を重ねます。私的パッチには Vault の実体（`~/Data/obsidian`）や、公開できない設定が含まれます。私的パッチの導入手順は当該リポジトリ側のドキュメントを参照してください。
 
 #### サブ環境
@@ -333,15 +387,18 @@ scripts/install-maintenance.sh   # 週次メンテナンスランナー用Launch
 ```sh
 git clone <このリポジトリのURL> ~/work/takumi009-ai-env
 cd ~/work/takumi009-ai-env
+mkdir -p ~/.config/takumi009-ai-env
+cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # コピー後にmachine_role（必要ならrole.leaderも）を書き換える
+cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # コピー後にこの機で使う定義だけ残す／有効化する
 scripts/install-sub.sh
 ```
 
-サブ環境は基本パッケージのみで完結し、私的パッチは導入しません（編集権限もありません＝pull専用）。`install-sub.sh` は以下を行います:
+サブ環境は基本パッケージのみで完結し、私的パッチは導入しません（編集権限もありません＝pull専用）。メイン環境と同様、`models.conf`・`bedrock.env` に自動コピーは無いので、`install-sub.sh` の実行前に `config/models.conf.sample`（Bedrockを使う機なら `config/bedrock.env.sample` も）を自分でコピーしてください。`profile.md` は初回実行時に無ければ `config/profile.md.sample` から自動コピーされます（`install-sub.sh` は内部で `install-main.sh` を呼ぶため、メイン環境と同じ機構が働きます）——ただしサブ機では、installer が動く前に `machine_role` を `value=sub` へ（このマシンが別のリーダー配役を担うなら `role.leader` も）書き換えられるよう、事前に自分でコピーしておくことを推奨します。`install-sub.sh` は以下を行います:
 
 1. `$HOME/Data/obsidian` が無ければ `vault-public/` の中身（public スナップショット＋private骨格）をコピーして Vault の骨格を作る（既に存在する場合は上書きしません）。
 2. `claude/`・`codex/` の symlink 化・codex MCP登録は `install-main.sh` をそのまま呼び出して行う（ロジックは共通）。
 3. Vault育成系・バックアップの LaunchAgent は**インストールしません**（メイン専用機能）。
-4. **セッション開始のたびに更新有無を確認**: 機役割の正本はローカル実体プロファイル（`$HOME/.config/takumi009-ai-env/profile.md`）の能力軸`machine_role`です — 本人が自分で書きます（`machine_role: configured value=main` または `value=sub`）。インストーラは実体プロファイルを一切書き換えません。`claude/hooks/check-sub-update.sh`・`scripts/update-sub.sh`・`scripts/check-drift.sh`・`claude/hooks/bootstrap-vault.sh` はいずれも `profile_resolve.py resolve` の `MACHINE_ROLE:` フィールドからこれを読みます。`sub` と読めたときだけサブ機として扱われます（解決失敗・`unknown`・`unavailable`・行の欠落はすべてサブ機として扱いません＝fail-closed）。`claude/hooks/check-sub-update.sh`（SessionStartフック）はセッション起動のたびにこれを確認し、`sub`でなければ何もせず静かにexitします（fail-closed）。実際のサブ機では時間上限つきの `git fetch` を実行し（fail-open＝失敗・タイムアウト・オフライン等は静かに無視してセッション起動をブロックしません。ただし失敗は `/tmp/check-sub-update.log` に記録されます）、`origin/main` より遅れていれば `scripts/update-sub.sh` を自分で実行するよう案内します。`scripts/update-sub.sh` 自体も冒頭で同じ`machine_role`を確認し、`sub`でなければ`fail()`で拒否します（メイン機で誤って実行された場合、`rsync --delete`でメインVaultの`Preferences/`が消えてしまうのを防ぐ最後の砦）。この確認を除く `scripts/update-sub.sh` 自体の処理内容は変更していません: このリポジトリを `git pull --ff-only` し、変化があれば `codex/config.toml` の再生成・`vault-public/Preferences/` の再同期（**Preferences以外には一切触れません**＝サブ機ローカルの `Fragments` 等は消えません）・新しい骨格フォルダの補充を自動で行います。変化が無ければ静かに終了します（サブは編集しない運用のため `git pull` が fast-forward できない事態は通常起きませんが、その場合は警告を出すだけで停止し、強制上書きはしません）。
+4. **セッション開始のたびに更新有無を確認**: 機役割の正本はローカル実体プロファイル（`$HOME/.config/takumi009-ai-env/profile.md`）の能力軸`machine_role`です — 本人が自分で書きます（`machine_role: configured value=main` または `value=sub`）。インストーラは既存の実体プロファイルやその`machine_role`の値を書き換えることは一切ありません（`profile.md`がまだ無ければ`install-main.sh`が`config/profile.md.sample`から新規作成しますが＝上記「導入手順」参照、既にある実体には一切触れません）。`claude/hooks/check-sub-update.sh`・`scripts/update-sub.sh`・`scripts/check-drift.sh`・`claude/hooks/bootstrap-vault.sh` はいずれも `profile_resolve.py resolve` の `MACHINE_ROLE:` フィールドからこれを読みます。`sub` と読めたときだけサブ機として扱われます（解決失敗・`unknown`・`unavailable`・行の欠落はすべてサブ機として扱いません＝fail-closed）。`claude/hooks/check-sub-update.sh`（SessionStartフック）はセッション起動のたびにこれを確認し、`sub`でなければ何もせず静かにexitします（fail-closed）。実際のサブ機では時間上限つきの `git fetch` を実行し（fail-open＝失敗・タイムアウト・オフライン等は静かに無視してセッション起動をブロックしません。ただし失敗は `/tmp/check-sub-update.log` に記録されます）、`origin/main` より遅れていれば `scripts/update-sub.sh` を自分で実行するよう案内します。`scripts/update-sub.sh` 自体も冒頭で同じ`machine_role`を確認し、`sub`でなければ`fail()`で拒否します（メイン機で誤って実行された場合、`rsync --delete`でメインVaultの`Preferences/`が消えてしまうのを防ぐ最後の砦）。この確認を除く `scripts/update-sub.sh` 自体の処理内容は変更していません: このリポジトリを `git pull --ff-only` し、変化があれば `codex/config.toml` の再生成・`vault-public/Preferences/` の再同期（**Preferences以外には一切触れません**＝サブ機ローカルの `Fragments` 等は消えません）・新しい骨格フォルダの補充を自動で行います。変化が無ければ静かに終了します（サブは編集しない運用のため `git pull` が fast-forward できない事態は通常起きませんが、その場合は警告を出すだけで停止し、強制上書きはしません）。
 
 サブ機では `Personal/profile-personal.md`・`Knowledge/mistakes.md` 等の private ノートが存在しませんが、`bootstrap-vault.sh`（SessionStartフック）は**存在するファイルだけ**を必読リストに載せる設計のため、「見つかりません」という警告は出ません。
 
@@ -369,6 +426,32 @@ Vault のバックアップ先（private repo）の作成・remote設定は本�
 - **Phase 3** — 実施サマリをFragments当日ファイルへ1行追記、`last-run.json` を更新（`last_success_at`は完全正常終了時のみ・`last_result`はsuccess/warn/failの実行結果を毎回記録し、警告/失敗があれば翌セッションの起動ヘルス行に⚠️で表示される）、`backup-vault.sh` で最終スナップショットを取得、Vault書込ロックを解放、異常時のみmacOS通知、30日超過のログを削除。
 
 各回の中間ファイル・機械可読status-fileは `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/` 配下にまとまり、`~/.claude/logs/maintenance/latest` が常に最新の実行を指します。
+
+### 使用率の見える化（usage_snapshot.py）
+
+セッション開始のたびに、枠（`claude-subscription`・`codex-subscription`・`unlimited`）あたり1行の**【使用率】**ブロックが出ます。ファイルを探しに行かなくても、リーダーがその場で残量を見られるようにするためです。あくまで提示専用の仕組みで、使用率から候補を選んだり、枠どうしを比較・順位付けしたり「偏り」を計算したりはしません。残量を並べて出すだけで、判断はリーダーに委ねます。
+
+- **前提**: 使用率取得器（下記「使用率取得器」節）が毎分 `~/.cache/claude-codex-usage/claude-cache.json`・`codex-cache.json` を更新し、`usage_snapshot.py` はそのファイルを読むだけで通信は一切行いません。
+- **手動で見る口**: `python3 claude/hooks/lib/usage_snapshot.py` を実行すると同じ3行がその場で表示されます（`--json` を付けると機械可読の1行JSONになります）。委任の直前にセッション開始時より新しい値を見たいときは、これをもう一度呼んでください。
+- キャッシュが無い（取得器未導入）・古い場合でも、静かに失敗せず常に3行のまま平易な文言で理由を示します。
+
+### 使用率取得器（scripts/usage-fetch.sh／scripts/install-usage-fetch.sh）
+
+`scripts/usage-fetch.sh` は毎分（LaunchAgent `com.takumi009.usage-fetch`・`scripts/install-usage-fetch.sh` が設置）Claude の OAuth 使用率と Codex の `rateLimits` を取得し、`~/.cache/claude-codex-usage/{claude,codex}-cache.json` へ原子的に書き出します——パスと JSON 形式（`schema_version: 1`）は `claude-codex-usage` リポジトリの表示スクリプト（`tmux-usage.sh`・`cmux-usage-watch.sh`）が既に読んでいるものと同じなので、表示側は無改修で動き続けます。2026-09 に `claude-codex-usage/refresh.sh` から移設しました（取得器は常に1つだけという方針。過去の二重取得・429ストームの再発を防ぐため）。429（レート制限）応答はキャッシュへの完全な no-op（1バイトも変わりません）。それ以外の失敗（タイムアウト・通信エラー・壊れた応答・`codex` コマンド不在）は `fetched_at` を変えずに `last_error` へ記録するので、「古いが `ok`」なキャッシュと「取得直後に失敗を記録した」キャッシュを表示側が常に区別できます。
+
+旧ジョブが既に動いている機での切替:
+
+```sh
+scripts/install-usage-fetch.sh --capture-display   # 任意: 比較用に今日のtmux/cmux表示を記録
+scripts/install-usage-fetch.sh --dry-run            # 何もせず計画（どちらの経路を取るか）だけ確認
+scripts/install-usage-fetch.sh                      # 旧を止め、新を配置・ロードし、新ジョブが両サービスに取得を試みるまで待つ（失敗の記録も含む。例＝この機にcodexコマンドが無い場合）
+scripts/install-usage-fetch.sh --verify             # キャッシュを再確認し、移行前後の表示を並べて出し、本人に確認を求める
+scripts/install-usage-fetch.sh --confirm             # 数日運用したのち: 退避した旧plistを削除して確定
+```
+
+旧LaunchAgentの `plist` は（即座に削除せず）`~/.local/state/takumi009-ai-env/usage-migration/` 配下へ退避するので、`--confirm` の前ならいつでも `scripts/install-usage-fetch.sh --rollback` で復元できます。何らかの理由（旧の配布元が復活させた等）で両方が同時にロードされてしまったときは、`scripts/install-usage-fetch.sh --heal` が唯一の安全な復旧コマンドです——旧repoのインストーラ自体は削除しないので、本人が確定的に退役させるまで戻る道が残ります。旧ジョブが一度も無かった機では、同じコマンドが新規導入として動きます（`--confirm` は不要。巻き戻しは単に新ジョブを止めるだけです）。実行しない限り実LaunchAgentには一切触れません。切替が中断したまま・取得が止まったままの機は `check-drift.sh` が `[USAGE-FETCH-*]`／`[USAGE-MIGRATION-INCOMPLETE]`／`[USAGE-LOCK-STUCK]` として報告します。サブ機には自動導入されません（`install-sub.sh` はLaunchAgentを一切設置しない方針のため）。サブ機でも使用率を追いたい場合は本人が `scripts/install-usage-fetch.sh` をそのサブ機で直接実行してください。
+
+再実行（または `--heal`）が「新ジョブはロードしたが enable が完了したか確認できない」旨のメッセージで失敗した場合（`bootstrap` 直後や、再実行が他の `enable` 呼び出しと競合したときに起こりえます）、メッセージ自体に実行すべき正確なコマンドが書かれています＝`launchctl enable gui/<uid>/com.takumi009.usage-fetch`。これを一度実行したうえで、もう一度 `scripts/install-usage-fetch.sh`（または `--heal`）を実行してください。これは新ジョブ自体の異常ではなく安全側の照会不能判定（fail-closed）なので、自動では再試行しません。
 
 ### ズレの検知（check-drift.sh）
 
@@ -408,9 +491,14 @@ cd ~/work/takumi009-ai-env && brew bundle
 ~/work/takumi009-ai-env-private/install-private.sh   # docs/・ngwords を張り戻す
 
 # 4. 環境の再構築
+mkdir -p ~/.config/takumi009-ai-env
+cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # ローカル設定はバックアップ対象外のため作り直す
+cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # （machine_role・モデル定義を旧機と同じ値へ戻す）
 scripts/install-main.sh --with-dotfiles   # symlink 化＋dotfiles＋codex MCP 登録
 scripts/install-backup.sh                 # 定期バックアップ再開
 scripts/install-maintenance.sh            # 週次メンテナンスランナー再開
+scripts/install-usage-fetch.sh --dry-run  # 使用率取得の再開: まず計画だけ確認
+scripts/install-usage-fetch.sh            # 使用率取得を再開
 
 # 5. 各アプリのログイン（手動）: Claude Code / Codex / その他
 ```
@@ -433,6 +521,8 @@ bash tests/test-bootstrap-vault.sh
 bash tests/test-install-sub.sh
 bash tests/test-install-backup.sh
 bash tests/test-install-maintenance.sh
+bash tests/test-usage-fetch.sh
+bash tests/test-install-usage-fetch.sh
 bash tests/test-with-dotfiles.sh
 bash tests/test-check-drift.sh
 bash tests/test-codex-exec.sh

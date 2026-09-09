@@ -31,22 +31,13 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
-# セクション6・7（配役表解凍・担当D追加分）で共有するヘルパー。
-# install-main.shのextract_profile_schema_block()関数だけをsedで静的抽出して
-# evalする（全体sourceによる実インストール処理の副作用を避けるため）。
-# 一度evalに成功すれば以後は再抽出せず既存の関数定義を再利用する（declare -Fで
-# 判定。セクション7から呼んでもセクション6の定義がそのまま使える）。
-# 戻り値0=関数が使える状態／非0=抽出失敗（呼び出し側でfail_caseすること）。
-ensure_extract_profile_schema_block_fn() {
-  if declare -F extract_profile_schema_block >/dev/null 2>&1; then
-    return 0
-  fi
-  local fn_src
-  fn_src="$(sed -n '/^extract_profile_schema_block() {/,/^}/p' "$REPO_ROOT/scripts/install-main.sh")" || return 1
-  [ -n "$fn_src" ] || return 1
-  eval "$fn_src"
-  declare -F extract_profile_schema_block >/dev/null 2>&1
-}
+# ⚠️ 2026-09-08 本人裁定A案（設定ファイルsample配布）で
+# scripts/install-main.shのextract_profile_schema_block()（```yamlフェンス
+# 抽出）が撤去された（雛形配置の読み元がconfig/profile.md.sampleという
+# 生ファイルへ付け替わり、フェンス抽出が不要になったため）。これをsedで
+# 静的抽出してevalしていた共有ヘルパーensure_extract_profile_schema_block_fn()
+# も、それを使っていたセクション6・7のテストごと撤去した（詳細＝
+# セクション6・7の現行実装を参照）。
 
 # 最小能力表の能力軸3キー（§3.3.0）。2026-09-08 モデル定義ファイルと候補
 # 指定対応（同設計§3.8・D-13）: 旧v1側の正本（bootstrap-vault.shが持って
@@ -276,54 +267,48 @@ PYEOF
   fi
 }
 
-echo "=== 6. 静的（配役表解凍・担当D）: vault-public/Preferences/profile-sample.md の \`\`\`yaml ブロックが scripts/install-main.sh の extract_profile_schema_block() で抽出できる（設計書§10「静的」①・4.5） ==="
+echo "=== 6. 静的（設定ファイルsample配布・2026-09-08本人裁定A案）: config/profile.md.sample が installer の雛形配置がそのままコピーできる生ファイル形式である（先頭---・role.leader・schema_version） ==="
 {
-  PROFILE_SAMPLE="$REPO_ROOT/vault-public/Preferences/profile-sample.md"
+  # 2026-09-08 本人裁定A案: 雛形配置の読み元がVaultノート
+  # （vault-public/Preferences/profile-sample.md・Obsidianノート＋```yaml
+  # フェンス構造）からrepo管理下の生ファイルconfig/profile.md.sampleへ
+  # 付け替わり、scripts/install-main.shのextract_profile_schema_block()
+  # （```yamlフェンス抽出）は撤去された。単純にファイルをそのままコピー
+  # するだけになったため、本セクションも「フェンスから抽出できるか」ではなく
+  # 「生ファイルとして単体で必要な形を満たしているか」を直接検査する形へ
+  # 差し替えた。
+  PROFILE_SAMPLE="$REPO_ROOT/config/profile.md.sample"
 
-  # install-main.sh全体をsourceすると実インストール処理が走ってしまうため、
-  # extract_profile_schema_block()関数の定義部分だけを静的抽出して使う
-  # （関数は`^extract_profile_schema_block() {`で始まり`^}`で終わる単純な形。
-  # 対象関数内に行頭"}"の入れ子は無い＝この抽出方法で安全に切り出せる。
-  # 抽出・eval自体の失敗は共有ヘルパーensure_extract_profile_schema_block_fn()
-  # 内で吸収し、戻り値でfail_caseへ倒せるようにする＝Codex一次レビュー指摘・
-  # Minor対応）。
-  if ! ensure_extract_profile_schema_block_fn; then
-    fail_case "install-main.shからextract_profile_schema_block()関数を抽出できない（関数名変更・削除の可能性）"
+  if [ ! -f "$PROFILE_SAMPLE" ]; then
+    fail_case "config/profile.md.sample が見つからない"
   else
-    EXTRACT_OUT=""
-    extract_rc=0
-    if EXTRACT_OUT="$(extract_profile_schema_block "$PROFILE_SAMPLE" 2>&1)"; then
-      extract_rc=0
+    SAMPLE_CONTENT="$(cat "$PROFILE_SAMPLE")"
+    pass "config/profile.md.sample を読み取れる"
+    if [[ "$(printf '%s\n' "$SAMPLE_CONTENT" | head -1)" == "---" ]]; then
+      pass "先頭行が---（installerがそのままコピーする雛形フォーマット）"
     else
-      extract_rc=$?
+      fail_case "先頭行が---でない（installerの雛形フォーマットと不一致）"
     fi
-    if [ "$extract_rc" -ne 0 ]; then
-      fail_case "profile-sample.mdから\`\`\`yamlブロックを抽出できない（詳細: ${EXTRACT_OUT}）"
+    if printf '%s\n' "$SAMPLE_CONTENT" | grep -q '^role\.leader:'; then
+      pass "role.leader行が含まれる（配役表v2の必須配役行）"
     else
-      pass "extract_profile_schema_block()がprofile-sample.mdからブロックを抽出できる"
-      if [[ "$(printf '%s\n' "$EXTRACT_OUT" | head -1)" == "---" ]]; then
-        pass "抽出したブロックの先頭行が---（installerが読む雛形フォーマット）"
-      else
-        fail_case "抽出したブロックの先頭行が---でない（installerの雛形フォーマットと不一致）"
-      fi
-      if printf '%s\n' "$EXTRACT_OUT" | grep -q '^role\.leader:'; then
-        pass "抽出したブロックにrole.leader行が含まれる（配役表v2の必須配役行）"
-      else
-        fail_case "抽出したブロックにrole.leader行が含まれない"
-      fi
-      if printf '%s\n' "$EXTRACT_OUT" | grep -q '^schema_version:'; then
-        pass "抽出したブロックにschema_version行が含まれる"
-      else
-        fail_case "抽出したブロックにschema_version行が含まれない"
-      fi
+      fail_case "role.leader行が含まれない"
+    fi
+    if printf '%s\n' "$SAMPLE_CONTENT" | grep -q '^schema_version:'; then
+      pass "schema_version行が含まれる"
+    else
+      fail_case "schema_version行が含まれない"
     fi
   fi
 }
 
-echo "=== 7. 静的（配役表解凍・担当D）: 固定キー集合＋動的プレフィックス2種＋期待版がprofile-sample.mdとprofile_resolve.py（known-keys／print-schema-version）で一致する（設計書§10「静的」②・§3.4・profile-resolve-contract-2026-09-01.md§7） ==="
+echo "=== 7. 静的（設定ファイルsample配布・2026-09-08本人裁定A案）: 固定キー集合＋動的プレフィックス2種＋期待版がconfig/profile.md.sampleとprofile_resolve.py（known-keys／print-schema-version）で一致する（§3.4・profile-resolve-contract-2026-09-01.md§7） ==="
 {
   PROFILE_RESOLVE_PY="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
-  PROFILE_SAMPLE="$REPO_ROOT/vault-public/Preferences/profile-sample.md"
+  # 2026-09-08 本人裁定A案: 読み元をVaultノート（vault-public/Preferences/
+  # profile-sample.md）からrepo管理下の生ファイルconfig/profile.md.sampleへ
+  # 付け替えた（extract_profile_schema_block()は撤去済み・セクション6参照）。
+  PROFILE_SAMPLE="$REPO_ROOT/config/profile.md.sample"
 
   if [ ! -f "$PROFILE_RESOLVE_PY" ]; then
     # 担当Aの成果物（claude/hooks/lib/profile_resolve.py）が本ブランチへ未着地の
@@ -332,8 +317,8 @@ echo "=== 7. 静的（配役表解凍・担当D）: 固定キー集合＋動的�
     # （リーダー指示・2026-09-01）。したがってこの分岐に入っている間のNGは
     # このテスト自体の不具合ではなく「担当A成果物の未着地」を示す。
     fail_case "claude/hooks/lib/profile_resolve.py が未配置のため known-keys/print-schema-version との一致を検証できない（担当A成果物の未着地待ち・契約＝profile-resolve-contract-2026-09-01.md §7。着地後に本テストを再実行して結合確認すること）"
-  elif ! ensure_extract_profile_schema_block_fn; then
-    fail_case "install-main.shからextract_profile_schema_block()関数を抽出できない（セクション6と同一失敗のはず＝想定外）"
+  elif [ ! -f "$PROFILE_SAMPLE" ]; then
+    fail_case "config/profile.md.sample が見つからない"
   else
     # `VAR="$(cmd)"`単独（`||`無し）はset -e下でcmdが非0を返すと即座にスクリプト
     # 全体を終了させてしまう（Codex一次レビュー指摘・Major対応）。以下すべての
@@ -346,23 +331,20 @@ echo "=== 7. 静的（配役表解凍・担当D）: 固定キー集合＋動的�
     fi
     if [ "$known_keys_rc" -ne 0 ]; then
       fail_case "profile_resolve.py known-keys が非0終了した（詳細: ${KNOWN_KEYS_OUT}）"
-    elif ! SAMPLE_BLOCK="$(extract_profile_schema_block "$PROFILE_SAMPLE" 2>&1)"; then
-      fail_case "profile-sample.mdから\`\`\`yamlブロックを抽出できない（詳細: ${SAMPLE_BLOCK}）"
     else
       pass "profile_resolve.py known-keys が成功する"
 
-      # 抽出したサンプルブロックを一時ファイルへ書き、print-schema-versionの
-      # 入力に使う（このサブコマンドはパス引数を取る値なし・副作用ゼロの契約）。
-      TMP_SAMPLE_BLOCK="$(mktemp)"
-      printf '%s\n' "$SAMPLE_BLOCK" > "$TMP_SAMPLE_BLOCK"
+      # config/profile.md.sampleは生ファイルそのものなので、抽出せずそのまま
+      # SAMPLE_BLOCKとして使う（print-schema-versionの入力にも直接渡せる。
+      # このサブコマンドはパス引数を取る値なし・副作用ゼロの契約）。
+      SAMPLE_BLOCK="$(cat "$PROFILE_SAMPLE")"
 
       print_version_rc=0
-      if PRINT_VERSION_OUT="$(python3 "$PROFILE_RESOLVE_PY" print-schema-version "$TMP_SAMPLE_BLOCK" 2>&1)"; then
+      if PRINT_VERSION_OUT="$(python3 "$PROFILE_RESOLVE_PY" print-schema-version "$PROFILE_SAMPLE" 2>&1)"; then
         print_version_rc=0
       else
         print_version_rc=$?
       fi
-      rm -f "$TMP_SAMPLE_BLOCK"
 
       # known-keys／print-schema-versionの出力とサンプル本文を、この場だけの
       # 突合ロジックとして直接文字列処理せずpython3へ渡す（既存のsection5と
@@ -714,64 +696,68 @@ echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC
   fi
 }
 
-echo "=== 16. モデル定義ファイルと候補指定-要件-2026-09-08.md AC-15: 公開サンプル（Vault正本・公開スナップショット）の静的検査＝FX-B14a〜c（Codexレビュー指摘・MAJOR-3対応・1巡目） ==="
+# ⚠️ 2026-09-08 検証職(Codex)1巡目指摘・リーダー裁定（MAJOR-2）: 本人裁定
+# A案（設定ファイルsample配布）で「Vaultの*-sample.mdは正本をrepoの
+# config/*.sampleへ縮める案内ノート」という方針が確定し、vault-scribeが
+# Preferences/model-definitions-sample.mdを既に案内ノート化した（schema
+# 本体の```confコードブロックが無く「正本はrepoのconfig/models.conf.sample」
+# という参照だけを持つ）。旧セクション16（Vault正本・公開スナップショットの
+# model=XXXX雛形トークン規約とexecution=external-cliの例を検査していた
+# AC-15由来のテスト）は、この改稿によって前提（Vaultにschema本体がある）が
+# 崩れ実際に赤化した（Vault正本はファイルが変わり検査対象の行が無い・
+# 公開スナップショットは締めのexport-public-vault.sh再生成待ちで一時的に
+# 旧内容のまま）。Vaultの案内ノートは機械契約の対象外とし、Vault依存を
+# 全て撤去したうえで、repo管理下のconfig/models.conf.sample自体を対象に
+# 「XXXX雛形トークンが無い（実値規約）」「resolverの定義パーサ
+# （load_model_defs()）で4定義が読める」の2点を検査する形へ置き換えた。
+# ⚠️ 公開スナップショット（vault-public/）を読むassertも置かない
+# （締めのexport-public-vault.sh再生成後に初めて内容が揃うため）。
+echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実値規約（XXXX無し）を満たし、resolverの定義パーサで4定義が読める ==="
 {
-  for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/model-definitions-sample.md" \
-                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/model-definitions-sample.md"; do
-    label="${label_path%%:*}"; f="${label_path#*:}"
-    if [ ! -f "$f" ]; then
-      fail_case "AC-15(${label}): ファイルが見つからない"
-      continue
-    fi
-
-    rc1=0; hit1="$(grep -nF '/Users/' "$f" 2>&1)" || rc1=$?
-    if [ "$rc1" -eq 1 ] && [ -z "$hit1" ]; then
-      pass "AC-15①(${label}): 絶対パス(/Users/)が0件"
-    else
-      fail_case "AC-15①(${label}): 絶対パスが残っている: ${hit1}"
-    fi
-
-    rc2=0; hit2="$(grep -nE '(API_KEY|SECRET|TOKEN|PASSWORD)' "$f" 2>&1)" || rc2=$?
-    if [ "$rc2" -eq 1 ] && [ -z "$hit2" ]; then
-      pass "AC-15②(${label}): 認証情報キー語が0件"
-    else
-      fail_case "AC-15②(${label}): 認証情報キー語が残っている: ${hit2}"
-    fi
-
-    # AC-15③（要件§8-4）: modelの値は雛形トークンXXXXだけ（機体依存の実値は書かない）。
-    bad_model="$(grep -nE '^model=' "$f" | grep -vF 'model=XXXX' || true)"
-    if [ -z "$bad_model" ]; then
-      pass "AC-15③(${label}): model=の値が雛形トークンXXXXだけ"
-    else
-      fail_case "AC-15③(${label}): 機体依存の値がXXXX以外で書かれている: ${bad_model}"
-    fi
-
-    excli_count="$(grep -c '^execution=external-cli$' "$f" 2>/dev/null || true)"
-    if [ -n "${excli_count:-}" ] && [ "${excli_count:-0}" -ge 1 ] 2>/dev/null; then
-      pass "AC-15(${label}): execution=external-cliの例が1回以上ある"
-    else
-      fail_case "AC-15(${label}): execution=external-cliの例が無い"
-    fi
-  done
-
-  # FX-B14a〜c: 陰性fixture（悪い例）を一時ファイルへ書き、上と同じ検査器
-  # （探索語）が実際に検出できることを確認する（設計§11.1「悪い例を検査器
-  # へ食わせる」）。公開スナップショットのサンプルを土台にする。
-  BASE14="$REPO_ROOT/vault-public/Preferences/model-definitions-sample.md"
-  if [ -f "$BASE14" ]; then
-    B14A="$(mktemp)"; cp "$BASE14" "$B14A"; printf '# /Users/takumi009/leak\n' >> "$B14A"
-    hit_a="$(grep -nF '/Users/' "$B14A" || true)"
-    if [ -n "$hit_a" ]; then pass "FX-B14a: 絶対パスの混入を検出できる"; else fail_case "FX-B14a: 絶対パスの混入を検出できない"; fi
-
-    B14B="$(mktemp)"; cp "$BASE14" "$B14B"; printf 'ANTHROPIC_API_KEY=sk-fake\n' >> "$B14B"
-    hit_b="$(grep -nE '(API_KEY|SECRET|TOKEN|PASSWORD)' "$B14B" || true)"
-    if [ -n "$hit_b" ]; then pass "FX-B14b: 認証情報キーの混入を検出できる"; else fail_case "FX-B14b: 認証情報キーの混入を検出できない"; fi
-
-    B14C="$(mktemp)"; cp "$BASE14" "$B14C"; printf 'model=claude-opus-5\n' >> "$B14C"
-    hit_c="$(grep -nE '^model=' "$B14C" | grep -vF 'model=XXXX' || true)"
-    if [ -n "$hit_c" ]; then pass "FX-B14c: 実モデルIDの混入を検出できる"; else fail_case "FX-B14c: 実モデルIDの混入を検出できない"; fi
+  MODELS_SAMPLE_D16="$REPO_ROOT/config/models.conf.sample"
+  if [ ! -f "$MODELS_SAMPLE_D16" ]; then
+    fail_case "config/models.conf.sample が見つからない"
   else
-    fail_case "FX-B14a〜c: 公開スナップショットのサンプルが見つからないため陰性fixtureを構成できない"
+    xxxx_hit="$(grep -n 'XXXX' "$MODELS_SAMPLE_D16" || true)"
+    if [ -z "$xxxx_hit" ]; then
+      pass "config/models.conf.sample にXXXX雛形トークンが無い（実値規約）"
+    else
+      fail_case "config/models.conf.sample にXXXX雛形トークンが残っている: ${xxxx_hit}"
+    fi
+
+    # `x="$(cmd)"`単独（`||`無し）はset -e下でcmdが非0を返すと即座にスクリプト
+    # 全体を終了させてしまう（本ファイル・他スイートの既存の流儀と同じ注意）。
+    # 必ず`|| defs_json="ERROR:..."`でガードする。
+    defs_json=""
+    defs_json="$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO_ROOT/claude/hooks/lib')
+import profile_resolve as pr
+try:
+    defs = pr.load_model_defs('$MODELS_SAMPLE_D16')
+except Exception as e:
+    print('ERROR:' + type(e).__name__ + ':' + str(e))
+    sys.exit(1)
+print(','.join(sorted(defs.keys())))
+" 2>&1)" || true
+    case "$defs_json" in
+      ERROR:*)
+        fail_case "resolverの定義パーサがconfig/models.conf.sampleを読めない: ${defs_json}"
+        ;;
+      *)
+        def_count="$(printf '%s' "$defs_json" | tr ',' '\n' | grep -c . || true)"
+        if [ "$def_count" = "4" ]; then
+          pass "resolverの定義パーサで読める定義数がちょうど4"
+        else
+          fail_case "resolverの定義パーサで読める定義数が4でない（実際: ${def_count}件・${defs_json}）"
+        fi
+        if [ "$defs_json" = "codex-review-default,fable-main,opus-main,sonnet-main" ]; then
+          pass "定義名の集合がfable-main,opus-main,sonnet-main,codex-review-default"
+        else
+          fail_case "定義名の集合が想定と異なる（実際: ${defs_json}）"
+        fi
+        ;;
+    esac
   fi
 }
 

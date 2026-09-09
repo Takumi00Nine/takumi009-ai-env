@@ -245,9 +245,14 @@ json_field() { python3 -c "import json,sys; print(json.loads(sys.argv[1])[sys.ar
 # 既定は「print常に失敗＝未ロード」の安全側。個別テストで「ロード済み」を
 # 模擬したい場合はFAKE_LAUNCHCTL_LOADED_LABELSにラベル名を設定してから
 # refresh_fake_launchctl を呼び直す。
+# ⚠️ B1-b（使用率取得器移設・check-drift.sh ⑨）でprint-disabledへの対応を
+# 追加した（既存のprint分岐は無改修＝既存テストへの影響なし。追加前は
+# print-disabled自体がデフォルトのexit 1に落ちて「照会不能」扱いになって
+# いたため、⑨のUSAGE-FETCH-DISABLED等をこの共有スタブでは検証できなかった）。
 FAKE_LAUNCHCTL_BIN="$(mktemp -d)"
 FAKE_LAUNCHCTL_CALL_LOG="$FAKE_LAUNCHCTL_BIN/calls.log"
-FAKE_LAUNCHCTL_LOADED_LABELS=""   # スペース区切りでロード済み扱いにするラベル名
+FAKE_LAUNCHCTL_LOADED_LABELS=""    # スペース区切りでロード済み扱いにするラベル名
+FAKE_LAUNCHCTL_DISABLED_LABELS=""  # スペース区切りでdisabled扱いにするラベル名
 refresh_fake_launchctl() {
   cat > "$FAKE_LAUNCHCTL_BIN/launchctl" <<EOF
 #!/usr/bin/env bash
@@ -259,6 +264,12 @@ if [ "\$1" = "print" ]; then
     esac
   done
   exit 1
+fi
+if [ "\$1" = "print-disabled" ]; then
+  for label in $FAKE_LAUNCHCTL_DISABLED_LABELS; do
+    printf '"%s" => disabled\n' "\$label"
+  done
+  exit 0
 fi
 exit 1
 EOF
@@ -3289,6 +3300,251 @@ echo "=== 75. 配役表-能力軸整理: AIENV_AGENTS_DIRが未設定でもset -
   assert_not_contains "unbound variableで落ちていない" "$out" "unbound variable"
   assert_contains "①-2 settings.jsonの判定まで到達している(set -uで落ちて空出力になっていない)" "$out" "settings.jsonはテンプレと一致しています"
 
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 76. ⑨使用率取得器: 陰性（未導入）では[USAGE-*]系driftが1件も出ない ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  FAKE_LAUNCHCTL_LOADED_LABELS=""
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "未導入では[USAGE-]系driftが出ない" "$out" "[USAGE-"
+  assert_contains "未導入のため対象外という表示がある" "$out" "対象外"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 77. ⑨[USAGE-FETCH-STALE]: 正常なキャッシュだが最終取得から30分超経過 ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.cache/claude-codex-usage"
+  stale_epoch=$(( $(date -u +%s) - 60 * 40 ))
+  cat > "$HOME_DIR/.cache/claude-codex-usage/claude-cache.json" <<EOF
+{"schema_version":1,"service":"claude","fetched_at":$stale_epoch,"updated_at":$stale_epoch,"five_hour":{"used_percent":10},"seven_day":{"used_percent":10},"last_error":null}
+EOF
+  FAKE_LAUNCHCTL_LOADED_LABELS=""
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "40分経過でSTALEを検知する" "$out" "[USAGE-FETCH-STALE]"
+  assert_contains "分経過の内訳が出る" "$out" "40 分経過"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 78. ⑨[USAGE-FETCH-NOCACHE]: ジョブは有効なのにキャッシュが一度も無い ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Library/LaunchAgents"
+  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "キャッシュ欠如でNOCACHEを検知する（Claude）" "$out" "[USAGE-FETCH-NOCACHE] Claude使用率キャッシュ"
+  assert_contains "キャッシュ欠如でNOCACHEを検知する（Codex）" "$out" "[USAGE-FETCH-NOCACHE] Codex使用率キャッシュ"
+  assert_not_contains "ロード済み・有効なのでNOT-LOADED/DISABLEDは出ない" "$out" "[USAGE-FETCH-NOT-LOADED]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 79. ⑨[USAGE-FETCH-NOCACHE]: fetched_atが未来（時計ズレ・壊れたキャッシュ） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Library/LaunchAgents" "$HOME_DIR/.cache/claude-codex-usage"
+  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+  future_epoch=$(( $(date -u +%s) + 3600 ))
+  cat > "$HOME_DIR/.cache/claude-codex-usage/claude-cache.json" <<EOF
+{"schema_version":1,"service":"claude","fetched_at":$future_epoch,"updated_at":$future_epoch,"five_hour":{"used_percent":10},"seven_day":{"used_percent":10},"last_error":null}
+EOF
+  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "未来のfetched_atはNOCACHEとして検知される（STALEではない）" "$out" "[USAGE-FETCH-NOCACHE] Claude使用率キャッシュ の fetched_at が未来です"
+  assert_not_contains "未来のfetched_atはSTALEとしては出ない" "$out" "[USAGE-FETCH-STALE] Claude"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 80. ⑨[USAGE-FETCH-NOT-LOADED]・[USAGE-FETCH-DISABLED] ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Library/LaunchAgents"
+  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+  FAKE_LAUNCHCTL_LOADED_LABELS=""
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "plistはあるが未ロードならNOT-LOADEDを検知する" "$out" "[USAGE-FETCH-NOT-LOADED]"
+  rm -rf "$REPO" "$HOME_DIR"
+
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Library/LaunchAgents"
+  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
+  FAKE_LAUNCHCTL_DISABLED_LABELS="com.takumi009.usage-fetch"
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "ロード済みだがdisabledならDISABLEDを検知する" "$out" "[USAGE-FETCH-DISABLED]"
+  assert_not_contains "disabledはNOT-LOADEDにはならない" "$out" "[USAGE-FETCH-NOT-LOADED]"
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 81. ⑨[USAGE-FETCH-DUPLICATE]: 旧と新が両方ロードされている（陽性・陰性とも） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  FAKE_LAUNCHCTL_LOADED_LABELS="com.claude-codex-usage.refresh com.takumi009.usage-fetch"
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "両方ロード済みでDUPLICATEを検知する" "$out" "[USAGE-FETCH-DUPLICATE]"
+  assert_contains "healの案内が含まれる" "$out" "--heal"
+  rm -rf "$REPO" "$HOME_DIR"
+
+  # 陰性: 旧だけ単独で1件動いている移行前の機は誤報しない（設計書§2.5）
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  FAKE_LAUNCHCTL_LOADED_LABELS="com.claude-codex-usage.refresh"
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "旧だけ単独ロードはDUPLICATEにならない（移行前の正常な機を誤検知しない）" "$out" "[USAGE-FETCH-DUPLICATE]"
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 82. ⑨[USAGE-MIGRATION-INCOMPLETE]: state.jsonがあるのに有効な取得ジョブが0件（陽性・陰性とも） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration"
+  cat > "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration/state.json" <<'EOF'
+{"had_old_job":true,"phase":"old-stopped"}
+EOF
+  FAKE_LAUNCHCTL_LOADED_LABELS=""
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "取得0件のまま止まっているとMIGRATION-INCOMPLETEを検知する" "$out" "[USAGE-MIGRATION-INCOMPLETE]"
+  rm -rf "$REPO" "$HOME_DIR"
+
+  # 陰性: 巻き戻し完了（state.json削除済み）の新規機は取得0件が正常
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  FAKE_LAUNCHCTL_LOADED_LABELS=""
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "state.jsonが無い（巻き戻し済み等）機ではMIGRATION-INCOMPLETEを出さない" "$out" "[USAGE-MIGRATION-INCOMPLETE]"
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 83. ⑨[USAGE-MIGRATION-INCOMPLETE]: phase=confirmingは中断した確定の再開を促す別扱い ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration" "$HOME_DIR/Library/LaunchAgents"
+  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+  cat > "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration/state.json" <<'EOF'
+{"had_old_job":true,"phase":"confirming"}
+EOF
+  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "phase=confirmingはジョブがあってもMIGRATION-INCOMPLETEとして再開を促す" "$out" "[USAGE-MIGRATION-INCOMPLETE]"
+  assert_contains "再開コマンドが--confirmである" "$out" "install-usage-fetch.sh --confirm"
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 84. ⑨[USAGE-LOCK-STUCK]: ロックが固着している ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.cache/claude-codex-usage/locks/claude.lock.d"
+  stuck_epoch=$(( $(date -u +%s) - 1000 ))
+  echo "$stuck_epoch" > "$HOME_DIR/.cache/claude-codex-usage/locks/claude.lock.d/created_at"
+  FAKE_LAUNCHCTL_LOADED_LABELS=""
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "固着したロックを検知する" "$out" "[USAGE-LOCK-STUCK]"
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 85. ⑨[USAGE-FETCH-REVIVABLE]: 確定済みなのに旧plistが実在（陽性・確定前は陰性） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration" "$HOME_DIR/Library/LaunchAgents"
+  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+  : > "$HOME_DIR/Library/LaunchAgents/com.claude-codex-usage.refresh.plist"
+  cat > "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration/state.json" <<'EOF'
+{"had_old_job":true,"phase":"confirmed"}
+EOF
+  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "確定済みなのに旧plistが実在するとREVIVABLEを検知する" "$out" "[USAGE-FETCH-REVIVABLE]"
+  assert_not_contains "REVIVABLEはhealを案内しない（まだ二重ではないため）" "$(printf '%s\n' "$out" | grep 'USAGE-FETCH-REVIVABLE')" "--heal"
+  rm -rf "$REPO" "$HOME_DIR"
+
+  # 陰性: 確定前（verified等）は退避物が意図的に残っているので正常
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration" "$HOME_DIR/Library/LaunchAgents"
+  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
+  : > "$HOME_DIR/Library/LaunchAgents/com.claude-codex-usage.refresh.plist"
+  cat > "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration/state.json" <<'EOF'
+{"had_old_job":true,"phase":"verified"}
+EOF
+  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
+  FAKE_LAUNCHCTL_DISABLED_LABELS=""
+  refresh_fake_launchctl
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "確定前は退避物が残っていてもREVIVABLEを出さない（意図的な残置）" "$out" "[USAGE-FETCH-REVIVABLE]"
   rm -rf "$REPO" "$HOME_DIR"
 }
 

@@ -1,0 +1,82 @@
+---
+# =====================================================================
+# プロファイル実体（schema 6・メイン機の実値。repo の
+#  config/profile.md.sample を ~/.config/takumi009-ai-env/profile.md へ
+#  コピーして使う。メイン機はそのままコピーして使う。サブ機もコピーし、
+#  変えたい箇所（少なくとも machine_role・必要なら role.leader）だけ編集する。
+#  installer は実体が無いときだけこのファイルを雛形としてコピーする
+#  （既にある実体は上書きしない）。本人が事前に自分でコピーしてもよい。
+#  実体は machine ごとのローカルファイル・repo 管理外のまま。
+#  書式 : <キー>: <状態> [属性=値 ...]
+#         - 状態は必ず先頭に1語。とりうる値は各ブロックのコメントにある
+#         - 属性は 名前=値 をスペース区切り。値にスペース・日本語は使わない
+#           （長い説明は行の上の # コメントへ書く）
+#         - 行頭 # の行と、値の後ろの「スペース+#」以降は無視される
+#  ⚠️ 認証情報（AWSのアクセスキー・トークン等）は書かない。このファイルは
+#     毎セッションAIが読む。Bedrockのピン留め値は bedrock.env（0600）へ。
+# =====================================================================
+
+# --- メタ -----------------------------------------------------------
+# この実体が追随しているスキーマ版。コードが期待する版より小さいと「追随待ち」
+# （欠けた固定キーは unknown 扱い・警告のみ）、同じなのに欠けていたら「壊れて
+# いる」（最小能力へ倒す）。⚠️ 職種の行を足しても版は上げない。版を上げるのは
+# 固定キー・文法・必須属性・enum が変わったときだけ。
+schema_version: 6
+# 能力クラスの表示ラベル。^[a-z0-9][a-z0-9-]*$ ／判定には使わない
+profile_slug: authoring
+
+# --- ① 配役表：職種ごとに「使うか・誰が演じるか」を1行で書く --------
+# 書式: role.<職種>: <状態> [model=<定義名>[,<定義名>…]]
+#  状態: configured    この職種を使う。下の model で起動する
+#      | unavailable   使いたいが今は動かせない（上限・認証失敗・定義ファイル不在）
+#                      ⚠️ 何を使いたかったかを残すため model は書く
+#      | not_adopted   この職種はこのマシンでは使わない（属性は書かない）
+#      | unknown       未確定。⚠️ 保留して本人に確認する（属性は書かない）
+#  model   : モデル定義ファイル（config/models.conf.sample をコピーした
+#            ~/.config/takumi009-ai-env/models.conf）の定義名をカンマ区切りで
+#            1つ以上。並び順に優先度の意味は無い（どれを使うかは
+#            リーダーがそのつど1つ選ぶ）。provider・execution・effort の説明は
+#            モデル定義ファイル側が正本（本ファイルには書かない）
+#  ⚠️ 職種を増やすときは、この表に1行足す（コード改修は不要。ただし自分の
+#     セッションで起動する職種は、コア側の職種定義 agents/<職種>.md も要る）
+#  ⚠️ 行を書かなかった職種は unknown 扱い＝保留して本人に確認する
+#     （「使わない」つもりなら not_adopted と明示的に書くこと）
+role.leader:               configured model=fable-main
+role.navi:                 unknown        # 未実装（Projects/navi-orchestrator 設計中）
+role.requirements-analyst: configured model=opus-main
+role.system-designer:      configured model=opus-main
+role.adoption-critic:      configured model=opus-main
+role.implementer:          configured model=sonnet-main
+role.researcher:           configured model=sonnet-main
+role.operator:             configured model=sonnet-main
+role.vault-scribe:         configured model=sonnet-main
+role.verifier:             configured model=codex-review-default
+role.ja-doc:               unknown        # 候補=Qwen（H17 実測評価待ち・経路未実装）
+
+# --- ② 代替配役：本命が使えないときに使う（無い職種は書かなくてよい）--
+# 書式は ① と同じ。⚠️ 状態が configured のものだけが代替として採用される
+fallback.verifier: configured model=opus-main  # 候補は1件だけ（2件以上あると本命不能時に機構が選べず止まる）
+
+# --- ③ このマシンで配役してはいけないモデル -------------------------
+# 書式: excluded_models: <状態> [value=<値>]
+#  状態: configured    禁止リストを持つ。value= に中身を書く
+#      | unavailable   禁止リストを判定できない（属性は書かない）
+#      | unknown       未確定（属性は書かない）
+#      ⚠️ 能力軸と同じ3値の enum（§3.3）。未記載・空も unknown 扱い
+#  value : <provider>/<model> のカンマ区切り。禁止したいモデルが無ければ none
+#          （[1m] は判定で無視する）
+# ⚠️ モデル族を全経路で禁止したいときは経路ごとに列挙する
+#    （例 anthropic-api/claude-fable-5,bedrock/fable）
+excluded_models: configured value=none
+
+# --- ④ 能力軸（3キー：team_mode／no_read_paths／machine_role）-----------------
+# 共通のとりうる値: configured value=<短い英語トークン> | unavailable | unknown
+# この案件をどの体制で回すかの既定値。値: solo（リーダー1人）| lean（実装者＋検証職）| full（職種別）
+team_mode:        configured value=full
+# 退避済み旧資料など、明示指示が無い限り読まない・検索しないパス。
+# 値: `~/` 表記の実パスをカンマ区切り／無ければ unavailable
+no_read_paths:    configured value=~/work/old
+# このマシンがメイン機かサブ機か。configured value=main＝メイン機・configured value=sub＝サブ機。
+# この行が機役割の唯一の正本。サブ機はコピー後にこの行だけ value=sub へ書き換える
+machine_role:     configured value=main
+---

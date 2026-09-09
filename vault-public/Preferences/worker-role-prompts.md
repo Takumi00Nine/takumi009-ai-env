@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-08
+updated: 2026-09-09
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -21,6 +21,7 @@ related:
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
   - "[[Preferences/model-definitions-sample]]"
   - "[[Decisions/2026-09-08-model-definitions-file]]"
+  - "[[Preferences/model-catalog]]"
 aliases:
   - "7ロール運用"
   - "requirements-analyst"
@@ -82,7 +83,7 @@ aliases:
 6. ツール境界: Web調査だけで足りるタスクは**「Bash/gh 不使用・WebFetch で読む」を明示**（ワーカーの許可リスト外コマンドは承認プロンプトがユーザーへ飛び、作業も止まるため）
 
 呼び方: チームメイト＝「Spawn a teammate using the implementer agent type…」／サブエージェント＝Agent ツールの subagent_type。
-7. **配役の指定＝正本は配役表**（コア＝[[Preferences/core-workflow]] §1 spawn 条文・[[Decisions/2026-09-01-role-cast-table-unfreeze]]）。配役表の `model` は**定義名の候補**であり、リーダーが spawn のたびにその中から1つ選ぶ。属性（provider・model ID・effort 等）の正本は**モデル定義ファイル**（[[Preferences/model-definitions-sample]]）。選んだ定義について `MODEL_MISMATCH` が出ていなければ、Agent ツールの `model` パラメータは**渡さない**（職種定義の既定値が効く）。
+7. **配役の指定＝正本は配役表**（コア＝[[Preferences/core-workflow]] §1 spawn 条文・[[Decisions/2026-09-01-role-cast-table-unfreeze]]）。配役表の `model` は**定義名の候補**であり、リーダーが spawn のたびにその中から1つ選ぶ。属性（provider・model ID・effort 等）の正本は**モデル定義ファイル**（[[Preferences/model-definitions-sample]]）。選んだ定義について `MODEL_MISMATCH` が出ていなければ、Agent ツールの `model` パラメータは**渡さない**（職種定義の既定値が効く）。判断材料＝[[Preferences/model-catalog]]（モデルとサービスの特性）と【使用率】ブロック
 
 **モデル指定は「受理された」ことと「意図どおり解決された」ことは別**（詳細＝[[Knowledge/model-param-accepted-vs-resolved]]）。実効モデルの確認手段: リーダー行＝`/status`・ワーカー行（named/cmux・in-process とも）＝ワーカー別トランスクリプトの `model` フィールドが正本。ペイン先頭のモデル表記はペイン運用時のみ存在し、in-process（既定）では無い（2026-09-02 実測）。ピン留め効果が未検証の指定経路（例: settings.json 単体経由）ではエイリアス指定を避け、疑わしければ本人へ確認する。
 

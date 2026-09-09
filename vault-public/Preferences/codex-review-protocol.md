@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-07
+updated: 2026-09-08
 tags: [preference, codex, review, delegation, protocol]
 project: meta
 related:
@@ -18,7 +18,7 @@ related:
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
 aliases:
   - "レビュー委任プロトコル"
-  - "worker-driven呼び出し方"
+  - "リーダーが起動するCodex検証"
 ---
 
 # Codex 一次レビュー委任プロトコル（SSOT）

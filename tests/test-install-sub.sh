@@ -138,10 +138,10 @@ make_fake_home() {
   # 配役表-能力軸整理-設計-2026-09-07.md §3: schema 5・新3キーの実体を
   # あらかじめ置く。本ファイルの主眼＝Vault骨格配置・symlink化・機役割の
   # 案内ログの検証とは無関係なテストは、install-main.shの雛形配置
-  # （vault-public/Preferences/profile-sample.md からのコピー。段階2で
-  # 新schemaへ追随予定＝設計書§9.1）に依存させない（テストの独立性）。
-  # seed_v1_profile()・seed_v2_profile()・個別のcat上書きで置き換えるテストは
-  # この既定値を上書きする（後勝ち）。
+  # （config/profile.md.sample からのコピー。2026-09-08 本人裁定A案で
+  # 読み元をvault-public/Preferences/profile-sample.mdから付け替え）に
+  # 依存させない（テストの独立性）。seed_v1_profile()・seed_v2_profile()・
+  # 個別のcat上書きで置き換えるテストはこの既定値を上書きする（後勝ち）。
   mkdir -p "$home/.config/takumi009-ai-env"
   write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
@@ -172,11 +172,11 @@ export AIENV_LEADER_ROLE='model=sonnet-main'
 # 持たない実体はT4-LEGACYとして解決失敗する（委譲されない）。そのため
 # 「v1相当を強制する」とは、make_fake_home()が書いたprofile.mdを消して
 # 不在にすることを意味する。
-# 呼び出し側は必ずrun_v1_legacy_repo()経由でTMP_REPO（vault-public/
-# Preferences/profile-sample.mdを除いた実repoの複製）に対して実行すること
-# （$REPO_ROOTを直接使うと、install-main.sh自身のP1雛形自動配置が実サンプルを
-# コピーしてしまい、コピー後に「実在するschema 5の実体」という別の非委譲
-# ケースへ倒れて本テストの意図＝legacy値置換ロジックの検証を阻害するため）。
+# 呼び出し側は必ずrun_v1_legacy_repo()経由でTMP_REPO（config/profile.md.sample
+# を除いた実repoの複製）に対して実行すること（$REPO_ROOTを直接使うと、
+# install-main.sh自身のP1雛形自動配置が実サンプルをコピーしてしまい、コピー後に
+# 「実在するschema 6の実体」という別の非委譲ケースへ倒れて本テストの意図＝
+# legacy値置換ロジックの検証を阻害するため）。
 seed_v1_profile() {
   local home="$1"
   local dest="$home/.config/takumi009-ai-env/profile.md"
@@ -184,14 +184,15 @@ seed_v1_profile() {
   return 0
 }
 
-# run_v1_legacy_repo() — vault-public/Preferences/profile-sample.mdを除いた
-# repoの複製を作り、そのパスを標準出力へ書く（seed_v1_profile()と対で使う。
-# 4b/4c/4d/4fの共通前処理）。
+# run_v1_legacy_repo() — config/profile.md.sampleを除いたrepoの複製を作り、
+# そのパスを標準出力へ書く（seed_v1_profile()と対で使う。4b/4c/4d/4fの
+# 共通前処理。2026-09-08 本人裁定A案で除外対象をvault-public/Preferences/
+# profile-sample.mdからconfig/profile.md.sampleへ付け替え）。
 run_v1_legacy_repo() {
   local tmp_repo
   tmp_repo="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$tmp_repo/"
-  command rm "$tmp_repo/vault-public/Preferences/profile-sample.md"
+  command rm "$tmp_repo/config/profile.md.sample"
   printf '%s\n' "$tmp_repo"
 }
 
@@ -430,6 +431,14 @@ echo "=== 7. 機役割の案内: 実行すると machine_role を本人が書く
     "$(echo "$out" | grep -qF "$PROFILE" && echo 1 || echo 0)"
   assert_true "本スクリプトは実体を書き換えない旨も明示される" \
     "$(echo "$out" | grep -q '本スクリプトは実体を書き換えません' && echo 1 || echo 0)"
+  # 2026-09-08 Codexレビュー指摘・MINOR対応（差し戻しA案6巡目）: 「実体を
+  # 書き換えない」という部分文字列だけでは、「既存の実体は対象・不在時は
+  # config/profile.md.sampleから新規作成する」という限定の有無を区別できず、
+  # この限定を誤って削除する回帰を検出できない。両方の限定句も検査する。
+  assert_true "「既存の実体が対象」という限定が明示される" \
+    "$(echo "$out" | grep -q '既存の実体が対象' && echo 1 || echo 0)"
+  assert_true "「不在時はconfig/profile.md.sampleから新規作成」という限定が明示される" \
+    "$(echo "$out" | grep -q 'config/profile.md.sampleからの新規作成' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }

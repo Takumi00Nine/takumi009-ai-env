@@ -30,9 +30,11 @@
 #      判定は、メイン機で私的パッチが未適用/復旧中等の理由で一時的にファイルが
 #      欠けていると誤ってサブ扱いされ、案内どおりupdate-sub.shを実行すると
 #      メインVaultの`Preferences/`が`rsync --delete`で上書き削除される事故に
-#      なり得た）。本スクリプトは実体プロファイルを書き換えない（FR-15＝
-#      実体を編集するのは本人だけ）。代わりに`machine_role`を書く案内を1行
-#      出す。
+#      なり得た）。本スクリプトは実体プロファイルの中身を編集しない（FR-15＝
+#      実体を編集するのは本人だけ。⚠️ 実体が無ければ内部で呼ぶinstall-main.sh
+#      のP1機構がconfig/profile.md.sampleから新規作成することはあるが、
+#      既にある実体を書き換えることは無い）。代わりに`machine_role`を書く
+#      案内を1行出す。
 #
 # 使い方:
 #   scripts/install-sub.sh                   # 実行（Vault骨格配置 + claude/codex symlink化）
@@ -170,7 +172,7 @@ log "（サブ専用の定期更新LaunchAgentも廃止済みのためインス�
 # --- 5. 機役割（machine_role）の案内（サブ機として使うための本人操作を示す） ---
 # 配役表-能力軸整理-設計-2026-09-07.md §5.1: 実体プロファイルへ`machine_role`を
 # 書く処理は足さない（FR-15＝実体を編集するのは本人だけ）。案内を1行出す。
-log "この機をサブ機として使うには、実体プロファイルへ machine_role: configured value=sub を1行書いてください（本スクリプトは実体を書き換えません）: ${AIENV_LOCAL_PROFILE_PATH}"
+log "この機をサブ機として使うには、実体プロファイルへ machine_role: configured value=sub を1行書いてください（本スクリプトは実体を書き換えません。既存の実体が対象で、実体がまだ無い場合はconfig/profile.md.sampleからの新規作成のみ行います）: ${AIENV_LOCAL_PROFILE_PATH}"
 
 if [ "$DRY_RUN" = "1" ]; then
   log "[dry-run] 完了。実際の変更は一切行っていません。"

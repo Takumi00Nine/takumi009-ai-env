@@ -89,9 +89,10 @@ make_fake_home() {
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
   # 配役表-能力軸整理-設計-2026-09-07.md §3: schema 5・新3キーの実体を
   # あらかじめ置く。本ファイルの主眼＝--with-dotfilesの呼び分けとは無関係
-  # なので、install-main.sh の雛形配置（vault-public/Preferences/
-  # profile-sample.md からのコピー。段階2で新schemaへ追随予定＝設計書§9.1）に
-  # 依存させない（テストの独立性・§10「機能差分なし」を字面どおり保つため）。
+  # なので、install-main.sh の雛形配置（config/profile.md.sample からの
+  # コピー。2026-09-08 本人裁定A案で読み元をvault-public/Preferences/
+  # profile-sample.mdから付け替え）に依存させない（テストの独立性・
+  # §10「機能差分なし」を字面どおり保つため）。
   mkdir -p "$home/.config/takumi009-ai-env"
   write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'

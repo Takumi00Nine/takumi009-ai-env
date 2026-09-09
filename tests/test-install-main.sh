@@ -14,15 +14,19 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/install-main.sh"
 
-# 2026-09-01 配役表解凍（設計書§3.9）: v2雛形はrole.leaderがunknownのまま
-# 配布されるため、リーダー配役が未確定の状態でinstall-main.shを（対話・
-# --non-interactiveいずれも指定せず）実行すると、対話可否の判定に落ちる
-# （TTY接続時は対話に入り本ファイルのテスト用の入力を待ってしまい、非TTY
-# 実行環境ではLEADER_UNCONFIGURED_NONINTERACTIVEでexit非0になる）。
-# §3.9対話そのもの・AIENV_LEADER_ROLEの詳細を検証しないテスト（多くの既存
-# テスト）は、この既定値をexportしておくことで「未確定→envの値を検査して
-# 採用（質問しない）」経路を常に通り、決定的にsettings.json生成まで進む。
-# §3.9固有のテストブロックでは、必要に応じてunset/上書きする。
+# 2026-09-01 配役表解凍（設計書§3.9）: role.leaderが未確定（unknown）の実体で
+# install-main.shを（対話・--non-interactiveいずれも指定せず）実行すると、
+# 対話可否の判定に落ちる（TTY接続時は対話に入り本ファイルのテスト用の入力を
+# 待ってしまい、非TTY実行環境ではLEADER_UNCONFIGURED_NONINTERACTIVEでexit
+# 非0になる）。2026-09-08本人裁定A案以降、実体が無いときにP1機構が自動配置
+# する雛形（config/profile.md.sample）はrole.leaderがconfigured（メイン機
+# 実値）だが、role.leader:unknownの実体を直接扱う§3.9固有のテスト
+# （write_profile_with_unknown_leader()参照）やmake_fake_home()を経由しない
+# テストでは依然として未確定状態を経由しうる。§3.9対話そのもの・
+# AIENV_LEADER_ROLEの詳細を検証しないテスト（多くの既存テスト）は、この
+# 既定値をexportしておくことで「未確定→envの値を検査して採用（質問しない）」
+# 経路を常に通り、決定的にsettings.json生成まで進む。§3.9固有のテスト
+# ブロックでは、必要に応じてunset/上書きする。
 export AIENV_LEADER_ROLE='model=sonnet-main'
 
 PASS=0
@@ -151,10 +155,10 @@ make_fake_home() {
   # 配役表-能力軸整理-設計-2026-09-07.md §3: schema 5・新3キーの実体を
   # あらかじめ置く。本ファイルの多くのテストの主眼＝symlink化・settings.json
   # 生成・その他installerの振る舞いの検証であり、install-main.shの雛形配置
-  # （vault-public/Preferences/profile-sample.md からのコピー。段階2で
-  # 新schemaへ追随予定＝設計書§9.1）に依存させない（テストの独立性）。
-  # role.leaderの状態・machine_roleの値等を個別に検証するテストは、この
-  # 既定値を上書きする（後勝ち）。
+  # （config/profile.md.sample からのコピー。2026-09-08 本人裁定A案で
+  # 読み元をvault-public/Preferences/profile-sample.mdから付け替え）に
+  # 依存させない（テストの独立性）。role.leaderの状態・machine_roleの値等を
+  # 個別に検証するテストは、この既定値を上書きする（後勝ち）。
   mkdir -p "$home/.config/takumi009-ai-env"
   write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
@@ -166,6 +170,31 @@ no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
 role.leader: configured model=sonnet-main
+---
+EOF
+}
+
+# write_profile_with_unknown_leader <path> — §3.9対話（Q1〜Q3・現1問）の
+# テスト専用。make_fake_home()と同じschema 6・3キー構成だが、role.leaderだけ
+# unknownにする（対話の発火条件＝role.leaderが未確定であること）。
+# 2026-09-08 本人裁定A案以前は、この前提を実サンプル
+# （vault-public/Preferences/profile-sample.md・role.leader:unknownで配布）
+# からのYAMLフェンス抽出で用意していたが、A案でconfig/profile.md.sampleへ
+# 読み元が付け替わり、雛形の実値がrole.leader:configuredになった（本人の
+# メイン機実値をそのまま配る仕様のため）。対話発火の前提はサンプルの実値に
+# 依存すべきではないため、直接この専用fixtureを書く方式へ変更した。
+write_profile_with_unknown_leader() {
+  local path="$1"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<'EOF'
+---
+schema_version: 6
+profile_slug: test-install-main-machine
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+excluded_models: configured value=none
+role.leader: unknown
 ---
 EOF
 }
@@ -298,80 +327,42 @@ echo "=== 5c. profile.md（実体プロファイル）へのRead allowルール�
   rm -rf "$FAKE_HOME"
 }
 
-# vault-public/Preferences/profile-sample.md は本来の配置経路が
-# Vault(Preferences/profile-sample.md)→export-public-vault.sh→vault-public/ の
-# 正規パイプライン（vault-scribe工程）であり、このテストファイル（実装ワーカー）
-# からVault管理下のファイルへ直接置くべきではない。そのためテスト6・7・9は
-# 実repoを一時コピーし、そのコピーの中にだけfixtureサンプルを追加してから
-# install-main.shを実行する（本物のvault-public/を一切変更しない）。
-make_repo_with_profile_sample_fixture() {
-  local tmp_repo="$1"
-  cp -R "$REPO_ROOT/." "$tmp_repo/"
-  mkdir -p "$tmp_repo/vault-public/Preferences"
-  # 2026-08-30 工程横断レビュー指摘・BLOCKING対応: 実サンプル
-  # （vault-public/Preferences/profile-sample.md）はObsidianノート形式であり、
-  # 先頭frontmatterはノートのメタデータ（date/tags/…）で、最小能力表3キーは
-  # 本文中の```yamlフェンスコードブロックの中にある。以前のfixtureは
-  # 「先頭frontmatterがそのまま3キー」という誤った形（実物と乖離した形）を
-  # 使っており、installer/resolverの入力形式不整合を結合テストが隠して
-  # しまっていた。ここでは実物と同じ「ノートmetadata＋本文＋```yamlフェンス」
-  # 構造を再現する。
-  # ⚠️ 2026-08-30本人裁定「profile-sampleの初期値はメイン機の実値に戻す」に
-  # 合わせ、このfixtureもsentinel(`<fill-in>`)ではなく実値で3キーを埋めた
-  # （実サンプルの初期値方針の変更に追随。fixtureの目的自体は「コピー機構が
-  # ノートmetadataを取り違えない」ことの確認であり、値そのものは何でもよい。
-  # 2026-09-07 配役表-能力軸整理-設計-2026-09-07.md §3で能力軸を6キー→3キーへ
-  # 整理）。
-  cat > "$tmp_repo/vault-public/Preferences/profile-sample.md" <<'EOF'
----
-date: 2026-08-30
-tags: [preference, core, profile, sample]
-project: takumi009-ai-env
----
-# プロファイルサンプル（fixture・テスト専用）
-
-このノート自体のfrontmatter（上）は最小能力表3キーではない。3キーは下の
-```yamlフェンス内にある（実物のvault-public/Preferences/profile-sample.mdと
-同じ構造の再現）。
-
-```yaml
----
-team_mode: full(案件による切替可)
-no_read_paths: ~/work/old,~/tmp/scratch（無ければunavailable）
-machine_role: 本人が実体へmain/subを書く
----
-```
-EOF
-}
+# 2026-09-08 本人裁定A案（設定ファイルsample配布）: 雛形配置の読み元が
+# Vault管理下のvault-public/Preferences/profile-sample.md（Obsidianノート
+# ＋```yamlフェンス構造）から、repo管理下の生ファイルconfig/profile.md.sample
+# （既に`---`〜`---`のschema本体そのもの・フェンス抽出不要）へ付け替わった。
+# テスト6・7・9は「実repoを一時コピーして専用fixtureを追加する」旧手法が
+# 不要になった——config/profile.md.sampleは`cp -R "$REPO_ROOT/."`だけで
+# 実物（実値入り・schema 6）がそのままTMP_REPOへ含まれるため、これを直接
+# 雛形配置のテスト入力として使う。
 
 echo "=== 6. ローカル実体プロファイルの雛形配置: サンプルがあり実体が無ければコピーする（P1機構・§9.0 A-1） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home_no_profile "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
-  make_repo_with_profile_sample_fixture "$TMP_REPO"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
-  # このfixtureは値がプレースホルダのまま（schema_versionを持たない6キーの
-  # yamlブロック）であり、コピー後の実体はschema 6のvalidatorを通らない
-  # （2026-09-08 モデル定義ファイルと候補指定対応・同設計§3.8・D-13でv1委譲が
-  # 「実体が本当に存在しない」場合だけに縮小されたため、コピー後に実体が
-  # 存在する状態ではT4-LEGACY等で非0終了する＝本体側の既知の仕様。本テストの
-  # 主眼＝雛形コピー自体の正しさとは無関係なため、installer本体の終了コードは
-  # 見ない（`|| true`）。
+  # config/profile.md.sampleは実値入り・schema 6で単体でも妥当なため、
+  # コピー後の実体はinstaller本体を最後まで完走させうる（旧・Vaultサンプル
+  # 経由の合成fixtureがschema_version欠落でT4-LEGACY必発だった頃とは異なる）。
+  # 本テストの主眼＝雛形コピー自体の正しさであり、installer本体の終了コードは
+  # 見ない（`|| true`。後続のsettings.json生成等が別の理由で失敗しても
+  # コピー自体の検証には影響しない）。
   env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1 || true
 
   assert_true "profile.mdが作成される" \
     "$([[ -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
   assert_true "symlinkではなく実ファイルとしてコピーされる（雛形は独立した実体）" \
     "$([[ ! -L "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
-  # 2026-08-30 BLOCKING対応: コピーはノート全体の複製ではなく、```yaml
-  # フェンス内の最小能力表ブロックだけを抽出したものになる。ノート本体の
-  # frontmatter（date/tags等）は含まれず、6キーのYAML frontmatterだけが
-  # そのまま実体になっていることを確認する。
-  assert_true "実体はノートmetadata(date:)を含まない" \
-    "$(grep -q '^date:' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 0 || echo 1)"
-  assert_true "実体は最小能力表3キーを含む" \
-    "$(grep -q '^machine_role: 本人が実体へmain/subを書く$' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 1 || echo 0)"
+  # 2026-09-08 本人裁定A案: config/profile.md.sampleは生ファイルそのものを
+  # そのままコピーするだけ（YAMLフェンス抽出は撤去済み）なので、コピー後の
+  # 実体はsource（TMP_REPO側のconfig/profile.md.sample）とバイト完全一致に
+  # なることを直接確認する（旧・ノートmetadata混入チェックに代わる検証）。
+  assert_true "実体はconfig/profile.md.sampleとバイト完全一致する（生ファイルの単純コピー）" \
+    "$(diff -q "$TMP_REPO/config/profile.md.sample" "$FAKE_HOME/.config/takumi009-ai-env/profile.md" >/dev/null 2>&1 && echo 1 || echo 0)"
+  assert_true "実体はrole.leader行を含む" \
+    "$(grep -q '^role\.leader:' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 1 || echo 0)"
   assert_true "実体は正しいYAML frontmatter形式（先頭行が---）" \
     "$([[ "$(head -1 "$FAKE_HOME/.config/takumi009-ai-env/profile.md")" == "---" ]] && echo 1 || echo 0)"
 
@@ -381,7 +372,7 @@ echo "=== 6. ローカル実体プロファイルの雛形配置: サンプル�
 echo "=== 7. ローカル実体プロファイルの雛形配置: 非破壊性（既存が通常ファイル/ディレクトリ/symlink/broken symlinkのいずれでも上書きしない） ==="
 {
   TMP_REPO="$(mktemp -d)"
-  make_repo_with_profile_sample_fixture "$TMP_REPO"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
   for kind in file dir symlink broken_symlink; do
     FAKE_HOME="$(mktemp -d)"
@@ -438,13 +429,15 @@ echo "=== 8. ローカル実体プロファイルの雛形配置: サンプル�
   make_fake_home_no_profile "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  rm -f "$TMP_REPO/vault-public/Preferences/profile-sample.md"
+  rm -f "$TMP_REPO/config/profile.md.sample"
 
   rc=0
   out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
   assert_eq "exit code 0（サンプル未整備でも致命的にしない）" "0" "$rc"
   assert_true "サンプル未整備のWARNが出る" \
-    "$(echo "$out" | grep -q 'profile-sample.md が見つかりません' && echo 1 || echo 0)"
+    "$(echo "$out" | grep -q 'config/profile.md.sampleを読み取れませんでした' && echo 1 || echo 0)"
+  assert_true "詳細に「No such file」相当が含まれる（無いことが原因と分かる）" \
+    "$(echo "$out" | grep -q '詳細:.*[Nn]o such file' && echo 1 || echo 0)"
   assert_true "profile.mdは作成されない" \
     "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
 
@@ -455,11 +448,11 @@ echo "=== 9. ローカル実体プロファイルの雛形配置: --dry-run で�
 {
   FAKE_HOME="$(mktemp -d)"
   TMP_REPO="$(mktemp -d)"
-  make_repo_with_profile_sample_fixture "$TMP_REPO"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
   out="$(HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" --dry-run 2>&1)"
-  assert_true "would extractの計画表示が出る" \
-    "$(echo "$out" | grep -q 'would extract profile schema block and write:.*profile-sample.md' && echo 1 || echo 0)"
+  assert_true "would copyの計画表示が出る" \
+    "$(echo "$out" | grep -q 'would copy profile sample:.*profile.md.sample' && echo 1 || echo 0)"
   assert_true "実際にはprofile.mdは作られない" \
     "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
 
@@ -901,22 +894,22 @@ echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-
   make_fake_home_no_profile "$FAKE_HOME"
 
   # ⚠️ ここだけは合成fixtureを使わず、追跡中の実サンプル
-  # （$REPO_ROOT/vault-public/Preferences/profile-sample.md）を直接入力にする
-  # （工程横断レビュー指摘: 従来はfixtureが「先頭frontmatter=7キー」という
-  # 実物と違う形を使っており、installer/resolverの入力形式不整合を隠していた）。
+  # （$REPO_ROOT/config/profile.md.sample）を直接入力にする（工程横断レビュー
+  # 指摘: 従来はfixtureが実物と違う形を使っており、installer/resolverの
+  # 入力形式不整合を隠していた。2026-09-08 本人裁定A案で読み元をVaultノート
+  # （vault-public/Preferences/profile-sample.md・Obsidianノート＋```yaml
+  # フェンス構造）からrepo管理下の生ファイルconfig/profile.md.sampleへ
+  # 付け替え、抽出も不要になった）。
   # ⚠️ アサーションはサンプルの「値の中身」（sentinelか実値か）に依存しない
   # 形にしている——本人裁定でサンプルの初期値が変わりうる（現に一度、
   # sentinel方式から実値方式へ変わった）ため、値の中身ではなく「3キーが
-  # ノートmetadataと取り違えられずに正しく抽出されているか」（BLOCKING対応の
-  # 本質）だけを固定的に検証する。
-  if [ ! -f "$REPO_ROOT/vault-public/Preferences/profile-sample.md" ]; then
-    fail_case "前提: 実サンプル(vault-public/Preferences/profile-sample.md)が見つからない"
+  # 正しく含まれているか」（BLOCKING対応の本質）だけを固定的に検証する。
+  if [ ! -f "$REPO_ROOT/config/profile.md.sample" ]; then
+    fail_case "前提: 実サンプル(config/profile.md.sample)が見つからない"
   else
-    # ⚠️ 段階2（vault-scribeによるvault-public/Preferences/profile-sample.md
-    # のschema 5追随・設計書§9.1）が終わるまでは、実サンプルがschema 4の
-    # ままのため雛形配置の後続処理（settings.json生成）がV8-b
-    # （no_read_pathsの旧書式）で失敗しうる。ここで打ち切らず後続の
-    # アサーション（3キー抽出の正しさ）で赤として観測させる。
+    # ⚠️ config/profile.md.sampleは実値入り・schema 6で単体でも妥当なため、
+    # 雛形配置の後続処理（settings.json生成）まで完走しうる。本テストの主眼＝
+    # 3キー抽出の正しさであり、installer本体の終了コードは見ない（`|| true`）。
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/install-main.sh" >/dev/null 2>&1 || true
     PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
     VAULT_FIXTURE="$(mktemp -d)"
@@ -937,16 +930,16 @@ echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-
     # profile_resolve.py側のCAPABILITY_KEYSいずれの現行3キー集合にも合わせる。
     for k in team_mode no_read_paths machine_role; do
       if ! grep -q "^${k}:" "$PROFILE_PATH"; then
-        fail_case "実サンプルから最小能力表3キーの1つ(${k})がノートmetadataと取り違えられ抽出できていない"
+        fail_case "実サンプルから最小能力表3キーの1つ(${k})が抽出できていない"
         missing_keys=$((missing_keys + 1))
       fi
     done
     if [ "$missing_keys" -eq 0 ]; then
-      pass "実サンプルからノートmetadataではなく最小能力表3キー全てが正しく抽出されている（T5にならない）"
+      pass "実サンプルから最小能力表3キー全てが正しく含まれている（T5にならない）"
     fi
     assert_true "T5(既存キー欠落)にはならない（BLOCKING対応の直接確認・値の中身に依存しない）" \
       "$(echo "$ctx" | grep -q 'T5' && echo 0 || echo 1)"
-    assert_true "T6(YAML破損)にもならない（抽出したブロックが正しいYAML frontmatterであることの確認）" \
+    assert_true "T6(YAML破損)にもならない（コピーされた実体が正しいYAML frontmatterであることの確認）" \
       "$(echo "$ctx" | grep -q 'T6' && echo 0 || echo 1)"
 
     rm -rf "$VAULT_FIXTURE"
@@ -1023,21 +1016,28 @@ echo "=== 15. --print-bedrock-env-json: envファイルが無ければ空のenv/
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 15b. ローカル実体プロファイルの雛形配置: 抽出失敗時のWARNに実際のエラー詳細が含まれる（Codex二次レビュー指摘・Minor対応: 従来はstdout/stderr両方をファイルへ吸い込んでいて詳細が常に空だった） ==="
+echo "=== 15b. ローカル実体プロファイルの雛形配置: 読取失敗時のWARNに実際のエラー詳細が含まれる（Codex二次レビュー指摘・Minor対応: 従来はstdout/stderr両方をファイルへ吸い込んでいて詳細が常に空だった。2026-09-08 本人裁定A案で読み元がconfig/profile.md.sampleへ付け替わり、失敗モードも「YAMLフェンスが見つからない」から「ファイルが読めない」へ変わった） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home_no_profile "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  mkdir -p "$TMP_REPO/vault-public/Preferences"
-  echo "no yaml fence in this fixture" > "$TMP_REPO/vault-public/Preferences/profile-sample.md"
+  # サンプルをディレクトリに置き換え、存在するのに読めない状態を決定的に
+  # 再現する（chmod 000はroot実行環境では読めてしまい未検証になりうるため
+  # 使わない＝テスト16と同じ技法。cpは新規コード側の唯一の`-f`非依存の
+  # 分岐で試みられるため、"無い"場合とは異なる詳細文言"is a directory"に
+  # なることも確認する）。
+  rm -f "$TMP_REPO/config/profile.md.sample"
+  mkdir -p "$TMP_REPO/config/profile.md.sample"
 
   out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)"
 
-  assert_true "抽出失敗のWARNが出る" \
-    "$(echo "$out" | grep -q '抽出できませんでした' && echo 1 || echo 0)"
-  assert_true "詳細（フェンスが見つからない旨）がWARNに含まれる（従来は空だった）" \
-    "$(echo "$out" | grep -q '詳細:.*が見つかりません' && echo 1 || echo 0)"
+  assert_true "読取失敗のWARNが出る" \
+    "$(echo "$out" | grep -q '読み取れませんでした' && echo 1 || echo 0)"
+  assert_true "詳細（ディレクトリである旨）がWARNに含まれる（従来は空だった）" \
+    "$(echo "$out" | grep -q '詳細:.*directory' && echo 1 || echo 0)"
+  assert_true "profile.mdは作成されない" \
+    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
@@ -1337,7 +1337,7 @@ EOF
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 29. §3.9対話: Q1→Q2→Q3を対話で答えるとrole.leaderの1行だけが確定し、他の行は1バイトも変わらない ==="
+echo "=== 29. §3.9対話: 定義名を訊く唯一の質問（旧Q1→Q2→Q3を1問へ畳んだもの）に答えるとrole.leaderの1行だけが確定し、他の行は1バイトも変わらない ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -1345,30 +1345,14 @@ echo "=== 29. §3.9対話: Q1→Q2→Q3を対話で答えるとrole.leaderの1�
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
   PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  # 実サンプルと同じ経路（雛形コピー）でrole.leader:unknownの実体を用意する。
-  env -u AIENV_LEADER_ROLE HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" --dry-run >/dev/null 2>&1
-  mkdir -p "$(dirname "$PROFILE_PATH")"
-  # --dry-runは何も書かないため改めて雛形だけを直接生成する。
-  python3 - "$TMP_REPO/vault-public/Preferences/profile-sample.md" "$PROFILE_PATH" <<'PYEOF'
-import re, sys
-with open(sys.argv[1], encoding="utf-8") as f:
-    text = f.read()
-blocks = re.findall(r"```yaml\n(.*?)\n```", text, re.DOTALL)
-candidate = next(b for b in blocks if b.lstrip().startswith("---"))
-with open(sys.argv[2], "w", encoding="utf-8") as f:
-    f.write(candidate.rstrip("\n") + "\n")
-PYEOF
+  # role.leader:unknownの実体を用意する（対話の発火条件）。
+  write_profile_with_unknown_leader "$PROFILE_PATH"
   PRE_CONTENT="$(cat "$PROFILE_PATH")"
 
   # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.3・D-11）: 質問が
   # 「モデル定義名（カンマ区切り）」の1問へ畳まれた。既定値を持つmake_fake_home()の
   # models.confに定義済みの opus-medium（claude-opus-5・effort=medium）を1行で
   # 指定する。
-  # ⚠️ 本テストはvault-public/Preferences/profile-sample.mdの実サンプルからの
-  # 雛形コピー経路を使う。同サンプルは本案件時点でまだschema 5・旧role文法の
-  # ままで新schema 6へ追随していないため（段階2・設計書§9.1が未着手）、
-  # コピーされた実体がgate_schema_version()でT4-LEGACYになり、本テストは
-  # 現時点で赤のまま（サンプル側の追随待ち＝担当外。リーダーへ報告済み）。
   rc=0
   out="$(printf 'opus-medium\n' \
     | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
@@ -1399,19 +1383,11 @@ echo "=== 30. §3.9対話: 3回とも不正な回答が続くと中止し、prof
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  mkdir -p "$(dirname "$PROFILE_PATH")"
-  python3 - "$TMP_REPO/vault-public/Preferences/profile-sample.md" "$PROFILE_PATH" <<'PYEOF'
-import re, sys
-with open(sys.argv[1], encoding="utf-8") as f:
-    text = f.read()
-blocks = re.findall(r"```yaml\n(.*?)\n```", text, re.DOTALL)
-candidate = next(b for b in blocks if b.lstrip().startswith("---"))
-with open(sys.argv[2], "w", encoding="utf-8") as f:
-    f.write(candidate.rstrip("\n") + "\n")
-PYEOF
+  write_profile_with_unknown_leader "$PROFILE_PATH"
   PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
 
-  # Q1に3回とも不正な番号(9)を答え続ける。
+  # 定義名を訊く唯一の質問に3回とも不正な値(9・定義名の形式に一致しない)を
+  # 答え続ける。
   rc=0
   out="$(printf '9\n9\n9\n' \
     | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
@@ -1432,16 +1408,7 @@ echo "=== 31. §3.9対話: 対話中のEOFは即座に非0終了する（リト�
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  mkdir -p "$(dirname "$PROFILE_PATH")"
-  python3 - "$TMP_REPO/vault-public/Preferences/profile-sample.md" "$PROFILE_PATH" <<'PYEOF'
-import re, sys
-with open(sys.argv[1], encoding="utf-8") as f:
-    text = f.read()
-blocks = re.findall(r"```yaml\n(.*?)\n```", text, re.DOTALL)
-candidate = next(b for b in blocks if b.lstrip().startswith("---"))
-with open(sys.argv[2], "w", encoding="utf-8") as f:
-    f.write(candidate.rstrip("\n") + "\n")
-PYEOF
+  write_profile_with_unknown_leader "$PROFILE_PATH"
 
   rc=0
   # 入力を1行も与えない（即EOF）。
@@ -1620,12 +1587,34 @@ echo "=== 38. §3.9優先順位表 行1: DRY_RUN=1は他条件によらず一切
   PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
 
   out="$(env -u AIENV_LEADER_ROLE HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run --reconfigure-leader 2>&1)"
-  assert_true "[dry-run]リーダー配役対話メッセージが出る" \
-    "$(echo "$out" | grep -q '\[dry-run\] リーダー配役を対話で確認します' && echo 1 || echo 0)"
+  assert_true "[dry-run]リーダー配役確認メッセージが出る" \
+    "$(echo "$out" | grep -qF '[dry-run] リーダー配役を確認します（未確定時のみ対話）' && echo 1 || echo 0)"
   POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
   assert_eq "profileは一切変更されない" "$PRE_SHA" "$POST_SHA"
   assert_true "settings.jsonも生成されない" \
     "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 38b. 検証職(Codex)2巡目指摘・MINOR回帰: role.leaderが既にconfigured（AIENV_LEADER_ROLE無・reconfigure無）でも、dry-runの文面は「対話する」と言い切らず中立表現のまま ==="
+{
+  # §3.9優先順位表 行5（configured+AIENV_LEADER_ROLE無+reconfigure無→
+  # そのまま通す＝実行時は対話しない）の前提でdry-runを実行する。旧文面
+  # 「リーダー配役を対話で確認します」は、この場合でも対話が起きるかの
+  # ように誤解させた（実行時は対話しない＝テスト40で確認済み）。
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"  # role.leader: configured model=sonnet-main（既定値）
+  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
+  PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
+
+  out="$(env -u AIENV_LEADER_ROLE HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run 2>&1)"
+  assert_true "[dry-run]文面が「対話で確認します」と言い切らない（誤解を招く旧文言が出ない）" \
+    "$(echo "$out" | grep -qF '[dry-run] リーダー配役を対話で確認します' && echo 0 || echo 1)"
+  assert_true "[dry-run]中立な文面（未確定時のみ対話）は出る" \
+    "$(echo "$out" | grep -qF '[dry-run] リーダー配役を確認します（未確定時のみ対話）' && echo 1 || echo 0)"
+  POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
+  assert_eq "profileは一切変更されない" "$PRE_SHA" "$POST_SHA"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1825,10 +1814,9 @@ echo "=== 43d. 設計書S7×S8: settings.json配置先の親ディレクトリ�
   # 先に作ってしまうため）。
   mkdir -p "$FAKE_HOME"
   : > "$FAKE_HOME/.claude"
-  # 実体プロファイルをあらかじめ有効な内容で置く（雛形配置＝vault-public/
-  # Preferences/profile-sample.mdからのコピーに依存させない。同ファイルは
-  # 段階2で新schemaへ追随予定＝設計書§9.1であり、本テストの主眼＝mkdir失敗
-  # 経路の検証とは無関係）。
+  # 実体プロファイルをあらかじめ有効な内容で置く（雛形配置＝config/
+  # profile.md.sampleからのコピーに依存させない。本テストの主眼＝mkdir失敗
+  # 経路の検証であり、雛形配置の中身とは無関係）。
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
   write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'

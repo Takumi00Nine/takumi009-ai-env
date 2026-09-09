@@ -96,9 +96,12 @@
 # 確定済みの値はそのまま通す＝冪等）。後者は対話を一切行わない（CI・バック
 # グラウンド実行での正しい運用。付いていれば`[ -t 0 ]`より常に優先する）。
 #
-# 機役割（配役表の能力軸`machine_role`）: 本スクリプトは実体プロファイルへの
-# 書込を一切行わない（配役表-能力軸整理-設計-2026-09-07.md §5.2・FR-15＝
-# 実体を編集するのは本人だけ）。settings.jsonの"model"はv2実体では配役表の
+# 機役割（配役表の能力軸`machine_role`）: 本スクリプトは既存の実体プロファイル
+# の内容（machine_role を含む）を一切書き換えない（配役表-能力軸整理-設計-
+# 2026-09-07.md §5.2・FR-15＝実体を編集するのは本人だけ）。⚠️ 実体が無い
+# ときだけ、雛形配置ブロック（後述）がconfig/profile.md.sampleから新規に
+# 作成することはある（2026-09-08本人裁定A案）が、その後の値の書き換えは
+# 行わない。settings.jsonの"model"はv2実体では配役表の
 # `role.leader`から決まり（--print-leader-runtime）、機役割にも
 # --sub-delegateにも依存しない。--sub-delegateが効くのは実体が本当に存在
 # しない場合に縮退したときのlegacy値選択（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）
@@ -128,8 +131,15 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${AIENV_MODEL_MAIN:=claude-fable-5[1m]}"
 : "${AIENV_MODEL_SUB:=claude-opus-5}"
 # ローカル実体プロファイル（2026-08-30 共通コア分離 §9.0 A-1 P1機構）の配置先。
-# claude/hooks/bootstrap-vault.sh と同じ環境変数名・既定値（マシンローカル・
-# repo管理外・非配布＝§11.2 source of truth定義）。
+# claude/hooks/bootstrap-vault.sh と同じ環境変数名・既定値（実体は機ごとの
+# ローカル・repo管理外のまま＝§11.2 source of truth定義。推奨経路は repo の
+# config/profile.md.sample を手でコピーして作ること＝実値入り。
+# 2026-09-08 本人裁定A案（設定ファイルsample配布）: 実体が無いときだけ動く
+# 既存の雛形自動生成（下記「雛形配置」ブロック）は、読み元を
+# vault-public/Preferences/profile-sample.md から repo の
+# config/profile.md.sample へ付け替えた（挙動＝「実体が無いときだけ雛形を
+# 置く・既存を壊さない」は変えていない）。本人が事前にconfig/profile.md.
+# sampleをコピーしておけば、雛形配置は非破壊性によりそれを上書きしない。
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
 # Bedrock最小セット（2026-08-30 共通コア分離 §9.0 A-1-4）: ピン留めの実値
 # （推論プロファイルID・リージョン・CLAUDE_CODE_USE_BEDROCK等）の正本となる
@@ -376,10 +386,12 @@ fail_settings_generation() {
   fail "$msg"
 }
 
-# サンプル雛形の実位置（§3.9 Q2の候補抽出・後段のstep①双方で使う。
-# extract_profile_schema_block() 自体はstep①の定義箇所で定義するが、
-# 呼び出しはこの変数を経由するため先に定義しておく）。
-PROFILE_SAMPLE_SRC="$DIR/vault-public/Preferences/profile-sample.md"
+# サンプル雛形の実位置（後段のstep①「雛形配置」ブロックで使う。
+# 2026-09-08 本人裁定A案で読み元をrepoのconfig/profile.md.sampleへ付け替えた
+# ＝生ファイルなのでYAMLフェンス抽出は不要（extract_profile_schema_block()は
+# 撤去した。旧・§3.9 Q2の候補抽出は2026-09-08 モデル定義ファイルと候補指定
+# 対応でsample_model_candidates()ごと既に廃止済みのためこの変数を使わない）。
+PROFILE_SAMPLE_SRC="$DIR/config/profile.md.sample"
 
 # ============================================================
 # 配役表解凍（2026-09-01・設計書§4.2-a〜g・§3.9）: リーダー実行値の解決と
@@ -810,7 +822,13 @@ ensure_leader_configured() {
   local path="$AIENV_LOCAL_PROFILE_PATH"
 
   if [ "$DRY_RUN" = "1" ]; then
-    log "[dry-run] リーダー配役を対話で確認します"
+    # 2026-09-08 検証職(Codex)2巡目指摘・MINOR対応: role.leaderが既に
+    # configured（かつAIENV_LEADER_ROLE不一致・--reconfigure-leaderの
+    # いずれも無い）なら実行時は対話しない（§3.9優先順位表 行5）。
+    # dry-runは§3.9の対話判定ロジック自体には踏み込まない設計のため、
+    # 「対話で確認します」と無条件に言い切らず、未確定時だけ対話が
+    # 起こりうる中立な文面にする。
+    log "[dry-run] リーダー配役を確認します（未確定時のみ対話）"
     return 0
   fi
 
@@ -1007,7 +1025,7 @@ check_profile_cmd() {
         log "モデル定義ファイル: ${_cpc_defs_path}（${_cpc_defs_state}）" >&2
       fi
       if [ "$_cpc_defs_state" = "ありません" ]; then
-        log "  雛形は自動生成しません。Vaultの Preferences/model-definitions-sample.md をコピーして本人が作成してください。" >&2
+        log "  雛形は自動生成しません。repoの config/models.conf.sample をコピーして本人が作成してください。" >&2
       fi
       ;;
     *)
@@ -1480,9 +1498,9 @@ EOF
 }
 
 # --- ローカル実体プロファイルの雛形配置（2026-08-30 共通コア分離 §9.0 A-1 P1機構） ---
-# サンプル（vault-public/Preferences/profile-sample.md・repo管理下）から
-# $AIENV_LOCAL_PROFILE_PATH の雛形を作る。メイン/サブ共通（--sub-delegate経由でも
-# 実行する＝claude/・codex/のsymlink化と同じ扱い）。
+# サンプル（config/profile.md.sample・repo管理下）から $AIENV_LOCAL_PROFILE_PATH
+# の雛形を作る。メイン/サブ共通（--sub-delegate経由でも実行する＝claude/・
+# codex/のsymlink化と同じ扱い）。
 # ⚠️ 2026-09-01 配役表解凍 §4.2-c: この雛形配置ブロックは settings.json 生成
 # （旧・本ブロックの後段にあった）より**前**へ入れ替えた（旧実装は生成が
 # 雛形配置より前にあり、入力〈プロファイル〉が出力〈settings.json〉より後に
@@ -1496,49 +1514,14 @@ EOF
 # （`[ -e ]`だけだとbroken symlinkを「存在しない」と誤判定するため`[ -L ]`も
 # 見る）。書込はmktemp+mvで原子的に行う（P1受入条件④・他の生成物と同じ流儀）。
 #
-# ⚠️ 実サンプルの入力形式不整合（2026-08-30 工程横断レビュー指摘・BLOCKING対応）:
-# `profile-sample.md`はObsidianノートであり、**先頭のfrontmatter（date/tags/…）は
-# ノート自体のメタデータであって最小能力表の固定キー（当時7キー・2026-09-07
-# 能力軸整理後は能力軸3キー）ではない**。固定キー本体は本文中の
-# ```yaml フェンスコードブロックの中にYAML frontmatter形式で書かれている
-# （そのブロック自体が独立した`---`区切りを持つ）。単純にノート全体を
-# コピーするだけでは、bootstrap-vault.shのresolve_local_profile()が
-# ノートの先頭frontmatterを解析してしまい、固定キー全てが「既存キー欠落」（T5）
-# という誤判定になる（結合テストが合成fixtureだったため見逃されていた不具合）。
-# 対策: サンプル本文の**最初の```yamlフェンスブロックのうち、内容が`---`で
-# 始まるもの**を抽出し、そのYAML frontmatter部分だけをローカル実体として書く
-# （サンプル側にマーカー等の追加変更は不要＝現行の実サンプルはこの条件を
-# 満たしている）。
-# ⚠️ PROFILE_SAMPLE_SRC自体は§3.9 Q2の候補抽出でも使うためスクリプト冒頭
-# （引数解析より前）で既に宣言済み——ここでは再宣言しない（値表を複数箇所に
-# 増やさないため）。
-extract_profile_schema_block() {
-  # 引数: サンプルファイルのパス。標準出力へYAML frontmatterブロック
-  # （`---`〜`---`を含む）を書く。
-  # 終了コードを2種類に分ける（2026-09-01 工程横断レビュー指摘・MINOR-1
-  # 対応）: exit 1＝読めた内容の中にフェンスが見つからない（YAML抽出失敗
-  # 相当）／exit 2＝ファイル自体が読めない・デコードできない（読取不能
-  # 相当）。⚠️ 従来はどちらも`sys.exit(1)`または素通しの例外（デフォルトで
-  # exit 1相当）に丸められており、呼び出し側（旧サンプル候補生成関数）が
-  # 「実在するが権限不足・不正UTF-8のサンプル」を`YAML_EXTRACT_FAILED`
-  # （F-22の4区分の1つ）と誤分類していた。`[ -f ]`は読取可能性を保証しない
-  # （存在確認だけ）ため、実際の読取り時点で失敗を検出しここで初めて区別する。
-  python3 -c "
-import re, sys
-try:
-    with open(sys.argv[1], encoding='utf-8') as f:
-        text = f.read()
-except (OSError, UnicodeDecodeError) as e:
-    print('サンプルを読み取れません（' + type(e).__name__ + '）', file=sys.stderr)
-    sys.exit(2)
-blocks = re.findall(r'\`\`\`yaml\n(.*?)\n\`\`\`', text, re.DOTALL)
-candidate = next((b for b in blocks if b.lstrip().startswith('---')), None)
-if candidate is None:
-    print('YAML frontmatterブロック（内容が---で始まる \`\`\`yamlフェンス）が見つかりません', file=sys.stderr)
-    sys.exit(1)
-sys.stdout.write(candidate.rstrip('\n') + '\n')
-" "$1"
-}
+# ⚠️ 2026-09-08 本人裁定A案（設定ファイルsample配布）: 読み元をVaultノート
+# （vault-public/Preferences/profile-sample.md）から repo の
+# config/profile.md.sample へ付け替えた。config/profile.md.sampleは
+# 実体そのままの生ファイル（```yamlフェンスやObsidianノートのfrontmatter
+# メタデータで包まれていない・schema本体が先頭`---`から直接始まる）ため、
+# 旧来のYAMLフェンス抽出（`extract_profile_schema_block()`。2026-08-30
+# 工程横断レビュー指摘・BLOCKING対応で新設していた）は不要になり撤去した。
+# 単純にファイルをそのまま実体としてコピーするだけでよい。
 if [ -e "$AIENV_LOCAL_PROFILE_PATH" ] || [ -L "$AIENV_LOCAL_PROFILE_PATH" ]; then
   if [ "$DRY_RUN" = "1" ]; then
     log "[dry-run] ローカル実体プロファイルは既に存在するため雛形コピーはskipします: $AIENV_LOCAL_PROFILE_PATH"
@@ -1546,40 +1529,35 @@ if [ -e "$AIENV_LOCAL_PROFILE_PATH" ] || [ -L "$AIENV_LOCAL_PROFILE_PATH" ]; the
     warn "ローカル実体プロファイルは既に存在するため雛形コピーをskipしました（既存を壊さない）: $AIENV_LOCAL_PROFILE_PATH"
   fi
 elif [ "$DRY_RUN" = "1" ]; then
-  log "[dry-run] would extract profile schema block and write: $PROFILE_SAMPLE_SRC -> $AIENV_LOCAL_PROFILE_PATH"
-elif [ -f "$PROFILE_SAMPLE_SRC" ]; then
+  log "[dry-run] would copy profile sample: $PROFILE_SAMPLE_SRC -> $AIENV_LOCAL_PROFILE_PATH"
+else
+  # ⚠️ 2026-09-08 本人裁定A案: `[ -f ]`での存在確認を独立の分岐にせず、`cp`を
+  # 直接試みてその失敗（無い・ディレクトリ・権限不足等いずれも）を1つの
+  # 分岐へ統一した（生ファイルの単純コピーになったので、旧来の「フェンスが
+  # 見つからない」失敗種別が無くなり、"存在しない"と"読めない"を分ける
+  # 実益も無くなったため。installer全体は落とさずWARNに留める＝
+  # --with-dotfiles失敗時と同じsoft-fail方針）。
   mkdir -p "$(dirname "$AIENV_LOCAL_PROFILE_PATH")"
   profile_tmp="$(mktemp "$(dirname "$AIENV_LOCAL_PROFILE_PATH")/.$(basename "$AIENV_LOCAL_PROFILE_PATH").aienv-tmp.XXXXXX")"
-  # `2>&1 1>"$profile_tmp"`の順序が重要（Codex二次レビュー指摘・Minor対応）:
-  # 先に`2>&1`でstderrを「その時点のstdout」＝この$(...)キャプチャ先へ
-  # 複製してから、`1>"$profile_tmp"`でstdoutだけをファイルへ切り替える
-  # （標準的なstdout/stderr入れ替えテクニック）。逆順（`> file 2>&1`）だと
-  # stdout・stderrの両方がファイルへ吸い込まれ、PROFILE_EXTRACT_ERRが常に
-  # 空になり失敗時の詳細メッセージが出なくなっていた。
-  if PROFILE_EXTRACT_ERR="$(extract_profile_schema_block "$PROFILE_SAMPLE_SRC" 2>&1 1>"$profile_tmp")"; then
+  if PROFILE_COPY_ERR="$(cp "$PROFILE_SAMPLE_SRC" "$profile_tmp" 2>&1 1>/dev/null)"; then
     mv "$profile_tmp" "$AIENV_LOCAL_PROFILE_PATH"
-    log "ローカル実体プロファイルの雛形を作成しました: $AIENV_LOCAL_PROFILE_PATH <- ${PROFILE_SAMPLE_SRC}（最小能力表ブロックのみ抽出）"
+    log "ローカル実体プロファイルの雛形を作成しました: $AIENV_LOCAL_PROFILE_PATH <- ${PROFILE_SAMPLE_SRC}（config/profile.md.sampleをそのままコピー）"
   else
     rm -f "$profile_tmp"
-    warn "profile-sample.mdから最小能力表ブロックを抽出できませんでした（サンプルの形式が変わった可能性）。雛形コピーをskipします: ${PROFILE_SAMPLE_SRC}（詳細: ${PROFILE_EXTRACT_ERR}）"
+    warn "config/profile.md.sampleを読み取れませんでした（無い・checkout破損・権限不足等の可能性）。雛形コピーをskipします: ${PROFILE_SAMPLE_SRC}（詳細: ${PROFILE_COPY_ERR}）"
   fi
-else
-  # サンプルがまだリポジトリに存在しない場合（P1機構のロールアウト未完了時）は
-  # installer全体を落とさずWARNに留める（--with-dotfiles失敗時と同じsoft-fail方針）。
-  warn "vault-public/Preferences/profile-sample.md が見つかりません（P1機構のロールアウト未完了、またはcheckout破損の可能性）: $PROFILE_SAMPLE_SRC"
 fi
 
 # ⚠️ 2026-09-07実測発見（配役表 能力軸整理）: 直後のensure_leader_configured()は
 # $AIENV_LOCAL_PROFILE_PATH.leader.lock を取得する（pid-lock.sh）。ロック取得は
 # 同ディレクトリへのmktempに依存するため、親ディレクトリ（$HOME/.config/
 # takumi009-ai-env/）が存在しないとmktempが無言で失敗し、ロック取得が
-# 「他プロセスとの競合」と誤認されて回収不能なまま失敗し続ける。上の雛形配置
-# ブロックは「サンプルが見つからない」分岐（1651行目のelse）を通るとmkdir -pを
-# 実行しない。旧マーカーファイル書込ブロック（撤去済み・FR-15＝
-# Decisions/2026-09-07-profile-axes-consolidation）が同じ親ディレクトリを
-# 副作用で作っていたため、この依存はこれまで表面化していなかった潜在バグ
-# だった。雛形配置の成否・分岐に関わらず、ここで一度だけ確実に作る
-# （DRY_RUNではensure_leader_configuredがロックを取得しない＝副作用不要）。
+# 「他プロセスとの競合」と誤認されて回収不能なまま失敗し続ける。⚠️
+# 2026-09-08本人裁定A案で雛形配置ブロックの分岐を統合した現在は、コピーを
+# 試みる分岐（上）が`mkdir -p`を必ず実行するため実質的に冗長だが、雛形配置
+# 側の分岐条件が将来また変わっても本ブロックだけでロック取得の前提を独立に
+# 保証できるよう、DRY_RUN以外は無条件でここでも作る（DRY_RUNでは
+# ensure_leader_configuredがロックを取得しない＝副作用不要）。
 if [ "$DRY_RUN" != "1" ]; then
   mkdir -p "$(dirname "$AIENV_LOCAL_PROFILE_PATH")"
 fi
@@ -1798,6 +1776,17 @@ generate_config_toml codex/config.toml "$HOME/.codex/config.toml"
 # 週次無人実行の経路は新設 maintenance.sh（PR2・install-maintenance.shが設置）へ移す。
 # 既存マシンで稼働中の旧LAは install-maintenance.sh の移行処理（旧ラベルのbootout）で
 # 片付ける（本スクリプトでは何もしない）。
+
+# 使用率取得器 LaunchAgent（com.takumi009.usage-fetch・scripts/usage-fetch.sh）は
+# 2026-09 B1-b（使用率取得器移設）で `claude-codex-usage/refresh.sh` から移設した
+# （docs/core-split/使用率取得器移設B1b-設計-2026-09-08.md）。install-backup.sh・
+# install-maintenance.sh と同じ理由で、本スクリプトからは呼び出さない（毎分実行
+# ジョブの導入は「新旧の入れ替え順序」「本人確認を挟む切替手順」を持つ独立の
+# installer にする＝scripts/install-usage-fetch.sh。メイン機の標準セットアップは
+# install-main.sh の実行後にこれを個別に実行する。詳細＝README「セットアップ」
+# 節・使用率取得器移設B1b-実装-2026-09-08.md）。サブ機は install-sub.sh の
+# 「LaunchAgent を一切設置しない」方針を崩さず、導入する場合は本人が
+# scripts/install-usage-fetch.sh を直接実行する（設計書§8 Q-7・(C)案）。
 # ⚠️ ローカル実体プロファイルの雛形配置は、settings.json生成より前（本ファイル
 # 上部・generate_settings_json呼び出しの直前）へ移動した（2026-09-01 配役表
 # 解凍 §4.2-c）。ここには残さない。

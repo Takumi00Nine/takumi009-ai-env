@@ -1,0 +1,51 @@
+# =====================================================================
+# モデル定義ファイル（メイン機の実値。repo の config/models.conf.sample を
+#  ~/.config/takumi009-ai-env/models.conf へコピーして使う。メイン機は
+#  そのままコピーして使う。サブ機もコピーし、使わない定義は削る／
+#  必要な定義（Bedrock 経由など）だけ有効化する。installer はこのファイルを
+#  コピーしない（本人が自分でコピーする）。実体は machine ごとのローカル
+#  ファイル・repo 管理外のまま。
+#  置き場: ~/.config/takumi009-ai-env/models.conf
+#  書式:  [定義名] の行で1つの定義が始まり、次の [ ] か行末までが中身
+#         属性は key=value を1行1つ。値にスペースは書けない
+#  空行と行頭 # は無視。⚠️ 値の後ろにコメントを書かない
+#  ⚠️ 認証情報は書かない。ここに書くのは「どのモデルをどの経路で使うか」だけ
+#  ⚠️ 定義名は自分で決めてよい（^[a-z0-9][a-z0-9-]*$）。配役表からこの名前で参照する
+# =====================================================================
+
+# --- サブスク／ネイティブAPI経由（model は具体ID。別名を書かない）---
+[fable-main]
+provider=anthropic-api
+model=claude-fable-5-1
+effort=high
+
+[opus-main]
+provider=anthropic-api
+model=claude-opus-5
+effort=high
+
+[sonnet-main]
+provider=anthropic-api
+model=claude-sonnet-5
+effort=high
+
+# --- 外部CLI経由（Codex など）------------------------------------
+#  model = 外部CLIが受理する実モデルID、または予約語 default
+#          （CLI側の既定を使う指定。予約語を書いたときはclaude/hooks/lib/
+#          profile_resolve.py の resolve-candidate が CODEX_ARGS から
+#          --model を省く＝wrapper（scripts/codex-exec.sh）はモデル指定
+#          なしで起動される。--model を渡す/渡さないの判定主体は
+#          profile_resolve.py 側でありwrapper自身は渡された引数をそのまま
+#          使うだけ）
+#  ⚠️ provider=external のときは execution を必ず書く
+[codex-review-default]
+provider=external
+execution=external-cli
+model=default
+effort=high
+
+# --- Bedrock 経由（メイン機は未使用。サブ機で有効化する場合はコメントを外す）---
+# model は別名だけ（実IDは bedrock.env のピン留め側）。別名: opus/sonnet/haiku/fable
+# [bedrock-opus]
+# provider=bedrock
+# model=opus

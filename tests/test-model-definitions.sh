@@ -69,7 +69,7 @@ role.verifier:    configured model=codex-high
 EOF
 
 cat > "$BASE/models.conf" <<'EOF'
-# モデル定義（このマシン専用・非配布）
+# モデル定義（実体＝機ごとのローカル。config/models.conf.sampleのコピー）
 [opus-main]
 provider=anthropic-api
 model=claude-opus-5

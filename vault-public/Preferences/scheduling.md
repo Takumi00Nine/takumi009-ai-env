@@ -1,10 +1,11 @@
 ---
 date: 2026-06-14
-updated: 2026-07-11
+updated: 2026-09-08
 tags: [preference, scheduling, cron]
 project: meta
 related:
   - "[[Projects/news-report-automation]]"
+  - "[[Decisions/2026-09-08-usage-fetcher-migration]]"
 aliases:
   - "CronCreate"
   - "スケジュール実行ルール"
@@ -17,7 +18,7 @@ aliases:
 時間指定タスクの使い分け：
 - **繰り返し処理 → スケジュール（クラウドルーティン：`/schedule`・RemoteTrigger）**
 - **1回だけの実行 → CronCreate**
-- **例外：ローカルファイルへのアクセスが必要な繰り返し処理**（Vault 棚卸し・使用率取得等）はクラウドから到達不可のため **LaunchAgent**（[[Knowledge/launchagent-vs-cron-keychain]]。実例＝[[Decisions/2026-07-05-vault-inventory-automation]]・[[Knowledge/claude-codex-usage]]）
+- **例外：ローカルファイルへのアクセスが必要な繰り返し処理**（Vault 棚卸し・使用率取得等）はクラウドから到達不可のため **LaunchAgent**（[[Knowledge/launchagent-vs-cron-keychain]]。実例＝[[Decisions/2026-07-05-vault-inventory-automation]]・[[Knowledge/claude-codex-usage]]・`com.takumi009.usage-fetch`（毎分・使用率取得。切替は `install-usage-fetch.sh`・サブ機は本人が直接実行＝[[Decisions/2026-09-08-usage-fetcher-migration]]））
 
 ※ ただし要件が「セッションを閉じても/PCを切っても動かす」なら、1回だけでもクラウド側（`run_once_at`）を使う。手元起動が前提でよい単発タスクは CronCreate（recurring:false）。
 
