@@ -101,6 +101,9 @@ source "$SCRIPT_DIR/lib/macos-notify.sh"
 : "${TIMEOUT_KNOWLEDGE_MERGE:=300}"
 : "${TIMEOUT_DECISION_PROPAGATION:=120}"
 : "${TIMEOUT_MAINTENANCE_APPLY:=720}"
+# 宣言記録の掃除（cmux-session-todo・FR-47・設計書§16.2）。cmuxを叩くため
+# ソケット半死でハングしうる。既存ステップと同じ形で打ち切る（既定30秒）。
+: "${TIMEOUT_TASK_PRUNE:=30}"
 # maintenance_apply.py自身の内部--claude-timeout（上記TIMEOUT_MAINTENANCE_APPLYより
 # 短くする＝外側のmaintenance_run_step.pyタイムアウトが内側より先に発火すると
 # 内部の状況が分からないまま強制終了されるため、内側を先に切れさせる）。
@@ -771,6 +774,67 @@ log "Phase2結果: promote=$N_PROMOTED merge=$N_MERGED merge_partial=$N_MERGED_P
 
 log "=== Phase 3: サマリ・通知 ==="
 
+# --- 宣言記録の掃除（cmux-session-todo・FR-47・設計書§16・v1.6でprune rc
+#     3値→4値に追随）---
+# 呼ぶ位置はPhase3冒頭・実施サマリ1行の組み立てより前（設計書§16.1）。
+# ①Phase3は既に「保持整理」（30日超過の実行ディレクトリ削除）を担っており
+# 宣言記録の掃除は同じ性質 ②結果をサマリ行に載せられる ③掃除はVaultへ
+# 1バイトも書かないため、Phase0のVault書込ロックともPhase3後半の
+# backup-vault.shとも干渉しない。
+# 新しいエラー隔離の仕組みは作らず、既存のrun_wrapped_step（timeout付き
+# 起動＋status-file）にそのまま載せる（設計書§16.2）。
+TASK_PRUNE_CMD="${MAINTENANCE_TASK_PRUNE_CMD:-$HOME/work/tools/cmux-task-watch/cmux-task-declare.sh}"
+TASK_PRUNE_SEGMENT=""            # 実施サマリへ足す1セグメント
+if [[ ! -x "$TASK_PRUNE_CMD" ]]; then
+  # 掃除の入口そのものが存在しない（段②でai-env側だけ先に入った期間・
+  # dotfiles未導入の別マシン＝F-23）。記録も他工程も無傷のまま
+  # 「未導入」とだけ記録して次へ進む（FR-47④）。
+  TASK_PRUNE_SEGMENT="・宣言掃除 未導入"
+  add_info_note "Phase3: 宣言記録の掃除は未実施です（掃除の入口が見つかりません: ${TASK_PRUNE_CMD}）"
+else
+  TASK_PRUNE_STATUS_FILE="$RUN_DIR/step-status-task-prune.json"
+  TASK_PRUNE_OUT="$RUN_DIR/task-prune.out"
+  run_wrapped_step "$TIMEOUT_TASK_PRUNE" "$TASK_PRUNE_STATUS_FILE" \
+    "$TASK_PRUNE_OUT" "$RUN_DIR/task-prune-stderr.log" \
+    bash "$TASK_PRUNE_CMD" prune
+  TASK_PRUNE_RESULT="$(parse_step_status "$TASK_PRUNE_STATUS_FILE")"
+  log "Phase3 宣言掃除: $TASK_PRUNE_RESULT"
+  # ステップ結果の生文字列（"OK 1"等）はサマリに出さない。"OK"は人には成功に
+  # 見えるので失敗を成功に見せてしまう（設計書§16.3）。人が読む語へ写像する。
+  case "$TASK_PRUNE_RESULT" in
+    "OK 0")
+      # 消した対はcmux-task-declare.sh側の契約どおり<UUID><TAB><slug>の行
+      # のみをstdoutへ出す（設計書§3.3）。空行は数えない（grep -c .）。
+      N_PRUNED="$(grep -c . "$TASK_PRUNE_OUT" 2>/dev/null || echo 0)"
+      [[ "$N_PRUNED" =~ ^[0-9]+$ ]] || N_PRUNED=0
+      if [[ "$N_PRUNED" -gt 0 ]]; then
+        PRUNED_PAIRS="$(tr '\t' '=' < "$TASK_PRUNE_OUT" | tr '\n' ';' | sed 's/;$//')"
+        TASK_PRUNE_SEGMENT="・宣言掃除 実施・${N_PRUNED}件（${PRUNED_PAIRS}）"
+      else
+        TASK_PRUNE_SEGMENT="・宣言掃除 実施・0件"
+      fi
+      ;;
+    "OK 1") TASK_PRUNE_REASON="接続不可" ;;      # cmuxに繋がらない＝F-22
+    "OK 2") TASK_PRUNE_REASON="宣言記録破損" ;;  # §3.1の破損判定に当たる
+    *)      TASK_PRUNE_REASON="内部エラー" ;;    # OK 3（取得後の書込等に失敗）・
+                                                  # その他のrc・WRAPPER_FAIL
+                                                  # （timeout＝F-24を含む）
+  esac
+  if [[ "$TASK_PRUNE_RESULT" != "OK 0" ]]; then
+    # rc=1/2/3・WRAPPER_FAILのいずれも、掃除の失敗はadd_info_noteに積む。
+    # add_anomalyは使わない（設計書§16.4）＝add_anomalyはRUN_FULLY_OK=0に
+    # 倒し、last_success_atを進めなくする。last_success_atはPhase1②⑤の
+    # --since算出の起点なので、毎週の掃除失敗が毎週の再走査を引き起こす
+    # 二次被害が出てしまう。月曜03:00にcmuxが起動していないのは異常ではなく
+    # 普通に起こる状態（設計書§16.5）で、それを異常として扱うと警告が
+    # 常態化し本当の異常が埋もれる。FR-47④（掃除が失敗しても記録は元の
+    # まま・他の工程を止めない）は、run_wrapped_stepによる隔離と、prune側の
+    # 「取得に失敗したら1件も消さない」契約の二重で満たされる。
+    TASK_PRUNE_SEGMENT="・宣言掃除 未実施（${TASK_PRUNE_REASON}）"
+    add_info_note "Phase3: 宣言記録の掃除は未実施です（${TASK_PRUNE_REASON}・記録は変更していません。ステップ結果=${TASK_PRUNE_RESULT}・詳細: ${RUN_DIR}）"
+  fi
+fi
+
 # --- Fragments当日ファイルへ実施サマリを1行追記 ---
 # 定常メンテ（Fragments週次昇格・棚卸し対処）はAIが自律実行し個別報告も
 # 不要という運用（Preferences/vault-operation.md「書き方の鉄則」の例外規定）
@@ -829,7 +893,7 @@ if [[ -d "$PREFERENCES_PROPOSALS_DIR" ]]; then
   [[ "$N_PENDING_PREFERENCES_PROPOSALS" =~ ^[0-9]+$ ]] || N_PENDING_PREFERENCES_PROPOSALS=0
 fi
 
-SUMMARY_LINE="定常メンテ(週次): 昇格${N_PROMOTED}件・マージ${N_MERGED}件（部分適用${N_MERGED_PARTIAL}件）・見送り${N_SKIPPED}件・Preferences未確認提案${N_PENDING_PREFERENCES_PROPOSALS}件（要承認）・波及漏れ疑い${DECISION_MISSING_COUNT}件（詳細: ${RUN_DIR}）"
+SUMMARY_LINE="定常メンテ(週次): 昇格${N_PROMOTED}件・マージ${N_MERGED}件（部分適用${N_MERGED_PARTIAL}件）・見送り${N_SKIPPED}件・Preferences未確認提案${N_PENDING_PREFERENCES_PROPOSALS}件（要承認）・波及漏れ疑い${DECISION_MISSING_COUNT}件${TASK_PRUNE_SEGMENT}（詳細: ${RUN_DIR}）"
 if append_fragments_summary "$SUMMARY_LINE"; then
   log "Fragmentsサマリ追記: $SUMMARY_LINE"
 else

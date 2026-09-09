@@ -16,17 +16,64 @@
 # export-public-vault.sh・5検出器・maintenance_apply.pyはFAKEスタブに
 # 差し替える）を組み立ててmaintenance.shを実行する。backup-vault.shだけは
 # 実物を使う（MAINTENANCE_INTERNAL_CALLバイパスの実結線を検証するため）。
+# 例外が1つだけある: §16.6.2系統①（実cmux-task-declare.shとの結合試験・
+# DT-7とは独立）は、別リポジトリ~/work/dotfiles/cmux/cmux-task-watch/の
+# 実物スクリプトを読みに行く（cmux自体は隔離スタブに差し替え、宣言記録も
+# 隔離パスへ書く＝実cmuxにも実記録にも触れない。実物が無い環境ではSKIP）。
 #
 # 実行方法: bash tests/test-maintenance.sh
 
 set -uo pipefail
 
-export HOME="$(mktemp -d)"
+# mktemp -dの失敗を検査せず使うと、書込み不能なsandbox環境で
+# HOME/WORK_ROOTが空文字列になり、以後の全パスがルート直下（例:
+# "$HOME/work/..." → "/work/..."）へ解決されてしまう事故が起こる
+# （2026-09-09 verifier実装レビュー1巡目 #6実測: read-only環境で見かけ上の
+# PASS/FAILが大量発生した）。全mktemp呼び出しを終了コードで検査し、返った
+# パスが空・"/"・非ディレクトリ・非空（mktempが返すはずのない既存ディレクトリの
+# 疑い）のいずれでもないことまで確かめてから使う。
+validate_temp_dir() {
+  local dir="$1" label="$2"
+  if [[ -z "$dir" ]]; then
+    echo "FATAL: ${label}用のmktemp -dが空のパスを返しました（隔離が保証できません）。" >&2
+    exit 1
+  fi
+  if [[ "$dir" == "/" ]]; then
+    echo "FATAL: ${label}用のmktemp -dがルートディレクトリを返しました（隔離が保証できません）。" >&2
+    exit 1
+  fi
+  if [[ ! -d "$dir" ]]; then
+    echo "FATAL: ${label}用のmktemp -dがディレクトリを作成できませんでした: '${dir}'" >&2
+    exit 1
+  fi
+  if [[ -n "$(ls -A "$dir" 2>/dev/null)" ]]; then
+    echo "FATAL: ${label}用の一時ディレクトリが空ではありません（mktempが返すはずの新規ディレクトリではない疑い・既存ディレクトリの誤指定を拒否）: '${dir}'" >&2
+    exit 1
+  fi
+}
+
+HOME="$(mktemp -d)" || {
+  echo "FATAL: mktemp -dに失敗しました（HOME隔離用）。書込み可能な一時領域が無い可能性があります。" >&2
+  exit 1
+}
+validate_temp_dir "$HOME" "HOME"
+export HOME
 trap 'rm -rf "$HOME" "$WORK_ROOT"' EXIT
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-WORK_ROOT="$(mktemp -d)"
+# §16.6.2系統①（実物cmux-task-declare.shとの結合テスト）だけは、HOME隔離の
+# 例外として実dotfilesリポジトリのパスを参照する。HOMEを上書きする前の
+# 本来のHOMEを保存しておく（本ファイルはHOME隔離を前提とするが、系統①は
+# 実物のスクリプト自体を読みに行く必要があり、隔離HOME配下には実物が
+# 存在しないため）。
+REAL_HOME="${REAL_TEST_HOME:-$(eval echo "~$(id -un)")}"
+REAL_CMUX_TASK_DECLARE="$REAL_HOME/work/dotfiles/cmux/cmux-task-watch/cmux-task-declare.sh"
+WORK_ROOT="$(mktemp -d)" || {
+  echo "FATAL: mktemp -dに失敗しました（WORK_ROOT隔離用）。書込み可能な一時領域が無い可能性があります。" >&2
+  exit 1
+}
+validate_temp_dir "$WORK_ROOT" "WORK_ROOT"
 
 PASS=0
 FAIL=0
@@ -52,6 +99,10 @@ assert_file_exists() {
 assert_file_not_exists() {
   local desc="$1" path="$2"
   if [[ ! -e "$path" ]]; then pass "$desc"; else fail_case "$desc (存在してはいけないのに存在する: $path)"; fi
+}
+assert_files_identical() {
+  local desc="$1" file_a="$2" file_b="$3"
+  if cmp -s "$file_a" "$file_b"; then pass "$desc"; else fail_case "$desc (バイト単位で不一致: $file_a / $file_b)"; fi
 }
 
 # =============================================================================
@@ -181,9 +232,103 @@ FAKEEOF
   chmod +x "$bindir/osascript"
 }
 
+# FAKE cmux-task-declare.sh（週次メンテ側テスト専用の契約スタブ・設計書
+# §16.6.2「テスト内で定義する10行程度のスクリプトが§3.3の終了コード契約を
+# そのまま演じる」）。担当Bが別リポジトリで実装中の実物には一切依存せず、
+# prune()のrc=0/1/2/3（v1.6でrc=3=内部エラーを追加）とstdout契約
+# （<UUID><TAB><slug>を0行以上／rc=1・2・3は空）だけを演じる。呼ばれるたび
+# FAKE_PRUNE_CALL_LOGへ1行追記する（AC-57①「掃除の入口が1回だけ呼ばれる」の
+# 検査対象）。
+# 挙動はFAKE_PRUNE_MODE（既定ok0）で切り替える。
+#   ok0 = rc=0でFAKE_PRUNE_STDOUTをそのまま出す（既定は空＝0件消した扱い）
+#   rc1 = rc=1・何も出さない（接続不可＝workspace list取得失敗＝F-22相当）
+#   rc2 = rc=2・何も出さない（宣言記録が破損＝§3.1相当）
+#   rc3 = rc=3・何も出さない（内部エラー＝取得後の書込等に失敗＝§3.3相当）
+# FAKE_PRUNE_SLEEPを指定するとその秒数だけ応答を遅らせる（F-24のtimeout検査用。
+# 呼び出しログへの記録はsleepより前に行うため、timeoutで打ち切られても
+# 「呼ばれた」こと自体は正しく1回だけ記録される）。
+setup_fake_prune_cmd() {
+  local path="$1"
+  cat > "$path" <<'FAKEEOF'
+#!/usr/bin/env bash
+echo "called $*" >> "${FAKE_PRUNE_CALL_LOG:-/dev/null}"
+if [[ "${1:-}" != "prune" ]]; then
+  echo "usage: cmux-task-declare.sh prune" >&2
+  exit 64
+fi
+if [[ -n "${FAKE_PRUNE_SLEEP:-}" ]]; then sleep "${FAKE_PRUNE_SLEEP}"; fi
+case "${FAKE_PRUNE_MODE:-ok0}" in
+  ok0)
+    printf '%s' "${FAKE_PRUNE_STDOUT:-}"
+    exit 0
+    ;;
+  rc1)
+    echo "ワークスペース一覧を取得できませんでした。1件も削除していません。" >&2
+    exit 1
+    ;;
+  rc2)
+    echo "宣言記録が破損しています。" >&2
+    exit 2
+    ;;
+  rc3)
+    echo "内部エラー: 記録の書込に失敗しました。" >&2
+    exit 3
+    ;;
+esac
+FAKEEOF
+  chmod +x "$path"
+}
+
+# 実cmux-task-declare.shとの結合試験専用の最小cmuxスタブ（設計書§16.6.2
+# 系統①）。list-windows と workspace list --window <id> の2コマンドだけに
+# 応答する（cmd_prune()のcollect_alive_uuidsが呼ぶのはこの2つだけ・
+# cmux-task-declare.sh:242-264参照）。制御は$state_dir配下のファイルで行う。
+#   fail_list_windows        存在すればlist-windowsを非0にする(接続不可を模擬)
+#   windows.json              list-windowsの応答本体（呼び出し前に用意する）
+#   workspaces.<win>.json     workspace list --window <win>の応答本体
+#   all-calls.log             受けた全呼出しを1行1回で集約記録(応答の成否に
+#                              関わらず記録する・AC-34の書込系ゼロ検査に使う。
+#                              verifier実装レビュー2巡目#10対応)
+# $1 = スタブ本体を置くパス（実行可能ファイル） $2 = 制御ディレクトリ
+setup_real_cmux_stub() {
+  local bin_path="$1" state_dir="$2"
+  mkdir -p "$state_dir"
+  # 非quotedヒアドキュメント終端（<<EOF）で$state_dirだけを生成時に埋め込み、
+  # スタブ自身の実行時ロジック（\$1等）はバックスラッシュでエスケープして
+  # そのまま出力する（bash32-strict-mode-pitfallsの「デフォルト値へJSONを
+  # 直接埋め込むと`}`でパーサが誤解する」落とし穴を避けるため、JSON本体は
+  # 呼び出し側が別ファイルへ書き、スタブはcatするだけにする）。
+  cat > "$bin_path" <<EOF
+#!/usr/bin/env bash
+STATE_DIR="$state_dir"
+echo "\$*" >> "\$STATE_DIR/all-calls.log"
+if [[ "\$1" == "--json" && "\$2" == "list-windows" ]]; then
+  if [[ -e "\$STATE_DIR/fail_list_windows" ]]; then
+    echo "stub cmux: list-windows failed" >&2
+    exit 1
+  fi
+  cat "\$STATE_DIR/windows.json"
+  exit 0
+fi
+if [[ "\$1" == "--json" && "\$2" == "workspace" && "\$3" == "list" && "\$4" == "--window" ]]; then
+  win="\$5"
+  if [[ ! -f "\$STATE_DIR/workspaces.\${win}.json" ]]; then
+    echo "stub cmux: no such window: \$win" >&2
+    exit 1
+  fi
+  cat "\$STATE_DIR/workspaces.\${win}.json"
+  exit 0
+fi
+echo "stub cmux: unsupported invocation: \$*" >&2
+exit 1
+EOF
+  chmod +x "$bin_path"
+}
+
 # 共通セットアップ: FAKEリポジトリ・Vault・AIENV_REPO・環境変数一式を用意する。
 # 呼び出し後、下記のグローバル変数が使える。
 # REPO / VAULT / AIENV_REPO / LOG_ROOT / OSASCRIPT_LOG / EXPORT_CALL_LOG / APPLY_ARGV_LOG
+# / PRUNE_STUB / PRUNE_CALL_LOG
 setup_test_env() {
   local test_dir="$1"
   REPO="$test_dir/repo"
@@ -194,6 +339,15 @@ setup_test_env() {
   OSASCRIPT_LOG="$test_dir/osascript.log"
   EXPORT_CALL_LOG="$test_dir/export-call.log"
   APPLY_ARGV_LOG="$test_dir/apply-argv.log"
+  # 既定は「掃除の入口はあるが対象0件」の契約スタブ（FR-47・設計書§16）。
+  # 既存テスト（本ファイルのFR-47追加より前からある全テスト）はこの新工程を
+  # 意識していないため、既定を「実施したが対象なし」にしておくことで
+  # last_result_summary・last_success_atへの副作用を出さない（add_info_note
+  # はrc=0のOK系では呼ばれないため）。掃除そのものを狙い撃ちで検査する
+  # テストだけがMAINTENANCE_TASK_PRUNE_CMD/FAKE_PRUNE_MODE等を個別に上書きする。
+  PRUNE_STUB="$test_dir/fake-cmux-task-declare.sh"
+  PRUNE_CALL_LOG="$test_dir/prune-call.log"
+  setup_fake_prune_cmd "$PRUNE_STUB"
   # backup-vault.sh自身のCLI多重起動防止ロック（既定は$TMPDIR/aienv-backup-
   # vault.lock）を実TMPDIR/実/tmpから隔離する。テストごとに専用のTMPDIRを
   # 割り当てることで、backup-vault.sh自身の"busy"（＝別のbackup-vault.sh
@@ -235,13 +389,20 @@ run_maintenance() {
   : "${TIMEOUT_DECISION_PROPAGATION:=10}"
   : "${TIMEOUT_MAINTENANCE_APPLY:=10}"
   : "${MAINTENANCE_STALE_LOCK_SECONDS:=3600}"
+  # 宣言記録の掃除（FR-47・設計書§16）。既定は上のsetup_test_env()が用意した
+  # 「対象0件」の契約スタブを指す。掃除そのものを狙い撃ちで検査するテストは
+  # `MAINTENANCE_TASK_PRUNE_CMD=... FAKE_PRUNE_MODE=... run_maintenance`の
+  # ように個別に上書きする（他のTIMEOUT_*と同じ`:=`の流儀）。
+  : "${TIMEOUT_TASK_PRUNE:=5}"
+  : "${MAINTENANCE_TASK_PRUNE_CMD:=$PRUNE_STUB}"
   VAULT="$VAULT" AIENV_REPO="$AIENV_REPO" MAINTENANCE_LOG_ROOT="$LOG_ROOT" TMPDIR="$TEST_TMPDIR" \
     FAKE_OSASCRIPT_LOG="$OSASCRIPT_LOG" FAKE_EXPORT_CALL_LOG="$EXPORT_CALL_LOG" \
-    FAKE_APPLY_ARGV_LOG="$APPLY_ARGV_LOG" \
+    FAKE_APPLY_ARGV_LOG="$APPLY_ARGV_LOG" FAKE_PRUNE_CALL_LOG="$PRUNE_CALL_LOG" \
     TIMEOUT_BACKUP_VAULT="$TIMEOUT_BACKUP_VAULT" TIMEOUT_EXPORT_PUBLIC_VAULT="$TIMEOUT_EXPORT_PUBLIC_VAULT" \
     TIMEOUT_CHECK_DRIFT="$TIMEOUT_CHECK_DRIFT" TIMEOUT_FRAGMENTS_LOG="$TIMEOUT_FRAGMENTS_LOG" \
     TIMEOUT_VAULT_INVENTORY="$TIMEOUT_VAULT_INVENTORY" TIMEOUT_KNOWLEDGE_MERGE="$TIMEOUT_KNOWLEDGE_MERGE" \
     TIMEOUT_DECISION_PROPAGATION="$TIMEOUT_DECISION_PROPAGATION" TIMEOUT_MAINTENANCE_APPLY="$TIMEOUT_MAINTENANCE_APPLY" \
+    TIMEOUT_TASK_PRUNE="$TIMEOUT_TASK_PRUNE" MAINTENANCE_TASK_PRUNE_CMD="$MAINTENANCE_TASK_PRUNE_CMD" \
     MAINTENANCE_STALE_LOCK_SECONDS="$MAINTENANCE_STALE_LOCK_SECONDS" \
     GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
     "$@" bash "$REPO/scripts/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR"
@@ -1117,6 +1278,317 @@ print(','.join(k for k in required if k not in d))
   assert_file_not_exists "anomaly無しのため通知は送られない" "$OSASCRIPT_LOG"
   LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
   assert_contains "last_success_atが前進する(完全正常終了)" "$LAST_RUN" "last_success_at\":"
+}
+
+# =============================================================================
+# Phase3宣言記録の掃除（cmux-session-todo・FR-47・設計書§16・v1.6でprune rc
+# 3値→4値・サマリ写像固定・DT-7に追随。AC-57／AC-58）
+# =============================================================================
+# 前半（本節〜39. Phase3宣言掃除の入口パス上書き）は実物のcmux-task-declare.sh
+# には依存しない契約スタブ試験。§16.6.2の「契約スタブ」（setup_fake_prune_cmd()。
+# 本ファイル冒頭）で§3.3の終了コード契約（rc=0で<UUID><TAB><slug>を0行以上・
+# rc=1/2/3は空）を演じ、maintenance.sh側の統合＝1回だけ呼ぶ・エラーを隔離する・
+# サマリのセグメントを§16.3の固定文字列へ正しく写像する・last_success_atを
+# 進める、を検査する。
+# 続くcase 40・41（§16.6.2系統①）は実物のcmux-task-declare.sh（別リポジトリ
+# ~/work/dotfiles/cmux/cmux-task-watch/）との実物結合試験で、記録が本当に
+# 2件→1件へ減る／1バイトも変わらないところまで見る（実物が無い環境では
+# SKIP。実cmux・実記録には触れない・verifier実装レビュー2巡目#12対応）。
+
+# DT-7共通ボディ（§16.6.3）。呼び出し側が事前にsetup_test_env()と、必要な
+# FAKE_PRUNE_*/MAINTENANCE_TASK_PRUNE_CMD/TIMEOUT_TASK_PRUNEの上書きを済ませた
+# 状態で呼ぶ。6状態すべてで共通に確かめる5項目（設計書§16.6.3）を検査する。
+# $1=T（テスト用一時ディレクトリ） $2=期待するサマリのセグメント文字列
+#   （§16.3の写像表そのもの。部分一致だが区切り記号（・（）を含む完全な
+#   セグメント単位で照合するため実質的に完全一致相当）
+# $3=掃除の入口が呼ばれた回数の期待値（未導入=0・それ以外=1）
+# $4=last_result_summaryにadd_info_noteの本文が残ることを期待するか(1/0)
+#   （c＝実施のみ0。add_info_noteはrc=0のOK系では呼ばれないため）
+run_dt7_case() {
+  local T="$1" expect_segment="$2" expect_calls="$3" expect_info_note="$4"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # 「宣言記録」に相当するfixture。契約スタブ自身はこのファイルを一切
+  # 参照・変更しない（maintenance.sh側の実装がこのパスへ直接触れていない
+  # ことを回帰的に確かめるための独立した観測点）。W-8相当＝2件のうち1件は
+  # workspace listに無いUUID、という体裁だけ真似ておく。
+  local record_fixture="$T/fake-declare-record.json"
+  printf '{"version":1,"workspaces":{"FB3B2F30-00D7-4093-91CE-0DE32B43165C":"slug-a","11111111-1111-1111-1111-111111111111":"slug-b"}}' \
+    > "$record_fixture"
+  cp "$record_fixture" "$record_fixture.before"
+  local rc=0
+  run_maintenance || rc=$?
+  assert_eq "exit 0（週次メンテは中断せず最後の工程まで到達する）" "0" "$rc"
+  assert_contains "Phase3の保持整理ログまで到達する(最終工程到達の証跡)" "$(cat "$LAST_STDOUT")" "done."
+  assert_files_identical "宣言記録は実行の前後でバイト単位で一致する(maintenance.sh自身は記録に一切触れない)" \
+    "$record_fixture" "$record_fixture.before"
+  local frag_text
+  frag_text="$(cat "$(find "$VAULT/Fragments" -name '20*.md' | head -1)")"
+  assert_contains "実施サマリのセグメントが§16.3の写像表の固定文字列と一致する" "$frag_text" "$expect_segment"
+  local last_run
+  last_run="$(cat "$LOG_ROOT/last-run.json")"
+  assert_contains "last_success_atが進む(掃除の失敗をadd_anomalyにしていない証拠・設計書§16.4)" \
+    "$last_run" "last_success_at\":"
+  if [[ "$expect_info_note" == "1" ]]; then
+    assert_contains "last_result_summaryにadd_info_noteの本文が残る(起動ヘルス行への可視化)" \
+      "$last_run" "宣言記録の掃除は未実施です"
+  else
+    assert_not_contains "add_info_noteは呼ばれないためlast_result_summaryに未実施の注記は残らない" \
+      "$last_run" "宣言記録の掃除は未実施です"
+  fi
+  local call_count
+  call_count="$(grep -c . "$PRUNE_CALL_LOG" 2>/dev/null || echo 0)"
+  assert_eq "掃除の入口の呼び出し回数(AC-57①)" "$expect_calls" "$call_count"
+}
+
+echo "=== 32. DT-7状態a: 掃除の入口が存在しない（未導入・F-23） ==="
+{
+  T="$WORK_ROOT/t32a"; mkdir -p "$T"
+  setup_test_env "$T"
+  MAINTENANCE_TASK_PRUNE_CMD="$T/no-such-cmux-task-declare.sh" \
+    run_dt7_case "$T" "・宣言掃除 未導入" "0" "1"
+}
+
+echo "=== 33. DT-7状態b: workspace list取得に失敗する(rc=1・接続不可・F-22・AC-58) ==="
+{
+  T="$WORK_ROOT/t33b"; mkdir -p "$T"
+  setup_test_env "$T"
+  FAKE_PRUNE_MODE=rc1 run_dt7_case "$T" "・宣言掃除 未実施（接続不可）" "1" "1"
+}
+
+echo "=== 34. DT-7状態c: rc=0で消した対が1件（実施・AC-57①②③） ==="
+{
+  T="$WORK_ROOT/t34c"; mkdir -p "$T"
+  setup_test_env "$T"
+  FAKE_PRUNE_MODE=ok0 FAKE_PRUNE_STDOUT=$'FB3B2F30-00D7-4093-91CE-0DE32B43165C\tslug-a\n' \
+    run_dt7_case "$T" "・宣言掃除 実施・1件（FB3B2F30-00D7-4093-91CE-0DE32B43165C=slug-a）" "1" "0"
+}
+
+echo "=== 35. DT-7状態d: 宣言記録が破損している(rc=2) ==="
+{
+  T="$WORK_ROOT/t35d"; mkdir -p "$T"
+  setup_test_env "$T"
+  FAKE_PRUNE_MODE=rc2 run_dt7_case "$T" "・宣言掃除 未実施（宣言記録破損）" "1" "1"
+}
+
+echo "=== 36. DT-7状態e: 内部エラー(rc=3・取得後の書込等に失敗) ==="
+{
+  T="$WORK_ROOT/t36e"; mkdir -p "$T"
+  setup_test_env "$T"
+  FAKE_PRUNE_MODE=rc3 run_dt7_case "$T" "・宣言掃除 未実施（内部エラー）" "1" "1"
+}
+
+echo "=== 37. DT-7状態f: cmuxのハング等でtimeoutし打ち切られる(F-24。rc=3と同じ『内部エラー』へ写像) ==="
+{
+  T="$WORK_ROOT/t37f"; mkdir -p "$T"
+  setup_test_env "$T"
+  TIMEOUT_TASK_PRUNE=1 FAKE_PRUNE_SLEEP=5 run_dt7_case "$T" "・宣言掃除 未実施（内部エラー）" "1" "1"
+}
+
+echo "=== 38. Phase3宣言掃除: rc=0で消した対が0件なら『実施・0件』と現れる(§16.3写像表・DT-7外の追加網羅) ==="
+{
+  T="$WORK_ROOT/t38"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  FAKE_PRUNE_MODE=ok0 FAKE_PRUNE_STDOUT="" run_maintenance || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  FRAG_TEXT="$(cat "$(find "$VAULT/Fragments" -name '20*.md' | head -1)")"
+  assert_contains "サマリ行に『宣言掃除 実施・0件』が現れる" "$FRAG_TEXT" "・宣言掃除 実施・0件"
+  LAST_RUN="$(cat "$LOG_ROOT/last-run.json")"
+  assert_contains "last_success_atは進む" "$LAST_RUN" "last_success_at\":"
+}
+
+echo "=== 39. Phase3宣言掃除: 入口のパスはMAINTENANCE_TASK_PRUNE_CMDで上書きできる（既存のパス上書きの流儀・設計書§16.2） ==="
+{
+  T="$WORK_ROOT/t39"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # setup_test_env()の既定PRUNE_STUBとは別のパスへ契約スタブを新規に用意し、
+  # 既定パスではなくこちらが呼ばれることを確認する。
+  ALT_STUB="$T/alt-declare.sh"
+  setup_fake_prune_cmd "$ALT_STUB"
+  rc=0
+  MAINTENANCE_TASK_PRUNE_CMD="$ALT_STUB" FAKE_PRUNE_MODE=ok0 \
+    FAKE_PRUNE_STDOUT=$'UUID-ALT\tslug-alt\n' \
+    run_maintenance || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  FRAG_TEXT="$(cat "$(find "$VAULT/Fragments" -name '20*.md' | head -1)")"
+  assert_contains "上書きしたパスの応答が反映される" "$FRAG_TEXT" "・宣言掃除 実施・1件（UUID-ALT=slug-alt）"
+}
+
+# =============================================================================
+# §16.6.2 系統①: 実cmux-task-declare.shとの結合試験（担当Bの成果物）
+# =============================================================================
+# ここまでの契約スタブ系（②）はmaintenance.sh側の統合ロジックだけを検査して
+# きた。ここからは実物のcmux-task-declare.sh（別リポジトリ~/work/dotfiles/
+# cmux/cmux-task-watch/）を実際に呼び、記録が本当に2件→1件へ減る／
+# 1バイトも変わらないところまで見る（verifier実装レビュー1巡目#2対応）。
+# cmux自体は隔離cmuxスタブ（setup_real_cmux_stub）に差し替え、宣言記録も
+# 隔離パス（CMUX_TASK_STATE）へ書く＝実cmux・実記録には一切触れない。
+# 実物が無い環境ではSKIP（既存テストのjq不在時と同じ流儀）。
+
+echo "=== 40. 系統①(設計書§16.6.2): 実cmux-task-declare.shをmaintenance.shから呼ぶと、workspace listに無いUUIDだけが記録から消えて残り1件は残る(実結合・AC-57) ==="
+{
+  T="$WORK_ROOT/t40"; mkdir -p "$T"
+  setup_test_env "$T"
+  # PREFERENCES_PROPOSALS_DIRの既定は$HOME/.claude/...で、本ファイル冒頭の
+  # $HOMEは全テストケース共通(test 26/27相当が同ディレクトリへ*.mdを残す)。
+  # サマリ行を完全一致で検査するため、他ケースの残留物に依存しないよう
+  # ここで明示的に空にする(verifier実装レビュー3巡目#14対応)。
+  rm -rf "$HOME/.claude/logs/maintenance/preferences-proposals" 2>/dev/null || true
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
+    echo "SKIP: 実物cmux-task-declare.shがこの環境に無いため（${REAL_CMUX_TASK_DECLARE}）、系統①の結合テストをスキップします"
+  else
+    # --- 隔離cmuxスタブ: window "1" に生存UUIDが1件だけ含まれる ---
+    CMUX_STUB_DIR="$T/real-cmux-stub"
+    CMUX_STUB_BIN="$CMUX_STUB_DIR/cmux"
+    CMUX_STUB_STATE="$CMUX_STUB_DIR/state"
+    setup_real_cmux_stub "$CMUX_STUB_BIN" "$CMUX_STUB_STATE"
+    printf '[{"id":"1","index":0}]' > "$CMUX_STUB_STATE/windows.json"
+    printf '{"workspaces":[{"id":"FB3B2F30-00D7-4093-91CE-0DE32B43165C"}]}' \
+      > "$CMUX_STUB_STATE/workspaces.1.json"
+
+    # --- 隔離宣言記録: 2件（うち1件はworkspace listに無いUUID＝W-8相当） ---
+    DECLARE_STATE_DIR="$T/real-declare-state"
+    mkdir -p "$DECLARE_STATE_DIR"
+    DECLARE_STATE_FILE="$DECLARE_STATE_DIR/workspaces.json"
+    printf '{"version":1,"workspaces":{"FB3B2F30-00D7-4093-91CE-0DE32B43165C":"slug-a","11111111-1111-1111-1111-111111111111":"slug-b"}}' \
+      > "$DECLARE_STATE_FILE"
+
+    # --- 呼び出し回数を数えるラッパ(設計書§16.6.2)。$0を実物へそのまま渡す
+    #     ことで、実物側のLIB_DIR解決（dirname "$0"/..）を壊さない。
+    PRUNE_CALL_LOG_REAL="$T/real-prune-call.log"
+    REAL_WRAPPER="$T/real-declare-wrapper.sh"
+    cat > "$REAL_WRAPPER" <<WRAPEOF
+#!/bin/bash
+echo "called" >> "$PRUNE_CALL_LOG_REAL"
+exec bash "$REAL_CMUX_TASK_DECLARE" "\$@"
+WRAPEOF
+    chmod +x "$REAL_WRAPPER"
+
+    rc=0
+    MAINTENANCE_TASK_PRUNE_CMD="$REAL_WRAPPER" \
+      CMUX_TASK_STATE="$DECLARE_STATE_FILE" \
+      CMUX_TASK_CMUX_BIN="$CMUX_STUB_BIN" \
+      CMUX_TASK_VAULT="$T/unused-vault" \
+      run_maintenance || rc=$?
+    assert_eq "exit 0" "0" "$rc"
+    # symlinkを解決するlatest_run_dir()を使うと、macOSの/var->/private/var
+    # のようなシンボリックリンク正規化でmaintenance.sh自身が埋め込む生の
+    # $RUN_DIR文字列（ln -s "$RUN_DIR" ...で生成・非解決）とズレ、完全一致
+    # 比較が常にFAILする（本テスト作成中に実測）。latestシンボリックリンクの
+    # ターゲットをreadlinkでそのまま読み、生の文字列を使う。
+    RUN_DIR="$(readlink "$LOG_ROOT/latest")"
+
+    CALL_COUNT="$(grep -c . "$PRUNE_CALL_LOG_REAL" 2>/dev/null || echo 0)"
+    assert_eq "掃除の入口(実物)は1回だけ呼ばれる" "1" "$CALL_COUNT"
+
+    REMAINING_KEYS="$(jq -r '.workspaces | keys | length' "$DECLARE_STATE_FILE" 2>/dev/null)"
+    assert_eq "記録が2件→1件になる(実物の削除が実際に起きる)" "1" "$REMAINING_KEYS"
+    assert_contains "残る1件はworkspace listにあるUUIDである" \
+      "$(cat "$DECLARE_STATE_FILE")" "FB3B2F30-00D7-4093-91CE-0DE32B43165C"
+    assert_not_contains "workspace listに無いUUIDは消えている" \
+      "$(cat "$DECLARE_STATE_FILE")" "11111111-1111-1111-1111-111111111111"
+
+    # 実施サマリ行を1行だけ抽出し、RUN_DIRまで含めた完全な期待行を組み立てて
+    # assert_eqで完全一致させる。assert_contains（部分一致）では期待
+    # セグメントの前後に誤字・重複・余計な文字が混ざっても検出できない
+    # （verifier実装レビュー3巡目#14対応）。他の集計項目（昇格・マージ・
+    # 見送り・Preferences未確認提案・波及漏れ疑い）は本テストのfixtureでは
+    # setup_fake_repo()/setup_test_env()の既定FAKE出力によりすべて0件になる
+    # （§16.6.1の基底＝掃除セグメント以外は既存テストと同じ既定値のまま）。
+    FRAG_FILE="$(find "$VAULT/Fragments" -name '20*.md' | head -1)"
+    FRAG_LINE="$(grep '^- 定常メンテ(週次): ' "$FRAG_FILE")"
+    EXPECTED_FRAG_LINE="- 定常メンテ(週次): 昇格0件・マージ0件（部分適用0件）・見送り0件・Preferences未確認提案0件（要承認）・波及漏れ疑い0件・宣言掃除 実施・1件（11111111-1111-1111-1111-111111111111=slug-b）（詳細: ${RUN_DIR}）"
+    assert_eq "サマリ行が削除対象のUUID=slugとRUN_DIRを含め完全一致する(AC-57)" "$EXPECTED_FRAG_LINE" "$FRAG_LINE"
+
+    # cmuxの書込系コマンド(AC-34)が1度も呼ばれていないことを、隔離cmux
+    # スタブの集約呼出しログで検査する(verifier実装レビュー2巡目#10対応)。
+    # grep -c は不一致のとき"0"を出力しつつ非0終了する。`|| echo 0`を
+    # 続けると出力後の非0終了でechoも走り"0\n0"の二重出力になる落とし穴
+    # （bash32-strict-mode-pitfalls）があるため、出力を先に受けてから
+    # 数値かどうかで判定する。
+    WRITE_CALL_COUNT="$(grep -cE '(^| )(todo|set-status|clear-status|set-progress|new-pane|new-surface)( |$)|workspace status set' \
+      "$CMUX_STUB_STATE/all-calls.log" 2>/dev/null)"
+    [[ "$WRITE_CALL_COUNT" =~ ^[0-9]+$ ]] || WRITE_CALL_COUNT=0
+    assert_eq "cmuxの書込系コマンドは1度も呼ばれない(AC-34・X-1)" "0" "$WRITE_CALL_COUNT"
+  fi
+}
+
+echo "=== 41. 系統①(設計書§16.6.2): 実cmux-task-declare.shの接続に失敗すると、記録は実行の前後でバイト単位で一致し、呼出回数1・サマリに固定の未実施文言が現れる(実結合・AC-58) ==="
+{
+  T="$WORK_ROOT/t41"; mkdir -p "$T"
+  setup_test_env "$T"
+  # case 40と同じ理由(#14対応): 他ケースの残留物に依存しないよう明示的に空にする。
+  rm -rf "$HOME/.claude/logs/maintenance/preferences-proposals" 2>/dev/null || true
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
+    echo "SKIP: 実物cmux-task-declare.shがこの環境に無いため（${REAL_CMUX_TASK_DECLARE}）、系統①の結合テストをスキップします"
+  else
+    CMUX_STUB_DIR="$T/real-cmux-stub"
+    CMUX_STUB_BIN="$CMUX_STUB_DIR/cmux"
+    CMUX_STUB_STATE="$CMUX_STUB_DIR/state"
+    setup_real_cmux_stub "$CMUX_STUB_BIN" "$CMUX_STUB_STATE"
+    # list-windows自体を失敗させる(接続不可・collect_alive_uuidsはこの1点で
+    # 非0になり、以降の削除処理へは進まない契約＝cmux-task-declare.sh:244)。
+    touch "$CMUX_STUB_STATE/fail_list_windows"
+
+    DECLARE_STATE_DIR="$T/real-declare-state"
+    mkdir -p "$DECLARE_STATE_DIR"
+    DECLARE_STATE_FILE="$DECLARE_STATE_DIR/workspaces.json"
+    printf '{"version":1,"workspaces":{"FB3B2F30-00D7-4093-91CE-0DE32B43165C":"slug-a","11111111-1111-1111-1111-111111111111":"slug-b"}}' \
+      > "$DECLARE_STATE_FILE"
+    cp "$DECLARE_STATE_FILE" "$DECLARE_STATE_FILE.before"
+
+    PRUNE_CALL_LOG_REAL="$T/real-prune-call.log"
+    REAL_WRAPPER="$T/real-declare-wrapper.sh"
+    cat > "$REAL_WRAPPER" <<WRAPEOF
+#!/bin/bash
+echo "called" >> "$PRUNE_CALL_LOG_REAL"
+exec bash "$REAL_CMUX_TASK_DECLARE" "\$@"
+WRAPEOF
+    chmod +x "$REAL_WRAPPER"
+
+    rc=0
+    MAINTENANCE_TASK_PRUNE_CMD="$REAL_WRAPPER" \
+      CMUX_TASK_STATE="$DECLARE_STATE_FILE" \
+      CMUX_TASK_CMUX_BIN="$CMUX_STUB_BIN" \
+      CMUX_TASK_VAULT="$T/unused-vault" \
+      run_maintenance || rc=$?
+    assert_eq "exit 0" "0" "$rc"
+    # symlinkを解決するlatest_run_dir()を使うと、macOSの/var->/private/var
+    # のようなシンボリックリンク正規化でmaintenance.sh自身が埋め込む生の
+    # $RUN_DIR文字列（ln -s "$RUN_DIR" ...で生成・非解決）とズレ、完全一致
+    # 比較が常にFAILする（本テスト作成中に実測）。latestシンボリックリンクの
+    # ターゲットをreadlinkでそのまま読み、生の文字列を使う。
+    RUN_DIR="$(readlink "$LOG_ROOT/latest")"
+
+    CALL_COUNT="$(grep -c . "$PRUNE_CALL_LOG_REAL" 2>/dev/null || echo 0)"
+    assert_eq "掃除の入口(実物)は1回だけ呼ばれる" "1" "$CALL_COUNT"
+
+    assert_files_identical "記録は実行の前後でバイト単位で一致する(実物が1件も削除しない契約どおり・AC-58)" \
+      "$DECLARE_STATE_FILE" "$DECLARE_STATE_FILE.before"
+
+    # 実施サマリ行を1行だけ抽出し、RUN_DIRまで含めた完全な期待行を組み立てて
+    # assert_eqで完全一致させる（verifier実装レビュー3巡目#14対応。理由は
+    # case 40と同じ）。
+    FRAG_FILE="$(find "$VAULT/Fragments" -name '20*.md' | head -1)"
+    FRAG_LINE="$(grep '^- 定常メンテ(週次): ' "$FRAG_FILE")"
+    EXPECTED_FRAG_LINE="- 定常メンテ(週次): 昇格0件・マージ0件（部分適用0件）・見送り0件・Preferences未確認提案0件（要承認）・波及漏れ疑い0件・宣言掃除 未実施（接続不可）（詳細: ${RUN_DIR}）"
+    assert_eq "サマリ行が未実施(接続不可)とRUN_DIRを含め完全一致する(AC-58)" "$EXPECTED_FRAG_LINE" "$FRAG_LINE"
+
+    # cmuxの書込系コマンド(AC-34)が1度も呼ばれていないことを、隔離cmux
+    # スタブの集約呼出しログで検査する(verifier実装レビュー2巡目#10対応)。
+    # grep -c は不一致のとき"0"を出力しつつ非0終了する。`|| echo 0`を
+    # 続けると出力後の非0終了でechoも走り"0\n0"の二重出力になる落とし穴
+    # （bash32-strict-mode-pitfalls）があるため、出力を先に受けてから
+    # 数値かどうかで判定する。
+    WRITE_CALL_COUNT="$(grep -cE '(^| )(todo|set-status|clear-status|set-progress|new-pane|new-surface)( |$)|workspace status set' \
+      "$CMUX_STUB_STATE/all-calls.log" 2>/dev/null)"
+    [[ "$WRITE_CALL_COUNT" =~ ^[0-9]+$ ]] || WRITE_CALL_COUNT=0
+    assert_eq "cmuxの書込系コマンドは1度も呼ばれない(AC-34・X-1)" "0" "$WRITE_CALL_COUNT"
+  fi
 }
 
 echo

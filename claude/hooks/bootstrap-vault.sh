@@ -1037,6 +1037,7 @@ $list
 ③ ユーザーの質問に関連するキーワードで Vault($VAULT) を Read/Grep/Glob で検索し、ヒットしたノートを読んでから回答する(obsidian-mcp は使わない)。
 ④ 新たな知見・判断・好み・プロジェクト変化が出たら、その場で Vault へ記録する。決定者・委任・空席時の申告の型は Preferences/core-workflow.md §4・§7 のとおりに従う（リーダー直筆は禁止＝delegation-gate が deny）。⚠️ vault-scribe の起動は Task tool の subagent_type に必ず"vault-scribe"を渡す（"scribe"という省略形は職種名・エージェント定義ファイル名のいずれとも一致せず spawn 失敗する。2026-09-03 実機で発生した実害の再発防止）。vault-scribe 不在なら起動してから振る。
 ${TEAM_MODE_DIRECTIVE5}
+⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Next Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）
 ${MACHINE_ROLE_HOLD_LINE:+
 ${MACHINE_ROLE_HOLD_LINE}}
 ${HEALTH_LINES:+

@@ -62,6 +62,56 @@ assert_not_contains() {
   fi
 }
 
+# assert_ascending_line_positions <desc> <haystack> <marker1> <marker2> ... —
+# 各markerが行頭(^marker + 半角空白)に現れる最初の行番号を取り、渡した順に
+# 単調増加であることを検査する（AC-59: ①→②→③→④→⑤→⑥の順序不変。
+# 差分レビュー指摘#5対応。並べ替えるとここで落ちる）。
+assert_ascending_line_positions() {
+  local desc="$1"; shift
+  local haystack="$1"; shift
+  local prev=0 m line
+  for m in "$@"; do
+    line="$(printf '%s\n' "$haystack" | grep -n "^${m} " | head -1 | cut -d: -f1)"
+    if [ -z "$line" ]; then
+      fail_case "$desc (${m} の行が見つからない)"
+      return
+    fi
+    if [ "$line" -le "$prev" ]; then
+      fail_case "$desc (${m} の位置が順序どおりでない: line=$line prev=$prev)"
+      return
+    fi
+    prev="$line"
+  done
+  pass "$desc"
+}
+
+# safe_mktemp_d — mktemp -d のラッパー。差分レビュー指摘#6（MAJOR）対応。
+# 本ファイルは `set -euo pipefail` のため `VAR="$(mktemp -d)"` の失敗自体は
+# 既に即終了する契約だが、失敗せずに空・`/`・既存の非空ディレクトリという
+# 異常な値を返した場合の防御をtest-next-pane-resolve.shのWORK_DIRガードと
+# 揃える（同種の`rm -rf`巻き込み事故を防ぐ二重の安全網）。
+# 標準出力へ検証済みのパスを1行返す。失敗時はFATALをstderrへ出しreturn 1
+# （呼び出し側は `VAR="$(safe_mktemp_d)" || exit 1` の形で使うこと）。
+safe_mktemp_d() {
+  local d
+  d="$(mktemp -d)" || { echo "FATAL: mktemp -d に失敗しました" >&2; return 1; }
+  case "$d" in
+    "" | "/")
+      echo "FATAL: mktemp -d の返り値が不正です: [$d]" >&2
+      return 1
+      ;;
+  esac
+  if [ ! -d "$d" ]; then
+    echo "FATAL: mktemp -d がディレクトリを作成しませんでした: [$d]" >&2
+    return 1
+  fi
+  if [ -n "$(ls -A "$d" 2>/dev/null)" ]; then
+    echo "FATAL: mktemp -d が空でない既存ディレクトリを返しました: [$d]" >&2
+    return 1
+  fi
+  printf '%s' "$d"
+}
+
 # 全5ファイルをVAULT配下に作る（メイン相当のfixture）。2026-09-05 §9.3 P3
 # 段階4対応: `Preferences/profile.md`・`Preferences/coding-delegation.md` を
 # 必読から外した（コアへの移送完了・配布済み）bootstrap-vault.shのFILES配列と
@@ -3061,6 +3111,84 @@ echo "=== 83. B1a「使用率の見える化」compute_usage_block()のfail-open
   assert_eq "83: 「python3 なし」の1行に縮退する" "1" "$n_line83"
 
   rm -rf "$VD83" "$NOPY_PATH_DIR"
+}
+
+echo "=== 84. FR-48/AC-59: 起動注入文に宣言コマンドの呼び出しを促す⑥が1行追加される（cmux-session-todo設計v1.5 §17） ==="
+{
+  VD84="$(safe_mktemp_d)" || exit 1
+  make_full_vault "$VD84"
+  ctx84="$(run_bootstrap "$VD84")"
+  assert_contains "84: ⑥の行が含まれる" "$ctx84" \
+    "⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Next Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）"
+  n_line84="$(printf '%s\n' "$ctx84" | grep -Fxc '⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Next Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）' || true)"
+  assert_eq "84: ⑥はちょうど1行（改行を含まない）" "1" "$n_line84"
+
+  # 既存①〜⑤が全部残っていること（文面も並びも変えない＝FR-48）。
+  assert_contains "84: ①が残る" "$ctx84" "① タスクに着手する前に"
+  assert_contains "84: ②が残る" "$ctx84" "② 上記を読み終えるまで"
+  assert_contains "84: ③が残る" "$ctx84" "③ ユーザーの質問に関連するキーワードで"
+  assert_contains "84: ④が残る" "$ctx84" "④ 新たな知見・判断・好み・プロジェクト変化が出たら"
+  assert_contains "84: ⑤が残る" "$ctx84" "⑤"
+
+  # 差分レビュー指摘#5: 存在だけでなく①→②→③→④→⑤→⑥の順序不変を検査する
+  # （行位置の比較。並べ替えるとここで落ちる）。
+  assert_ascending_line_positions "84: ①→②→③→④→⑤→⑥の順序が保たれる" "$ctx84" \
+    "①" "②" "③" "④" "⑤" "⑥"
+
+  rm -rf "$VD84"
+}
+
+echo "=== 85. FR-48/AC-59: フックは宣言コマンド(set)を実行せず、宣言記録も作らない ==="
+{
+  VD85="$(safe_mktemp_d)" || exit 1
+  make_full_vault "$VD85"
+
+  # PATH先頭にマーカーを書くだけの偽cmux-task-declare.shを置く。
+  # フックが誤ってこれを呼び出せばMARKER85が作られる（design.md §17.3）。
+  SPY_DIR85="$(safe_mktemp_d)" || exit 1
+  MARKER_DIR85="$(safe_mktemp_d)" || exit 1
+  MARKER85="$MARKER_DIR85/declare-was-called.marker"
+  cat > "$SPY_DIR85/cmux-task-declare.sh" <<EOF
+#!/bin/bash
+touch "$MARKER85"
+EOF
+  chmod +x "$SPY_DIR85/cmux-task-declare.sh"
+
+  # 差分レビュー指摘#6: PATH上だけでなく、注入文に書かれている固定パス
+  # $HOME/work/tools/cmux-task-watch/cmux-task-declare.sh にもスパイを置く
+  # （固定パスを直接実行する誤実装がPATHスパイを迂回してもここで捕まる）。
+  # 実機の~/work/toolsには一切触れないよう、隔離HOMEを別途用意する。
+  FAKE_HOME85="$(safe_mktemp_d)" || exit 1
+  mkdir -p "$FAKE_HOME85/work/tools/cmux-task-watch"
+  MARKER_DIR85B="$(safe_mktemp_d)" || exit 1
+  MARKER85B="$MARKER_DIR85B/declare-was-called-fixedpath.marker"
+  cat > "$FAKE_HOME85/work/tools/cmux-task-watch/cmux-task-declare.sh" <<EOF
+#!/bin/bash
+touch "$MARKER85B"
+EOF
+  chmod +x "$FAKE_HOME85/work/tools/cmux-task-watch/cmux-task-declare.sh"
+
+  # CMUX_TASK_STATE相当の宣言記録ファイル（フックが誤って書けば存在するようになる）。
+  STATE_DIR85="$(safe_mktemp_d)" || exit 1
+  STATE85="$STATE_DIR85/workspaces.json"
+
+  ctx85="$(HOME="$FAKE_HOME85" PATH="$SPY_DIR85:$PATH" CMUX_TASK_STATE="$STATE85" run_bootstrap "$VD85")"
+
+  assert_contains "85: 本文自体は壊れず出力される" "$ctx85" "【セッション開始ブートストラップ｜ハーネス強制注入】"
+
+  marker_exists85=0
+  if [ -e "$MARKER85" ]; then marker_exists85=1; fi
+  assert_eq "85: 偽cmux-task-declare.sh(PATH経由)は呼ばれない（マーカー未生成）" "0" "$marker_exists85"
+
+  marker_exists85b=0
+  if [ -e "$MARKER85B" ]; then marker_exists85b=1; fi
+  assert_eq "85: 偽cmux-task-declare.sh(固定パス \$HOME/work/tools/cmux-task-watch/経由)も呼ばれない" "0" "$marker_exists85b"
+
+  state_exists85=0
+  if [ -e "$STATE85" ]; then state_exists85=1; fi
+  assert_eq "85: 宣言記録ファイルも作られない" "0" "$state_exists85"
+
+  rm -rf "$VD85" "$SPY_DIR85" "$MARKER_DIR85" "$FAKE_HOME85" "$MARKER_DIR85B" "$STATE_DIR85"
 }
 
 echo
