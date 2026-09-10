@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-09-07
+updated: 2026-09-10
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 related:
@@ -14,7 +14,7 @@ aliases:
   - "モデル割り当て"
   - "Fable除外"
   - "cmux notify"
-  - "delegation-gate 許可パス"
+  - "delegation-gate-v2 許可パス"
 ---
 # 開発の役割分担（Claude中心＋Codex検証職）
 > 背景＝「ループエンジニアリング」の実装（[[Knowledge/loop-engineering]]）。
