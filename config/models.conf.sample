@@ -11,9 +11,29 @@
 #  空行と行頭 # は無視。⚠️ 値の後ろにコメントを書かない
 #  ⚠️ 認証情報は書かない。ここに書くのは「どのモデルをどの経路で使うか」だけ
 #  ⚠️ 定義名は自分で決めてよい（^[a-z0-9][a-z0-9-]*$）。配役表からこの名前で参照する
+#  ⚠️ 参照されない定義があっても害はない。使うかどうかは配役表で決める
+#     （本人方針 2026-09-10）
+#  背景（各経路の性質・向く仕事の詳しい比較）: Vault
+#  Preferences/model-catalog.md（本ファイルは定義の網羅、あちらは選び方）
+#  ファイル構成（本人指示 2026-09-10。経路の種類でA/B/Cへ大分類し、
+#  A=サブスク系→B=Bedrock系→C=ローカルLLM系の順に並べる）:
+#    A. サブスク系   ①Claudeサブスク（anthropic-api）②Codexサブスク（external）
+#    B. Bedrock系    ③Claude Bedrock別名方式（bedrock）④Claude Bedrock
+#                    Messages API（bedrock-mantle）⑤Codex on Bedrock（未対応）
+#    C. ローカルLLM系 ⑥vLLM（未対応）
 # =====================================================================
 
-# --- サブスク／ネイティブAPI経由（model は具体ID。別名を書かない）---
+# =====================================================================
+# A. サブスク系（Claude/Codexのサブスク時間枠を消費する経路）
+# =====================================================================
+
+# =====================================================================
+# ① Claude サブスク（anthropic-api）。claude.ai ログインのOAuth。枠は
+#  claude-subscription（five_hour/seven_day）。組み込みWebSearch等フル機能。
+#  model は具体ID（別名不可）
+# =====================================================================
+
+# --- 現行世代・既定3定義（配役表・テストが参照。名前と値を変えない）---
 [fable-main]
 provider=anthropic-api
 model=claude-fable-5-1
@@ -29,23 +49,260 @@ provider=anthropic-api
 model=claude-sonnet-5
 effort=high
 
-# --- 外部CLI経由（Codex など）------------------------------------
-#  model = 外部CLIが受理する実モデルID、または予約語 default
-#          （CLI側の既定を使う指定。予約語を書いたときはclaude/hooks/lib/
-#          profile_resolve.py の resolve-candidate が CODEX_ARGS から
-#          --model を省く＝wrapper（scripts/codex-exec.sh）はモデル指定
-#          なしで起動される。--model を渡す/渡さないの判定主体は
-#          profile_resolve.py 側でありwrapper自身は渡された引数をそのまま
-#          使うだけ）
-#  ⚠️ provider=external のときは execution を必ず書く
+# 現行世代・Haiku 4.5。分類・抽出・定型変換など判断の軽い大量処理向け。
+# effort非対応のため書かない（日付付きID）
+[haiku-main]
+provider=anthropic-api
+model=claude-haiku-4-5-20251001
+
+# --- 現行世代・同じmodelでeffort違いの枠 ---
+# Fable 5.1をmaxで使う枠。上流工程で判断の質を最優先したい場面向け
+[fable-max]
+provider=anthropic-api
+model=claude-fable-5-1
+effort=max
+
+# Opus 5を軽く回す枠。並列軽作業・枠温存向け
+[opus-low]
+provider=anthropic-api
+model=claude-opus-5
+effort=low
+
+# xhighは運用上使わない（Decisions/2026-08-07-avoid-xhigh-effort）。網羅
+# 目的で経路の存在だけ記録し無効化
+# [opus-xhigh]
+# provider=anthropic-api
+# model=claude-opus-5
+# effort=xhigh
+
+# Sonnet 5を軽く回す枠。探索的調査・大量並列向け
+[sonnet-low]
+provider=anthropic-api
+model=claude-sonnet-5
+effort=low
+
+# --- 旧世代（提供継続中。新規既定には使わないが経路として残す）---
+[fable-5-legacy]
+provider=anthropic-api
+model=claude-fable-5
+effort=high
+
+[opus-4-8-legacy]
+provider=anthropic-api
+model=claude-opus-4-8
+effort=high
+
+[opus-4-7-legacy]
+provider=anthropic-api
+model=claude-opus-4-7
+effort=high
+
+[opus-4-6-legacy]
+provider=anthropic-api
+model=claude-opus-4-6
+effort=high
+
+[sonnet-4-6-legacy]
+provider=anthropic-api
+model=claude-sonnet-4-6
+effort=high
+
+# =====================================================================
+# ② Codex サブスク（external。Codex CLI経由。scripts/codex-exec.shが
+#  ハンドラ）。execution=external-cli必須。model=外部CLIが受理する実IDか
+#  予約語default）
+#  枠=codex-subscription（five_hour/seven_day。reset creditで両窓リセット）
+#  effortの受理値はminimal/low/medium/high/xhigh（公式configリファレンス
+#  2026-09-10確認）。xhighはモデル依存かつ運用上不使用（2026-08-07決定）、
+#  max/ultraはアプリ側の段階でconfig値ではないため定義しない
+# =====================================================================
 [codex-review-default]
 provider=external
 execution=external-cli
 model=default
 effort=high
 
-# --- Bedrock 経由（メイン機は未使用。サブ機で有効化する場合はコメントを外す）---
-# model は別名だけ（実IDは bedrock.env のピン留め側）。別名: opus/sonnet/haiku/fable
-# [bedrock-opus]
-# provider=bedrock
-# model=opus
+# GPT-6 Astra。OpenAI公式説明＝コード・アプリ・研究にまたがる複雑な作業に
+# 最も対応できる上位モデル（advanced reasoning・computer use・高い判断力）。
+# 用途はデザイン系案件の上流工程限定（2026-09-05決定。一次レビューの既定は
+# Solのまま切り替えない）
+[codex-astra-high]
+provider=external
+execution=external-cli
+model=gpt-6-astra
+effort=high
+
+[codex-astra-medium]
+provider=external
+execution=external-cli
+model=gpt-6-astra
+effort=medium
+
+[codex-astra-low]
+provider=external
+execution=external-cli
+model=gpt-6-astra
+effort=low
+
+# GPT-5.6 Sol。OpenAI公式説明＝GPT-5.6系で最も対応力の高いモデル（複雑な
+# コーディング・computer use・研究・セキュリティ向け）。曖昧・難度が高い・
+# 高価値なタスクに推奨。本機のconfig.tomlが既定にしているモデル（2026-
+# 09-10時点。既定は機体・アカウント・ロールアウトで変わりうる）。一次
+# レビュー・bounded taskの実装委任向け
+[codex-sol-high]
+provider=external
+execution=external-cli
+model=gpt-5.6-sol
+effort=high
+
+[codex-sol-medium]
+provider=external
+execution=external-cli
+model=gpt-5.6-sol
+effort=medium
+
+[codex-sol-low]
+provider=external
+execution=external-cli
+model=gpt-5.6-sol
+effort=low
+
+# GPT-5.6 Terra。OpenAI公式説明＝日常作業向けのバランス型モデル（GPT-5.5
+# 相当の性能をより低コストで）。定型的な日常作業の実務的な起点
+[codex-terra-high]
+provider=external
+execution=external-cli
+model=gpt-5.6-terra
+effort=high
+
+[codex-terra-medium]
+provider=external
+execution=external-cli
+model=gpt-5.6-terra
+effort=medium
+
+[codex-terra-low]
+provider=external
+execution=external-cli
+model=gpt-5.6-terra
+effort=low
+
+# GPT-5.6 Luna。OpenAI公式説明＝GPT-5.6系列で最速・最安ながら高い能力を
+# 提供。成功基準が明確な高頻度タスク（抽出・分類・構造化要約など）向け
+[codex-luna-high]
+provider=external
+execution=external-cli
+model=gpt-5.6-luna
+effort=high
+
+[codex-luna-medium]
+provider=external
+execution=external-cli
+model=gpt-5.6-luna
+effort=medium
+
+[codex-luna-low]
+provider=external
+execution=external-cli
+model=gpt-5.6-luna
+effort=low
+
+# GPT-5.5（前世代flagship）。一部経路でまだ選べる旧世代として残す
+[codex-gpt-5-5-legacy]
+provider=external
+execution=external-cli
+model=gpt-5.5
+effort=high
+
+# =====================================================================
+# B. Bedrock系（Claude/Codexのサブスク時間枠を消費しない従量課金経路。
+#  AWS側のアカウントには別途デフォルトクォータがある＝無制限ではない）
+# =====================================================================
+
+# =====================================================================
+# ③ Claude Bedrock 別名方式（bedrock）。AWSプロファイル→短期ベアラー
+#  トークン方式。Claude/Codexのサブスク時間枠は消費しない従量課金経路
+#  ——ただしAWS側のアカウントには別途デフォルトクォータがある（AWS公式
+#  Bedrockモデルカードの「Quotas and Limits」節で明記。無制限ではない）。
+#  WebSearch可＝2026-09-01実測で訂正済み。model は別名のみ（opus/sonnet/
+#  haiku/fable）、実IDは bedrock.env のピン留め側（ANTHROPIC_DEFAULT_*_
+#  MODEL）が持つ。effortは現行のピン留め方式で効く保証が無いため書かない。
+#  メイン機は現状サブスク本命で未使用（2026-09-08実測）——サブ機・サブスク
+#  枠切迫時の保険用に定義だけ置く
+# =====================================================================
+[bedrock-fable]
+provider=bedrock
+model=fable
+
+[bedrock-opus]
+provider=bedrock
+model=opus
+
+[bedrock-sonnet]
+provider=bedrock
+model=sonnet
+
+[bedrock-haiku]
+provider=bedrock
+model=haiku
+
+# =====================================================================
+# ④ Claude Bedrock Messages API（bedrock-mantle）。③と同じ枠・費用の性質
+#  だが、model は実ID（anthropic.<...>）をそのまま書ける＝bedrock.env側の
+#  ピン留めが要らない経路
+# =====================================================================
+[mantle-fable]
+provider=bedrock-mantle
+model=anthropic.claude-fable-5-1
+
+[mantle-opus]
+provider=bedrock-mantle
+model=anthropic.claude-opus-5
+
+[mantle-sonnet]
+provider=bedrock-mantle
+model=anthropic.claude-sonnet-5
+
+[mantle-haiku]
+provider=bedrock-mantle
+model=anthropic.claude-haiku-4-5
+
+# =====================================================================
+# ⑤ Codex on Bedrock（amazon-bedrock model provider）。すべてコメント
+#  アウト。amazon-bedrockというprovider自体がこのファイルのPROVIDERS集合
+#  に無く、現行の属性では `-c model_provider=amazon-bedrock` を表現できず
+#  未対応。WebSearch不可・従量課金（ChatGPTサブスクとは別建て）につき
+#  優先度も低い。
+#  ⚠️危険: 下の3行「だけ」を解除すると、他の値（provider=external等）が
+#  すべて形式上正しいため resolver は失敗せずexit 0を返す。だが provider
+#  をamazon-bedrockへ切り替える手段がこの属性群には無いため、Bedrock経由
+#  にはならず、通常のexternal-cli（ChatGPTサブスク経由のgpt-5.6-sol）と
+#  して静かに実行されてしまう（2026-09-10検証職実測: 解除するとexit 0で
+#  CODEX_ARGS --model gpt-5.6-solが生成され、Bedrock指定は一切含まれ
+#  ない）。resolverがprovider overrideを表現できるschemaへ拡張されるまで、
+#  このブロックは実際に有効化してはいけない参考例にすぎない
+# =====================================================================
+# [codex-bedrock-sol]
+# provider=external
+# execution=external-cli
+# model=gpt-5.6-sol
+
+# =====================================================================
+# C. ローカルLLM系（vLLM・ポート8000。枠の概念なし・自己ホスト）
+# =====================================================================
+
+# =====================================================================
+# ⑥ ローカルLLM（vLLM・ポート8000）。すべてコメントアウト。provider=local
+#  はresolver未実装のため、有効化すると resolver が全定義を検査する構造上
+#  この1行だけで定義ファイル全体がMINIMALへ落ちる（2026-09-10リーダー実測。
+#  将来スライスBで対応後にコメントを外す）
+# =====================================================================
+# gpt-oss-20b（Apache 2.0・MoE・reasoning effort調整可・関数呼び出し向け）
+# [local-gpt-oss-20b]
+# provider=local
+# model=gpt-oss-20b
+
+# Gemma 4 12B（Apache 2.0・長文脈256K・マルチモーダル・関数呼び出し向け）
+# [local-gemma-4-12b]
+# provider=local
+# model=gemma-4-12b

@@ -1,12 +1,13 @@
 ---
 date: 2026-09-08
-updated: 2026-09-08
+updated: 2026-09-10
 tags: [preference, core, profile, sample, model]
 project: takumi009-ai-env
 related:
   - "[[Preferences/profile-sample]]"
   - "[[Preferences/bedrock-env-sample]]"
   - "[[Decisions/2026-09-08-model-definitions-file]]"
+  - "[[Decisions/2026-09-10-models-conf-comprehensive]]"
 aliases:
   - "モデル定義ファイルサンプル"
   - "models.conf サンプル"
@@ -21,6 +22,8 @@ aliases:
 - **配役表の役割の行には属性を書かない**＝`role.<職種>: configured model=<定義名>[,<定義名>…]` だけ。provider・model ID・effort 等の属性はすべてこのファイル側に書く（正本＝[[Preferences/profile-sample]] から移設）。
 - ⚠️ **候補の並び順に優先度の意味は無い**（どれを使うかはリーダーがそのつど1つ選ぶ）。**例外はリーダー行だけで**、`settings.json` が値を1つしか持てないので**先頭の定義**を書き出す。これは1つに畳むための規則であって「先頭が最良」という意味ではない。
 - ⚠️ **`fallback.<職種>` の候補は1件だけにする**（2件以上あると、本命が使えなくなったときに機構が選ばずに止まる）。
+- **定義は使える経路を網羅して書き、使うかどうかは配役表で決める**（参照しない定義は無害。resolver が受理しない経路はコメントアウトで置く。2026-09-10 本人指示＝[[Decisions/2026-09-10-models-conf-comprehensive]]）。
+- **並び順＝サブスク系→Bedrock 系→ローカル LLM 系。Codex の定義名は `codex-<model>-<effort>`**（2026-09-10）。
 
 ## サンプル本文
 

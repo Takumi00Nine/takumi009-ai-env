@@ -18,6 +18,7 @@ related:
   - "[[Knowledge/bedrock-bearer-token]]"
   - "[[Decisions/2026-09-08-usage-fetcher-migration]]"
   - "[[Decisions/2026-09-10-leader-free-model-choice]]"
+  - "[[Decisions/2026-09-10-models-conf-comprehensive]]"
 aliases:
   - "モデル特性カタログ"
   - "モデルの選び方"
@@ -36,7 +37,7 @@ aliases:
 
 | モデル | 特徴 | 向く仕事・向かない仕事 | 注意点 |
 |---|---|---|---|
-| **Claude Fable 5.1**（`claude-fable-5-1`） | Claude 系の最上位。1M コンテキスト・adaptive thinking 常時オン・長時間の自律作業に強い | 向く＝要件定義・設計・採否判定など判断の質が下流全体に効く上流工程。向かない＝日常の軽い実装・定型作業 | 週次の専用枠があり枯渇しやすい。ワーカー・定型生成にはほぼ割り当てない運用が定石。プロンプトキャッシュ読取は base 入力価格の 2.5%（Fable 5.1／Mythos 5.1 のみ・他モデルは 10%・公式モデル表脚注 2026-09-10 確認） |
+| **Claude Fable 5.1**（`claude-fable-5-1`） | Claude 系の最上位。1M コンテキスト・adaptive thinking 常時オン・長時間の自律作業に強い | 向く＝要件定義・設計・採否判定など判断の質が下流全体に効く上流工程。向かない＝日常の軽い実装・定型作業 | Fable 専用の週次上限があるが、これは全体7日枠の内側の追加上限で、Fable 利用は両方を進める（別財布ではない・[[Knowledge/anthropic-claude-models-2026-06]]）。ワーカーに使うかはリーダーが案件ごとに判断（既定も禁止も無い）。プロンプトキャッシュ読取は base 入力価格の 2.5%（Fable 5.1／Mythos 5.1 のみ・他モデルは 10%・公式モデル表脚注 2026-09-10 確認） |
 | **Claude Opus 5**（`claude-opus-5`） | Fable 5.1 に近い性能をより軽い枠消費で出せる日常の最上位。5段階 effort（low〜max）対応 | 向く＝要件定義・設計・採否判定の既定、複雑な統合判断、Codex 上限到達時の一次レビュー代替。向かない＝大量の並列軽作業 | thinking が既定オンで応答に余裕トークンが要る。推奨 effort の初期値は high |
 | **Claude Sonnet 5**（`claude-sonnet-5`） | 作る工程の主力候補。実装・調査・テストなど「作る工程」の主力 | 向く＝開発4工程の実働・探索的調査。向かない＝後戻りコストが高い設計判断の単独決定 | 並行起動しやすく枠の主消費源になりやすい |
 | **Claude Haiku 4.5** | Claude 系で最も軽量・高速 | 向く＝分類・抽出・定型変換など判断の重くない大量処理。向かない＝設計判断・複雑なコード理解 | 使う場合は models.conf に個別定義を足す（実測メモ無し） |
@@ -53,7 +54,7 @@ aliases:
 
 | サービス | 認証 | 枠・窓 | リセットの仕組み | 使用率の取れ方 | 機能差 | 費用の性質 | 向く・向かない |
 |---|---|---|---|---|---|---|---|
-| **Claude サブスク** | claude.ai ログイン（キーチェーン保存の OAuth） | `claude-subscription`。`five_hour`・`seven_day`（＋参考の週次モデル別枠） | `/limit-reset`＝**未公開**の CLI コマンド。**5時間窓だけ**リセット、週次には効かない。残数の機械取得は未確認 | **【使用率】ブロックに出る**（3枠の1つ） | 組み込み WebSearch 等フル機能 | 定額（契約プラン） | 向く＝通常運用・判断の重い上流工程。向かない＝枠が切迫した状況での大量消費 |
+| **Claude サブスク** | claude.ai ログイン（キーチェーン保存の OAuth） | `claude-subscription`。`five_hour`・`seven_day`（＋Fable 専用の週次上限＝全体7日枠の内側。Fable 利用は両方を進める） | `/limit-reset`＝**未公開**の CLI コマンド。**5時間窓だけ**リセット、週次には効かない。残数の機械取得は未確認 | **【使用率】ブロックに出る**（3枠の1つ） | 組み込み WebSearch 等フル機能 | 定額（契約プラン） | 向く＝通常運用・判断の重い上流工程。向かない＝枠が切迫した状況での大量消費 |
 | **Claude Bedrock**（現行＝配役表 `provider=bedrock`＋`bedrock.env` のピン留め。設計中の統合経路名は要件書側） | AWS プロファイル→短期ベアラートークン（presigned URL 方式・実効期限は指定値と AWS 認証情報の残り期限の短い方）。使用側に IAM の明示 Allow（`bedrock:CallWithBearerToken`）が要る | `unlimited`（枠の概念なし） | 無し（上限の概念が無いためリセットという操作が意味を持たない） | 出ない（`unlimited` は使用率を読まない） | **WebSearch は利用可**（2026-08 時点の「不可」という公式注記は 2026-09-01 実測で訂正済み＝[[Knowledge/bedrock-claude-code-pitfalls]]） | 従量課金（AWS 側でトークン量課金） | 向く＝サブスク枠を使い切りたくない場面の保険的経路、費用を許容できる場面。向かない＝定額枠で足りている状況（従量課金が無駄になる）。注意＝短期トークンの実効期限・SSO 再ログインが要る場合がある |
 | **Codex サブスク**（ChatGPT ログイン） | ChatGPT の OAuth ログイン | `codex-subscription`。`five_hour`・`seven_day` | **公式の「rate-limit reset credit」**（本人の呼び方＝チケット）。**5時間窓と週次窓の両方**を一度にリセット、付与から30日で失効 | **【使用率】ブロックに出る**。チケットの枚数・期限も `account/rateLimits/read` から機械取得できる（確度高＝[[Knowledge/codex-rate-limit-reset-banking]]） | フル機能（WebSearch 含む） | 定額（契約プラン） | 向く＝一次レビュー・bounded task の実装委任・画像生成一気通貫。向かない＝枠切迫時の大量投入（チケットで回復できるが枚数に限りがある） |
 | **Codex Bedrock**（`amazon-bedrock` model provider） | Bedrock API キー（`AWS_BEARER_TOKEN_BEDROCK`）または AWS SDK の資格情報チェーン（前者を優先。ChatGPT ログインとは別建て） | ChatGPT サブスクの枠とは別建て（従量課金）。⚠️ **rate-limit reset credit の対象になるかは未確認**（公式ドキュメントに記載なし＝推定で「対象外」とは断定しない） | 記載なし（サブスクの窓の概念自体が無いため無いと推定。確度中） | 出ない想定（Codex サブスクの `usage` とは別系統） | **WebSearch 不可**（公式ドキュメントが機能表で明記＝「OpenAI がホストするクラウド機能に依存する機能は非対応」）。利用可能モデルは `gpt-5.6-sol`／`terra`／`luna` と旧世代 `gpt-5.5`／`gpt-5.4`（リージョン依存、公式確認済み） | 従量課金（トークン単位、シート契約なし＝AWS 公式ブログの表現） | 向く＝Codex サブスク枠が枯渇していて費用を許容できる保険。向かない＝WebSearch が要る裏取り系タスク（researcher 等） |

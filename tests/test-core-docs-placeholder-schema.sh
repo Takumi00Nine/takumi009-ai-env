@@ -712,7 +712,22 @@ echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC
 # （load_model_defs()）で4定義が読める」の2点を検査する形へ置き換えた。
 # ⚠️ 公開スナップショット（vault-public/）を読むassertも置かない
 # （締めのexport-public-vault.sh再生成後に初めて内容が揃うため）。
-echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実値規約（XXXX無し）を満たし、resolverの定義パーサで4定義が読める ==="
+# 2026-09-10 モデル定義ファイル網羅化（本人方針: 今の環境で使えないBedrock・
+# ローカルLLMも含め経路を網羅的に定義しておき、使うかどうかは配役表
+# profile.md側で決める）でconfig/models.conf.sampleの有効な定義が4件から
+# 28件へ増え、続く2巡目（本人裁定）でexternalをモデル×effortで揃えた
+# （codex-<model>-<effort>命名。astra/sol/terra/luna×high/medium/lowの
+# 12定義へ統一。effort省略名codex-sol等は廃止）ことで28件→35件になった。
+# さらに検証職(Codex)1巡目レビューのMAJOR-1対応（本人裁定 2026-09-10:
+# xhighは運用方針で原則使わない=Decisions/2026-08-07-avoid-xhigh-effortに
+# 反するため[opus-xhigh]をコメントアウトへ格下げ）で35件→34件になった。
+# 同レビューのMAJOR-3指摘（定義名と件数だけでは値の誤りを検知できない）に
+# 対応し、名前だけの集合比較から
+# name/provider/model/execution/effortの完全なタプル比較へ強化した
+# （既存4定義=fable-main/opus-main/sonnet-main/codex-review-defaultの
+# 値回帰も、この完全一致比較に含めて恒久的に検知する。profile.md.sampleは
+# 編集不要）。
+echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実値規約（XXXX無し）を満たし、resolverの定義パーサで34定義が値まで一致して読める ==="
 {
   MODELS_SAMPLE_D16="$REPO_ROOT/config/models.conf.sample"
   if [ ! -f "$MODELS_SAMPLE_D16" ]; then
@@ -727,9 +742,11 @@ echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実�
 
     # `x="$(cmd)"`単独（`||`無し）はset -e下でcmdが非0を返すと即座にスクリプト
     # 全体を終了させてしまう（本ファイル・他スイートの既存の流儀と同じ注意）。
-    # 必ず`|| defs_json="ERROR:..."`でガードする。
-    defs_json=""
-    defs_json="$(python3 -c "
+    # 必ず`|| defs_tuples="ERROR:..."`でガードする。
+    # name/provider/model/execution/effortをタブ区切り1行1定義（名前順）で
+    # 出す。effort未指定は空文字（execution既定subagentは検証済みの確定値）。
+    defs_tuples=""
+    defs_tuples="$(python3 -c "
 import sys
 sys.path.insert(0, '$REPO_ROOT/claude/hooks/lib')
 import profile_resolve as pr
@@ -738,23 +755,65 @@ try:
 except Exception as e:
     print('ERROR:' + type(e).__name__ + ':' + str(e))
     sys.exit(1)
-print(','.join(sorted(defs.keys())))
+for name in sorted(defs.keys()):
+    d = defs[name]
+    parts = [name, d.provider, d.model, d.execution]
+    if d.effort:
+        parts.append(d.effort)
+    print('\t'.join(parts))
 " 2>&1)" || true
-    case "$defs_json" in
+    case "$defs_tuples" in
       ERROR:*)
-        fail_case "resolverの定義パーサがconfig/models.conf.sampleを読めない: ${defs_json}"
+        fail_case "resolverの定義パーサがconfig/models.conf.sampleを読めない: ${defs_tuples}"
         ;;
       *)
-        def_count="$(printf '%s' "$defs_json" | tr ',' '\n' | grep -c . || true)"
-        if [ "$def_count" = "4" ]; then
-          pass "resolverの定義パーサで読める定義数がちょうど4"
+        def_count="$(printf '%s\n' "$defs_tuples" | grep -c . || true)"
+        if [ "$def_count" = "34" ]; then
+          pass "resolverの定義パーサで読める定義数がちょうど34"
         else
-          fail_case "resolverの定義パーサで読める定義数が4でない（実際: ${def_count}件・${defs_json}）"
+          fail_case "resolverの定義パーサで読める定義数が34でない（実際: ${def_count}件）"
         fi
-        if [ "$defs_json" = "codex-review-default,fable-main,opus-main,sonnet-main" ]; then
-          pass "定義名の集合がfable-main,opus-main,sonnet-main,codex-review-default"
+        expected_tuples_d16="$(cat <<'EXPECTED_D16'
+bedrock-fable	bedrock	fable	subagent
+bedrock-haiku	bedrock	haiku	subagent
+bedrock-opus	bedrock	opus	subagent
+bedrock-sonnet	bedrock	sonnet	subagent
+codex-astra-high	external	gpt-6-astra	external-cli	high
+codex-astra-low	external	gpt-6-astra	external-cli	low
+codex-astra-medium	external	gpt-6-astra	external-cli	medium
+codex-gpt-5-5-legacy	external	gpt-5.5	external-cli	high
+codex-luna-high	external	gpt-5.6-luna	external-cli	high
+codex-luna-low	external	gpt-5.6-luna	external-cli	low
+codex-luna-medium	external	gpt-5.6-luna	external-cli	medium
+codex-review-default	external	default	external-cli	high
+codex-sol-high	external	gpt-5.6-sol	external-cli	high
+codex-sol-low	external	gpt-5.6-sol	external-cli	low
+codex-sol-medium	external	gpt-5.6-sol	external-cli	medium
+codex-terra-high	external	gpt-5.6-terra	external-cli	high
+codex-terra-low	external	gpt-5.6-terra	external-cli	low
+codex-terra-medium	external	gpt-5.6-terra	external-cli	medium
+fable-5-legacy	anthropic-api	claude-fable-5	subagent	high
+fable-main	anthropic-api	claude-fable-5-1	subagent	high
+fable-max	anthropic-api	claude-fable-5-1	subagent	max
+haiku-main	anthropic-api	claude-haiku-4-5-20251001	subagent
+mantle-fable	bedrock-mantle	anthropic.claude-fable-5-1	subagent
+mantle-haiku	bedrock-mantle	anthropic.claude-haiku-4-5	subagent
+mantle-opus	bedrock-mantle	anthropic.claude-opus-5	subagent
+mantle-sonnet	bedrock-mantle	anthropic.claude-sonnet-5	subagent
+opus-4-6-legacy	anthropic-api	claude-opus-4-6	subagent	high
+opus-4-7-legacy	anthropic-api	claude-opus-4-7	subagent	high
+opus-4-8-legacy	anthropic-api	claude-opus-4-8	subagent	high
+opus-low	anthropic-api	claude-opus-5	subagent	low
+opus-main	anthropic-api	claude-opus-5	subagent	high
+sonnet-4-6-legacy	anthropic-api	claude-sonnet-4-6	subagent	high
+sonnet-low	anthropic-api	claude-sonnet-5	subagent	low
+sonnet-main	anthropic-api	claude-sonnet-5	subagent	high
+EXPECTED_D16
+)"
+        if [ "$defs_tuples" = "$expected_tuples_d16" ]; then
+          pass "34定義のname/provider/model/execution/effortが現行の期待値と完全一致"
         else
-          fail_case "定義名の集合が想定と異なる（実際: ${defs_json}）"
+          fail_case "定義の値が想定と異なる（差分は下記diffで確認）: $(diff <(printf '%s\n' "$expected_tuples_d16") <(printf '%s\n' "$defs_tuples") | tr '\n' ' ')"
         fi
         ;;
     esac
