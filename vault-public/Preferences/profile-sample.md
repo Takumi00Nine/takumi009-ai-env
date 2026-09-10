@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-08
+updated: 2026-09-10
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -13,10 +13,13 @@ related:
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
   - "[[Decisions/2026-09-08-model-definitions-file]]"
+  - "[[Decisions/2026-09-09-cmux-session-todo-operation]]"
 aliases:
   - "配役表サンプル"
   - "プロファイルサンプル"
   - "profile.md案内"
+  - "サブ機の更新手順"
+  - "update-subが拒否"
 ---
 # プロファイルサンプル（v6・職種ファースト配役表）
 
@@ -49,3 +52,22 @@ aliases:
 | `machine_role` | `configured value=main`（サンプルはメイン機の実値） | サンプルはメイン機の値のまま。**サブ機はコピー後に `configured value=sub` へ書き換える**（機構は推測しない） |
 
 未記載の職種は`unknown`（保留・本人確認待ち）として扱われる。「このマシンでは使わない」と決めている職種は、行を省略せず`not_adopted`と明示的に書くこと（§3.2）。
+
+## サブ機の更新手順（既存サブ機に新しい schema・設定が届いたとき）
+
+実測 2026-09-10（サブ機・schema 4→6）。`scripts/update-sub.sh` は実体プロファイルの `machine_role` を resolver で読み、`sub` と解決できたときだけ動く（解決失敗・行の欠落・旧 schema で unknown 扱い＝すべて拒否＝fail-closed）。プロファイルが旧版のままだと「このマシンはサブ機として登録されていません」「スキーマが旧版です」で止まるので、順序は次のとおり。
+
+1. `git pull --ff-only`（update-sub.sh でなく素の pull。旧プロファイルのままでは update-sub.sh が拒否するため）
+2. sample を実体へコピー: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は `profile.md.bak.v<旧版>-<日付>` に退避してから。権限 0600）
+3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-main`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
+4. `scripts/install-sub.sh --check-profile`（副作用ゼロの検査。OK を確認）
+5. `scripts/update-sub.sh --resync`（1 で pull 済み＝HEAD 不変のため、`--resync` を付けないと Preferences 再同期・config.toml 再生成が走らず静かに終わる）
+6. 新しいフック・職種定義が届いた版では `scripts/install-sub.sh` を再実行（symlink 配置・settings.json 再生成。既存プロファイルには触れない。`AGENTS: dangling` が出たら表示されたファイルを削除）
+7. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
+8. **cmux Dock の「Next Task」をサブ機でも出す（任意・dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。部品は dotfiles 側にある（`cmux/cmux-task-watch/`・共有 lib・`dock.json` の4枠目）。
+   - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は `scripts/install-sub.sh --with-dotfiles`）。install.sh が `~/.config/cmux/dock.json` の symlink・`~/work/tools/cmux-next-watch` の symlink・dock-guard LaunchAgent を整える。
+   - `mkdir -p ~/work/tools && ln -sfn ~/work/dotfiles/cmux/cmux-task-watch ~/work/tools/cmux-task-watch`（⚠️ `dock.json` の Next Task 枠は `~/work/tools/cmux-task-watch/cmux-task-watch.sh` を起動するが、install.sh はこの symlink を作らない＝手作業。2026-09-10 時点）
+   - cmux を再起動 → dock-guard が Usage／Next Project／Next Task／System の4枠へ再シードする。
+   - セッション中にリーダーが `~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言はフック化しない＝[[Decisions/2026-09-09-cmux-session-todo-operation]]）。
+
+⚠️ update-sub.sh の失敗文面は原因を「配役表の machine_role が sub でない」と示すが、実際の起点は「プロファイルが旧 schema で固定キーが unknown 扱い」でも同じ文面になる（resolver の stderr は捨てられる）。まず resolve を直接叩いて何が読めているかを見る。

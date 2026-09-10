@@ -135,6 +135,25 @@ The sub environment is self-contained with just the base package and does not in
 
 On sub machines, private notes such as `Personal/profile-personal.md` and `Knowledge/mistakes.md` don't exist, but since `bootstrap-vault.sh` (the SessionStart hook) is designed to only list **files that actually exist** as required reading, no "not found" warnings appear.
 
+##### Updating an existing sub machine (when a new schema/config lands)
+
+Measured 2026-09-10 (sub machine, schema 4→6). `scripts/update-sub.sh` reads the local profile's `machine_role` capability axis via the resolver and only proceeds when it resolves to exactly `sub` (resolution failure, a missing line, or an old schema are all treated as `unknown` — every one of these is rejected, fail-closed). With an outdated profile still in place it stops instead, with "this machine is not registered as a sub machine" or "the schema is outdated", so update in this order:
+
+1. `git pull --ff-only` (a plain pull, not `update-sub.sh` — with the old profile still in place, `update-sub.sh` itself would refuse to run).
+2. Copy the samples over the real files: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md` and `cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf` (back up the existing real file first, e.g. to `profile.md.bak.v<old-version>-<date>`; permission `0600`).
+3. Edit the profile for this sub machine (required right after copying, since the samples carry the main machine's values): `machine_role: configured value=sub`, `role.leader: configured model=opus-main`, `no_read_paths: unavailable` (on a machine without that path), and `team_mode` if this machine needs a different one.
+4. `scripts/install-sub.sh --check-profile` — a side-effect-free profile check; confirm it reports OK before continuing.
+5. `scripts/update-sub.sh --resync` — step 1 already pulled, so `HEAD` hasn't moved; without `--resync` the `Preferences/` re-sync and `config.toml` regeneration are skipped and the command exits quietly having done nothing.
+6. If the version you pulled ships new hooks or role definitions, re-run `scripts/install-sub.sh` (places symlinks, regenerates `settings.json`; never touches the existing profile). If it prints `AGENTS: dangling`, delete the file(s) it names.
+7. Verify with `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → expect `OK schema_version=<expected version> ... MACHINE_ROLE:sub`. Also check the mode line printed at the start of a new session.
+8. **Show cmux Dock's "Next Task" pane on a sub machine too (optional, dotfiles-installed machines only)**: the display source is that machine's own local Vault Projects note (its `## Tasks` section), so no data sync is needed. The pieces live in the dotfiles repo (`cmux/cmux-task-watch/`, the shared lib, and `dock.json`'s 4th pane).
+   - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh` (on a machine without dotfiles yet, use `scripts/install-sub.sh --with-dotfiles` instead). `install.sh` sets up the `~/.config/cmux/dock.json` symlink, the `~/work/tools/cmux-next-watch` symlink, and the dock-guard LaunchAgent.
+   - `mkdir -p ~/work/tools && ln -sfn ~/work/dotfiles/cmux/cmux-task-watch ~/work/tools/cmux-task-watch` (⚠️ `dock.json`'s Next Task pane launches `~/work/tools/cmux-task-watch/cmux-task-watch.sh`, but `install.sh` does not create this symlink — it's a manual step, as of 2026-09-10).
+   - Restart cmux → dock-guard re-seeds all four panes: Usage / Next Project / Next Task / System.
+   - The pane only shows content once the leader declares a project during the session with `~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>` (the target `Projects/<slug>.md` needs a `## Tasks` section; this declaration step is intentionally not hooked automatically).
+
+⚠️ `update-sub.sh`'s failure message attributes the cause to "the role-cast profile's `machine_role` isn't `sub`", but the exact same message also appears when the real cause is an old-schema profile whose fixed keys read as `unknown` (the resolver's own `stderr` is discarded). Run `profile_resolve.py resolve` directly first to see what it's actually reading before assuming which cause applies.
+
 #### Also install dotfiles (a separate component)
 
 ```sh
@@ -403,6 +422,25 @@ scripts/install-sub.sh
 4. **セッション開始のたびに更新有無を確認**: 機役割の正本はローカル実体プロファイル（`$HOME/.config/takumi009-ai-env/profile.md`）の能力軸`machine_role`です — 本人が自分で書きます（`machine_role: configured value=main` または `value=sub`）。インストーラは既存の実体プロファイルやその`machine_role`の値を書き換えることは一切ありません（`profile.md`がまだ無ければ`install-main.sh`が`config/profile.md.sample`から新規作成しますが＝上記「導入手順」参照、既にある実体には一切触れません）。`claude/hooks/check-sub-update.sh`・`scripts/update-sub.sh`・`scripts/check-drift.sh`・`claude/hooks/bootstrap-vault.sh` はいずれも `profile_resolve.py resolve` の `MACHINE_ROLE:` フィールドからこれを読みます。`sub` と読めたときだけサブ機として扱われます（解決失敗・`unknown`・`unavailable`・行の欠落はすべてサブ機として扱いません＝fail-closed）。`claude/hooks/check-sub-update.sh`（SessionStartフック）はセッション起動のたびにこれを確認し、`sub`でなければ何もせず静かにexitします（fail-closed）。実際のサブ機では時間上限つきの `git fetch` を実行し（fail-open＝失敗・タイムアウト・オフライン等は静かに無視してセッション起動をブロックしません。ただし失敗は `/tmp/check-sub-update.log` に記録されます）、`origin/main` より遅れていれば `scripts/update-sub.sh` を自分で実行するよう案内します。`scripts/update-sub.sh` 自体も冒頭で同じ`machine_role`を確認し、`sub`でなければ`fail()`で拒否します（メイン機で誤って実行された場合、`rsync --delete`でメインVaultの`Preferences/`が消えてしまうのを防ぐ最後の砦）。この確認を除く `scripts/update-sub.sh` 自体の処理内容は変更していません: このリポジトリを `git pull --ff-only` し、変化があれば `codex/config.toml` の再生成・`vault-public/Preferences/` の再同期（**Preferences以外には一切触れません**＝サブ機ローカルの `Fragments` 等は消えません）・新しい骨格フォルダの補充を自動で行います。変化が無ければ静かに終了します（サブは編集しない運用のため `git pull` が fast-forward できない事態は通常起きませんが、その場合は警告を出すだけで停止し、強制上書きはしません）。
 
 サブ機では `Personal/profile-personal.md`・`Knowledge/mistakes.md` 等の private ノートが存在しませんが、`bootstrap-vault.sh`（SessionStartフック）は**存在するファイルだけ**を必読リストに載せる設計のため、「見つかりません」という警告は出ません。
+
+##### 既存サブ機の更新（新しい schema・設定が届いたとき）
+
+実測 2026-09-10（サブ機・schema 4→6）。`scripts/update-sub.sh` は実体プロファイルの `machine_role` を resolver で読み、`sub` と解決できたときだけ動きます（解決失敗・行の欠落・旧 schema はすべて `unknown` 扱い＝いずれも拒否＝fail-closed）。プロファイルが旧版のままだと「このマシンはサブ機として登録されていません」「スキーマが旧版です」で止まるので、順序は次のとおりです。
+
+1. `git pull --ff-only`（`update-sub.sh` ではなく素の pull。旧プロファイルのままでは `update-sub.sh` 自体が拒否するため）。
+2. sample を実体へコピー: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は先に `profile.md.bak.v<旧版>-<日付>` 等へ退避してから。権限 `0600`）。
+3. プロファイルをサブ機用に編集（コピー直後はメイン機の値のため必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-main`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode` も。
+4. `scripts/install-sub.sh --check-profile` — 副作用ゼロの検査。OK を確認してから次へ進む。
+5. `scripts/update-sub.sh --resync` — 1で既に pull 済み（`HEAD` は不変）のため、`--resync` を付けないと `Preferences/` の再同期・`config.toml` の再生成が走らず、何もしないまま静かに終わる。
+6. 新しいフック・職種定義が届いた版では `scripts/install-sub.sh` を再実行する（symlink 配置・`settings.json` の再生成。既存プロファイルには一切触れない）。`AGENTS: dangling` が出た場合は、表示されたファイルを削除する。
+7. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub` を確認する。新しいセッションの開幕1行でもモードを確認する。
+8. **cmux Dock の「Next Task」をサブ機でも出す（任意・dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。部品は dotfiles 側にある（`cmux/cmux-task-watch/`・共有 lib・`dock.json` の4枠目）。
+   - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は代わりに `scripts/install-sub.sh --with-dotfiles`）。`install.sh` が `~/.config/cmux/dock.json` の symlink・`~/work/tools/cmux-next-watch` の symlink・dock-guard LaunchAgent を整える。
+   - `mkdir -p ~/work/tools && ln -sfn ~/work/dotfiles/cmux/cmux-task-watch ~/work/tools/cmux-task-watch`（⚠️ `dock.json` の Next Task 枠は `~/work/tools/cmux-task-watch/cmux-task-watch.sh` を起動するが、`install.sh` はこの symlink を作らない＝手作業。2026-09-10時点）。
+   - cmux を再起動 → dock-guard が Usage／Next Project／Next Task／System の4枠へ再シードする。
+   - セッション中にリーダーが `~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言は自動フック化しない）。
+
+⚠️ `update-sub.sh` の失敗文面は原因を「配役表の `machine_role` が `sub` でない」と示しますが、実際の起点が「プロファイルが旧 schema で固定キーが `unknown` 扱いになっている」場合でも同じ文面になります（resolver 自身の `stderr` は捨てられます）。まず `profile_resolve.py resolve` を直接叩いて何が読めているかを確認してから、原因を判断してください。
 
 #### dotfiles（部品）も一緒に導入する
 
