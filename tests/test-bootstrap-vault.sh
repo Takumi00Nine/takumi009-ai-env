@@ -3004,7 +3004,7 @@ echo "=== 79. B1a「使用率の見える化」AC-91④⑤: 【使用率】ブ�
   UC79="$(mktemp -d)"
   NOW79=1788858365
   python3 -c "import json; open('$UC79/claude-cache.json','w').write(json.dumps({'fetched_at':$NOW79-60,'five_hour':{'used_percent':25.0,'resets_at_epoch':$NOW79+1000},'seven_day':{'used_percent':46.0,'resets_at_epoch':$NOW79+90000},'model_weekly':{'used_percent':34,'resets_at_epoch':$NOW79+90000,'label':'Fable'},'last_error':None}))"
-  python3 -c "import json; open('$UC79/codex-cache.json','w').write(json.dumps({'fetched_at':$NOW79-30,'five_hour':{'used_percent':66,'resets_at_epoch':$NOW79+2000},'seven_day':{'used_percent':10,'resets_at_epoch':$NOW79+90000},'last_error':None}))"
+  python3 -c "import json; open('$UC79/codex-cache.json','w').write(json.dumps({'fetched_at':$NOW79-30,'five_hour':{'used_percent':66,'resets_at_epoch':$NOW79+2000},'seven_day':{'used_percent':10,'resets_at_epoch':$NOW79+90000},'reset_credits':{'available_count':1,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'RateLimitResetCredit_abc123','status':'available','granted_at_epoch':1788539594,'expires_at_epoch':1791131594,'title':'Full reset (Weekly + 5 hr)'}]},'last_error':None}))"
 
   ctx79="$(AIENV_USAGE_CACHE_DIR="$UC79" AIENV_USAGE_NOW="$NOW79" run_bootstrap "$VD79")"
   assert_contains "79: 【使用率】見出しが出る" "$ctx79" "【使用率】"
@@ -3021,10 +3021,15 @@ echo "=== 79. B1a「使用率の見える化」AC-91④⑤: 【使用率】ブ�
   # （python3 claude/hooks/lib/usage_snapshot.pyを同じfixture・同じNOW79で
   # 直接実行し裏取り済みの期待値。tests/test-usage-snapshot.shのFX-1と
   # 同一NOW値・同種fixtureで独立に検証済みの値と一致する）。
+  # ⚠️ B1-c（2026-09-09）: Codex枠の末尾にチケット句が付く。Claude行は
+  # チケット句を持たない固定契約（本人指示2026-09-09＝長い固定文言は載せ
+  # ない・範囲差の説明はVault資料側）ことも同時に固定する。
   assert_contains "79: Claude枠の実内容（5h/7d/Fable週の残量・リセット・鮮度）が厳密一致" "$ctx79" \
     "Claude枠: 5h 残75%（リセット 18:22）／7d 残54%（09-09 19:06）／Fable週 残66%・取得 1分前"
-  assert_contains "79: Codex枠の実内容（5h/7dの残量・リセット・鮮度）が厳密一致" "$ctx79" \
-    "Codex枠: 5h 残34%（リセット 18:39）／7d 残90%（09-09 19:06）・取得 0分前"
+  assert_contains "79: Codex枠の実内容（5h/7d/チケットの残量・リセット・鮮度）が厳密一致" "$ctx79" \
+    "Codex枠: 5h 残34%（リセット 18:39）／7d 残90%（09-09 19:06）・取得 0分前／チケット 1枚（10/05）"
+  claude_line79="$(printf '%s\n' "$ctx79" | grep '^Claude枠:')"
+  assert_not_contains "79: Claude行にはチケット句を足さない（B1-c本人指示）" "$claude_line79" "チケット"
 
   rm -rf "$VD79" "$UC79"
 }

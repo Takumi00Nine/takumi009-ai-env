@@ -1,10 +1,11 @@
 ---
 date: 2026-06-21
-updated: 2026-09-07
+updated: 2026-09-09
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 related:
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
+  - "[[Decisions/2026-09-09-cmux-session-todo-operation]]"
 aliases:
   - "外部脳運用チートシート"
   - "public執筆の掟"
@@ -26,6 +27,7 @@ aliases:
 - 同じルールは SSOT 1つ＋他はリンクのみ。旧方針は `deprecated YYYY-MM-DD` で現行より下に隔離。
 - **部品追加の掟**: 実行部品（スクリプト・フック・LaunchAgent）を追加するときは、対応する Decision に**分類（A=常時/B=定期/C=手動）・テスト増分・廃止条件**を書く。
 - **Projects の frontmatter**: `status:` は4値のみ＝`active`/`paused`/`completed`/`closed`。**状態が動いたら `next:`（15文字以内の次アクション）も更新**（cmux Next ペイン表示元。「Nextの N 番」解決＝`cmux-next-watch.sh --list`）。
+- **Tasks 節**（任意）: `## Tasks` → `### <版名>` → `- [ ]`/`- [/]`（進行中）/`- [x]`。cmux Dock「Next Task」の表示元。工程の節目（要件/設計/実装/検証の完了・版の切替）にリーダーが記録職へ更新を依頼する（[[Decisions/2026-09-09-cmux-session-todo-operation]]）。`next:` が無いノートは Tasks 節の先頭未完タスクを Next Project が導出表示する（書き戻しなし）。
 ## 書き方の鉄則
 - 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず `vault-scribe`（常駐チームメイト）へ委任**（spawn 時の subagent_type も `vault-scribe`＝職種名はファイル名と一致＝[[Decisions/2026-09-03-role-key-equals-agent-filename]]）＝リーダーが内容を確定して渡し、vault-scribe が掟に従い執筆（[[Decisions/2026-08-10-vault-scribe]]）。**リーダー直筆は禁止**＝旧例外「scribe 不在時・軽い1件は直筆可」は本人指示で撤廃（[[Decisions/2026-08-12-vault-scribe-mandatory]]・delegation-gate-v2 フックが deny・vault-scribe 不在なら起動してから振る）。⚠️ **単独モードだけは例外**＝記録職を立てないので、リーダーが案件の締めに直筆する（Vault 専用の直接作業宣言マーカーで gate を通す＝[[Decisions/2026-09-07-solo-leader-writes-vault]]）。軽量／フルは従来どおり scribe 必須。**vault-scribe 専任の対象は AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）に限定**＝人間向け領域（Blogs/・Explorations/ ほか6フォルダ以外すべて）はリーダー・ワーカー・スクリプトが直接書き込み可（[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]・旧例外「Codex のみ Blogs/・Explorations/ 直書き可」は人間向け領域全体の直書き可に一般化され不要に）。他ワーカーは AI向け6フォルダへの記録候補があれば「Vault記録候補:」で申告。
 - 長くなったら分割（目安8,000字・Decisions は対象外）＝詳細を別ノートへ分離し相互リンク。

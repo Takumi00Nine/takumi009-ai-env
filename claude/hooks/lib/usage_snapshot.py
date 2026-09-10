@@ -67,8 +67,43 @@ DEFAULT_STALE_SECONDS = 600
 # ============================================================
 TOP_LEVEL_FIELDS = frozenset({"generated_at", "pools"})
 POOL_FIELDS = frozenset(
-    {"pool_ref", "kind", "usage_state", "fetched_at", "age_seconds", "windows", "error"}
+    {
+        "pool_ref",
+        "kind",
+        "usage_state",
+        "fetched_at",
+        "age_seconds",
+        "windows",
+        "error",
+        "reset_credits",
+    }
 )
+# ⚠️ B1-c（2026-09-09）: 「チケット」（Codex の rate-limit reset credit）の
+# 機械可読表現。Claude は残回数を返す API が未確認（機械取得しない）ため、
+# claude-subscription には常にこの固定値を持たせて範囲差を明示する
+# （本人指示2026-09-09 01:55＝Claude=5h窓のみ／Codex=5h+7d窓の両方）。
+# codex-subscription はキャッシュの reset_credits を検証したうえで持たせる
+# （+ state）。信用しない（`state:"missing"`へ倒す）のは`available_count`
+# そのものが非負整数として解釈できないときだけで、詳細行（credits）が
+# 無い／裏付けが無いことは正常形として受理する（公式app-serverの
+# count-only応答＝検証職2巡目MAJOR-2対応。`_build_codex_reset_credits`
+# 参照）。credits各要素の型不正は要素単位で除外する
+# （`_extract_credit_entry`参照）。unlimited は reset_credits: None（§2.2）。
+CODEX_RESET_CREDITS_FIELDS = frozenset(
+    {"available_count", "reset_scope", "credits", "state"}
+)
+CLAUDE_RESET_CREDITS_FIELDS = frozenset(
+    {"available_count", "reset_scope", "credits", "note"}
+)
+CREDIT_ENTRY_FIELDS = frozenset(
+    {"id", "status", "granted_at_epoch", "expires_at_epoch", "title"}
+)
+CLAUDE_RESET_CREDITS_FIXED = {
+    "available_count": None,
+    "reset_scope": ["five_hour"],
+    "credits": [],
+    "note": "not_machine_readable",
+}
 # ⚠️ label は five_hour/seven_day では null・model_weekly だけ非null。
 # フィールド集合そのものは窓の種類によらず常にこの5つで揃える
 # （AC-95①の「集合の完全一致」を型の分岐なしで機械的に検査できるようにする
@@ -270,6 +305,136 @@ def _extract_window(data: dict, window_name: str) -> Optional[dict]:
     }
 
 
+# Codexのチケットが常にリセットする範囲（本人指示2026-09-09 01:55）。
+# ⚠️ 検証職1巡目MAJOR-2対応: これは取得器（scripts/lib/usage-source.sh）が
+# 常に書く定数であり上流データではないため、キャッシュの値をそのまま
+# 信用せず、ここでも常にこの固定値を使う（`reset_scope:["secret_scope"]`
+# のような壊れた/汚染された値がキャッシュに紛れ込んでいても出力へは
+# 一切現れない＝読み手側の多重防御）。
+CODEX_RESET_SCOPE = ["five_hour", "seven_day"]
+
+
+def _valid_epoch(value) -> bool:
+    """整数（またはfloatで整数値）かつ0より大きいepochだけを妥当とする。
+    ⚠️ 検証職1巡目MAJOR-2対応: 0・負値・非整数floatは「型は数値だが値が
+    明らかに壊れているepoch」であり、そのまま日付表示に使うと1970年1月1日
+    付近の意味の無い日付を「有効期限」として出してしまう。ここで弾く。
+    """
+    if isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not value.is_integer():
+        return False
+    return value > 0
+
+
+def _extract_credit_entry(raw) -> Optional[dict]:
+    """1件のチケット（reset credit）を検証する。
+
+    ⚠️ 検証職2巡目MAJOR-1対応: `id`・`status`・`granted_at_epoch` は
+    必須（非null・正しい型）とし、いずれかが欠落/nullなエントリは丸ごと
+    除外する（「有効な別creditが1件あれば、それ以外の全項目nullな
+    creditも`state:ok`のcredits[]に残ってしまう」という不具合の再発防止。
+    「creditをnull項目付きでJSONへ残す」中途半端な状態は作らない）。
+    `expires_at_epoch`・`title` は公式protocol（openai/codex
+    codex-rs/app-server-protocol/src/protocol/v2/account.rs）がnullable
+    な任意フィールドのため、型不正・値不正（0・負値等）ならその
+    フィールドだけをNoneへ倒し、エントリ自体は残す（id/status/
+    granted_at_epochが正しい限り「詳細の一部が無い」だけの正常な縮退
+    として扱う＝検証職2巡目MAJOR-2の「count-onlyは正常形」と同じ考え方
+    をcredit単位にも適用）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    id_ = raw.get("id")
+    status = raw.get("status")
+    granted = raw.get("granted_at_epoch")
+    if not (isinstance(id_, str) and id_ != ""):
+        return None
+    if not (isinstance(status, str) and status != ""):
+        return None
+    if not _valid_epoch(granted):
+        return None
+    expires = raw.get("expires_at_epoch")
+    if expires is not None and not _valid_epoch(expires):
+        expires = None
+    title = raw.get("title")
+    if title is not None and not isinstance(title, str):
+        title = None
+    return {
+        "id": id_,
+        "status": status,
+        "granted_at_epoch": granted,
+        "expires_at_epoch": expires,
+        "title": title,
+    }
+
+
+def _build_codex_reset_credits(data: Optional[dict]) -> dict:
+    """codex-subscription 用の reset_credits を組み立てる。data は
+    codex-cache.json 全体（無し/壊れていれば None）。
+
+    ⚠️ 検証職2巡目MAJOR-2対応: `available_count`（非負整数として解釈
+    できる値）こそが権威値（公式protocol・実装記録§2「Claude側を固定
+    文言にした理由」と同じ考え方＝researcher実測の一次情報を最優先する）
+    であり、**詳細行（credits）が無い／裏付けが無いことは異常ではない**
+    （openai/codex公式app-server README・protocol v2/account.rsの
+    `credits: null`＝count-onlyの正常形）。1巡目対応で追加した
+    「available_count>0なら未失効の裏付けが必須」というfail-closed化は
+    この正常形を`state:"missing"`へ誤分類していたため撤回した。
+    信用しない（`state:"missing"`へ倒す）のは以下だけ:
+      - `reset_credits`キー自体が無い、または型が壊れている。
+      - `available_count`が負値・非整数など、非負整数として解釈できない
+        （枚数という権威値そのものが壊れている場合のみfail-closed）。
+    `credits`配列の各要素の型検査は`_extract_credit_entry()`が個別に行う
+    （壊れた要素は個別に除外されるだけで、reset_credits全体を巻き込まない）。
+    表示に使う失効日の選択（status=="available"かつ未失効`>now`のものだけ
+    を候補にする）は`_format_ticket_text()`側の責務のまま変更していない。
+    """
+    missing = {
+        "available_count": None,
+        "reset_scope": CODEX_RESET_SCOPE,
+        "credits": [],
+        "state": "missing",
+    }
+    if not isinstance(data, dict):
+        return missing
+    raw = data.get("reset_credits")
+    if not isinstance(raw, dict):
+        return missing
+    available_count = _as_number(raw.get("available_count"))
+    if isinstance(available_count, float):
+        available_count = int(available_count) if available_count.is_integer() else None
+    if available_count is not None and available_count < 0:
+        available_count = None
+    if available_count is None:
+        return missing
+
+    credits_raw = raw.get("credits")
+    credits = []
+    if isinstance(credits_raw, list):
+        for entry in credits_raw:
+            normalized = _extract_credit_entry(entry)
+            if normalized is not None:
+                credits.append(normalized)
+
+    return {
+        "available_count": available_count,
+        "reset_scope": CODEX_RESET_SCOPE,
+        "credits": credits,
+        "state": "ok",
+    }
+
+
+def _reset_credits_for_pool(pool_ref: str, data: Optional[dict]) -> dict:
+    if pool_ref == "claude-subscription":
+        # dictはmutableなので、呼び出し元が誤って書き換えても定数側へ
+        # 波及しないよう毎回コピーを返す。
+        return dict(CLAUDE_RESET_CREDITS_FIXED)
+    return _build_codex_reset_credits(data)
+
+
 def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_seconds: int) -> dict:
     """claude-subscription / codex-subscription 共通の構築ロジック。
     §5 stdout契約の評価順（先勝ち）: ①ファイル不在→missing
@@ -287,6 +452,7 @@ def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_secon
             "age_seconds": None,
             "windows": [],
             "error": None,
+            "reset_credits": _reset_credits_for_pool(pool_ref, None),
         }
 
     if status == "parse_error":
@@ -298,6 +464,7 @@ def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_secon
             "age_seconds": None,
             "windows": [],
             "error": None,
+            "reset_credits": _reset_credits_for_pool(pool_ref, None),
         }
 
     fetched_at = _as_number(data.get("fetched_at"))
@@ -326,6 +493,7 @@ def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_secon
             "age_seconds": None,
             "windows": [],
             "error": error_val,
+            "reset_credits": _reset_credits_for_pool(pool_ref, data),
         }
 
     fetched_at = int(fetched_at)
@@ -347,12 +515,14 @@ def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_secon
         "age_seconds": age_seconds,
         "windows": windows,
         "error": error_val,
+        "reset_credits": _reset_credits_for_pool(pool_ref, data),
     }
 
 
 def build_unlimited_pool() -> dict:
     """§2.2で固定された3枠目。実体（配役表）はこの枠を定義しない＝常にこの
     固定値を返す（v19一次レビュー1巡目の指摘どおり枠は常に3件）。
+    reset_credits は None（unlimited枠にチケットの概念自体が無い＝§2.2）。
     """
     return {
         "pool_ref": "unlimited",
@@ -362,6 +532,7 @@ def build_unlimited_pool() -> dict:
         "age_seconds": None,
         "windows": [],
         "error": None,
+        "reset_credits": None,
     }
 
 
@@ -413,6 +584,64 @@ def _format_percent(value) -> str:
     return str(value)
 
 
+def _format_ticket_date(epoch) -> Optional[str]:
+    """チケット（reset credit）の失効日をJSTのMM/DD表記で返す。窓のリセット
+    表記（`_format_reset`のMM-DD区切り）とはあえて区切り文字を変え
+    （指示書§2.2の例示 `／チケット 1枚（10/05）` に合わせたMM/DD）、時刻は
+    持たない（チケットの失効は日単位の情報として十分＝本人指示の例示に
+    時刻が無い）。クラッシュしない契約は_format_resetと同じ（AC-91①）。
+    """
+    try:
+        dt = datetime.fromtimestamp(epoch, JST)
+    except (OverflowError, OSError, ValueError, TypeError):
+        return None
+    return dt.strftime("%m/%d")
+
+
+def _format_ticket_text(pool: dict, now: int) -> str:
+    """Codex行の末尾に足す「チケット」句（先頭の「／」は含まない・
+    呼び出し側が付ける）。⚠️ 本人指示2026-09-09 02:30＝提示に長い固定文言を
+    載せない。範囲差（Claude=5h窓のみ／Codex=5h+7d窓の両方）の説明は
+    Vaultの資料側に書き、ここでは枚数と期限だけを出す。
+
+    ⚠️ 検証職3巡目MINOR-2対応（docstring訂正）: `reset_credits`
+    （`_build_codex_reset_credits`）は「available_count>0なら未失効の
+    availableなチケットが最低1件ある」ことは**保証しない**（この保証は
+    検証職1巡目対応で一時追加したが、2巡目MAJOR-2で撤回済み＝公式
+    app-serverのcount-only応答〈`credits:null`〉は正常形であり、詳細行・
+    裏付けの有無を問わず`available_count`だけが権威値として信頼される）。
+    枚数（`available_count`）は常にそのまま表示し、`status=="available"`
+    かつ`expires_at_epoch > now`（未失効）の適格な詳細が`credits`の中に
+    見つかったときだけ、その中で最も早く失効する1件の日付を追加で添える
+    （見つからなければ日付なしの「チケット N枚」のまま）。`credits`配列
+    には失効済み・status非availableなエントリも一緒に残り得る（それ自体は
+    壊れたデータではないため）。ここで`status=="available"`かつ
+    `expires_at_epoch > now`のものだけを候補にしないと、`min()`が過去の
+    失効日を「これから来る期限」として誤って選んでしまう（実測で発見）。
+    """
+    rc = pool.get("reset_credits")
+    if not isinstance(rc, dict):
+        return "チケット 取得不可"
+    count = rc.get("available_count")
+    if not isinstance(count, int) or isinstance(count, bool):
+        return "チケット 取得不可"
+    if count == 0:
+        return "チケット 0枚"
+    expiries = [
+        c.get("expires_at_epoch")
+        for c in rc.get("credits", [])
+        if isinstance(c, dict)
+        and c.get("status") == "available"
+        and isinstance(c.get("expires_at_epoch"), (int, float))
+        and not isinstance(c.get("expires_at_epoch"), bool)
+        and c.get("expires_at_epoch") > now
+    ]
+    date_str = _format_ticket_date(min(expiries)) if expiries else None
+    if date_str is None:
+        return f"チケット {count}枚"
+    return f"チケット {count}枚（{date_str}）"
+
+
 def _format_window_segment(window: dict, now: int) -> str:
     remaining = _format_percent(window["remaining_percent"])
     if window["window"] == "model_weekly":
@@ -448,7 +677,13 @@ def _human_line_for_subscription(pool: dict, now: int) -> str:
     # 静かに隠さない。行数は変えない（枠あたり1行の契約のまま末尾に追記）。
     if pool["error"] is not None:
         suffix += f" ⚠️取得エラー（{pool['error']}）"
-    return f"{name}: " + "／".join(segments) + suffix
+    line = f"{name}: " + "／".join(segments) + suffix
+    # B1-c（2026-09-09）: Codex行の末尾にだけチケット句を足す（本人指示
+    # 2026-09-09 02:30＝長い固定文言は載せない・行数は変えない）。Claude行
+    # には何も足さない（Claudeは残回数を返すAPIが未確認＝機械取得しない）。
+    if pool["pool_ref"] == "codex-subscription":
+        line += "／" + _format_ticket_text(pool, now)
+    return line
 
 
 def render_human(snapshot: dict, now: int) -> str:

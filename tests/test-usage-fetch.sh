@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # scripts/usage-fetch.sh・scripts/lib/usage-source.sh・scripts/lib/usage-notify.sh
-# のユニットテスト（B1-b・使用率取得器移設。AC-97＝23 fixture のうち B1-b が
-# 実行する19件のうち18件＋AC の枠外4件。⑦の1件はB1-a未マージのため未実施）。
+# のユニットテスト（B1-b・使用率取得器移設 + B1-c・Codexチケット追加）。
 #
-# 対応表（要件＝ローカルLLM段階経路-要件-2026-09-03.md v20 AC-97）:
+# ⚠️ 検証職2巡目MINOR-2対応（記述訂正）: 以下の「AC-97」対応表はB1-bが
+# 単独ブランチで作業していた当時（`claude/hooks/lib/usage_snapshot.py`が
+# まだ本ブランチに無かった時点）の記述で、当時は⑦のusage-snapshot 1件を
+# 「B1-a未マージのため未実施」としていた。**B1-aは既にmainへ統合済みで、
+# 本ファイルの⑦節は実際には実行される**（下記「⑦読み手の非通信」節の
+# コードが該当ファイルの存在を検出して実行する分岐を参照）。この節の
+# 「23 fixture」「19件」等の数字はB1-bの範囲だけを数えた当時の値であり、
+# 後続のB1-c（⑧節・11変異確認込み）はこの数字に含まれない。
+#
+# 対応表（要件＝ローカルLLM段階経路-要件-2026-09-03.md v20 AC-97・B1-b当時の記述）:
 #   ①応答からの値の抽出 2 ／②必須欠落・型不正・401・500 8
 #   （型不正はD-15の3変異を1fixtureで注入するパラメタ化1件×2サービス）
 #   ③成功時のみfetched_atが進む 2 ／⑤429は完全no-op 4 ／⑥原子的書き出し 2
 #   ＝計18件実行。④（ゲート統合2件）はB2。⑦（読み手の非通信3件）のうち
-#   check-usage-gate・監視の2件はB2、usage-snapshot 1件はB1-a
-#   （claude/hooks/lib/usage_snapshot.py・worktree feature/usage-snapshot）が
-#   本ブランチに未マージのため「未実施」として明示スキップする
-#   （設計書§4「担当Cの前提」・リーダー指示）。
+#   check-usage-gate・監視の2件はB2、usage-snapshot 1件は現在は実行される
+#   （上記訂正のとおり）。
 #   AC の枠外4件＝F-9b・F-9c・D-15窓の定義・F-3（設計書§6.1）。
+#   B1-c（2026-09-09）で⑧節（Codexチケットの取得・変換）を追加。
 #
 # ⚠️ refresh_service() の戻り値契約（scripts/usage-fetch.sh 冒頭コメント参照）＝
 # 0＝キャッシュへ結果を記録できた（成功・失敗記録のどちらも含む）／
@@ -33,6 +40,11 @@ set -a
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 ENTRY="$REPO_ROOT/scripts/usage-fetch.sh"
+# ⚠️ B1-c⑤（表示ツール互換の現物実行）用に、$HOMEを書き換える前の実際の
+# HOMEを保存しておく。`load_entry_for()`は`.`（source）の直前の変数代入
+# なのでbashの仕様上シェル全体へ`$HOME`の変更が残る（テスト内の他fixtureが
+# 都度 `HOME="$E/home" ...` と明示上書きしているのはこのため）。
+HOME_REAL="$HOME"
 
 PASS=0
 FAIL=0
@@ -280,6 +292,23 @@ echo "=== ②必須欠落・型不正・401・500（claude・codex 各4＝計8�
   rm -rf "$E"
 }
 {
+  # B1-c（2026-09-09・検証職1巡目MAJOR-3対応）: `rateLimitResetCredits`は
+  # あるが`rateLimits`が丸ごと無い応答は、B1-c以前と同じ`codex_timeout`
+  # （124）へ分類される（`.result`全体が非空というだけで完了条件にすると
+  # `parse_error`（11）へ分類が後退する、という検証職の実測指摘への対応）。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs
+  STUB_CODEX_RESULT_LINE="$(codex_success_result_line)"
+  refresh_service codex >/dev/null
+  baseline_fetched_at="$(jq -r '.fetched_at' "$CODEX_CACHE")"
+
+  REQUEST_TIMEOUT=1
+  STUB_CODEX_RESULT_LINE='{"jsonrpc":"2.0","id":2,"result":{"rateLimitResetCredits":{"availableCount":1,"credits":[{"id":"RateLimitResetCredit_x","status":"available","grantedAt":1788539594,"expiresAt":1791131594,"title":"t"}]}}}'
+  refresh_service codex >/dev/null
+  assert_eq "B1-c③rateLimits欠落: fetched_atが不変" "$baseline_fetched_at" "$(jq -r '.fetched_at' "$CODEX_CACHE")"
+  assert_eq "B1-c③rateLimits欠落: last_error.type=timeout（parse_errorへ後退していない）" "timeout" "$(jq -r '.last_error.type' "$CODEX_CACHE")"
+  rm -rf "$E"
+}
+{
   # 4通り目＝codexコマンド不在（F-3）。⚠️ codexの取得層（app-server経由の
   # JSON-RPC）には「構文的に壊れた応答」に対応する固有のfetch_status（HTTP層
   # で言う401/500相当）が実在しない（実測＝抽出用jqが失敗すると単に
@@ -298,7 +327,7 @@ echo "=== ②必須欠落・型不正・401・500（claude・codex 各4＝計8�
 }
 {
   E="$(new_env)"; load_entry_for "$E"; reset_stubs
-  base='{"schema_version":1,"service":"codex","fetched_at":1000,"updated_at":1000,"five_hour":{"used_percent":10,"resets_at_epoch":2000},"seven_day":{"used_percent":20,"resets_at_epoch":3000},"last_error":null}'
+  base='{"schema_version":1,"service":"codex","fetched_at":1000,"updated_at":1000,"five_hour":{"used_percent":10,"resets_at_epoch":2000},"seven_day":{"used_percent":20,"resets_at_epoch":3000},"reset_credits":{"available_count":1,"reset_scope":["five_hour","seven_day"],"credits":[{"id":"x","status":"available","granted_at_epoch":1788539594,"expires_at_epoch":1791131594,"title":"t"}]},"last_error":null}'
   assert_true "codex 型不正 baseline: 有効な応答は受理される" \
     "$(validate_usage_payload codex "$base" && echo 1 || echo 0)"
   v1="$(printf '%s' "$base" | jq -c '.five_hour.used_percent = true')"
@@ -310,6 +339,54 @@ echo "=== ②必須欠落・型不正・401・500（claude・codex 各4＝計8�
   v3="$(printf '%s' "$base" | jq -c '.fetched_at = 1.5')"
   assert_true "codex 型不正(iii) fetched_atが非整数なら拒否" \
     "$(validate_usage_payload codex "$v3" && echo 0 || echo 1)"
+
+  # B1-c（2026-09-09・検証職1巡目MAJOR-1対応）: reset_creditsの型契約。
+  # 「欠落応答（旧CLI相当）」の受理と「壊れた応答（上流が型不正な値を
+  # 返す・手で壊されたキャッシュ）」の拒否を、この1つのbaselineから分岐
+  # させることで、五時間窓／七日間窓の検査が既に落としている偽陽性を除く
+  # （each variantはbaseの他のフィールドを一切変えないため、拒否の原因が
+  # reset_creditsの検査以外にないことが保証される）。
+  missing_shape="$(printf '%s' "$base" | jq -c '.reset_credits = {available_count:null, reset_scope:["five_hour","seven_day"], credits:[]}')"
+  assert_true "codex reset_credits: 欠落形(available_count:null・credits:[])は受理される" \
+    "$(validate_usage_payload codex "$missing_shape" && echo 1 || echo 0)"
+  v4="$(printf '%s' "$base" | jq -c '.reset_credits.available_count = "1"')"
+  assert_true "codex reset_credits(iv) available_countが文字列なら拒否" \
+    "$(validate_usage_payload codex "$v4" && echo 0 || echo 1)"
+  v5="$(printf '%s' "$base" | jq -c '.reset_credits.available_count = -1')"
+  assert_true "codex reset_credits(v) available_countが負値なら拒否" \
+    "$(validate_usage_payload codex "$v5" && echo 0 || echo 1)"
+  v6="$(printf '%s' "$base" | jq -c '.reset_credits.credits[0].id = 7')"
+  assert_true "codex reset_credits(vi) credit.idが数値なら拒否" \
+    "$(validate_usage_payload codex "$v6" && echo 0 || echo 1)"
+  v7="$(printf '%s' "$base" | jq -c '.reset_credits.credits[0].granted_at_epoch = "1788539594"')"
+  assert_true "codex reset_credits(vii) credit.granted_at_epochが文字列なら拒否" \
+    "$(validate_usage_payload codex "$v7" && echo 0 || echo 1)"
+  v8="$(printf '%s' "$base" | jq -c '.reset_credits.credits[0].title = {"a":1}')"
+  assert_true "codex reset_credits(viii) credit.titleがオブジェクトなら拒否" \
+    "$(validate_usage_payload codex "$v8" && echo 0 || echo 1)"
+  v9="$(printf '%s' "$base" | jq -c '.reset_credits.reset_scope = ["secret_scope"]')"
+  assert_true "codex reset_credits(ix) reset_scopeが固定値と不一致なら拒否" \
+    "$(validate_usage_payload codex "$v9" && echo 0 || echo 1)"
+  v10="$(printf '%s' "$base" | jq -c '.reset_credits.credits = "not-an-array"')"
+  assert_true "codex reset_credits(x) creditsが配列でないなら拒否" \
+    "$(validate_usage_payload codex "$v10" && echo 0 || echo 1)"
+  v11="$(printf '%s' "$base" | jq -c '.reset_credits.credits[0] = "not-an-object"')"
+  assert_true "codex reset_credits(xi) credits要素がオブジェクトでないなら拒否" \
+    "$(validate_usage_payload codex "$v11" && echo 0 || echo 1)"
+
+  # 変異確認（coding-doc-style §4「陽性fixtureが実際に拒否経路を通って
+  # いるか」）: reset_credits_okの検査節を取り除いた変異コピーでは、v4
+  # （available_countが文字列）が受理されてしまうことを確認する（このv4が
+  # 実際にこの検査（他の検査ではなく）で拒否されている証拠）。
+  MUT_USAGE_SOURCE="$(mktemp)"
+  sed '/and (\.reset_credits | reset_credits_ok)/d' "$REPO_ROOT/scripts/lib/usage-source.sh" > "$MUT_USAGE_SOURCE"
+  assert_true "変異コピー生成: 対象行が実際に1行削除されている" \
+    "$([ "$(wc -l < "$REPO_ROOT/scripts/lib/usage-source.sh")" -eq "$(( $(wc -l < "$MUT_USAGE_SOURCE") + 1 ))" ] && echo 1 || echo 0)"
+  ( . "$MUT_USAGE_SOURCE"; validate_usage_payload codex "$v4" )
+  mut_v4_rc=$?
+  assert_true "陽性fixture(v4向け): reset_credits_ok検査を外した変異コピーは文字列のavailable_countでも受理してしまう（fixtureが実際にこの検査を通っている証拠）" \
+    "$([ "$mut_v4_rc" -eq 0 ] && echo 1 || echo 0)"
+  rm -f "$MUT_USAGE_SOURCE"
   rm -rf "$E"
 }
 
@@ -536,6 +613,224 @@ EOF
     "$([ "$(jq -r '.five_hour.used_percent' "$CLAUDE_CACHE" 2>/dev/null)" = "42" ] && echo 1 || echo 0)"
   assert_true "F-3: codex側はlast_errorに missing required command: codex を記録" \
     "$(jq -r '.last_error.message' "$CODEX_CACHE" 2>/dev/null | grep -q "codex" && echo 1 || echo 0)"
+  rm -rf "$E"
+}
+
+echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（B1-c・2026-09-09） ==="
+# scripts/lib/usage-source.sh: transform_codex_usage() が .result.rateLimits
+# だけでなく兄弟キー .result.rateLimitResetCredits も codex-cache.json の
+# reset_credits へ書き出すことを検査する（指示書§2.3＝あり／なし／credits
+# 空／statusがavailable以外の4fixture＋秘密値なし＋既存キー不変）。
+{
+  # (1) あり：availableな1枚＋秘密値混入(accountId・description)が
+  # 一切キャッシュへ写らないことも同時に検査する（絶対厳守③）。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs
+  STUB_CODEX_RESULT_LINE='{"jsonrpc":"2.0","id":2,"result":{"accountId":"acct_SECRET1234567890","rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":55,"resetsAt":1234567890},"secondary":{"windowDurationMins":10080,"usedPercent":22,"resetsAt":1234599999}},"rateLimitResetCredits":{"availableCount":1,"credits":[{"id":"RateLimitResetCredit_abc123","resetType":"codexRateLimits","status":"available","grantedAt":1788539594,"expiresAt":1791131594,"title":"Full reset (Weekly + 5 hr)","description":"secret-ish free text that must not be recorded"}]}}}'
+  refresh_service codex
+  rc=$?
+  assert_eq "B1-c①あり: refresh_serviceは0" "0" "$rc"
+  # 検証職1巡目MAJOR-4対応: 「既存キーは不変」を五時間窓・七日間窓の
+  # used_percentという2値だけでなく、reset_credits以外の全キー・全値の
+  # 完全一致（schema_version・service・updated_at・両窓のresets_at_epoch・
+  # last_error含む）で固定する。fetched_at/updated_atは実行時刻に依存する
+  # ため、実際に書かれた値をそのまま期待値へ埋め込んで比較する
+  # （B1-b以前の出力形をこのfixtureの入力から手計算した固定値）。
+  captured_fetched_at1="$(jq -r '.fetched_at' "$CODEX_CACHE")"
+  actual_shape1="$(jq -c -S 'del(.reset_credits)' "$CODEX_CACHE")"
+  expected_shape1="$(jq -nc --argjson fa "$captured_fetched_at1" '{
+    schema_version: 1, service: "codex", fetched_at: $fa, updated_at: $fa,
+    five_hour: {used_percent: 55, resets_at_epoch: 1234567890},
+    seven_day: {used_percent: 22, resets_at_epoch: 1234599999},
+    last_error: null
+  }' | jq -c -S .)"
+  assert_eq "B1-c①あり: reset_credits以外の全キー・全値がB1-b以前の出力と1バイトも違わない" "$expected_shape1" "$actual_shape1"
+  assert_eq "B1-c①あり: reset_credits.available_count" "1" "$(jq -r '.reset_credits.available_count' "$CODEX_CACHE")"
+  assert_eq "B1-c①あり: reset_credits.reset_scope" '["five_hour","seven_day"]' "$(jq -c '.reset_credits.reset_scope' "$CODEX_CACHE")"
+  assert_eq "B1-c①あり: credits[0].id" "RateLimitResetCredit_abc123" "$(jq -r '.reset_credits.credits[0].id' "$CODEX_CACHE")"
+  assert_eq "B1-c①あり: credits[0].status" "available" "$(jq -r '.reset_credits.credits[0].status' "$CODEX_CACHE")"
+  assert_eq "B1-c①あり: credits[0].granted_at_epoch" "1788539594" "$(jq -r '.reset_credits.credits[0].granted_at_epoch' "$CODEX_CACHE")"
+  assert_eq "B1-c①あり: credits[0].expires_at_epoch" "1791131594" "$(jq -r '.reset_credits.credits[0].expires_at_epoch' "$CODEX_CACHE")"
+  assert_eq "B1-c①あり: credits[0].title" "Full reset (Weekly + 5 hr)" "$(jq -r '.reset_credits.credits[0].title' "$CODEX_CACHE")"
+  cache_raw="$(cat "$CODEX_CACHE")"
+  assert_true "B1-c①あり(絶対厳守③): accountIdの秘密値がキャッシュに写っていない" \
+    "$(printf '%s' "$cache_raw" | grep -q "acct_SECRET" && echo 0 || echo 1)"
+  assert_true "B1-c①あり(絶対厳守③): descriptionの自由文がキャッシュに写っていない" \
+    "$(printf '%s' "$cache_raw" | grep -q "secret-ish free text" && echo 0 || echo 1)"
+  rm -rf "$E"
+}
+{
+  # (2) なし：応答に rateLimitResetCredits キー自体が無い（旧codex-cli）
+  # →「取れなかった」ことが分かる形（credits[]・available_countはnull）で
+  # 書く（キー自体を省略しない）。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs
+  STUB_CODEX_RESULT_LINE="$(codex_success_result_line)"
+  refresh_service codex >/dev/null
+  assert_eq "B1-c②なし: reset_credits.available_countはnull" "null" "$(jq -r '.reset_credits.available_count' "$CODEX_CACHE")"
+  assert_eq "B1-c②なし: reset_credits.creditsは空配列" "[]" "$(jq -c '.reset_credits.credits' "$CODEX_CACHE")"
+  assert_eq "B1-c②なし: reset_credits.reset_scopeは固定値" '["five_hour","seven_day"]' "$(jq -c '.reset_credits.reset_scope' "$CODEX_CACHE")"
+  rm -rf "$E"
+}
+{
+  # (3) credits空：rateLimitResetCredits はあるが availableCount=0・
+  # credits=[]（本人の手持ちチケットが0枚の実在パターン）。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs
+  STUB_CODEX_RESULT_LINE='{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":55,"resetsAt":1234567890},"secondary":{"windowDurationMins":10080,"usedPercent":22,"resetsAt":1234599999}},"rateLimitResetCredits":{"availableCount":0,"credits":[]}}}'
+  refresh_service codex >/dev/null
+  assert_eq "B1-c③credits空: reset_credits.available_count=0" "0" "$(jq -r '.reset_credits.available_count' "$CODEX_CACHE")"
+  assert_eq "B1-c③credits空: reset_credits.creditsは空配列" "[]" "$(jq -c '.reset_credits.credits' "$CODEX_CACHE")"
+  rm -rf "$E"
+}
+{
+  # (4) statusがavailable以外：失効済み(expired)のチケットが1枚だけ返る場合。
+  # 取得器はstatusの値をそのまま転記する（フィルタしない。提示側
+  # usage_snapshot.pyが「available」だけを表示に使う判断を持つ＝関心の分離）。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs
+  STUB_CODEX_RESULT_LINE='{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":55,"resetsAt":1234567890},"secondary":{"windowDurationMins":10080,"usedPercent":22,"resetsAt":1234599999}},"rateLimitResetCredits":{"availableCount":0,"credits":[{"id":"RateLimitResetCredit_zzz","status":"expired","grantedAt":1788539594,"expiresAt":1791131594,"title":"Full reset (Weekly + 5 hr)"}]}}}'
+  refresh_service codex >/dev/null
+  assert_eq "B1-c④status非available: available_countは応答どおり0" "0" "$(jq -r '.reset_credits.available_count' "$CODEX_CACHE")"
+  assert_eq "B1-c④status非available: statusはそのまま転記される" "expired" "$(jq -r '.reset_credits.credits[0].status' "$CODEX_CACHE")"
+  rm -rf "$E"
+}
+{
+  # (4b) 【検証職2巡目MAJOR-2の正常形】count-only応答（`credits:null`。
+  # 公式app-server応答の正常形＝詳細行を返さずavailableCountだけ返す）を
+  # transform_codex_usageへ直接通し、reset_credits.available_countが権威値
+  # としてそのまま書かれることを確認する（1巡目対応で追加した「裏付け
+  # 必須」というfail-closed化は提示層(usage_snapshot.py)側の問題であり、
+  # 取得器(usage-source.sh)は元々この正常形を素通しできていたことの回帰
+  # 確認も兼ねる）。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs
+  STUB_CODEX_RESULT_LINE='{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":55,"resetsAt":1234567890},"secondary":{"windowDurationMins":10080,"usedPercent":22,"resetsAt":1234599999}},"rateLimitResetCredits":{"availableCount":3,"credits":null}}}'
+  refresh_service codex
+  rc=$?
+  assert_eq "B1-c④b count-only: refresh_serviceは0" "0" "$rc"
+  assert_eq "B1-c④b count-only: reset_credits.available_count=3（権威値をそのまま信頼する）" "3" "$(jq -r '.reset_credits.available_count' "$CODEX_CACHE")"
+  assert_eq "B1-c④b count-only: reset_credits.creditsは空配列" "[]" "$(jq -c '.reset_credits.credits' "$CODEX_CACHE")"
+  rm -rf "$E"
+}
+{
+  # (4c) 【検証職2巡目MAJOR-3】reset_credits単独の型不正（availableCountが
+  # 文字列）があっても、five_hour/seven_dayの更新は止まらない（局所的
+  # 縮退＝チケット部分だけが「取れなかった」形へ正規化される）。検証職の
+  # 再現repro（77%/88%・availableCount:"bad"）をそのまま使う。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs
+  STUB_CODEX_RESULT_LINE="$(codex_success_result_line)"
+  refresh_service codex >/dev/null
+  baseline_fetched_at_4c="$(jq -r '.fetched_at' "$CODEX_CACHE")"
+
+  STUB_CODEX_RESULT_LINE='{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":77,"resetsAt":3000},"secondary":{"windowDurationMins":10080,"usedPercent":88,"resetsAt":4000}},"rateLimitResetCredits":{"availableCount":"bad","credits":[]}}}'
+  refresh_service codex
+  rc=$?
+  assert_eq "B1-c④c reset_credits単独異常: refresh_serviceは0（書き込み自体は成功）" "0" "$rc"
+  assert_true "B1-c④c reset_credits単独異常: fetched_atが前進する（使用率本体の更新は止まらない）" \
+    "$([ "$(jq -r '.fetched_at' "$CODEX_CACHE")" != "$baseline_fetched_at_4c" ] && echo 1 || echo 0)"
+  assert_eq "B1-c④c reset_credits単独異常: five_hourは新しい値(77%)に更新される" "77" "$(jq -r '.five_hour.used_percent' "$CODEX_CACHE")"
+  assert_eq "B1-c④c reset_credits単独異常: seven_dayは新しい値(88%)に更新される" "88" "$(jq -r '.seven_day.used_percent' "$CODEX_CACHE")"
+  assert_eq "B1-c④c reset_credits単独異常: last_errorはnull（局所的縮退であり取得失敗ではない）" "null" "$(jq -r '.last_error' "$CODEX_CACHE")"
+  assert_eq "B1-c④c reset_credits単独異常: reset_creditsは欠落sentinelへ正規化される" "null" "$(jq -r '.reset_credits.available_count' "$CODEX_CACHE")"
+  rm -rf "$E"
+}
+{
+  # (4c-2) 【検証職3巡目MAJOR-1】`rateLimitResetCredits`自体、または
+  # `credits`コンテナがscalar型（文字列・真偽値等）でも、five_hour/seven_day
+  # の更新は止まらない（(4c)は`availableCount`という「値」の型不正だったが、
+  # 今回は`rateLimitResetCredits`・`credits`という「コンテナ」自体の型不正。
+  # objectでない`$rc`への`.availableCount`アクセスや、配列でない
+  # `$rc.credits`への`[]`展開はjqの実行時エラーとなり、要素単位のtry/catchへ
+  # 到達する前にtransform_codex_usage全体が失敗していた不具合の再発防止）。
+  for bad_container_case in \
+    'rateLimitResetCredits_is_string:{"rateLimitResetCredits":"bad"}' \
+    'rateLimitResetCredits_is_bool:{"rateLimitResetCredits":true}' \
+    'credits_is_string:{"rateLimitResetCredits":{"availableCount":1,"credits":"bad"}}' \
+    'credits_is_bool:{"rateLimitResetCredits":{"availableCount":1,"credits":true}}'
+  do
+    case_name="${bad_container_case%%:*}"
+    rc_literal="${bad_container_case#*:}"
+    E="$(new_env)"; load_entry_for "$E"; reset_stubs
+    STUB_CODEX_RESULT_LINE="$(codex_success_result_line)"
+    refresh_service codex >/dev/null
+    baseline_fetched_at_4c2="$(jq -r '.fetched_at' "$CODEX_CACHE")"
+
+    STUB_CODEX_RESULT_LINE="$(printf '{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":77,"resetsAt":3000},"secondary":{"windowDurationMins":10080,"usedPercent":88,"resetsAt":4000}},%s}}' "$(printf '%s' "$rc_literal" | sed 's/^{//; s/}$//')")"
+    refresh_service codex
+    rc=$?
+    assert_eq "B1-c④c2[$case_name] refresh_serviceは0（コンテナ型不正でも書き込みは成功）" "0" "$rc"
+    assert_true "B1-c④c2[$case_name] fetched_atが前進する（使用率本体の更新は止まらない）" \
+      "$([ "$(jq -r '.fetched_at' "$CODEX_CACHE")" != "$baseline_fetched_at_4c2" ] && echo 1 || echo 0)"
+    assert_eq "B1-c④c2[$case_name] five_hourは新しい値(77%)に更新される" "77" "$(jq -r '.five_hour.used_percent' "$CODEX_CACHE")"
+    assert_eq "B1-c④c2[$case_name] seven_dayは新しい値(88%)に更新される" "88" "$(jq -r '.seven_day.used_percent' "$CODEX_CACHE")"
+    assert_eq "B1-c④c2[$case_name] reset_credits.creditsは空配列へ正規化される" "[]" "$(jq -c '.reset_credits.credits' "$CODEX_CACHE")"
+    rm -rf "$E"
+  done
+
+  # 変異確認: サニタイザからコンテナ型検査（$rc_rawがobjectかどうか）を
+  # 取り除いた壊れコピーへ差し戻すと、同じ応答でtransform_codex_usageが
+  # 実行時エラーで失敗する（five_hour/seven_dayも巻き込む）ことを確認する
+  # （このfixtureが実際にコンテナ型検査を通っている証拠）。
+  MUT_USAGE_SOURCE_NOCONTAINERGUARD="$(mktemp)"
+  sed 's/(if (\$rc_raw|type) == "object" then \$rc_raw else null end) as \$rc/$rc_raw as $rc/' \
+    "$REPO_ROOT/scripts/lib/usage-source.sh" > "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"
+  assert_true "変異コピー生成: コンテナ型検査の行が実際に書き換わっている" \
+    "$(diff -q "$REPO_ROOT/scripts/lib/usage-source.sh" "$MUT_USAGE_SOURCE_NOCONTAINERGUARD" >/dev/null 2>&1 && echo 0 || echo 1)"
+  raw_4c2_mut='{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":77,"resetsAt":3000},"secondary":{"windowDurationMins":10080,"usedPercent":88,"resetsAt":4000}},"rateLimitResetCredits":"bad"}'
+  out_4c2_mut="$( ( . "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"; transform_codex_usage "$raw_4c2_mut" 5000 ) 2>/dev/null )"
+  assert_true "陽性fixture(B1-c④c2向け): コンテナ型検査を外した変異コピーはscalarなrateLimitResetCreditsで丸ごと失敗する（fixtureが実際にこの検査を通っている証拠）" \
+    "$([ -z "$out_4c2_mut" ] && echo 1 || echo 0)"
+  rm -f "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"
+}
+{
+  # (4d) 【検証職2巡目MAJOR-1】idが欠落したcreditは丸ごと除外されるが、
+  # 使用率本体・available_countは影響を受けない。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs
+  STUB_CODEX_RESULT_LINE='{"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":55,"resetsAt":1234567890},"secondary":{"windowDurationMins":10080,"usedPercent":22,"resetsAt":1234599999}},"rateLimitResetCredits":{"availableCount":1,"credits":[{"status":"available","grantedAt":1788539594,"expiresAt":1791131594,"title":"t"}]}}}'
+  refresh_service codex >/dev/null
+  assert_eq "B1-c④d id欠落credit: 丸ごと除外されcreditsは空配列" "[]" "$(jq -c '.reset_credits.credits' "$CODEX_CACHE")"
+  assert_eq "B1-c④d id欠落credit: available_countは影響を受けない" "1" "$(jq -r '.reset_credits.available_count' "$CODEX_CACHE")"
+
+  # 変異確認: 取得器のjqサニタイザからid型検査の項を取り除いた壊れコピーで
+  # 同じ応答をtransform_codex_usageへ通すと、id欠落creditがそのまま残って
+  # しまうことを確認する（このfixtureが実際にid型検査を通っている証拠）。
+  MUT_USAGE_SOURCE_NOID="$(mktemp)"
+  sed 's/and ((\.id|type) == "string") and (\.id != "")//' "$REPO_ROOT/scripts/lib/usage-source.sh" > "$MUT_USAGE_SOURCE_NOID"
+  assert_true "変異コピー生成: id型検査の行が実際に書き換わっている" \
+    "$(diff -q "$REPO_ROOT/scripts/lib/usage-source.sh" "$MUT_USAGE_SOURCE_NOID" >/dev/null 2>&1 && echo 0 || echo 1)"
+  raw_4d='{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":55,"resetsAt":1234567890},"secondary":{"windowDurationMins":10080,"usedPercent":22,"resetsAt":1234599999}},"rateLimitResetCredits":{"availableCount":1,"credits":[{"status":"available","grantedAt":1788539594,"expiresAt":1791131594,"title":"t"}]}}'
+  out_4d_mut="$( ( . "$MUT_USAGE_SOURCE_NOID"; transform_codex_usage "$raw_4d" 5000 ) )"
+  assert_true "陽性fixture(B1-c④d向け): id型検査を外した変異コピーはid欠落creditを残してしまう（fixtureが実際にこの検査を通っている証拠）" \
+    "$(printf '%s' "$out_4d_mut" | jq -e '.reset_credits.credits | length == 1' >/dev/null 2>&1 && echo 1 || echo 0)"
+  rm -f "$MUT_USAGE_SOURCE_NOID"
+  rm -rf "$E"
+}
+{
+  # (5) 表示ツール互換（AC-98①相当・検証職1巡目MAJOR-4対応で現物実行へ
+  # 変更）: テスト側でjqの読み方を再実装するのではなく、現物
+  # `~/work/claude-codex-usage/tmux-usage.sh`（読み取り専用・無改修）を
+  # 拡張後のキャッシュに対して実際に実行し、exit 0・ERR非表示・実値の
+  # 反映を確認する。
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs; valid_claude_token
+  STUB_CODEX_RESULT_LINE="$(codex_success_result_line)"
+  refresh_service codex >/dev/null
+  STUB_CURL_STATUS=200
+  STUB_CURL_BODY="$(claude_success_body)"
+  refresh_service claude >/dev/null
+  TMUX_USAGE_SH="$HOME_REAL/work/claude-codex-usage/tmux-usage.sh"
+  if [ ! -f "$TMUX_USAGE_SH" ]; then
+    echo "  未実施 - B1-c⑤表示ツール互換: $TMUX_USAGE_SH が無い（別repo未クローン環境のためスキップ）"
+  else
+    TMUX_XDG_CACHE="$(mktemp -d)"
+    TMUX_XDG_CONFIG="$(mktemp -d)"
+    mkdir -p "$TMUX_XDG_CACHE/claude-codex-usage"
+    cp "$CODEX_CACHE" "$TMUX_XDG_CACHE/claude-codex-usage/codex-cache.json"
+    cp "$CLAUDE_CACHE" "$TMUX_XDG_CACHE/claude-codex-usage/claude-cache.json"
+    tmux_out="$(XDG_CACHE_HOME="$TMUX_XDG_CACHE" XDG_CONFIG_HOME="$TMUX_XDG_CONFIG" HOME="$HOME_REAL" bash "$TMUX_USAGE_SH" 2>&1)"
+    tmux_rc=$?
+    assert_eq "B1-c⑤表示ツール互換: 現物tmux-usage.shの実行はexit 0" "0" "$tmux_rc"
+    assert_true "B1-c⑤表示ツール互換: ERR表示になっていない" \
+      "$(printf '%s' "$tmux_out" | grep -q "ERR" && echo 0 || echo 1)"
+    assert_true "B1-c⑤表示ツール互換: Codex側(CX)の実値が反映される" \
+      "$(printf '%s' "$tmux_out" | grep -q "CX" && echo 1 || echo 0)"
+    rm -rf "$TMUX_XDG_CACHE" "$TMUX_XDG_CONFIG"
+  fi
   rm -rf "$E"
 }
 

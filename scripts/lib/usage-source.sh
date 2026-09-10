@@ -234,6 +234,18 @@ transform_codex_usage() {
   # （上流が5h/7dの枠を入れ替えた実績あり＝2026-07-13）。既知の帯に属さない、
   # または不在の窓は null のまま（validate_usage_payload の「片方は許容」規則
   # の対象）。
+  #
+  # ⚠️ B1-c（2026-09-09）: raw は fetch_codex_once が渡す `.result`
+  # （`{rateLimits, rateLimitResetCredits}`）または（旧仕様・テスト双方の
+  # 互換のため）rateLimits 単体のどちらでも受理する（`.rateLimits? // .`）。
+  # rateLimitResetCredits（本人の言う「チケット」＝banked reset credit）は
+  # `.rateLimits` の兄弟キーとして raw 直下から読む（$r ではなく raw の
+  # トップレベル）。欠落（旧 codex-cli 応答）は「取れなかった」ことが分かる
+  # 形（available_count:null・credits:[]）で書き、キー自体を省略しない。
+  # description は転記しない（長文・変動＝指示書§2.1）。id はプレフィクス
+  # 付きの不透明な資源ID形式（`RateLimitResetCredit_<opaque>`。複数の独立
+  # ソースで確認＝Knowledge/claude-codex-usage.md 2026-09-09節）で accountId
+  # を埋め込まないため、加工せずそのまま転記する。
   local raw now
   raw="$1"
   now="$2"
@@ -245,6 +257,7 @@ transform_codex_usage() {
       else null
       end;
     (.rateLimits? // .) as $r
+    | (.rateLimitResetCredits) as $rc
     | (reduce ([$r.primary, $r.secondary] | .[]) as $w
         ({five_hour: null, seven_day: null};
           ($w | window_kind) as $kind
@@ -263,6 +276,73 @@ transform_codex_usage() {
         used_percent: ($byKind.seven_day.usedPercent // $byKind.seven_day.used_percent // null),
         resets_at_epoch: ($byKind.seven_day.resetsAt // $byKind.seven_day.resets_at_epoch // null)
       },
+      # ⚠️ 検証職2巡目MAJOR-3対応: reset_credits単独の型不正が使用率本体
+      # （five_hour/seven_day）の更新まで止めてはいけない（局所的縮退の
+      # 仕様に反する）。ここで上流の型不正をその場で「取れなかった」形
+      # （available_count:null・該当creditを除外）へ正規化し、
+      # validate_usage_payload() に渡す時点で reset_credits は常に
+      # 型契約を満たす（five_hour/seven_dayが正常な限り、reset_credits側の
+      # 汚染で書き込み全体が拒否されることは無い）。
+      # ⚠️ 検証職3巡目MAJOR-1対応: 上記の正規化は「$rcがobject」「$rc.credits
+      # が配列」という前提のアクセス（`$rc.availableCount`・`$rc.credits[]`）
+      # に依存していたため、`rateLimitResetCredits`自体や`credits`コンテナが
+      # scalar型（文字列・真偽値・配列等）だと、そのアクセス自体がjqの
+      # 実行時エラーとなり、try/catchへ到達する前にtransform_codex_usage()
+      # 全体が失敗していた（five_hour/seven_dayも巻き込んで書き込み全体が
+      # parse_errorへ倒れる＝MAJOR-3で直したはずの契約が破れていた）。
+      # コンテナ自体の型検査を最初に行い、objectでない`$rc`はnullへ、
+      # 配列でない`$rc.credits`は空配列へ倒してから中身へアクセスする。
+      # ⚠️ 検証職2巡目MAJOR-1対応: id・status・granted_at_epoch は必須
+      # （非null・正しい型）とし、いずれか欠落/型不正のcreditは丸ごと
+      # 除外する（「有効な別creditがあればnullだらけのcreditも残る」を
+      # 防ぐ）。expires_at_epoch・title は公式protocol（v2/account.rs）が
+      # nullable のため任意＝型不正なら当該フィールドだけをnullへ倒し、
+      # エントリ自体は残す（id/status/granted_at_epochが正しい限り「詳細の
+      # 一部が無い」だけの正常な縮退として扱う）。
+      reset_credits: (
+        (.rateLimitResetCredits) as $rc_raw
+        | (if ($rc_raw|type) == "object" then $rc_raw else null end) as $rc
+        | (if $rc == null then null else $rc.availableCount end) as $ac_raw
+        | (
+            if ($ac_raw|type) == "number" and ($ac_raw == ($ac_raw|floor)) and ($ac_raw >= 0)
+            then $ac_raw
+            else null
+            end
+          ) as $safe_ac
+        | (
+            if $rc == null then []
+            elif ($rc.credits|type) == "array" then $rc.credits
+            else []
+            end
+          ) as $credits_raw
+        | {
+            available_count: $safe_ac,
+            reset_scope: ["five_hour", "seven_day"],
+            credits: [
+              $credits_raw[]
+              | try (
+                  if (type == "object")
+                     and ((.id|type) == "string") and (.id != "")
+                     and ((.status|type) == "string") and (.status != "")
+                     and ((.grantedAt|type) == "number") and (.grantedAt == (.grantedAt|floor))
+                  then {
+                    id: .id,
+                    status: .status,
+                    granted_at_epoch: .grantedAt,
+                    expires_at_epoch: (
+                      if ((.expiresAt|type) == "number") and (.expiresAt == (.expiresAt|floor))
+                      then .expiresAt
+                      else null
+                      end
+                    ),
+                    title: (if (.title|type) == "string" then .title else null end)
+                  }
+                  else empty
+                  end
+                ) catch empty
+            ]
+          }
+      ),
       last_error: null
     }' 2>/dev/null
 }
@@ -278,6 +358,14 @@ transform_codex_usage() {
 # coding-doc-style §4「壊れたデータを見分ける条件は書き手側の契約で書く」）。
 # ⚠️ Codex の片窓欠落は現物のまま受け入れる（§8 Q-6＝読み手側の改訂は
 # B2 の担当。取得器の振る舞いはここでは変えない）。
+
+# ⚠️ B1-c（2026-09-09・検証職1巡目MAJOR-1対応）＝ `reset_credits` の型契約
+# （FR-104由来の窓検査と同じ「書き手側の契約」原則）。取得器がここで拒否
+# しないと、上流APIが返した型不正な値（枚数が文字列・idが数値・epochが
+# 文字列等）がそのままキャッシュへ書かれてしまう。`reset_scope` は取得器が
+# 常に固定値で書く定数（上流データではない）なので、固定値との完全一致を
+# 検査する（`["secret_scope"]`のような値が紛れ込んでいたら壊れた応答として
+# 拒否する）。
 validate_usage_payload() {
   local service payload
   service="$1"
@@ -285,8 +373,29 @@ validate_usage_payload() {
   printf '%s' "$payload" | jq -e --arg service "$service" '
     def valid_number: type == "number" and . >= 0 and . <= 100;
     def valid_epoch: type == "number" and (. == floor);
+    def valid_count: . == null or (type == "number" and (. == floor) and . >= 0);
+    def valid_str_or_null: . == null or type == "string";
     def window_ok:
       (.used_percent == null) or ((.used_percent | valid_number) and (.resets_at_epoch | valid_epoch));
+    # ⚠️ 検証職2巡目MAJOR-1対応: id・status・granted_at_epochは必須
+    # （非null・非空文字列／有効epoch）。expires_at_epoch・titleは公式
+    # protocol（v2/account.rs）がnullableのため任意（null許容）。
+    # transform_codex_usage()が既にこの契約を満たす形へ正規化するため、
+    # ここは主に「hand-craftedな不正payloadを直接この関数へ渡すテスト」
+    # のための多重防御。
+    def credit_ok:
+      type == "object"
+      and (.id | type == "string") and (.id != "")
+      and (.status | type == "string") and (.status != "")
+      and (.granted_at_epoch | valid_epoch)
+      and (.title | valid_str_or_null)
+      and (.expires_at_epoch == null or (.expires_at_epoch | valid_epoch));
+    def reset_credits_ok:
+      type == "object"
+      and (.available_count | valid_count)
+      and (.reset_scope == ["five_hour", "seven_day"])
+      and (.credits | type == "array")
+      and all(.credits[]; credit_ok);
     .schema_version == 1
     and .service == $service
     and (.fetched_at | valid_epoch)
@@ -295,6 +404,7 @@ validate_usage_payload() {
         (.five_hour | window_ok)
         and (.seven_day | window_ok)
         and ((.five_hour.used_percent != null) or (.seven_day.used_percent != null))
+        and (.reset_credits | reset_credits_ok)
       else
         (.five_hour.used_percent != null) and (.five_hour | window_ok)
         and (.seven_day.used_percent != null) and (.seven_day | window_ok)
@@ -427,7 +537,15 @@ fetch_codex_once() {
   start_seconds=$SECONDS
   result=""
   while [ $(( SECONDS - start_seconds )) -le "$codex_deadline" ]; do
-    result="$(jq -c 'select(.id == 2) | .result.rateLimits // empty' "$server_out" 2>/dev/null | tail -n 1)"
+    # B1-c（2026-09-09・検証職1巡目MAJOR-3対応）: チケット
+    # （`.result.rateLimitResetCredits`）は rateLimits の兄弟キーなので
+    # 変換器へは `.result` 全体を渡すが、**完了条件（このループを抜ける
+    # 条件）は従来どおり `.result.rateLimits` の存在**に保つ（`.result` の
+    # 有無だけを条件にすると、rateLimits を欠いた応答＝壊れた/不完全な
+    # 応答を「結果が来た」と誤認して待機を打ち切ってしまい、本来
+    # `codex_timeout`（124）になるべき状況が `parse_error`（11）に化ける
+    # という分類の後退を検証職が実測で発見した）。
+    result="$(jq -c 'select(.id == 2 and (.result.rateLimits != null)) | .result // empty' "$server_out" 2>/dev/null | tail -n 1)"
     [ -n "$result" ] && break
     kill -0 "$_codex_server_pid" 2>/dev/null || break
     sleep 0.1

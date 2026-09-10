@@ -5,7 +5,14 @@
 # 2026-09-08 worker-driven一次レビュー（Codex・2巡）BLOCKING/MAJOR/MINOR
 # 対応で拡充。
 #
-# fixture総数=15（陽性15件・陰性0件。FX-13/FX-14は検証職1巡目MINOR-5/6対応で追加）:
+# fixture一覧（固定の総数は持たない＝検証職3巡目MINOR-2対応。数え方
+# （区分単位／`$WORK/fx*`ディレクトリ単位等）によって合計値が割れやすく、
+# 過去2巡で数字だけがドリフトして実体と食い違う指摘を繰り返し受けたため、
+# 総数の明記はやめて下記の列挙そのものを正とする。再集計したい場合は
+# `grep -o '\$WORK/fx[0-9a-z]*' tests/test-usage-snapshot.sh | sort -u | wc -l`
+# でユニークなfixtureディレクトリ数を機械的に数え直せる。FX-13/FX-14は
+# 検証職1巡目MINOR-5/6対応・FX-15〈3ディレクトリa-c・4観点a-d〉/FX-16
+# 〈8ディレクトリ=観点a-h〉はB1-c「Codexチケット」対応で追加）:
 #   FX-1  正常（claude=model_weekly付き・codex=通常。両方usage_state=ok）
 #   FX-2  stale（claudeのfetched_atが--stale-secondsより古い。codexは新鮮。
 #         599/600/601秒の境界も検査）
@@ -35,6 +42,15 @@
 #         （検証職1巡目MINOR-5: 必須窓のリセット時刻欠落をokにしない）
 #   FX-14 last_error.type=curl → 許可リストで要約される
 #         （検証職1巡目MINOR-6: 取得器のD-3拡張と許可リストの不一致を解消）
+#   FX-15 Codexの「チケット」(reset credit)の提示（4区分a-d）: 0枚／
+#         reset_credits欠落(拡張前キャッシュ)は取得不可／複数枚・status混在
+#         時の日付選択／Claude行への非影響（B1-c）
+#   FX-16 チケットの正常形の網羅＋型不正の除外（8区分a-h・検証職2巡目対応）:
+#         負値available_countはmissing(a)／count-only(credits空)は正常形で
+#         state=ok(b)／expires_at_epoch=0(c)・失効済み(d)・型不正(e)は当該
+#         フィールドだけNoneへ倒しエントリは残す／reset_scope汚染値は無視
+#         して固定値(f)／id欠落creditは丸ごと除外(g)／全項目nullのcreditは
+#         有効な別creditがあっても残らない(h)
 # 横断検査（全fixtureに適用）: exit 0（AC-91①）・pools配列が常に3件
 #   （AC-91②）・claude-subscription/codex-subscription/unlimitedの順序固定。
 # 構造検査（FX-1限定）: AC-95①（--jsonの最上位・pool・window各階層の
@@ -43,14 +59,16 @@
 # AST検査（許可リスト方式の簡易版・coding-doc-style §4「陽性fixtureを必ず
 #   置く」対応）: usage_snapshot.py全体で減算(Sub)・不等号比較(Lt/LtE/Gt/GtE)
 #   演算が発生する(演算種別,関数名)ごとの**個数**を、既知の安全な関数
-#   （_extract_window・build_subscription_pool・_scrub_error＝いずれも
-#   単一poolの内部値だけを扱う）の期待個数と完全一致させる（2巡目MAJOR
-#   対応で集合比較から個数比較へ強化＝既に許可された関数内へ演算を追加
-#   しても検出できる）。陽性fixtureは①新しい関数を追加する場合②既に
-#   許可された関数の中へ演算を追加する場合の両方を置く。⚠️ それでも
-#   関数名単位・個数ベースの粗い検査であり、AC-95③が本来求める行単位・
-#   データフロー追跡までの完全なAST到達可能性検査（v19要件書全体の
-#   スコープ）ではない（実装記録「残件」に明記）。
+#   （_extract_window・build_subscription_pool・_scrub_error・_valid_epoch・
+#   _build_codex_reset_credits・_format_ticket_text＝いずれも単一pool・
+#   単一チケットの内部値だけを扱う。後半3つはB1-c「Codexチケット」対応で
+#   追加）の期待個数と完全一致させる（2巡目MAJOR対応で集合比較から個数
+#   比較へ強化＝既に許可された関数内へ演算を追加しても検出できる）。
+#   陽性fixtureは①新しい関数を追加する場合②既に許可された関数の中へ
+#   演算を追加する場合の両方を置く。⚠️ それでも関数名単位・個数ベースの
+#   粗い検査であり、AC-95③が本来求める行単位・データフロー追跡までの
+#   完全なAST到達可能性検査（v19要件書全体のスコープ）ではない
+#   （実装記録「残件」に明記）。
 #
 # 正本: ~/work/takumi009-ai-env-private/docs/core-split/
 #   使用率提示B1a-実装-2026-09-08.md
@@ -126,7 +144,7 @@ print(','.join(p['pool_ref'] for p in d['pools']))
 # ============================================================
 FX1="$WORK/fx1"; mkdir -p "$FX1"
 write_json "$FX1/claude-cache.json" "{'schema_version':1,'service':'claude','fetched_at':$NOW-180,'updated_at':$NOW-180,'five_hour':{'used_percent':25.0,'resets_at_epoch':$NOW+1000},'seven_day':{'used_percent':46.0,'resets_at_epoch':$NOW+90000},'model_weekly':{'used_percent':34,'resets_at_epoch':$NOW+90000,'label':'Fable'},'last_error':None}"
-write_json "$FX1/codex-cache.json" "{'schema_version':1,'service':'codex','fetched_at':$NOW-60,'updated_at':$NOW-60,'five_hour':{'used_percent':66,'resets_at_epoch':$NOW+2000},'seven_day':{'used_percent':10,'resets_at_epoch':$NOW+90000},'last_error':None}"
+write_json "$FX1/codex-cache.json" "{'schema_version':1,'service':'codex','fetched_at':$NOW-60,'updated_at':$NOW-60,'five_hour':{'used_percent':66,'resets_at_epoch':$NOW+2000},'seven_day':{'used_percent':10,'resets_at_epoch':$NOW+90000},'reset_credits':{'available_count':1,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'RateLimitResetCredit_abc123','status':'available','granted_at_epoch':1788539594,'expires_at_epoch':1791131594,'title':'Full reset (Weekly + 5 hr)'}]},'last_error':None}"
 
 echo "=== FX-1: 正常（陽性） ==="
 {
@@ -144,12 +162,46 @@ echo "=== FX-1: 正常（陽性） ==="
 import json,sys
 d = json.load(sys.stdin)
 top_ok = frozenset(d.keys()) == frozenset({'generated_at','pools'})
-pool_ok = all(frozenset(p.keys()) == frozenset({'pool_ref','kind','usage_state','fetched_at','age_seconds','windows','error'}) for p in d['pools'])
+pool_ok = all(frozenset(p.keys()) == frozenset({'pool_ref','kind','usage_state','fetched_at','age_seconds','windows','error','reset_credits'}) for p in d['pools'])
 win_ok = all(frozenset(w.keys()) == frozenset({'window','used_percent','remaining_percent','resets_at_epoch','label'}) for p in d['pools'] for w in p['windows'])
 unlimited_windows_empty = [p for p in d['pools'] if p['pool_ref']=='unlimited'][0]['windows'] == []
-print('OK' if (top_ok and pool_ok and win_ok and unlimited_windows_empty) else 'NG')
+unlimited_rc_null = [p for p in d['pools'] if p['pool_ref']=='unlimited'][0]['reset_credits'] is None
+claude_rc = [p for p in d['pools'] if p['pool_ref']=='claude-subscription'][0]['reset_credits']
+claude_rc_ok = frozenset(claude_rc.keys()) == frozenset({'available_count','reset_scope','credits','note'})
+codex_rc = [p for p in d['pools'] if p['pool_ref']=='codex-subscription'][0]['reset_credits']
+codex_rc_ok = frozenset(codex_rc.keys()) == frozenset({'available_count','reset_scope','credits','state'})
+credit_ok = all(frozenset(c.keys()) == frozenset({'id','status','granted_at_epoch','expires_at_epoch','title'}) for c in codex_rc['credits'])
+print('OK' if (top_ok and pool_ok and win_ok and unlimited_windows_empty and unlimited_rc_null and claude_rc_ok and codex_rc_ok and credit_ok) else 'NG')
 ")"
-  assert_eq "FX-1 AC-95①: 最上位・pool・windowのフィールド集合が実装記録の固定表と完全一致（unlimited windows=[]含む）" "OK" "$fieldcheck1"
+  assert_eq "FX-1 AC-95①: 最上位・pool・window・reset_credits・credit各階層のフィールド集合が実装記録の固定表と完全一致（B1-c反映）" "OK" "$fieldcheck1"
+
+  codex_rc_state1="$(printf '%s' "$json1" | python3 -c "import json,sys; d=json.load(sys.stdin); print([p['reset_credits']['state'] for p in d['pools'] if p['pool_ref']=='codex-subscription'][0])")"
+  assert_eq "FX-1 codex-subscription.reset_credits.state=ok" "ok" "$codex_rc_state1"
+
+  # ⚠️ 検証職1巡目MINOR-1対応（記述訂正）: 当初「日本語を含む同一コマンド
+  # 内でbrace展開が誤発火する」と説明していたが、検証職の再現実験（日本語
+  # 無しでも失敗しないとの報告）を受けて再調査した結果、日本語の有無は
+  # 無関係で、GNU Bashの仕様（ダブルクォート内の`{`・`,`はbrace展開の対象
+  # 外）と矛盾しない現象であることが分かった。**最小再現**（本機の
+  # `/bin/bash 3.2.57(1)-release`で確定的に再現・日本語無し）:
+  #   f() { echo "argc=$#"; }
+  #   f "x" "$(python3 -c "print({'a': 1, 'b': 2})")"   # → argc=3 に化ける
+  #   v="$(python3 -c "print({'a': 1, 'b': 2})")"; f "x" "$v"  # → argc=2（安全）
+  # 「コマンド置換の結果をコマンドの引数として直接使う」場合にだけ再現し、
+  # 「変数へ一度代入してから参照する」場合は再現しない（`frozenset({...})`
+  # のように直前に`(`が付く形も、直接引数に使えば同様に再現する＝当初の
+  # 「直前の(で回避できる」という説明も誤りだった）。原因（bashのどの内部
+  # 処理がこれを起こすか）は未特定のまま。対処は再現しない側の書き方
+  # （dict(...)呼び出し構文で波括弧そのものを避け、かつ計算とassert_eqを
+  # 別文＝変数へ一度代入してから渡す。fieldcheck1と同じパターンに揃える）
+  # の両方を採用し、原因不明のまま安全側に倒した。
+  claude_rc_check1="$(printf '%s' "$json1" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+rc = [p for p in d['pools'] if p['pool_ref']=='claude-subscription'][0]['reset_credits']
+print('OK' if rc == dict(available_count=None, reset_scope=['five_hour'], credits=[], note='not_machine_readable') else 'NG:'+json.dumps(rc))
+")"
+  assert_eq "FX-1 claude-subscription.reset_credits は範囲差の固定値（5h窓のみ・not_machine_readable）" "OK" "$claude_rc_check1"
 
   no_bias1="$(printf '%s' "$json1" | python3 -c "
 import json,sys
@@ -198,6 +250,12 @@ print(ws[0]['label'] if ws else 'MISSING')
   assert_contains "FX-1 同日リセット(5h)は「リセット HH:MM」形式" "$claude_line1" "5h 残75%（リセット 18:22）"
   assert_contains "FX-1 翌日以降のリセット(7d)は「MM-DD HH:MM」のみ（語を前置しない）" "$claude_line1" "7d 残54%（09-09 19:06）"
   assert_not_contains "FX-1 7d側には「リセット」の語を前置しない" "$claude_line1" "7d 残54%（リセット"
+
+  # B1-c（2026-09-09）: Codex行の末尾にチケット句が付き、Claude行には
+  # 何も足されない（本人指示2026-09-09＝範囲差の説明を提示に載せない）。
+  codex_line1="$(printf '%s\n' "$human1" | grep '^Codex枠:')"
+  assert_contains "FX-1 Codex行の末尾にチケット句（1枚・失効日MM/DD）が付く" "$codex_line1" "／チケット 1枚（10/05）"
+  assert_not_contains "FX-1 Claude行にはチケット句を足さない" "$claude_line1" "チケット"
 }
 
 # ============================================================
@@ -597,20 +655,33 @@ for node in ast.walk(tree):
                 counts[("CMP", enclosing_func(node.lineno))] += 1
                 break
 
-# 許可リスト（実測: 2026-09-08時点のusage_snapshot.pyを手で確認して転記。
+# 許可リスト（実測: 2026-09-09時点のusage_snapshot.pyを手で確認して転記。
 # 個数まで固定する＝関数の中で件数が増えても検出できるようにする）。
-# いずれも単一poolの内部値だけを扱う（枠間比較ではない）:
+# いずれも単一poolの内部値・単一チケットの内部値だけを扱う（枠間比較・
+# チケット間比較ではない）:
 #   _extract_window: SUB1(remaining=100-used)・CMP2(remaining<0／
 #     len(label)>40)
 #   build_subscription_pool: SUB1(age=now-fetched_at)・
 #     CMP2(age<0／age>stale_seconds)
 #   _scrub_error: CMP1(100<=status<=999のHTTPステータス形式検査)
+#   _valid_epoch: CMP1(value>0＝1件のチケットが持つ1つのepoch値の健全性
+#     検査。検証職1巡目MAJOR-2対応)
+#   _build_codex_reset_credits: CMP1(available_count<0＝1件のpoolが持つ
+#     枚数の非負性検査。検証職1巡目MAJOR-2対応。⚠️検証職2巡目MAJOR-2対応で
+#     「available_count>0なら未失効の裏付けが必須」というCMPをもう1つ
+#     持っていたが、正常な「枚数だけ取得(count-only)」を誤ってmissingへ
+#     倒す過剰なfail-closed化だったため撤回＝CMP2→CMP1)
+#   _format_ticket_text: CMP1(expires_at_epoch>now＝表示候補の未失効判定。
+#     単一チケット内の判定で枠間比較ではない。検証職1巡目MAJOR-2対応)
 ALLOWED = {
     ("SUB", "_extract_window"): 1,
     ("CMP", "_extract_window"): 2,
     ("SUB", "build_subscription_pool"): 1,
     ("CMP", "build_subscription_pool"): 2,
     ("CMP", "_scrub_error"): 1,
+    ("CMP", "_valid_epoch"): 1,
+    ("CMP", "_build_codex_reset_credits"): 1,
+    ("CMP", "_format_ticket_text"): 1,
 }
 
 found = {k: v for k, v in counts.items() if v > 0}
@@ -629,10 +700,240 @@ else:
     print("OK")
 PYEOF
 
+# ============================================================
+# FX-15: 「チケット」（Codex rate-limit reset credit）の人可読・JSON表現
+# （B1-c・2026-09-09。指示書§2.3＝JSONのキー集合更新・人可読行の固定文言・
+# 0枚／取得不可／期限のJST表示・行数3のまま）
+# ============================================================
+echo "=== FX-15: チケット（reset credit）の提示（陽性・B1-c） ==="
+{
+  # (a) 0枚: available_countが0（credits空でもcreditsに0件あってもよい）。
+  FX15A="$WORK/fx15a"; mkdir -p "$FX15A"
+  write_json "$FX15A/claude-cache.json" "{'fetched_at':$NOW-60,'five_hour':{'used_percent':1,'resets_at_epoch':$NOW+1000},'seven_day':{'used_percent':1,'resets_at_epoch':$NOW+90000},'last_error':None}"
+  write_json "$FX15A/codex-cache.json" "{'fetched_at':$NOW-30,'five_hour':{'used_percent':1,'resets_at_epoch':$NOW+2000},'seven_day':{'used_percent':1,'resets_at_epoch':$NOW+90000},'reset_credits':{'available_count':0,'reset_scope':['five_hour','seven_day'],'credits':[]},'last_error':None}"
+  human15a="$(run_human "$FX15A")"
+  n_lines15a="$(printf '%s\n' "$human15a" | wc -l | tr -d ' ')"
+  assert_eq "FX-15a 人可読は3行のまま" "3" "$n_lines15a"
+  assert_contains "FX-15a Codex行は「チケット 0枚」（枚数のみ・期限なし）" "$human15a" "Codex枠: 5h 残99%（リセット 18:39）／7d 残99%（09-09 19:06）・取得 0分前／チケット 0枚"
+  json15a="$(run_json "$FX15A")"
+  assert_eq "FX-15a JSON: reset_credits.state=ok（0枚を機械可読には'取れなかった'扱いにしない＝available_count=0はそれ自体正常値・検証職1巡目MINOR-2で説明文の誤記を訂正）" \
+    "ok" "$(printf '%s' "$json15a" | python3 -c "import json,sys; d=json.load(sys.stdin); print([p['reset_credits']['state'] for p in d['pools'] if p['pool_ref']=='codex-subscription'][0])")"
+  assert_eq "FX-15a JSON: reset_credits.available_count=0" "0" \
+    "$(printf '%s' "$json15a" | python3 -c "import json,sys; d=json.load(sys.stdin); print([p['reset_credits']['available_count'] for p in d['pools'] if p['pool_ref']=='codex-subscription'][0])")"
+
+  # (b) 取得不可: codex-cache.jsonにreset_creditsキー自体が無い（拡張前の
+  # 実キャッシュ相当）。usage_state（five_hour/seven_day）はokのまま。
+  FX15B="$WORK/fx15b"; mkdir -p "$FX15B"
+  write_json "$FX15B/claude-cache.json" "{'fetched_at':$NOW-60,'five_hour':{'used_percent':1,'resets_at_epoch':$NOW+1000},'seven_day':{'used_percent':1,'resets_at_epoch':$NOW+90000},'last_error':None}"
+  write_json "$FX15B/codex-cache.json" "{'fetched_at':$NOW-30,'five_hour':{'used_percent':1,'resets_at_epoch':$NOW+2000},'seven_day':{'used_percent':1,'resets_at_epoch':$NOW+90000},'last_error':None}"
+  human15b="$(run_human "$FX15B")"
+  assert_contains "FX-15b 拡張前キャッシュ(reset_credits欠落)は「チケット 取得不可」" "$human15b" "／チケット 取得不可"
+  json15b="$(run_json "$FX15B")"
+  assert_eq "FX-15b JSON: codex-subscription usage_stateはok（窓データは無傷）" "ok" "$(pool_field "$json15b" codex-subscription usage_state)"
+  assert_eq "FX-15b JSON: reset_credits.state=missing" "missing" \
+    "$(printf '%s' "$json15b" | python3 -c "import json,sys; d=json.load(sys.stdin); print([p['reset_credits']['state'] for p in d['pools'] if p['pool_ref']=='codex-subscription'][0])")"
+  assert_eq "FX-15b JSON: reset_credits.available_count=null" "None" \
+    "$(printf '%s' "$json15b" | python3 -c "import json,sys; d=json.load(sys.stdin); print([p['reset_credits']['available_count'] for p in d['pools'] if p['pool_ref']=='codex-subscription'][0])")"
+
+  # (c) 複数枚・statusが混在: available 2枚（失効日が異なる）＋expired 1枚。
+  # 表示は「available」だけを対象に最も早く失効する日付を添える。
+  FX15C="$WORK/fx15c"; mkdir -p "$FX15C"
+  write_json "$FX15C/claude-cache.json" "{'fetched_at':$NOW-60,'five_hour':{'used_percent':1,'resets_at_epoch':$NOW+1000},'seven_day':{'used_percent':1,'resets_at_epoch':$NOW+90000},'last_error':None}"
+  write_json "$FX15C/codex-cache.json" "{'fetched_at':$NOW-30,'five_hour':{'used_percent':1,'resets_at_epoch':$NOW+2000},'seven_day':{'used_percent':1,'resets_at_epoch':$NOW+90000},'reset_credits':{'available_count':2,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'RateLimitResetCredit_later','status':'available','granted_at_epoch':$NOW,'expires_at_epoch':1793550794,'title':'t'},{'id':'RateLimitResetCredit_sooner','status':'available','granted_at_epoch':$NOW,'expires_at_epoch':1791131594,'title':'t'},{'id':'RateLimitResetCredit_old','status':'expired','granted_at_epoch':$NOW,'expires_at_epoch':1700000000,'title':'t'}]},'last_error':None}"
+  human15c="$(run_human "$FX15C")"
+  assert_contains "FX-15c 複数枚: 枚数はavailable_countをそのまま表示（2枚）" "$human15c" "チケット 2枚"
+  assert_contains "FX-15c 複数枚: 添える日付はavailableのうち最も早い失効日(10/05)。expiredの古い日付や、availableでも遅い方(11/02)は使わない" "$human15c" "チケット 2枚（10/05）"
+  assert_not_contains "FX-15c availableでも遅い方の失効日(11/02)が誤って使われていない" "$human15c" "11/02"
+  assert_not_contains "FX-15c expiredの失効日(11/15)が誤って使われていない" "$human15c" "11/15"
+
+  # (d) FX-1のClaude行と同じfixtureで、Claude行にはreset_creditsの内容が
+  # 一切影響しないことを別のcodex reset_credits値で再確認する（回帰防止）。
+  claude_line15c="$(printf '%s\n' "$human15c" | grep '^Claude枠:')"
+  assert_not_contains "FX-15d Claude行はcodexのreset_credits値に一切影響されない" "$claude_line15c" "チケット"
+}
+
+# ============================================================
+# FX-16: 「チケット」の正常形の網羅＋壊れた値の除外（検証職2巡目MAJOR-1/
+# MAJOR-2対応で全面書き換え）。
+# ⚠️ 1巡目対応は「available_count>0なら未失効の裏付けが必須」という
+# fail-closed化を入れたが、これは公式app-server応答の正常形である
+# 「count-only」応答（`credits:null`・detail行が無い。availableCountが
+# 権威値）を誤ってmissingへ倒す過剰な拒否だった（検証職2巡目MAJOR-2）。
+# 本節は「正常形の網羅表（count-only／詳細あり／0枚／欠落／型不正）→
+# 各形の期待JSON・人可読」を先に固定してから実装した結果を検証する
+# （検証職2巡目の指摘どおりの順）。
+# 各fixtureは five_hour/seven_day は完全に正常（usage_state=ok）に保ち、
+# reset_credits側の1点だけを変えることで、結果の原因が意図した検査
+# （`_build_codex_reset_credits`・`_extract_credit_entry`）以外にないことを
+# 保証する（coding-doc-style §4「陽性fixtureが実際に拒否経路を通っていない」
+# 再発防止）。
+# ============================================================
+echo "=== FX-16: チケットの正常形・型不正の除外（B1-c・検証職2巡目対応） ==="
+{
+  fx16_base_pools() { # $1=codex-cache.jsonのreset_credits部分（jqのdictリテラル文字列そのまま）
+    local dir="$1" rc_literal="$2"
+    write_json "$dir/claude-cache.json" "{'fetched_at':$NOW-60,'five_hour':{'used_percent':1,'resets_at_epoch':$NOW+1000},'seven_day':{'used_percent':1,'resets_at_epoch':$NOW+90000},'last_error':None}"
+    write_json "$dir/codex-cache.json" "{'fetched_at':$NOW-30,'five_hour':{'used_percent':1,'resets_at_epoch':$NOW+2000},'seven_day':{'used_percent':1,'resets_at_epoch':$NOW+90000},'reset_credits':$rc_literal,'last_error':None}"
+  }
+  rc_state_of() { # $1=cache_dir
+    printf '%s' "$(run_json "$1")" | python3 -c "import json,sys; d=json.load(sys.stdin); print([p['reset_credits']['state'] for p in d['pools'] if p['pool_ref']=='codex-subscription'][0])"
+  }
+  rc_credits_of() { # $1=cache_dir
+    printf '%s' "$(run_json "$1")" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps([p['reset_credits']['credits'] for p in d['pools'] if p['pool_ref']=='codex-subscription'][0]))"
+  }
+
+  # (a) 型不正な枚数（負値）→ 権威値そのものが壊れているのでmissing／
+  # 取得不可へ倒す（検証職1巡目MAJOR-2で改善済み・2巡目でもここは維持）。
+  FX16A="$WORK/fx16a"; mkdir -p "$FX16A"
+  fx16_base_pools "$FX16A" "{'available_count':-1,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'x','status':'available','granted_at_epoch':$NOW,'expires_at_epoch':1791131594,'title':'t'}]}"
+  assert_eq "FX-16a available_count=-1はstate=missingへ倒す" "missing" "$(rc_state_of "$FX16A")"
+  human16a="$(run_human "$FX16A")"
+  assert_contains "FX-16a 人可読は「チケット -1枚」ではなく「取得不可」" "$human16a" "／チケット 取得不可"
+  assert_not_contains "FX-16a 人可読に負の枚数を出さない" "$human16a" "-1枚"
+
+  # (b) 【正常形＝count-only】available_count=1・creditsは空（公式
+  # app-server応答の`credits:null`相当。詳細行を返さないのは異常ではない
+  # ＝検証職2巡目MAJOR-2で反転）。available_countが権威値として
+  # そのまま信頼され、state=ok・期限なしの「チケット 1枚」になる。
+  FX16B="$WORK/fx16b"; mkdir -p "$FX16B"
+  fx16_base_pools "$FX16B" "{'available_count':1,'reset_scope':['five_hour','seven_day'],'credits':[]}"
+  assert_eq "FX-16b【正常形】count-onlyはstate=ok（missingへ倒さない）" "ok" "$(rc_state_of "$FX16B")"
+  human16b="$(run_human "$FX16B")"
+  assert_contains "FX-16b【正常形】人可読は期限なしの「チケット 1枚」" "$human16b" "／チケット 1枚"
+  assert_not_contains "FX-16b【正常形】「取得不可」にはならない" "$human16b" "取得不可"
+  assert_not_contains "FX-16b【正常形】無い期限を捏造して括弧を出さない" "$human16b" "チケット 1枚（"
+
+  # (c) expires_at_epoch=0（1970年付近の壊れた値）→ その値だけをNoneへ
+  # 倒す（id/status/granted_at_epochが正しい限りエントリ自体は残す）。
+  # 枚数はcount-only同様に信頼され、日付だけ出さない。
+  FX16C="$WORK/fx16c"; mkdir -p "$FX16C"
+  fx16_base_pools "$FX16C" "{'available_count':1,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'x','status':'available','granted_at_epoch':$NOW,'expires_at_epoch':0,'title':'t'}]}"
+  assert_eq "FX-16c expires_at_epoch=0でもstate=ok（枚数は信頼する）" "ok" "$(rc_state_of "$FX16C")"
+  assert_eq "FX-16c expires_at_epoch=0はJSON上nullへ正規化される（エントリは残す）" "null" \
+    "$(printf '%s' "$(rc_credits_of "$FX16C")" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)[0]["expires_at_epoch"]))')"
+  human16c="$(run_human "$FX16C")"
+  assert_contains "FX-16c 人可読は期限なしの「チケット 1枚」" "$human16c" "／チケット 1枚"
+  assert_not_contains "FX-16c 1970年付近の日付(01/01)を出さない" "$human16c" "01/01"
+
+  # (d) status=availableだが失効日が過去（既に失効済みなのにavailableを
+  # 名乗る矛盾）→ エントリはそのまま残す（型としては正しいepochのため。
+  # 過去かどうかの判定は表示側`_format_ticket_text`の責務）が、表示の
+  # 日付候補からは除外される。
+  FX16D="$WORK/fx16d"; mkdir -p "$FX16D"
+  fx16_base_pools "$FX16D" "{'available_count':1,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'x','status':'available','granted_at_epoch':1700000000,'expires_at_epoch':1700000001,'title':'t'}]}"
+  assert_eq "FX-16d 失効済みでもstate=ok（枚数は信頼する）" "ok" "$(rc_state_of "$FX16D")"
+  human16d="$(run_human "$FX16D")"
+  assert_contains "FX-16d 人可読は期限なしの「チケット 1枚」（過去の失効日を出さない）" "$human16d" "／チケット 1枚"
+  assert_not_contains "FX-16d 失効済みの過去日付(11/15)を出さない" "$human16d" "11/15"
+
+  # (e) expires_at_epochが文字列（型不正）→ (c)と同じくその値だけNoneへ
+  # 倒し、エントリ自体（id/status/granted_at_epoch）は残す。
+  FX16E="$WORK/fx16e"; mkdir -p "$FX16E"
+  fx16_base_pools "$FX16E" "{'available_count':1,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'x','status':'available','granted_at_epoch':$NOW,'expires_at_epoch':'1791131594','title':'t'}]}"
+  credits16e="$(rc_credits_of "$FX16E")"
+  assert_eq "FX-16e 型不正なexpires_at_epochだけNoneへ正規化し、id等は残す" "OK" \
+    "$(printf '%s' "$credits16e" | python3 -c "
+import json,sys
+c = json.load(sys.stdin)
+print('OK' if len(c) == 1 and c[0]['id'] == 'x' and c[0]['expires_at_epoch'] is None else 'NG:'+json.dumps(c))
+")"
+  human16e="$(run_human "$FX16E")"
+  assert_contains "FX-16e 人可読は期限なしの「チケット 1枚」" "$human16e" "／チケット 1枚"
+
+  # (f) reset_scopeがキャッシュ内で汚染されていても出力は常に固定値。
+  FX16F="$WORK/fx16f"; mkdir -p "$FX16F"
+  fx16_base_pools "$FX16F" "{'available_count':1,'reset_scope':['secret_scope'],'credits':[{'id':'x','status':'available','granted_at_epoch':$NOW,'expires_at_epoch':1791131594,'title':'t'}]}"
+  json16f="$(run_json "$FX16F")"
+  scope16f="$(printf '%s' "$json16f" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps([p['reset_credits']['reset_scope'] for p in d['pools'] if p['pool_ref']=='codex-subscription'][0]))")"
+  assert_eq "FX-16f reset_scopeは汚染値を無視し常に固定値" '["five_hour", "seven_day"]' "$scope16f"
+  assert_not_contains "FX-16f 汚染値がJSONに漏れていない" "$json16f" "secret_scope"
+
+  # (g) 【検証職2巡目MAJOR-1】id欠落のcredit（他フィールドは正常）は丸ごと
+  # 除外する。available_countは影響を受けず信頼される（枚数と詳細行は
+  # 独立に検証する設計＝指摘3と同じ考え方をcredit単位にも適用）。
+  FX16G="$WORK/fx16g"; mkdir -p "$FX16G"
+  fx16_base_pools "$FX16G" "{'available_count':1,'reset_scope':['five_hour','seven_day'],'credits':[{'status':'available','granted_at_epoch':$NOW,'expires_at_epoch':1791131594,'title':'t'}]}"
+  assert_eq "FX-16g idが無いcreditは丸ごと除外される" "[]" "$(rc_credits_of "$FX16G")"
+  assert_eq "FX-16g それでもavailable_countは信頼されstate=ok" "ok" "$(rc_state_of "$FX16G")"
+  human16g="$(run_human "$FX16G")"
+  assert_contains "FX-16g 人可読は期限なしの「チケット 1枚」" "$human16g" "／チケット 1枚"
+
+  # (h) 【検証職2巡目MAJOR-1の直接repro】有効な1件＋全項目nullの1件が
+  # 混在＝有効な方の存在によって、全項目nullの方まで`state:ok`の
+  # credits[]へ残ってしまわないことを確認する。
+  FX16H="$WORK/fx16h"; mkdir -p "$FX16H"
+  fx16_base_pools "$FX16H" "{'available_count':2,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'RateLimitResetCredit_ok','status':'available','granted_at_epoch':$NOW,'expires_at_epoch':1791131594,'title':'t'},{'id':None,'status':None,'granted_at_epoch':None,'expires_at_epoch':None,'title':None}]}"
+  credits16h="$(rc_credits_of "$FX16H")"
+  assert_eq "FX-16h 全項目nullのcreditは有効な別creditがあっても残らない（1件だけになる）" "OK" \
+    "$(printf '%s' "$credits16h" | python3 -c "
+import json,sys
+c = json.load(sys.stdin)
+print('OK' if len(c) == 1 and c[0]['id'] == 'RateLimitResetCredit_ok' else 'NG:'+json.dumps(c))
+")"
+  human16h="$(run_human "$FX16H")"
+  assert_contains "FX-16h 有効な方の失効日(10/05)は表示される" "$human16h" "チケット 2枚（10/05）"
+
+  # --- 変異確認（coding-doc-style §4「陽性fixtureが実際に拒否経路／正常
+  # 経路を通っているか」の直接検証） ---
+  # (i) FX-16aが検出する不具合（負のavailable_countをそのまま信用する）を
+  # 意図的に再現した壊れコピーへ差し戻すと、同じfixtureが確実に失敗側へ
+  # 転じることを確認する。
+  MUT_LIB_NOGUARD="$WORK/usage_snapshot_mutant_noguard.py"
+  python3 -c "
+src = open('$LIB', encoding='utf-8').read()
+marker = '    if available_count is not None and available_count < 0:\n        available_count = None\n'
+assert marker in src, '対象コードが見つからない（実装が変更された場合はこのテストも更新すること）'
+mutated = src.replace(marker, '')
+open('$MUT_LIB_NOGUARD', 'w', encoding='utf-8').write(mutated)
+"
+  human16a_mut="$(AIENV_USAGE_CACHE_DIR="$FX16A" python3 "$MUT_LIB_NOGUARD" --now "$NOW")"
+  assert_contains "陽性fixture(FX-16a向け): 負値ガードを外した変異コピーは-1枚をそのまま出す（fixtureが実際にこの分岐を通っている証拠）" "$human16a_mut" "-1枚"
+
+  # (j) 検証職2巡目MAJOR-2で撤回した「available_count>0なら未失効の
+  # 裏付けが必須」というfail-closed化を意図的に復元した壊れコピーへ戻すと、
+  # FX-16b（count-only・正常形）が「取得不可」へ誤って転じることを確認する
+  # （撤回が正しく効いていることの直接証拠）。
+  MUT_LIB_OVERCLOSED="$WORK/usage_snapshot_mutant_overclosed.py"
+  python3 -c "
+src = open('$LIB', encoding='utf-8').read()
+marker = '''    return {
+        \"available_count\": available_count,
+        \"reset_scope\": CODEX_RESET_SCOPE,
+        \"credits\": credits,
+        \"state\": \"ok\",
+    }'''
+assert marker in src, '対象コードが見つからない（実装が変更された場合はこのテストも更新すること）'
+injected = '''    if available_count > 0 and not any(
+        c[\"status\"] == \"available\" and c[\"expires_at_epoch\"] is not None and c[\"expires_at_epoch\"] > 0
+        for c in credits
+    ):
+        return missing
+''' + marker
+mutated = src.replace(marker, injected, 1)
+open('$MUT_LIB_OVERCLOSED', 'w', encoding='utf-8').write(mutated)
+"
+  human16b_mut="$(AIENV_USAGE_CACHE_DIR="$FX16B" python3 "$MUT_LIB_OVERCLOSED" --now "$NOW")"
+  assert_contains "陽性fixture(FX-16b向け): 撤回済みのfail-closed化を復元した変異コピーはcount-onlyを誤って取得不可にする（撤回が実際に効いている証拠）" "$human16b_mut" "取得不可"
+
+  # (k) FX-16gが検出する不具合（idが無いcreditを受理する）を意図的に
+  # 再現した壊れコピーへ差し戻すと、当該creditがcredits[]へ残ることを
+  # 確認する。
+  MUT_LIB_NOIDCHECK="$WORK/usage_snapshot_mutant_noidcheck.py"
+  python3 -c "
+src = open('$LIB', encoding='utf-8').read()
+marker = '    if not (isinstance(id_, str) and id_ != \"\"):\n        return None\n'
+assert marker in src, '対象コードが見つからない（実装が変更された場合はこのテストも更新すること）'
+mutated = src.replace(marker, '')
+open('$MUT_LIB_NOIDCHECK', 'w', encoding='utf-8').write(mutated)
+"
+  credits16g_mut="$(AIENV_USAGE_CACHE_DIR="$FX16G" python3 "$MUT_LIB_NOIDCHECK" --json --now "$NOW" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len([p for p in d['pools'] if p['pool_ref']=='codex-subscription'][0]['reset_credits']['credits']))")"
+  assert_eq "陽性fixture(FX-16g向け): id必須チェックを外した変異コピーはidの無いcreditも残してしまう（fixtureが実際にこの検査を通っている証拠）" "1" "$credits16g_mut"
+}
+
 echo "=== AST到達可能性検査（AC-95③・許可リスト方式の簡易版） ==="
 {
   ast_result="$(python3 "$AST_HELPER" "$LIB")"
-  assert_eq "実装コードの減算・不等号比較は既知の安全な関数・個数と完全一致する(_extract_window/build_subscription_pool/_scrub_error)" "OK" "$ast_result"
+  assert_eq "実装コードの減算・不等号比較は既知の安全な関数・個数と完全一致する(_extract_window/build_subscription_pool/_scrub_error/_valid_epoch/_build_codex_reset_credits/_format_ticket_text)" "OK" "$ast_result"
 
   # 陽性fixture①: 「枠間の残量を引き算する」ような新しい関数を一時コピー
   # へ追加すると、この検査が確実に検出することを確認する。
