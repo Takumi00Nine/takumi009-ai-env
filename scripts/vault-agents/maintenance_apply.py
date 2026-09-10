@@ -128,6 +128,10 @@ DEFAULT_CLAUDE_TIMEOUT = 300.0
 # （--tools ""でツールが無くエージェント的暴走はしないため大きめでも安全）。
 DEFAULT_MAX_TURNS = int(os.environ.get("MAINTENANCE_APPLY_MAX_TURNS", "8"))
 
+# claude_exit_error（rc!=0）の理由文に含めるstderr+stdoutの合計文字数上限
+# （従来のstderr単体の上限2000を踏襲）。
+CLAUDE_EXIT_DETAIL_MAX_LEN = 2000
+
 VALID_ACTIONS = ("promote", "merge", "skip")
 
 # validate_structured_output()のadditionalProperties:false相当チェック用
@@ -290,6 +294,25 @@ def build_output_schema(frag_ids, merge_ids):
     }
 
 
+def _budgeted_truncate_pair(text_a, text_b, total_len):
+    """2つの文字列を合計total_len以内に収めつつ、両方が非空なら両方を必ず
+    残す（超過分は長い方だけから優先的に削り、余った枠は他方へ回す）。
+
+    単純に`(text_a + text_b)[:total_len]`のような一括切り詰めをすると、
+    片方（特に先に置く方）が長いだけでもう片方が丸ごと消えてしまう
+    （Codexレビュー指摘Major対応・2026-09-10）。
+    """
+    len_a, len_b = len(text_a), len(text_b)
+    if len_a + len_b <= total_len:
+        return text_a, text_b
+    half = total_len // 2
+    if len_a <= half:
+        return text_a, text_b[: total_len - len_a]
+    if len_b <= half:
+        return text_a[: total_len - len_b], text_b
+    return text_a[:half], text_b[: total_len - half]
+
+
 def invoke_claude(claude_bin, model, system_prompt_path, schema, material, timeout, max_turns=DEFAULT_MAX_TURNS):
     """ヘッドレスClaudeを1回起動する（`--max-turns`は既定でDEFAULT_MAX_TURNS）。
 
@@ -323,7 +346,42 @@ def invoke_claude(claude_bin, model, system_prompt_path, schema, material, timeo
         return None, "spawn_error", str(e)
 
     if proc.returncode != 0:
-        return None, "claude_exit_error", f"claudeが異常終了しました(rc={proc.returncode}): {proc.stderr[:2000]}"
+        # rc!=0のとき、claude CLIはエラー本文をstderrではなくstdoutのJSON
+        # （`{"is_error": true, "result": "..."}`形状）に書くことがある
+        # （実例＝2026-09-10 週次メンテ障害＝未ログイン時の"Not logged in ·
+        # Please run /login"はstdout側のみに出てstderrは空だった）。stderrだけを
+        # 理由文に使うと、この種の失敗は理由が空文字のまま記録され原因が
+        # 追えなくなる。stdoutをJSONとして解釈でき`result`が非空文字列なら
+        # それを優先し、解釈できない・resultが無い/文字列でない場合は生stdoutを
+        # 使う（型を明示判定してフォールバックする＝Codexレビュー指摘Major
+        # 対応・2026-09-10。非文字列resultをstr()で暗黙変換すると、リストや
+        # 数値など想定外の応答形状の内容がそのまま理由文へ混入してしまう）。
+        stdout_detail = ""
+        if proc.stdout:
+            try:
+                stdout_json = json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                stdout_json = None
+            result_field = stdout_json.get("result") if isinstance(stdout_json, dict) else None
+            if isinstance(result_field, str) and result_field:
+                stdout_detail = result_field
+            else:
+                stdout_detail = proc.stdout
+
+        stderr_text = proc.stderr or ""
+        # 合計上限(CLAUDE_EXIT_DETAIL_MAX_LEN)の中でstderr・stdoutそれぞれに
+        # 枠を割り当て、両方が非空なら両方のラベルと本文を必ず残す（Codex
+        # レビュー指摘Major対応・2026-09-10。従来はcombined文字列全体を末尾
+        # から一括切り詰めていたため、stderrが長いとstdout側の診断本文が
+        # 丸ごと消えていた＝独立追試: stderr 2100文字・stdoutにJSON本文、で
+        # reasonにstdoutが一切残らないことを確認済み）。
+        stderr_budget, stdout_budget = _budgeted_truncate_pair(
+            stderr_text, stdout_detail, CLAUDE_EXIT_DETAIL_MAX_LEN
+        )
+        combined = f"stderr={stderr_budget}"
+        if stdout_detail:
+            combined += f" stdout={stdout_budget}"
+        return None, "claude_exit_error", f"claudeが異常終了しました(rc={proc.returncode}): {combined}"
 
     try:
         response = json.loads(proc.stdout)

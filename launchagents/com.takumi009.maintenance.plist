@@ -12,6 +12,16 @@
     <dict>
         <key>HOME</key>
         <string>__AIENV_HOME__</string>
+        <!-- ヘッドレスClaude CLI（maintenance_apply.py経由の`claude`コマンド）は
+             ログイン状態の判定にUSER環境変数を参照する。ログインシェルのUSERは
+             launchd経由の起動では確実には継承されないため、明示的にここで
+             設定する（HOMEだけを渡すとclaudeが「Not logged in · Please run
+             /login」で異常終了することを実機で再現・確認済み＝2026-09-10週次
+             メンテ障害。LOGNAMEだけを渡す代替も実機で不成功を確認済み）。
+             値はHOMEと同じ__AIENV_HOME__方式のプレースホルダで、
+             scripts/install-maintenance.shが実ユーザー名へ置換する。 -->
+        <key>USER</key>
+        <string>__AIENV_USER__</string>
         <key>PATH</key>
         <!-- maintenance.sh は git・python3 に加えヘッドレスClaude CLI
              (maintenance_apply.py 経由の `claude` コマンド) を呼ぶ。claude の

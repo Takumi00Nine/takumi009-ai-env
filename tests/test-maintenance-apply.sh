@@ -1187,6 +1187,50 @@ print(structured, kind)
   assert_eq "非list型permission_denialsはtool_use_detectedとして異常扱い" "None tool_use_detected" "$out"
 }
 
+echo "=== 37b. invoke_claude: rc!=0でstderrが長くてもstdoutのJSON(result)本文が理由文から消えない（Codexレビュー指摘Major対応・2026-09-10） ==="
+{
+  mkdir -p "$WORK_ROOT/t37b"
+  FAKE37B="$WORK_ROOT/t37b/fake.sh"
+  cat > "$FAKE37B" <<'EOF'
+#!/usr/bin/env bash
+cat > /dev/null
+python3 -c "print('E' * 2100, file=__import__('sys').stderr, end='')"
+echo '{"is_error": true, "result": "IMPORTANT_STDOUT_BODY"}'
+exit 1
+EOF
+  chmod +x "$FAKE37B"
+  out="$(run_py "
+structured, kind, detail = ma.invoke_claude('$FAKE37B', 'sonnet', '/dev/null', {'type': 'object'}, {}, 10)
+print(structured, kind)
+print('IMPORTANT_STDOUT_BODY' in detail, len(detail) <= ma.CLAUDE_EXIT_DETAIL_MAX_LEN + 100)
+")"
+  assert_contains "kind=claude_exit_error" "$out" "None claude_exit_error"
+  assert_contains "長いstderrと共存してもstdoutのresult本文がreasonに残る・全体の長さも既存上限相当のまま" "$out" "True True"
+}
+
+echo "=== 37c. invoke_claude: stdoutのJSON resultが文字列でない場合は暗黙str()変換せず生stdoutへフォールバックする（Codexレビュー指摘Major対応・2026-09-10） ==="
+{
+  mkdir -p "$WORK_ROOT/t37c"
+  RESP37C="$WORK_ROOT/t37c/response.json"
+  cat > "$RESP37C" <<'EOF'
+{"is_error": true, "result": {"nested": "NOT_A_STRING_RESULT"}}
+EOF
+  FAKE37C="$WORK_ROOT/t37c/fake.sh"
+  printf '#!/usr/bin/env bash\ncat > /dev/null\ncat "%s"\nexit 1\n' "$RESP37C" > "$FAKE37C"
+  chmod +x "$FAKE37C"
+  out="$(run_py "
+structured, kind, detail = ma.invoke_claude('$FAKE37C', 'sonnet', '/dev/null', {'type': 'object'}, {}, 10)
+print(kind)
+# 生stdout(JSON)がそのまま含まれていれば「非文字列resultをstr()変換せず
+# 生stdoutへフォールバックした」ことの証拠になる（JSON特有のダブルクォート
+# 表記'\"is_error\"'は、旧実装のstr(dict)変換＝Pythonのrepr表記（シングル
+# クォート）では再現できないため、両実装を判別できる）。
+print('\"is_error\": true' in detail)
+")"
+  assert_contains "kind=claude_exit_error" "$out" "claude_exit_error"
+  assert_contains "非文字列resultは生stdout(JSON丸ごと)へフォールバックする(str()の暗黙変換ではない)" "$out" "True"
+}
+
 echo "=== 38. MERGE: merge_checks実行中(=書込前の時間のかかる区間)にnote_bが変わったら統合ノート作成後もstub化しない ==="
 {
   V="$WORK_ROOT/t38/vault"
@@ -1630,7 +1674,7 @@ print('SUMMARY', s['n_promoted'], s['has_anomaly'])
 
 # fake claude バイナリを生成する。
 # 制御用環境変数:
-#   FAKE_CLAUDE_MODE      = respond(既定) / sleep / nonzero / garbage
+#   FAKE_CLAUDE_MODE      = respond(既定) / sleep / nonzero / nonzero_stdout_json / garbage
 #   FAKE_CLAUDE_RESPONSE_FILE = respond時に標準出力へcatする応答JSONファイル
 #   FAKE_CLAUDE_SLEEP_SECONDS = sleepモードの秒数
 #   FAKE_CLAUDE_SAVE_ARGV / FAKE_CLAUDE_SAVE_STDIN = 呼び出し引数/標準入力の保存先（検証用）
@@ -1642,6 +1686,9 @@ if [[ -n "${FAKE_CLAUDE_SAVE_ARGV:-}" ]]; then printf '%s\n' "$@" > "$FAKE_CLAUD
 case "${FAKE_CLAUDE_MODE:-respond}" in
   sleep) sleep "${FAKE_CLAUDE_SLEEP_SECONDS:-5}"; echo '{}' ;;
   nonzero) echo "boom" >&2; exit 1 ;;
+  # 2026-09-10週次メンテ障害の再現用: rc=1・stderrは空・エラー本文は
+  # stdoutのJSON(result)側だけに出る（実機で確認した未ログイン時の応答形状）。
+  nonzero_stdout_json) echo '{"is_error":true,"result":"Not logged in · Please run /login"}'; exit 1 ;;
   garbage) echo 'not-json{{' ;;
   respond) cat "$FAKE_CLAUDE_RESPONSE_FILE" ;;
 esac
@@ -1953,6 +2000,44 @@ pathlib.Path('$FJSON').write_text(json.dumps(payload))
   STATUS="$(cat "$W/apply-status.json")"
   assert_contains "anomaly=true" "$STATUS" '"anomaly": true'
   assert_contains "reasonにspawn_error" "$STATUS" "spawn_error"
+  assert_eq "Knowledgeには何も書き込まれない" "0" "$(find "$V/Knowledge" -name '*.md' | wc -l | tr -d ' ')"
+}
+
+echo "=== 55b. main(): claudeがrc!=0でstderrは空・エラー本文がstdoutのJSON(result)にしか無い場合もreasonに含まれる（2026-09-10週次メンテ障害対応） ==="
+{
+  V="$WORK_ROOT/t29b/vault"; mkdir -p "$V/Knowledge" "$V/Fragments/2026-07"
+  cat > "$V/Fragments/2026-07/2026-07-15.md" <<'EOF'
+---
+date: 2026-07-15
+tags: [fragments, daily]
+project: external-brain
+---
+# Fragments 2026-07-15
+- **断片H2**：claude_exit_errorのstdout本文取り込みテスト用。
+EOF
+  FJSON="$WORK_ROOT/t29b/fragments.json"
+  python3 -c "
+import sys, hashlib, json, pathlib
+sys.path.insert(0, '$LIB_DIR')
+import fragments_log
+vault = pathlib.Path('$V')
+text = (vault/'Fragments/2026-07/2026-07-15.md').read_text()
+entries = fragments_log.extract_entries(text)
+fid = fragments_log.stable_fragment_id('Fragments/2026-07/2026-07-15.md', entries[0][0])
+payload = {'fragments': [{'id': fid, 'source_relpath': 'Fragments/2026-07/2026-07-15.md',
+           'source_sha256': hashlib.sha256(text.encode()).hexdigest(), 'date': '2026-07-15',
+           'heading_or_bullet': entries[0][0], 'body': entries[0][2]}], 'truncated': []}
+pathlib.Path('$FJSON').write_text(json.dumps(payload))
+"
+  W="$WORK_ROOT/t29b/work"
+  FAKE_CLAUDE_MODE=nonzero_stdout_json \
+    run_apply_cli "$V" "$W" --fragments-json "$FJSON" > "$WORK_ROOT/t29b/stdout.txt" 2>&1
+  RC=$?
+  assert_eq "終了コードは0（異常時もstatus-file経由で通知）" "0" "$RC"
+  STATUS="$(cat "$W/apply-status.json")"
+  assert_contains "anomaly=true" "$STATUS" '"anomaly": true'
+  assert_contains "reasonにclaude_exit_error" "$STATUS" "claude_exit_error"
+  assert_contains "reasonにstdoutのJSON(result)由来の本文(Not logged in)が含まれる" "$STATUS" "Not logged in"
   assert_eq "Knowledgeには何も書き込まれない" "0" "$(find "$V/Knowledge" -name '*.md' | wc -l | tr -d ' ')"
 }
 

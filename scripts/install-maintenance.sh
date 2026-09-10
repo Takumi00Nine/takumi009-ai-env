@@ -82,6 +82,33 @@ MIGRATION_FAILED=0
 [ -e "$SRC" ] || fail "リポジトリのファイルが見つかりません（checkout破損の可能性）: $SRC"
 [ -f "$DIR/scripts/maintenance.sh" ] || fail "リポジトリに scripts/maintenance.sh が見つかりません（checkout破損の可能性）"
 
+# __AIENV_USER__: plistのEnvironmentVariables.USER用（ヘッドレスClaude CLIの
+# ログイン状態判定に必要＝2026-09-10週次メンテ障害対応）。ログインシェルの
+# USERはlaunchdのEnvironmentVariablesへ確実には継承されないため、明示的に
+# 設定する（実機再現・2026-09-10）。dry-run表示にも使うため、DRY_RUN分岐より
+# 前で一度だけ取得し、`id -un`が非0終了・空出力のどちらでも即座にFAILする
+# （Codexレビュー指摘Major対応・2026-09-10。取得に失敗したまま気づかずUSERが
+# 空文字列で生成された場合、plist自体は妥当なXMLのまま「USERが空文字」という
+# 検出しづらい壊れ方をする）。
+if ! aienv_user="$(id -un)" || [ -z "$aienv_user" ]; then
+  fail "id -un に失敗、または空でした（USER環境変数を解決できません）。手動確認: id -un"
+fi
+
+# plistの<string>値へ埋め込む前にXMLの特殊文字（&・<・>）をエンティティへ
+# 変換し、続けてsedの置換文字列側で特殊な意味を持つ文字（&・\）と区切り文字
+# として使っている#をエスケープする（Codexレビュー指摘Minor対応・2026-09-10。
+# XMLエスケープを欠かすと、USER値に&等を含む環境で不正なplistが生成される）。
+xml_escape_for_plist() {
+  local s="$1"
+  s="${s//&/&amp;}"
+  s="${s//</&lt;}"
+  s="${s//>/&gt;}"
+  printf '%s' "$s"
+}
+sed_replacement_escape() {
+  printf '%s' "$1" | sed -e 's/[&\]/\\&/g' -e 's/#/\\#/g'
+}
+
 # 指定ラベルがlaunchd上に「ロード済み」かどうかをplistファイルの有無とは独立に
 # 確認する（scripts/install-backup.shの old_label_status() と同じ設計・同じ
 # 3巡分のCodexレビュー指摘対応をそのまま踏襲）。旧ラベル4本の移行判定だけでなく、
@@ -159,7 +186,7 @@ migrate_retired_label() {
 }
 
 if [ "$DRY_RUN" = "1" ]; then
-  log "[dry-run] would generate: $DEST <- $SRC （__AIENV_HOME__ を $HOME へ置換）"
+  log "[dry-run] would generate: $DEST <- $SRC （__AIENV_HOME__ を $HOME へ、__AIENV_USER__ を ${aienv_user} へ置換）"
   log "[dry-run] would run: launchctl bootout $DOMAIN/$LABEL （既存があれば一旦アンロード。無ければ無視）"
   log "[dry-run] would run: launchctl bootstrap $DOMAIN $DEST"
   log "[dry-run] would run: launchctl enable $DOMAIN/$LABEL"
@@ -179,10 +206,15 @@ fi
 #     確認してから旧ラベル4本の移行に進む。新設置に失敗した場合は旧ラベルの
 #     移行を一切行わずexit 1する＝週次経路が完全に消失する事態を避ける） ---
 mkdir -p "$(dirname "$DEST")"
-escaped_home=$(printf '%s' "$HOME" | sed -e 's/[&\]/\\&/g' -e 's/#/\\#/g')
+# HOME・USERともにXMLエスケープしてからsedの置換用エスケープを行う（`id -un`は
+# HOME環境変数ではなく実行ユーザーのpasswdエントリを見るため、テストでHOMEだけを
+# 差し替えたfixture実行でも本物のユーザー名が展開される点に注意。テスト側はUSER
+# 自体を上書きして期待値と揃える）。
+escaped_home=$(sed_replacement_escape "$(xml_escape_for_plist "$HOME")")
+escaped_user=$(sed_replacement_escape "$(xml_escape_for_plist "$aienv_user")")
 tmp="$(mktemp "$(dirname "$DEST")/.$(basename "$DEST").aienv-tmp.XXXXXX")"
 trap 'rm -f "$tmp"' RETURN
-sed "s#__AIENV_HOME__#${escaped_home}#g" "$SRC" > "$tmp"
+sed -e "s#__AIENV_HOME__#${escaped_home}#g" -e "s#__AIENV_USER__#${escaped_user}#g" "$SRC" > "$tmp"
 
 # 内容に変更が無く、かつ新ラベルが既にlaunchd上にロード済みなら bootout→bootstrap
 # による再読み込み自体をスキップする（Codexレビュー指摘Major対応・2026-07-16）。
@@ -231,7 +263,7 @@ if [ "$SKIP_RELOAD" = "1" ]; then
   fi
 else
   mv "$tmp" "$DEST"
-  log "generated: $DEST <- $SRC （__AIENV_HOME__ を $HOME へ置換）"
+  log "generated: $DEST <- $SRC （__AIENV_HOME__ を $HOME へ、__AIENV_USER__ を ${aienv_user} へ置換）"
 
   if [ "$SKIP_LAUNCHCTL" = "1" ]; then
     log "SKIP_LAUNCHCTL=1 のため launchctl 操作はskipします（テスト用）"

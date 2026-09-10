@@ -103,8 +103,22 @@ echo "=== 2. 通常実行: 新ラベル(com.takumi009.maintenance)のplistが生
   assert_true "新ラベルのplistが生成される" "$([[ -f "$DEST" ]] && echo 1 || echo 0)"
   assert_true "__AIENV_HOME__が実HOME(FAKE_HOME)へ置換されている" \
     "$(grep -q "$FAKE_HOME/work/takumi009-ai-env/scripts/maintenance.sh" "$DEST" && echo 1 || echo 0)"
-  assert_true "プレースホルダが残っていない" \
+  assert_true "プレースホルダ(__AIENV_HOME__)が残っていない" \
     "$(grep -q '__AIENV_HOME__' "$DEST" && echo 0 || echo 1)"
+  # 2026-09-10週次メンテ障害対応: EnvironmentVariables.USERにヘッドレスClaude
+  # CLIのログイン判定に必要な実ユーザー名(`id -un`)が含まれることを検証する
+  # （HOME環境変数をFAKE_HOMEへ差し替えてもUSERはOSの実ユーザー名になる点に
+  # 注意。install-maintenance.shはHOME環境変数ではなく`id -un`でユーザー名を
+  # 取得するため、テスト実行環境の実ユーザー名と一致するはず）。
+  REAL_USER="$(id -un)"
+  assert_true "プレースホルダ(__AIENV_USER__)が残っていない" \
+    "$(grep -q '__AIENV_USER__' "$DEST" && echo 0 || echo 1)"
+  assert_true "EnvironmentVariables.USERキーが存在する" \
+    "$(grep -q '<key>USER</key>' "$DEST" && echo 1 || echo 0)"
+  assert_true "USERキーの値が実ユーザー名(id -un)へ置換されている" \
+    "$(grep -A1 '<key>USER</key>' "$DEST" | grep -q "<string>${REAL_USER}</string>" && echo 1 || echo 0)"
+  assert_true "既存のHOMEキーは引き続き存在する(USER追加で壊れていない)" \
+    "$(grep -A1 '<key>HOME</key>' "$DEST" | grep -q "<string>${FAKE_HOME}</string>" && echo 1 || echo 0)"
   assert_true "Labelキーが新ラベルになっている" \
     "$(grep -A1 '<key>Label</key>' "$DEST" | grep -q "<string>${NEW_LABEL}</string>" && echo 1 || echo 0)"
   if command -v plutil >/dev/null 2>&1; then
@@ -112,6 +126,108 @@ echo "=== 2. 通常実行: 新ラベル(com.takumi009.maintenance)のplistが生
   fi
 
   rm -rf "$FAKE_HOME"
+}
+
+echo "=== 2b. USER解決失敗: id -unが非0終了ならUSERが空のplistを生成せず即座にFAILする（Codexレビュー指摘Major対応・2026-09-10） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  FAKE_ID_BIN="$(mktemp -d)"
+  cat > "$FAKE_ID_BIN/id" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "-un" ]]; then
+  exit 1
+fi
+exec /usr/bin/id "$@"
+EOF
+  chmod +x "$FAKE_ID_BIN/id"
+
+  # dry-runでも通常実行でも、DRY_RUN分岐より前でid -unを検証しFAILすることを確認する。
+  rc=0
+  ERRLOG="$FAKE_HOME/dryrun-stderr.log"
+  PATH="$FAKE_ID_BIN:$PATH" HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run >/dev/null 2>"$ERRLOG" || rc=$?
+  assert_eq "dry-runでもid -un失敗はexit 1" "1" "$rc"
+  assert_true "id -un失敗のFAILメッセージが出る(dry-run)" \
+    "$(grep -q 'id -un に失敗' "$ERRLOG" && echo 1 || echo 0)"
+  assert_true "dry-runではUSER解決失敗時もplistは作られない(元々dry-runなので当然だが明示確認)" \
+    "$([[ ! -e "$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist" ]] && echo 1 || echo 0)"
+
+  rc=0
+  : > "$FAKE_LAUNCHCTL_LOG"
+  PATH="$FAKE_ID_BIN:$FAKE_BIN:$PATH" SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>"$ERRLOG" || rc=$?
+  assert_eq "通常実行でもid -un失敗はexit 1" "1" "$rc"
+  assert_true "id -un失敗のFAILメッセージが出る(通常実行)" \
+    "$(grep -q 'id -un に失敗' "$ERRLOG" && echo 1 || echo 0)"
+  assert_true "USER解決に失敗した場合はplistを一切生成しない(空USERで生成されるより安全)" \
+    "$([[ ! -e "$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist" ]] && echo 1 || echo 0)"
+  assert_launchctl_never_called "USER解決失敗時は偽launchctlも一度も呼ばれない"
+
+  rm -rf "$FAKE_HOME" "$FAKE_ID_BIN"
+}
+
+echo "=== 2c. USER解決失敗: id -unが空文字を返した場合も即座にFAILする(空USERでのplist生成を防ぐ) ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  FAKE_ID_BIN="$(mktemp -d)"
+  cat > "$FAKE_ID_BIN/id" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "-un" ]]; then
+  echo ""
+  exit 0
+fi
+exec /usr/bin/id "$@"
+EOF
+  chmod +x "$FAKE_ID_BIN/id"
+
+  rc=0
+  ERRLOG="$FAKE_HOME/stderr.log"
+  : > "$FAKE_LAUNCHCTL_LOG"
+  PATH="$FAKE_ID_BIN:$FAKE_BIN:$PATH" SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>"$ERRLOG" || rc=$?
+  assert_eq "id -unの空出力はexit 1" "1" "$rc"
+  assert_true "id -un失敗のFAILメッセージが出る" \
+    "$(grep -q 'id -un に失敗' "$ERRLOG" && echo 1 || echo 0)"
+  assert_true "空USERのplistは生成されない" \
+    "$([[ ! -e "$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist" ]] && echo 1 || echo 0)"
+  assert_launchctl_never_called "USER空文字時は偽launchctlも一度も呼ばれない"
+
+  rm -rf "$FAKE_HOME" "$FAKE_ID_BIN"
+}
+
+echo "=== 2d. USER値のXMLエスケープ: '&'・'#'・'\\' を含むユーザー名でも妥当なplistが生成され、値が元どおり復元できる（Codexレビュー指摘Minor対応・2026-09-10） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  FAKE_ID_BIN="$(mktemp -d)"
+  # 元のユーザー名（sedの区切り文字#・置換特殊文字&と\・XML特殊文字&を含む）。
+  RAW_USER='u#amp&slash\'
+  cat > "$FAKE_ID_BIN/id" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "-un" ]]; then
+  printf '%s' '${RAW_USER}'
+  exit 0
+fi
+exec /usr/bin/id "\$@"
+EOF
+  chmod +x "$FAKE_ID_BIN/id"
+
+  rc=0
+  PATH="$FAKE_ID_BIN:$FAKE_BIN:$PATH" SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>"$FAKE_HOME/stderr.log" || rc=$?
+  assert_eq "特殊文字入りユーザー名でも生成自体は成功する" "0" "$rc"
+
+  DEST="$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist"
+  assert_true "plistが生成される" "$([[ -f "$DEST" ]] && echo 1 || echo 0)"
+  if command -v plutil >/dev/null 2>&1; then
+    assert_true "特殊文字を含むUSER値でもplutil -lint OKな妥当なXML/plistになる" \
+      "$(plutil -lint "$DEST" >/dev/null 2>&1 && echo 1 || echo 0)"
+  fi
+  decoded="$(python3 -c "
+import plistlib
+with open('$DEST', 'rb') as f:
+    data = plistlib.load(f)
+print(data['EnvironmentVariables']['USER'])
+")"
+  assert_eq "デコードしたUSER値が元のid -un出力と完全一致する(XMLエスケープの往復が正しい)" \
+    "$RAW_USER" "$decoded"
+
+  rm -rf "$FAKE_HOME" "$FAKE_ID_BIN"
 }
 
 echo "=== 3. 移行: 旧ラベル4本のplistが残っていれば全て削除される ==="
