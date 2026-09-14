@@ -1,9 +1,10 @@
 ---
 date: 2026-07-05
-updated: 2026-09-09
+updated: 2026-09-14
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
+  - "[[Decisions/2026-09-10-leader-free-model-choice]]"
   - "[[Preferences/coding-delegation]]"
   - "[[Decisions/2026-07-05-worker-stage-roles]]"
   - "[[Decisions/2026-07-05-delegation-gate-v2]]"
@@ -30,13 +31,13 @@ aliases:
 
 # ワーカー工程ロール運用（7ロール・agents定義＋本ノートSSOT）
 
-ワーカー/チームメイトへの委任は**工程ロール定義**（`~/.claude/agents/*.md`）を名指しで使う。定義本文＝ロールの行動規範（機械的にシステムプロンプトへ付加・tools/model も適用）、本ノート＝リーダー側の運用ルール。
+ワーカー/チームメイトへの委任は**工程ロール定義**（`~/.claude/agents/*.md`）を名指しで使う。定義本文＝ロールの行動規範（機械的にシステムプロンプトへ付加し、toolsを適用）、本ノート＝リーダー側の運用ルール。モデルはspawn時に指定する。
 
 > **2026-08-07 改定（in-process 恒久化＝[[Decisions/2026-08-07-teammate-in-process-permanent]]）**: チームメイトはペインを持たない（エージェントパネル内で動作）。本ノートの「ペイン実査」（`cmux read-screen`・`list-panes`・ペイン消滅確認）は **`TaskOutput`／エージェントパネル（↑↓選択・Enter でトランスクリプト）での実査に読み替える**。名前付き起動・命名規則（パネル・通知・Feed での判別に引き続き有効）・終了の後始末（停止条件④の実査・終了要求レース注意）は従来通り。ペイン運用に戻した場合（`cct --teammate-mode auto`）のみ原文の手順を使う。
 
-## 7ロール一覧（既定 model: sonnet・**上流3ロール＝claude-opus-5**）
+## 7ロール一覧（職種と職務）
 
-モデル割り当て（2026-07-25 本人決定＝[[Decisions/2026-07-25-opus5-upstream-roles]]）: **requirements-analyst / system-designer / adoption-critic ＝ Opus 5**（判断の質が下流全体に効く上流工程・実行回数少）、他4ロール＝Sonnet 5 のまま。命名規則に従い上流3ロールは `opus-` プレフィックス（例: `opus-system-designer`）。これらは職種定義の既定値であり、実際の配役の正本は配役表（[[Preferences/core-workflow]] §1・[[Preferences/coding-delegation]]）。
+ワーカーモデルは配役表の候補からリーダーがspawnごとに選ぶ。上流工程向けの判断目安は [[Preferences/coding-delegation]] と [[Preferences/model-catalog]] を参照する。命名は実際に選んだ配役に合わせる。
 | ロール名 | 工程 | 要旨 |
 |---|---|---|
 | `requirements-analyst` | 要件定義 | 検証可能な受入条件・スコープ外・OSS先行調査（「作らない」提案含む）。**要件定義の成果物は「要件定義書（確定事項のみ）」と「検討経緯（論点・代替案比較・レビュー録）」の2ファイル構成を既定とする**（正本＝[[Preferences/coding-doc-style]] §3・[[Decisions/2026-08-30-doc-body-archive-split]]） |
@@ -63,7 +64,7 @@ aliases:
 
 **全職種に共通**＝①Vault の AI 向け6フォルダへは `vault-scribe` 以外書かない ②**`cwd` に `$HOME` 全体を渡すときは職種を問わず `read-only`**（広い `cwd` と `workspace-write` を組み合わせない）。
 
-補助ロール（7工程外）: **`vault-scribe`**（Sonnet 5・執筆代行）＝リーダーが確定した内容の Vault 書き込み専任。内容の新規判断はしない・Codex 一次レビュー対象外（リーダーが diff 実査）。命名＝`sonnet-vault-scribe`。**常駐可**（セッション中は残置してよい＝その旨本人に明示・セッション終了時に停止）。運用の詳細＝[[Preferences/vault-operation]]・[[Decisions/2026-08-10-vault-scribe]]。
+補助ロール（7工程外）: **`vault-scribe`**（執筆代行）＝リーダーが確定した内容の Vault 書き込み専任。内容の新規判断はしない・Codex 一次レビュー対象外（リーダーが diff 実査）。命名＝`<配役>-vault-scribe`（実際の選択に合わせる）。**常駐可**（セッション中は残置してよい＝その旨本人に明示・セッション終了時に停止）。運用の詳細＝[[Preferences/vault-operation]]・[[Decisions/2026-08-10-vault-scribe]]。
 
 ## 職種定義を新設・改訂するときの掟（2026-09-01 本人指示）
 **共通部と固有部の分離（2026-09-06 本人決定）**: 全職種に共通の型（着手前の Read・事実の扱い・成果物の2ファイル構成とシンプルさ・Vault の扱い・安全則・一次レビュー・報告形式・指示の優先）は [[Preferences/core-worker]] に1本で持ち、職種定義（`agents/*.md`）には「absolute-rules と core-worker を Read する」の2行と、その職種固有の手順・出力形式だけを書く。共通部を職種定義へ複製しない。職種定義には日付・決定ノート参照・理由を書かず（ルールだけ）、なぜ・いつは Decisions 側に置く。
@@ -83,7 +84,7 @@ aliases:
 6. ツール境界: Web調査だけで足りるタスクは**「Bash/gh 不使用・WebFetch で読む」を明示**（ワーカーの許可リスト外コマンドは承認プロンプトがユーザーへ飛び、作業も止まるため）
 
 呼び方: チームメイト＝「Spawn a teammate using the implementer agent type…」／サブエージェント＝Agent ツールの subagent_type。
-7. **配役の指定＝正本は配役表**（コア＝[[Preferences/core-workflow]] §1 spawn 条文・[[Decisions/2026-09-01-role-cast-table-unfreeze]]）。配役表の `model` は**定義名の候補**であり、リーダーが spawn のたびにその中から1つ選ぶ。属性（provider・model ID・effort 等）の正本は**モデル定義ファイル**（[[Preferences/model-definitions-sample]]）。選んだ定義について `MODEL_MISMATCH` が出ていなければ、Agent ツールの `model` パラメータは**渡さない**（職種定義の既定値が効く）。判断材料＝[[Preferences/model-catalog]]（モデルとサービスの特性）と【使用率】ブロック
+7. **配役の指定＝正本は配役表**。選択・起動条件は [[Preferences/core-workflow]] §1 spawn条文に従う。属性の正本はモデル定義ファイル（[[Preferences/model-definitions-sample]]）。選んだ候補を実agents-dir付きの `resolve-candidate` で解決し、subagentでは返却された `AGENT_MODEL` をAgentの `model` へ明示する。external-cliでは既存 `CODEX_ARGS` を所定のwrapperへ渡す。命名は `<配役>-<職種名>` とし、配役部分を実際の選択に合わせる。名前だけを実効モデルの証拠にしない。判断材料は [[Preferences/model-catalog]] と【使用率】ブロック。
 
 **モデル指定は「受理された」ことと「意図どおり解決された」ことは別**（詳細＝[[Knowledge/model-param-accepted-vs-resolved]]）。実効モデルの確認手段: リーダー行＝`/status`・ワーカー行（named/cmux・in-process とも）＝ワーカー別トランスクリプトの `model` フィールドが正本。ペイン先頭のモデル表記はペイン運用時のみ存在し、in-process（既定）では無い（2026-09-02 実測）。ピン留め効果が未検証の指定経路（例: settings.json 単体経由）ではエイリアス指定を避け、疑わしければ本人へ確認する。
 
@@ -92,7 +93,7 @@ aliases:
 **途中投入の仕様変更は最終レビューで反映確認必須（2026-07-23 本人指摘）**: 作業中のワーカーへ SendMessage で仕様変更を送っても、反映が最後回しになる・取りこぼされる傾向がある。リーダーは最終レビュー時に**変更点が成果物に実際に反映されているかを個別に実査**する（変更で「不要」にした実装・テストの残存も含めて grep で確認）。実例2件（2026-07-23 同一タスク）: ①削除指示した移行コードが残存 ②**差し戻し2点中1点のみ対応し、裁定済みの残り1点を「要リーダー判断」と報告**。対策＝差し戻しは可能なら1メッセージ1論点に絞り、報告には**各点の実装箇所（ファイル:行）の明記を義務付け**て突合する。
 
 ## 起動形態の既定＝名前付きチームメイト（2026-07-12 本人指示）
-ワーカーは**原則、名前付きチームメイト**（Agent ツールに `name` を付与）で起動する。**命名規則（2026-07-20 本人指示）＝`<モデル名>-<ロール名>`**：名前の先頭に実行モデル、ハイフンの後に**工程ロール名**（7ロール: requirements-analyst/system-designer/implementer/verifier/researcher/operator/adoption-critic）。例: `sonnet-implementer`・`sonnet-researcher`・`fable-system-designer`。一覧・通知・ペインで「どのモデルがどの工程か」を一目で判別するため。モデル未指定（既定 Sonnet）でも省略せず `sonnet-` を付ける。末尾に**タスク識別子を任意で付けてよい（リーダー裁量・2026-07-20 本人確認）**: 例 `sonnet-implementer-op-keyframes`。同ロール並行時は衝突回避のため必須。cmux では名前付きだけが分割ペインに表示され、本人が進行を目視できるため。名前なしサブエージェント（in-process・ペインなし）は裏で走って見えない＝既定にしない。例外＝ごく軽い内部検索・数分で終わる単発タスクでリーダーが不要と判断した場合のみ。
+ワーカーは**原則、名前付きチームメイト**（Agent ツールに `name` を付与）で起動する。**命名規則（2026-07-20 本人指示）＝`<モデル名>-<ロール名>`**：名前の先頭に実行モデル、ハイフンの後に**工程ロール名**（7ロール: requirements-analyst/system-designer/implementer/verifier/researcher/operator/adoption-critic）。例: `sonnet-implementer`・`sonnet-researcher`・`fable-system-designer`。一覧・通知・ペインで「どのモデルがどの工程か」を一目で判別するため。名前のモデル部分は、明示して起動した配役に合わせる。末尾に**タスク識別子を任意で付けてよい（リーダー裁量・2026-07-20 本人確認）**: 例 `sonnet-implementer-op-keyframes`。同ロール並行時は衝突回避のため必須。cmux では名前付きだけが分割ペインに表示され、本人が進行を目視できるため。名前なしサブエージェント（in-process・ペインなし）は裏で走って見えない＝既定にしない。例外＝ごく軽い内部検索・数分で終わる単発タスクでリーダーが不要と判断した場合のみ。
 
 **終了の後始末も必須**: チームメイトは使い終わったら必ず停止・消去する（放置しない）。停止条件＝**①作業完了 ②最終報告の受領 ③リーダーのレビューOK（差し戻しなし）④作業していないこと**。④は通知だけで判断せず `cmux read-screen` のペイン実査で「処理中でない」ことを確認する（完了報告を送った後も作業を続けている個体が実在するため。報告≠停止可）。差し戻す可能性がある間は停止しない（コンテキスト保持のまま再指示）。継続対話の予定がある場合は残してよいが、その旨をユーザーに明示する。
 

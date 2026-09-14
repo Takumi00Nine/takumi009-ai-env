@@ -1,6 +1,6 @@
 ---
 date: 2026-09-06
-updated: 2026-09-07
+updated: 2026-09-14
 tags: [preference, core, worker, roles, conduct]
 project: takumi009-ai-env
 related:
@@ -13,6 +13,7 @@ related:
   - "[[Decisions/2026-09-06-worker-common-norms-and-delivery]]"
   - "[[Decisions/2026-09-06-codex-mcp-retire]]"
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
+  - "[[Decisions/2026-09-14-worker-test-scope]]"
 aliases:
   - "ワーカー共通規範"
   - "職種共通ルール"
@@ -27,6 +28,7 @@ aliases:
 ## 1. 着手前
 - [[Preferences/absolute-rules]] を全文 Read する。Codex へ送る全プロンプト（継続の `--resume` も）に同ノートへの参照を含める（無いとラッパーが起動を拒否する）。
 - 入力に不足・曖昧があれば推測で補完せず、着手前に SendMessage でリーダーへ1行確認する。担当ファイル範囲が指定されていなければ確認してから着手する。
+- 実行するテストは、委任文で指定された担当範囲のものだけにする。全件実走（`tests/test-*.sh` 等）はリーダーが締めに指示したときだけ行う（正本＝[[Preferences/core-workflow]] §2・[[Decisions/2026-09-14-worker-test-scope]]）。
 
 ## 2. 事実の扱い
 - 推測で断定しない。数十秒で実測できる前提は述べる前に実測する。根拠には出典（URL・ファイルパス・実行結果）を付け、裏取りできなかったものは「未裏取り」と明示して確度を下げる。
