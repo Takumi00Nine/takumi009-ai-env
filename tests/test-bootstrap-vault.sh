@@ -191,14 +191,14 @@ make_model_defs() {
   mkdir -p "$(dirname "$path")"
   if [ "$#" -eq 0 ]; then
     cat > "$path" <<'EOF'
-[opus-main]
-provider=anthropic-api
-model=claude-opus-5
-
 [opus-high]
 provider=anthropic-api
 model=claude-opus-5
 effort=high
+
+[opus-noeffort]
+provider=anthropic-api
+model=claude-opus-5
 
 [opus-max]
 provider=anthropic-api
@@ -214,7 +214,7 @@ effort=xhigh
 provider=anthropic-api
 model=claude-fable-5[1m]
 
-[sonnet-main]
+[sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 
@@ -320,7 +320,7 @@ run_bootstrap_health4() {
     echo "no_read_paths:    unavailable"
     echo "machine_role:     ${machine_role_line}"
     echo "excluded_models: configured value=none"
-    echo "role.leader: configured model=opus-main"
+    echo "role.leader: configured model=opus-high"
     echo "---"
   } > "$profile_path"
   if [ -n "$legacy_marker" ]; then
@@ -353,7 +353,7 @@ team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
 excluded_models: configured value=none
-role.leader:      configured model=opus-main
+role.leader:      configured model=opus-high
 ---
 EOF
 }
@@ -1125,7 +1125,7 @@ team_mode: configured value=<fill-in>
 no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
-role.leader: configured model=opus-main
+role.leader: configured model=opus-high
 ---
 EOF
 
@@ -1152,7 +1152,7 @@ profile_slug: authoring
 team_mode: configured value=full
 no_read_paths: unavailable
 excluded_models: configured value=none
-role.leader: configured model=opus-main
+role.leader: configured model=opus-high
 ---
 EOF
 
@@ -1198,7 +1198,7 @@ team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
-role.leader: configured model=opus-main
+role.leader: configured model=opus-high
 future_new_key: 未来のスキーマが追加した値
 ---
 EOF
@@ -1295,8 +1295,8 @@ echo "=== 23. parser 4.1-a/4.1-b: ハイフンキー・コメント行・行末�
   P="$(mktemp -d)/comment.md"
   make_v2_profile "$P" \
     "# これはコメント行（無視される）" \
-    "role.leader: configured model=opus-main  # 行末コメントも無視" \
-    "role.requirements-analyst: configured model=opus-main"
+    "role.leader: configured model=opus-high  # 行末コメントも無視" \
+    "role.requirements-analyst: configured model=opus-high"
   out="$(resolve_v2 "$P")"  || true
   assert_contains "4.1-a: ハイフンを含むキー(role.requirements-analyst)がT6にならない" "$out" "OK"
   assert_not_contains "4.1-b: コメント行・行末コメントでT6にならない" "$out" "MINIMAL"
@@ -1306,7 +1306,7 @@ echo "=== 24. parser §3.1-7: 重複キー・重複属性・未許可属性は�
 {
   DUPKEY="$(mktemp -d)/dupkey.md"
   make_v2_profile "$DUPKEY" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.leader: unknown"
   out="$(resolve_v2 "$DUPKEY")"  || true
   assert_contains "重複キーはMINIMAL/T6になる" "$out" "MINIMAL"
@@ -1314,13 +1314,13 @@ echo "=== 24. parser §3.1-7: 重複キー・重複属性・未許可属性は�
 
   DUPATTR="$(mktemp -d)/dupattr.md"
   make_v2_profile "$DUPATTR" \
-    "role.leader: configured model=opus-main model=sonnet-main"
+    "role.leader: configured model=opus-high model=sonnet-high"
   out="$(resolve_v2 "$DUPATTR")"  || true
   assert_contains "重複属性はMINIMAL/T6になる" "$out" "MINIMAL	T6"
 
   UNKATTR="$(mktemp -d)/unkattr.md"
   make_v2_profile "$UNKATTR" \
-    "role.leader: configured model=opus-main mystery=1"
+    "role.leader: configured model=opus-high mystery=1"
   out="$(resolve_v2 "$UNKATTR")"  || true
   assert_contains "許可されない属性はMINIMAL/T6になる" "$out" "MINIMAL	T6"
 
@@ -1333,8 +1333,8 @@ echo "=== 25. validator V8-a: 状態4値と属性有無の組み合わせ ==="
 {
   NOTADOPT_ATTR="$(mktemp -d)/notadopt.md"
   make_v2_profile "$NOTADOPT_ATTR" \
-    "role.leader: configured model=opus-main" \
-    "role.researcher: not_adopted model=opus-main"
+    "role.leader: configured model=opus-high" \
+    "role.researcher: not_adopted model=opus-high"
   out="$(resolve_v2 "$NOTADOPT_ATTR")"  || true
   assert_contains "not_adoptedが属性を持つとV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
@@ -1346,7 +1346,7 @@ echo "=== 25. validator V8-a: 状態4値と属性有無の組み合わせ ==="
 
   UNAVAIL_OK="$(mktemp -d)/unavailok.md"
   make_v2_profile "$UNAVAIL_OK" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.researcher: unavailable model=bedrock-haiku"
   out="$(resolve_v2 "$UNAVAIL_OK")"  || true
   assert_contains "unavailableはprovider/modelを持ってよい（意図の記録）" "$out" "OK"
@@ -1360,41 +1360,41 @@ echo "=== 26. validate_model_def(): provider毎のmodel形式・execution既定�
   BADMODEL="$(mktemp -d)/badmodel.md"
   BADMODEL_CONF="$(mktemp -d)/badmodel.conf"
   make_model_defs "$BADMODEL_CONF" "[bad-model]" "provider=anthropic-api" "model=gpt-5"
-  make_v2_profile "$BADMODEL" "role.leader: configured model=opus-main"
+  make_v2_profile "$BADMODEL" "role.leader: configured model=opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$BADMODEL_CONF" resolve_v2 "$BADMODEL")"  || true
   assert_contains "anthropic-apiでmodelがclaude-接頭辞でないとT12でMINIMAL" "$out" "MINIMAL	T12"
 
   BEDROCKARN="$(mktemp -d)/bedrockarn.md"
   BEDROCKARN_CONF="$(mktemp -d)/bedrockarn.conf"
   make_model_defs "$BEDROCKARN_CONF" "[bad-arn]" "provider=bedrock" "model=arn:aws:bedrock:foo"
-  make_v2_profile "$BEDROCKARN" "role.leader: configured model=opus-main"
+  make_v2_profile "$BEDROCKARN" "role.leader: configured model=opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$BEDROCKARN_CONF" resolve_v2 "$BEDROCKARN")"  || true
   assert_contains "bedrockでarn:始まりのmodelはT12（別名限定）" "$out" "MINIMAL	T12"
 
   BEDROCKUS="$(mktemp -d)/bedrockus.md"
   BEDROCKUS_CONF="$(mktemp -d)/bedrockus.conf"
   make_model_defs "$BEDROCKUS_CONF" "[bad-us]" "provider=bedrock" "model=us.opus"
-  make_v2_profile "$BEDROCKUS" "role.leader: configured model=opus-main"
+  make_v2_profile "$BEDROCKUS" "role.leader: configured model=opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$BEDROCKUS_CONF" resolve_v2 "$BEDROCKUS")"  || true
   assert_contains "bedrockでus.始まりのmodelもT12" "$out" "MINIMAL	T12"
 
   EXTNOEXEC="$(mktemp -d)/extnoexec.md"
   EXTNOEXEC_CONF="$(mktemp -d)/extnoexec.conf"
   make_model_defs "$EXTNOEXEC_CONF" "[bad-noexec]" "provider=external" "model=default"
-  make_v2_profile "$EXTNOEXEC" "role.leader: configured model=opus-main"
+  make_v2_profile "$EXTNOEXEC" "role.leader: configured model=opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$EXTNOEXEC_CONF" resolve_v2 "$EXTNOEXEC")"  || true
   assert_contains "provider=externalでexecution未記載はT12" "$out" "MINIMAL	T12"
 
   NONSUBEXEC="$(mktemp -d)/nonsubexec.md"
   NONSUBEXEC_CONF="$(mktemp -d)/nonsubexec.conf"
   make_model_defs "$NONSUBEXEC_CONF" "[bad-nonsub]" "provider=anthropic-api" "model=claude-opus-5" "execution=external-cli"
-  make_v2_profile "$NONSUBEXEC" "role.leader: configured model=opus-main"
+  make_v2_profile "$NONSUBEXEC" "role.leader: configured model=opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$NONSUBEXEC_CONF" resolve_v2 "$NONSUBEXEC")"  || true
   assert_contains "anthropic-apiでexecution!=subagentはT12" "$out" "MINIMAL	T12"
 
   DEFAULTEXEC="$(mktemp -d)/defaultexec.md"
   make_v2_profile "$DEFAULTEXEC" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   out="$(resolve_v2 "$DEFAULTEXEC")"  || true
   assert_contains "execution未記載はsubagent既定でOKになる" "$out" "OK"
 }
@@ -1403,14 +1403,14 @@ echo "=== 27. validator V9-d②: execution=external-apiは常にconfigured不可
 {
   EXTAPI="$(mktemp -d)/extapi.md"
   make_v2_profile "$EXTAPI" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=ext-api-bad"
   out="$(resolve_v2 "$EXTAPI")"  || true
   assert_contains "execution=external-apiはハンドラ未実装でconfigured不可(V9-d)" "$out" "MINIMAL	T8	V9-d"
 
   EXTAPI_UNAVAIL="$(mktemp -d)/extapiunavail.md"
   make_v2_profile "$EXTAPI_UNAVAIL" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: unavailable model=ext-api-bad"
   out="$(resolve_v2 "$EXTAPI_UNAVAIL")"  || true
   assert_contains "unavailableならexternal-apiでも構文上は許される(V9-d②はconfigured限定)" "$out" "OK"
@@ -1420,7 +1420,7 @@ echo "=== 28. validator V16: excluded_modelsに一致する配役はMINIMAL ==="
 {
   V16="$(mktemp -d)/v16.md"
   make_v2_profile "$V16" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' 's/excluded_models: configured value=none/excluded_models: configured value=anthropic-api\/claude-opus-5/' "$V16"
   out="$(resolve_v2 "$V16")"  || true
   assert_contains "禁止モデル一致はV16でMINIMAL" "$out" "MINIMAL	T8	V16"
@@ -1437,8 +1437,8 @@ echo "=== 29. validator V6: fallbackが指す職種がrole.表に無いとMINIMA
 {
   V6="$(mktemp -d)/v6.md"
   make_v2_profile "$V6" \
-    "role.leader: configured model=opus-main" \
-    "fallback.ghost-role: configured model=opus-main"
+    "role.leader: configured model=opus-high" \
+    "fallback.ghost-role: configured model=opus-high"
   out="$(resolve_v2 "$V6")"  || true
   assert_contains "対応するrole.表が無いfallbackはV6でMINIMAL" "$out" "MINIMAL	T8	V6"
 }
@@ -1454,12 +1454,12 @@ echo "=== 30. §3.5-L リーダー状態遷移: unknown/not_adopted/行が無い
   done
 
   NOLEADER="$(mktemp -d)/noleader.md"
-  make_v2_profile "$NOLEADER" "role.researcher: configured model=sonnet-main"
+  make_v2_profile "$NOLEADER" "role.researcher: configured model=sonnet-high"
   out="$(resolve_v2 "$NOLEADER")"  || true
   assert_contains "role.leader行が無ければfail(MINIMAL)になる" "$out" "MINIMAL"
 
   UNAVAIL_NOFB="$(mktemp -d)/leaderunavail.md"
-  make_v2_profile "$UNAVAIL_NOFB" "role.leader: unavailable model=opus-main"
+  make_v2_profile "$UNAVAIL_NOFB" "role.leader: unavailable model=opus-high"
   out="$(resolve_v2 "$UNAVAIL_NOFB")"  || true
   assert_contains "leader=unavailableでfallback無しはfail" "$out" "MINIMAL"
 
@@ -1472,7 +1472,7 @@ echo "=== 31. §3.5-L: leaderのfallback救済（本命unavailable→fallbackが
   RESCUE="$(mktemp -d)/leaderrescue.md"
   make_v2_profile "$RESCUE" \
     "role.leader: unavailable model=bedrock-opus" \
-    "fallback.leader: configured model=opus-main"
+    "fallback.leader: configured model=opus-high"
   out="$(resolve_v2 "$RESCUE")"  || true
   assert_contains "leaderがfallback救済されればOKになる" "$out" "OK"
   json="$(resolve_leader_v2 "$RESCUE")"  || true
@@ -1490,9 +1490,9 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
 {
   FB_RESCUE="$(mktemp -d)/workerfallback.md"
   make_v2_profile "$FB_RESCUE" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=bedrock-haiku" \
-    "fallback.verifier: configured model=sonnet-main"
+    "fallback.verifier: configured model=sonnet-high"
   # bedrock.envを与えない(ABSENT=disabled)のでverifierの本命(bedrock)はV9-dで使用不可
   out="$(resolve_v2 "$FB_RESCUE")"  || true
   assert_contains "本命が使用不可でもfallbackが使えればFALLBACK:verifierとして採用される" "$out" "FALLBACK:verifier"
@@ -1501,7 +1501,7 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
   echo "--- 双方使用不可のときだけVACANT+VACANT_REASON、優先順はV1-b→V9-d→V12 ---"
   BOTH_BAD="$(mktemp -d)/bothbad.md"
   make_v2_profile "$BOTH_BAD" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=bedrock-haiku" \
     "fallback.verifier: configured model=bedrock-opus"
   out="$(resolve_v2 "$BOTH_BAD")"  || true
@@ -1511,9 +1511,9 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
   echo "--- unavailableの本命は評価されず、fallbackだけが評価される ---"
   UNAVAIL_SKIP="$(mktemp -d)/unavailskip.md"
   make_v2_profile "$UNAVAIL_SKIP" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: unavailable model=bedrock-opus" \
-    "fallback.verifier: configured model=sonnet-main"
+    "fallback.verifier: configured model=sonnet-high"
   out="$(resolve_v2 "$UNAVAIL_SKIP")"  || true
   assert_contains "unavailableな本命はスキップされfallbackが採用される" "$out" "FALLBACK:verifier"
 }
@@ -1527,7 +1527,7 @@ echo "=== 33. §3.7 判定不能: Bedrock経路の判定不能はワーカーな
 
   WORKER_UNKNOWN="$(mktemp -d)/workerunknown.md"
   make_v2_profile "$WORKER_UNKNOWN" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$WORKER_UNKNOWN" "$UNREADABLE_ENV")"  || true
   assert_not_contains "判定不能でもワーカーは空席にならない" "$out" "VACANT:verifier"
@@ -1568,14 +1568,14 @@ echo "=== 35. V15/T11: 禁止キー名はv1/v2どちらの分類でもpreflight�
 {
   V15_V2="$(mktemp -d)/v15v2.md"
   make_v2_profile "$V15_V2" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   echo "api_key: configured value=xyz" >> "$V15_V2"
   # frontmatter終端---の後ろに付けると構文が壊れるので、専用のfixtureを作り直す。
   cat > "$V15_V2" <<'EOF'
 ---
 schema_version: 6
 profile_slug: authoring
-role.leader: configured model=opus-main
+role.leader: configured model=opus-high
 api_key: configured value=xyz
 team_mode:        configured value=full
 no_read_paths:    unavailable
@@ -1611,7 +1611,7 @@ echo "=== 36. 結合（DIRECTIVE）: VACANT_UNKNOWN・FALLBACK・VACANT_REASON�
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   make_v2_profile "$PROFILE_PATH" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=bedrock-haiku" \
     "fallback.verifier: configured model=bedrock-opus"
   # 静的検証: このprofile単体でVACANT_REASON:verifier=V9-dが出ることを確認済み(#32)。
@@ -1640,8 +1640,8 @@ echo "=== 37. stdout契約: v2 OKでは全文Readが必読リストに載り、�
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   make_v2_profile "$PROFILE_PATH" \
-    "role.leader: configured model=opus-main" \
-    "role.requirements-analyst: configured model=opus-main"
+    "role.leader: configured model=opus-high" \
+    "role.requirements-analyst: configured model=opus-high"
 
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
   occurrences="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH  （全" || true)"
@@ -1659,10 +1659,10 @@ echo "=== 37. stdout契約: v2 OKでは全文Readが必読リストに載り、�
   MULTI="$(mktemp -d)/multi.md"
   make_v2_profile "$MULTI" \
     "role.leader: unavailable model=bedrock-opus" \
-    "fallback.leader: configured model=opus-main" \
+    "fallback.leader: configured model=opus-high" \
     "role.verifier: configured model=bedrock-haiku" \
-    "fallback.verifier: configured model=sonnet-main" \
-    "role.researcher: configured model=sonnet-main"
+    "fallback.verifier: configured model=sonnet-high" \
+    "role.researcher: configured model=sonnet-high"
   multi_out="$(resolve_v2 "$MULTI")"  || true
   # 期待: OK -> FALLBACK:leader,verifier(順不同はソート済み) -> VACANT_UNKNOWN(コア
   # マニフェストの他職種) -> ADVISORY:V1-a の順で、この並びどおりに現れること。
@@ -1736,7 +1736,7 @@ echo "=== 39. §3.7 判定不能: ワーカーが判定不能で通ったこと�
 
   ADV_UNKNOWN="$(mktemp -d)/advunknown.md"
   make_v2_profile "$ADV_UNKNOWN" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$ADV_UNKNOWN" "$UNREADABLE_ENV2")"  || true
   assert_contains "判定不能で通した職種があることがADVISORY:JUDGEMENT_UNKNOWNとして出る" "$out" "ADVISORY:JUDGEMENT_UNKNOWN"
@@ -1750,7 +1750,7 @@ echo "=== 40. §4.1-f: leaderがfallback救済されたときも職種名'leader
   LEADER_FB="$(mktemp -d)/leaderfb.md"
   make_v2_profile "$LEADER_FB" \
     "role.leader: unavailable model=bedrock-opus" \
-    "fallback.leader: configured model=opus-main"
+    "fallback.leader: configured model=opus-high"
   out="$(resolve_v2 "$LEADER_FB")"  || true
   assert_contains "leaderのfallback採用がFALLBACK:leaderとして出る" "$out" "FALLBACK:leader"
 }
@@ -1783,7 +1783,7 @@ echo "=== 42. §3.4 T4'(実体の版>コードの版): 未知キーを無視しA
 {
   T4PRIME="$(mktemp -d)/t4prime.md"
   make_v2_profile "$T4PRIME" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' 's/schema_version: 6/schema_version: 7/' "$T4PRIME"
   # ---の直前に未知キーを挿入する。
 
@@ -1805,7 +1805,7 @@ echo "=== 44. V8-b共通規則・excluded_modelsの扱い統一（Codex一次レ
 {
   EM_SENTINEL="$(mktemp -d)/emsentinel.md"
   make_v2_profile "$EM_SENTINEL" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' 's/excluded_models: configured value=none/excluded_models: configured value=<fill-in>/' "$EM_SENTINEL"
   out="$(resolve_v2 "$EM_SENTINEL")"  || true
   assert_contains "excluded_modelsのsentinelもT2-MINIMALで検出される" "$out" "MINIMAL	T2-MINIMAL"
@@ -1813,14 +1813,14 @@ echo "=== 44. V8-b共通規則・excluded_modelsの扱い統一（Codex一次レ
 
   DUP_VALUE="$(mktemp -d)/dupvalue.md"
   make_v2_profile "$DUP_VALUE" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' 's/team_mode:        configured value=full/team_mode:        configured value=full,full/' "$DUP_VALUE"
   out="$(resolve_v2 "$DUP_VALUE")"  || true
   assert_contains "value内の重複要素はV8-bでMINIMALになる（共通規則）" "$out" "MINIMAL	T8	V8-b"
 
   EM_UNAVAIL="$(mktemp -d)/emunavail.md"
   make_v2_profile "$EM_UNAVAIL" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' 's/excluded_models: configured value=none/excluded_models: unavailable/' "$EM_UNAVAIL"
   out="$(resolve_v2 "$EM_UNAVAIL")"  || true
   assert_contains "excluded_models: unavailable（属性無し）はOKになる（他の能力軸キーと同じ3状態）" "$out" "OK"
@@ -1904,21 +1904,21 @@ echo "=== 46. list-roles: kind/state/定義名/execution既定値/not_adopted・
 {
   LR="$(mktemp -d)/listroles.md"
   make_v2_profile "$LR" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.navi: unknown" \
     "role.researcher: not_adopted" \
     "role.system-designer: configured model=opus-high" \
     "role.verifier: unavailable model=bedrock-opus" \
-    "fallback.verifier: configured model=sonnet-main"
+    "fallback.verifier: configured model=sonnet-high"
   out="$(python3 "$PROFILE_LIB" list-roles "$LR")"  || true
 
-  assert_contains "role.leaderの行がkind=role・state=configured・定義名=opus-mainで出る" "$out" "role	leader	configured	opus-main	anthropic-api	claude-opus-5	subagent	"
+  assert_contains "role.leaderの行がkind=role・state=configured・定義名=opus-highで出る" "$out" "role	leader	configured	opus-high	anthropic-api	claude-opus-5	subagent	"
   assert_contains "executionが省略されていてもsubagentが補われて出る" "$out" "	subagent	"
   assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "role	system-designer	configured	opus-high	anthropic-api	claude-opus-5	subagent	high"
   assert_contains "unknown状態は定義名以降が全て空文字になる（5フィールド）" "$out" "role	navi	unknown					"
   assert_contains "not_adopted状態も定義名以降が全て空文字になる（5フィールド）" "$out" "role	researcher	not_adopted					"
   assert_contains "unavailable状態は定義名・provider/modelを保持したまま出る（意図の記録）" "$out" "role	verifier	unavailable	bedrock-opus	bedrock	opus	subagent	"
-  assert_contains "fallback行もkind=fallbackとして出る" "$out" "fallback	verifier	configured	sonnet-main	anthropic-api	claude-sonnet-5	subagent	"
+  assert_contains "fallback行もkind=fallbackとして出る" "$out" "fallback	verifier	configured	sonnet-high	anthropic-api	claude-sonnet-5	subagent	"
 
   # role.表→fallback.表の順であることの確認（roleの最後の行より後にfallbackが来る）。
   role_idx=$(printf '%s' "$out" | grep -n '^role	verifier' | head -1 | cut -d: -f1)
@@ -1935,7 +1935,7 @@ echo "=== 47. list-roles: 失敗時（自己完結・resolve-leaderと同じコ�
 
   DUP="$(mktemp -d)/lrdup.md"
   make_v2_profile "$DUP" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.leader: unknown"
   out="$(python3 "$PROFILE_LIB" list-roles "$DUP" 2>/dev/null)"  || true
   err="$(python3 "$PROFILE_LIB" list-roles "$DUP" 2>&1 1>/dev/null)"  || true
@@ -1970,7 +1970,7 @@ echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8�
 
   WORKER_BAD_UTF8="$(mktemp -d)/workerbadutf8.md"
   make_v2_profile "$WORKER_BAD_UTF8" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$WORKER_BAD_UTF8" "$BAD_UTF8_ENV")"  || true
   err="$(python3 "$PROFILE_LIB" resolve "$WORKER_BAD_UTF8" --bedrock-env "$BAD_UTF8_ENV" --agents-dir "$AGENTS_DIR" 2>&1 1>/dev/null)"  || true
@@ -1995,19 +1995,19 @@ echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8�
 echo "=== 51. V14メタ構文の直接検証: schema_versionが正整数でない・profile_slugが規約に反する ==="
 {
   BADVER="$(mktemp -d)/badver.md"
-  make_v2_profile "$BADVER" "role.leader: configured model=opus-main"
+  make_v2_profile "$BADVER" "role.leader: configured model=opus-high"
   sed -i '' 's/schema_version: 6/schema_version: abc/' "$BADVER"
   out="$(resolve_v2 "$BADVER")"  || true
   assert_contains "schema_versionが数値でなければT3になる" "$out" "MINIMAL	T3"
 
   BADVER0="$(mktemp -d)/badver0.md"
-  make_v2_profile "$BADVER0" "role.leader: configured model=opus-main"
+  make_v2_profile "$BADVER0" "role.leader: configured model=opus-high"
   sed -i '' 's/schema_version: 6/schema_version: 0/' "$BADVER0"
   out="$(resolve_v2 "$BADVER0")"  || true
   assert_contains "schema_version=0(正整数でない)もT3になる" "$out" "MINIMAL	T3"
 
   BADSLUG="$(mktemp -d)/badslug.md"
-  make_v2_profile "$BADSLUG" "role.leader: configured model=opus-main"
+  make_v2_profile "$BADSLUG" "role.leader: configured model=opus-high"
   sed -i '' 's/profile_slug: authoring/profile_slug: Bad_Slug!/' "$BADSLUG"
   out="$(resolve_v2 "$BADSLUG")"  || true
   assert_contains "profile_slugが規約(^[a-z0-9][a-z0-9-]*\$)に反するとT14になる" "$out" "MINIMAL	T14"
@@ -2017,15 +2017,15 @@ echo "=== 52. V8-a 状態4値×属性有無の網羅補充: unavailableでmodel�
 {
   UNAVAIL_MISSING="$(mktemp -d)/unavailmissing.md"
   make_v2_profile "$UNAVAIL_MISSING" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: unavailable"
   out="$(resolve_v2 "$UNAVAIL_MISSING")"  || true
   assert_contains "unavailableでもmodel欠落はV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
   UNKNOWN_ATTR="$(mktemp -d)/unknownattr.md"
   make_v2_profile "$UNKNOWN_ATTR" \
-    "role.leader: configured model=opus-main" \
-    "role.verifier: unknown model=sonnet-main"
+    "role.leader: configured model=opus-high" \
+    "role.verifier: unknown model=sonnet-high"
   out="$(resolve_v2 "$UNKNOWN_ATTR")"  || true
   assert_contains "unknown状態で属性を持つとV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
@@ -2039,7 +2039,7 @@ echo "=== 53. bedrock-mantle provider: 適合表(§3.3)の形式検査(モデル
 {
   MANTLE_OK="$(mktemp -d)/mantleok.md"
   make_v2_profile "$MANTLE_OK" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=mantle-haiku"
   # bedrock.envは渡すがCLAUDE_CODE_USE_BEDROCKだけ有効にする(ピンは無し)。
   MANTLE_ENV="$(mktemp -d)/bedrock.env"
@@ -2051,7 +2051,7 @@ echo "=== 53. bedrock-mantle provider: 適合表(§3.3)の形式検査(モデル
   MANTLE_BAD="$(mktemp -d)/mantlebad.md"
   MANTLE_BAD_CONF="$(mktemp -d)/mantlebad.conf"
   make_model_defs "$MANTLE_BAD_CONF" "[bad-mantle]" "provider=bedrock-mantle" "model=not-anthropic-prefixed"
-  make_v2_profile "$MANTLE_BAD" "role.leader: configured model=opus-main"
+  make_v2_profile "$MANTLE_BAD" "role.leader: configured model=opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$MANTLE_BAD_CONF" resolve_v2 "$MANTLE_BAD")"  || true
   assert_contains "bedrock-mantleでanthropic.始まりでないmodelはT12でMINIMALになる" "$out" "MINIMAL	T12"
 }
@@ -2060,7 +2060,7 @@ echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex�
 {
   WORKER_MAX="$(mktemp -d)/workermax.md"
   make_v2_profile "$WORKER_MAX" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=sonnet-max"
   out="$(resolve_v2 "$WORKER_MAX")"  || true
   assert_contains "ワーカー行はmaxを書ける(V9-bのenumはEFFORT_CLAUDEでmaxを含む)" "$out" "OK"
@@ -2074,7 +2074,7 @@ echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex�
 
   CODEX_MINIMAL="$(mktemp -d)/codexminimal.md"
   make_v2_profile "$CODEX_MINIMAL" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=codex-review-minimal"
   out="$(resolve_v2 "$CODEX_MINIMAL")"  || true
   assert_contains "Codexハンドラ(external-cli/codex-review-default)はminimalを書ける" "$out" "OK"
@@ -2084,7 +2084,7 @@ echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex�
   CODEX_MINIMAL_ELSEWHERE_CONF="$(mktemp -d)/codexminimalelsewhere.conf"
   make_model_defs "$CODEX_MINIMAL_ELSEWHERE_CONF" "[bad-sonnet-minimal]" "provider=anthropic-api" "model=claude-sonnet-5" "effort=minimal"
   CODEX_MINIMAL_ELSEWHERE="$(mktemp -d)/codexminimalelsewhere.md"
-  make_v2_profile "$CODEX_MINIMAL_ELSEWHERE" "role.leader: configured model=opus-main"
+  make_v2_profile "$CODEX_MINIMAL_ELSEWHERE" "role.leader: configured model=opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$CODEX_MINIMAL_ELSEWHERE_CONF" resolve_v2 "$CODEX_MINIMAL_ELSEWHERE")"  || true
   assert_contains "Claude系(anthropic-api)でminimalはT12でMINIMALになる(Codex方言はexternalハンドラ限定)" "$out" "MINIMAL	T12"
 }
@@ -2093,7 +2093,7 @@ echo "=== 55. V9-f直接検証: 既知の非対応モデル×xhigh はADVISORY�
 {
   V9F_KNOWN="$(mktemp -d)/v9fknown.md"
   make_v2_profile "$V9F_KNOWN" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=opus46-xhigh"
   out="$(resolve_v2 "$V9F_KNOWN")"  || true
   # ADVISORYフィールドはコードをソートして併記する(§5)ため"V1-a,V9-f"に
@@ -2103,7 +2103,7 @@ echo "=== 55. V9-f直接検証: 既知の非対応モデル×xhigh はADVISORY�
 
   V9F_BEDROCK="$(mktemp -d)/v9fbedrock.md"
   make_v2_profile "$V9F_BEDROCK" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: configured model=bedrock-opus-xhigh"
   out="$(resolve_v2 "$V9F_BEDROCK")"  || true
   assert_contains "bedrock別名は実モデル版を判別できないためEFFORT_COMPATIBILITY_UNVERIFIEDになる" "$out" "ADVISORY:EFFORT_COMPATIBILITY_UNVERIFIED"
@@ -2150,7 +2150,7 @@ EOF
   echo "--- effort未指定のleader行では、settings.jsonにeffortLevelキーが有るだけで不一致になる（§3.8の非対称） ---"
   LEADER_NO_EFFORT="$(mktemp -d)/leadernoeffort.md"
   make_v2_profile "$LEADER_NO_EFFORT" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-noeffort"
   SETTINGS_UNEXPECTED_EFFORT="$(mktemp -d)/settings-unexpected-effort.json"
   cat > "$SETTINGS_UNEXPECTED_EFFORT" <<'EOF'
 {"model": "claude-opus-5", "effortLevel": "high"}
@@ -2295,7 +2295,7 @@ echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行�
   # しない＝role_and_core_manifest_diff()はparsed.rolesのキーのみを見る）。
   COMPLETE_ROSTER="$(mktemp -d)/complete-roster.md"
   make_v2_profile "$COMPLETE_ROSTER" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.navi: unknown" \
     "role.ja-doc: unknown" \
     "role.adoption-critic: unknown" \
@@ -2326,7 +2326,7 @@ echo "=== 58b. V1-aマニフェスト(結合・回帰防止・対照実験): 完
   # 完全に同一。
   OLD_KEY_ROSTER="$(mktemp -d)/old-key-roster.md"
   make_v2_profile "$OLD_KEY_ROSTER" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.navi: unknown" \
     "role.ja-doc: unknown" \
     "role.adoption-critic: unknown" \
@@ -2381,7 +2381,7 @@ echo "=== 61. FX-P1〜P3: resolver単体・team_modeがsolo/lean/fullのときTE
   for v in solo lean full; do
     FXP="$(mktemp -d)/fxp-$v.md"
     make_v2_profile "$FXP" \
-      "role.leader: configured model=opus-main"
+      "role.leader: configured model=opus-high"
     sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=$v/" "$FXP"
     # ⚠️ `out="$(cmd)" || true`は`||`の右辺が常に成功するため直後の`$?`は
     # 常に0になり、resolve_v2自身の終了コードを検証できない（Codex一次
@@ -2402,7 +2402,7 @@ echo "=== 62. FX-P4〜P5: resolver単体・team_modeがunknown/unavailableなら
 {
   FXP4="$(mktemp -d)/fxp4.md"
   make_v2_profile "$FXP4" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unknown/" "$FXP4"
   if out="$(resolve_v2 "$FXP4")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P4(team_mode:unknown): TEAM_MODE:unknownが出る" "$out" "TEAM_MODE:unknown"
@@ -2412,7 +2412,7 @@ echo "=== 62. FX-P4〜P5: resolver単体・team_modeがunknown/unavailableなら
 
   FXP5="$(mktemp -d)/fxp5.md"
   make_v2_profile "$FXP5" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unavailable/" "$FXP5"
   if out="$(resolve_v2 "$FXP5")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P5(team_mode:unavailable): TEAM_MODE:unknownが出る" "$out" "TEAM_MODE:unknown"
@@ -2425,7 +2425,7 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
 {
   FXP6="$(mktemp -d)/fxp6.md"
   make_v2_profile "$FXP6" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=solo,lean/" "$FXP6"
   if out="$(resolve_v2 "$FXP6")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P6(カンマ列挙): MINIMALになる" "$out" "MINIMAL"
@@ -2434,7 +2434,7 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
 
   FXP7="$(mktemp -d)/fxp7.md"
   make_v2_profile "$FXP7" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=quick/" "$FXP7"
   if out="$(resolve_v2 "$FXP7")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P7(未知の語): MINIMALになる" "$out" "MINIMAL"
@@ -2477,7 +2477,7 @@ echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞ�
     VD="$(mktemp -d)"; make_full_vault "$VD"
     FXI="$(mktemp -d)/fxi-$v.md"
     make_v2_profile "$FXI" \
-      "role.leader: configured model=opus-main"
+      "role.leader: configured model=opus-high"
     sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=$v/" "$FXI"
     ctx="$(run_bootstrap_with_profile "$VD" "$FXI")"
 
@@ -2502,7 +2502,7 @@ echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはre
   VD="$(mktemp -d)"; make_full_vault "$VD"
   FXI4="$(mktemp -d)/fxi4.md"
   make_v2_profile "$FXI4" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unknown/" "$FXI4"
   ctx="$(run_bootstrap_with_profile "$VD" "$FXI4")"
   n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED")"
@@ -2515,7 +2515,7 @@ echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはre
   VD2="$(mktemp -d)"; make_full_vault "$VD2"
   FXI6="$(mktemp -d)/fxi6.md"
   make_v2_profile "$FXI6" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   python3 - "$FXI6" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -2534,18 +2534,18 @@ echo "=== 67. FX-R1・FX-R2（AC-10）: 退役キー'primary-reviewer'はV1-bで
 {
   FXR1="$(mktemp -d)/fxr1.md"
   make_v2_profile "$FXR1" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.primary-reviewer: unavailable model=bedrock-opus" \
-    "fallback.primary-reviewer: configured model=opus-main"
+    "fallback.primary-reviewer: configured model=opus-high"
   out="$(resolve_v2 "$FXR1")"  || true
   assert_contains "FX-R1(陰性): VACANT:にprimary-reviewerが出る" "$out" "VACANT:primary-reviewer"
   assert_contains "FX-R1: VACANT_REASONがprimary-reviewer=V1-b" "$out" "VACANT_REASON:primary-reviewer=V1-b"
 
   FXR2="$(mktemp -d)/fxr2.md"
   make_v2_profile "$FXR2" \
-    "role.leader: configured model=opus-main" \
+    "role.leader: configured model=opus-high" \
     "role.verifier: unavailable model=bedrock-opus" \
-    "fallback.verifier: configured model=opus-main"
+    "fallback.verifier: configured model=opus-high"
   out="$(resolve_v2 "$FXR2")"  || true
   assert_contains "FX-R2(陽性): FALLBACK:にverifierが出る" "$out" "FALLBACK:verifier"
   assert_not_contains "FX-R2: VACANT:に現れない" "$out" "VACANT:verifier"
@@ -2589,7 +2589,7 @@ EOF
   VD3="$(mktemp -d)"; make_full_vault "$VD3"
   FXUE="$(mktemp -d)/fxue.md"
   make_v2_profile "$FXUE" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-high"
   python3 - "$FXUE" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -2665,7 +2665,7 @@ EOF
     chmod +x "$SPY/$cmd"
   done
 
-  # role.leader: model=opus-main（effort未指定）と
+  # role.leader: model=opus-noeffort（effort未指定）と
   # 一致するsettings.json（Codex一次レビュー指摘・MAJOR対応: 従来は
   # /nonexistent-dir/settings.jsonを指定しており、check_leader_settings_drift()
   # が「監視不能」警告を出す状態のまま「警告なし」と称していた。§10.5-5〜6の
@@ -2689,7 +2689,7 @@ EOF
   VD="$(mktemp -d)"; make_full_vault "$VD"
   FXP1="$(mktemp -d)/fxp1-spy.md"
   make_v2_profile "$FXP1" \
-    "role.leader: configured model=opus-main"
+    "role.leader: configured model=opus-noeffort"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=solo/" "$FXP1"
   AFTER_LOG="$(mktemp -d)/calls-after.log"; : > "$AFTER_LOG"
   AFTER_JSON="$(mktemp -d)/after.json"
@@ -2824,7 +2824,7 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   # codeだけでは、fixture表（要件§6.2）が定めるTEAM_MODE:full・UNKNOWN_EXTRA:
   # 不在という残りの期待を固定していなかった。両方を明示的に検査する。
   FXP1_72="$(mktemp -d)/fxp1.md"
-  make_v2_profile "$FXP1_72" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP1_72" "role.leader: configured model=opus-high"
   rc=0; out="$(resolve_v2 "$FXP1_72")" || rc=$?
   assert_eq "FX-P1: OK<TAB>schema_version=6で始まる" "1" \
     "$([[ "$out" == $'OK\tschema_version=6'* ]] && echo 1 || echo 0)"
@@ -2833,7 +2833,7 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   assert_not_contains "FX-P1: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
 
   FXP2_72="$(mktemp -d)/fxp2.md"
-  make_v2_profile "$FXP2_72" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP2_72" "role.leader: configured model=opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=sub/" "$FXP2_72"
   rc=0; out="$(resolve_v2 "$FXP2_72")" || rc=$?
   assert_eq "FX-P2: OK<TAB>schema_version=6で始まる" "1" \
@@ -2843,14 +2843,14 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   assert_not_contains "FX-P2: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
 
   FXP3_72="$(mktemp -d)/fxp3.md"
-  make_v2_profile "$FXP3_72" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP3_72" "role.leader: configured model=opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     not_adopted/" "$FXP3_72"
   rc=0; out="$(resolve_v2 "$FXP3_72")" || rc=$?
   assert_contains "FX-P3: V7(machine_roleの状態が不正)を含む" "$out" "V7: machine_roleの状態が不正です"
   assert_eq "FX-P3: exit 1" "1" "$rc"
 
   FXP4_72="$(mktemp -d)/fxp4.md"
-  make_v2_profile "$FXP4_72" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP4_72" "role.leader: configured model=opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=primary/" "$FXP4_72"
   rc=0; out="$(resolve_v2 "$FXP4_72")" || rc=$?
   assert_contains "FX-P4: V8-b(machine_roleのvalue形式が不正)を含む" "$out" "V8-b: machine_roleのvalue形式が不正です"
@@ -2860,7 +2860,7 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
 echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・陰性2件(FX-P10・FX-P11) ==="
 {
   FXP9_73="$(mktemp -d)/fxp9.md"
-  make_v2_profile "$FXP9_73" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP9_73" "role.leader: configured model=opus-high"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old,~/Data/private#" "$FXP9_73"
   rc=0; out="$(resolve_v2 "$FXP9_73")" || rc=$?
   assert_eq "FX-P9: OKで始まる（大文字を含む実パスも受理）" "1" \
@@ -2868,7 +2868,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
   assert_eq "FX-P9: exit 0" "0" "$rc"
 
   FXP10_73="$(mktemp -d)/fxp10.md"
-  make_v2_profile "$FXP10_73" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP10_73" "role.leader: configured model=opus-high"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old, ~/tmp/x#" "$FXP10_73"
   rc=0; out="$(resolve_v2 "$FXP10_73")" || rc=$?
   assert_contains "FX-P10: T6を含む" "$out" "T6"
@@ -2876,7 +2876,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
   assert_eq "FX-P10: exit 1" "1" "$rc"
 
   FXP11_73="$(mktemp -d)/fxp11.md"
-  make_v2_profile "$FXP11_73" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP11_73" "role.leader: configured model=opus-high"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=/work/old#" "$FXP11_73"
   rc=0; out="$(resolve_v2 "$FXP11_73")" || rc=$?
   assert_contains "FX-P11: V8-b(no_read_pathsのvalue形式が不正)を含む" "$out" "V8-b: no_read_pathsのvalue形式が不正です"
@@ -2886,7 +2886,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
 echo "=== 75. AC-9(FR-13): 廃止キー残存時のUNKNOWN_EXTRA契約の陽性1件(FX-P7)・陰性1件(FX-P1) ==="
 {
   FXP7_75="$(mktemp -d)/fxp7-ac9.md"
-  make_v2_profile "$FXP7_75" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP7_75" "role.leader: configured model=opus-high"
   # frontmatter終端(---)の直前に挿入する（末尾に追記すると frontmatter の
   # 外側になってしまうため）。AC5-ALLOW:FX-P7
   python3 - "$FXP7_75" <<'PYEOF'
@@ -2905,7 +2905,7 @@ PYEOF
   assert_contains "FX-P7: I=最小能力の文言を含む" "$ctx" "最小能力"
 
   FXP1_75="$(mktemp -d)/fxp1-ac9.md"
-  make_v2_profile "$FXP1_75" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP1_75" "role.leader: configured model=opus-high"
   out="$(resolve_v2 "$FXP1_75")"
   assert_not_contains "FX-P1: R=UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
   ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP1_75")"
@@ -2930,7 +2930,7 @@ echo "=== 76. AC-11(FR-9): machine_roleがunknownのときだけDIRECTIVEへ保�
   # 診断行中のMACHINE_ROLE:<値>トークンを共通のプレースホルダへ正規化して
   # からdiffする（値そのものの一致は他のテスト＝§75等で別途検査済み）。
   FXP_76="$(mktemp -d)/fxp-ac11.md"
-  make_v2_profile "$FXP_76" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP_76" "role.leader: configured model=opus-high"
   ctx_p1="$(run_bootstrap_with_profile "$VD_76" "$FXP_76")"
 
   sed -i '' "s/machine_role:     configured value=main/machine_role:     unknown/" "$FXP_76"
@@ -2960,7 +2960,7 @@ echo "=== 76b. AC-11(FR-9)陰性・MAJOR-1対応: machine_roleがunavailableの�
   VD_76B="$(mktemp -d)"; make_full_vault "$VD_76B"
 
   FXP_76B="$(mktemp -d)/fxp-ac11-unavailable.md"
-  make_v2_profile "$FXP_76B" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP_76B" "role.leader: configured model=opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     unavailable/" "$FXP_76B"
   ctx_unavail="$(run_bootstrap_with_profile "$VD_76B" "$FXP_76B")"
 
@@ -2976,7 +2976,7 @@ echo "=== 77. 設計§11.3新設2件の①: AIENV_MODEL_DEFS_FILEが相対パス
   UNCONFIRMED='🧭 現在＝モード未確定（配役表の team_mode が読めません）。委任の前に本人へ確認します。'
   VD77="$(mktemp -d)"; make_full_vault "$VD77"
   FXP77="$(mktemp -d)/fxp77.md"
-  make_v2_profile "$FXP77" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP77" "role.leader: configured model=opus-high"
   ctx77="$(run_bootstrap_with_profile "$VD77" "$FXP77" "/nonexistent-dir/settings.json" "relative/models.conf")"
   n77="$(printf '%s' "$ctx77" | grep -Fx -c "$UNCONFIRMED")"
   assert_eq "I(T13): AIENV_MODEL_DEFS_FILEが相対パスだと未確定行がちょうど1行（resolve自体がT13でloud失敗する）" "1" "$n77"
@@ -2989,7 +2989,7 @@ echo "=== 78. 設計§11.3新設2件の②: 同じ絶対パスのAIENV_MODEL_DEF
 {
   VD78="$(mktemp -d)"; make_full_vault "$VD78"
   FXP78="$(mktemp -d)/fxp78.md"
-  make_v2_profile "$FXP78" "role.leader: configured model=opus-main"
+  make_v2_profile "$FXP78" "role.leader: configured model=opus-high"
   ctx78_tmp="$(cd /tmp && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"
   ctx78_repo="$(cd "$REPO_ROOT" && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"
   ctx78_vd="$(cd "$VD78" && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"

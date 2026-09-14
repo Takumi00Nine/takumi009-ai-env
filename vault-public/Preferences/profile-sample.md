@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-10
+updated: 2026-09-14
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -31,7 +31,7 @@ aliases:
 - 各キー・各状態のとりうる値は**コメントに書く**（2026-08-30 本人フィードバック＝日本語長文値は手編集困難・指定可能な値がコメントで分かるようにする）。本文中で説明しない値は書かない。
 - `role.leader`はサンプル（メイン機の実値）では確定値のまま配布する。未確定・サブ機で変える場合は**installerの対話（U-1・設計§3.9）が実体側で確定させる**（2026-09-08 本人決定でサンプル＝雛形の unknown 前提は解消）。
 - 能力軸3キー（`team_mode`／`no_read_paths`／`machine_role`）。キー名・書式（`configured value=...`）は A-1 から変更していない（§3.2 の④）。`no_read_paths` は P3 段階4（schema_version 3）で追加。`vault_scope` は 2026-09-07 に撤去（[[Decisions/2026-09-07-retire-vault-scope-axis]]・schema は 4 のまま）。`inventory_source`／`vault_write`／`ui.user_call`／`git_role`／`web_verification` は 2026-09-07 に撤去・`machine_role` を新設（[[Decisions/2026-09-07-profile-axes-consolidation]]・schema 5）。
-- `effort` は各モデル定義（[[Preferences/model-definitions-sample]]）に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通）。定義ファイルのサンプルにある `effort=high` は一例で、機体ごとに選び直してよい。
+- `effort` は effort 対応モデル（Fable／Opus／Sonnet）の定義に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通・[[Preferences/model-definitions-sample]]）。Haiku 4.5 は effort 非対応のため書かない（`haiku` 定義）。定義ファイルのサンプルにある `effort=high` は一例で、機体ごとに選び直してよい。
 
 ## サンプル本文
 
@@ -59,7 +59,7 @@ aliases:
 
 1. `git pull --ff-only`（update-sub.sh でなく素の pull。旧プロファイルのままでは update-sub.sh が拒否するため）
 2. sample を実体へコピー: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は `profile.md.bak.v<旧版>-<日付>` に退避してから。権限 0600）
-3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-main`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
+3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-high`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
 4. `scripts/install-sub.sh --check-profile`（副作用ゼロの検査。OK を確認）
 5. `scripts/update-sub.sh --resync`（1 で pull 済み＝HEAD 不変のため、`--resync` を付けないと Preferences 再同期・config.toml 再生成が走らず静かに終わる）
 6. 新しいフック・職種定義が届いた版では `scripts/install-sub.sh` を再実行（symlink 配置・settings.json 再生成。既存プロファイルには触れない。`AGENTS: dangling` が出たら表示されたファイルを削除）

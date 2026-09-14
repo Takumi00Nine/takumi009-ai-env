@@ -27,7 +27,7 @@ SCRIPT="$REPO_ROOT/scripts/install-main.sh"
 # 既定値をexportしておくことで「未確定→envの値を検査して採用（質問しない）」
 # 経路を常に通り、決定的にsettings.json生成まで進む。§3.9固有のテスト
 # ブロックでは、必要に応じてunset/上書きする。
-export AIENV_LEADER_ROLE='model=sonnet-main'
+export AIENV_LEADER_ROLE='model=sonnet-high'
 
 PASS=0
 FAIL=0
@@ -99,19 +99,15 @@ assert_agents_line() {
 # 参照するだけになったため、role.leaderの解決を伴うテストは全てこの定義
 # ファイルを必要とする（無いとT7で解決不能になり、テストの主眼と無関係な
 # 理由で失敗する）。本ファイルの多くのテストで共通に使う最小の定義セット
-# （sonnet-main／opus-main／opus-high／opus-medium／opus-low／bedrock-opus）を
+# （sonnet-high／opus-high／opus-medium／opus-low／bedrock-opus）を
 # 1箇所にまとめる。
 write_models_conf_at() {
   local dir="$1"
   mkdir -p "$dir"
   cat > "$dir/models.conf" <<'EOF'
-[sonnet-main]
+[sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
-
-[opus-main]
-provider=anthropic-api
-model=claude-opus-5
 
 [opus-high]
 provider=anthropic-api
@@ -169,7 +165,7 @@ team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
-role.leader: configured model=sonnet-main
+role.leader: configured model=sonnet-high
 ---
 EOF
 }
@@ -474,7 +470,7 @@ echo "=== 9. ローカル実体プロファイルの雛形配置: --dry-run で�
 # write_v2_profile_with_bedrock_role <dest> <alias> — role.researcherを
 # provider=bedrock model=<alias>（定義名bedrock-<alias>経由）で配役したschema 6
 # プロファイルを書く（§4.2-d動的Bedrock許可キーのテスト用フィクスチャ）。
-# role.leaderはグローバルexportのAIENV_LEADER_ROLE（model=sonnet-main）と
+# role.leaderはグローバルexportのAIENV_LEADER_ROLE（model=sonnet-high）と
 # 一致する値をあらかじめconfigured済みにしておき、対話に入らず冪等に通す。
 # 併せて<dest>と同じディレクトリへmodels.confを書く（bedrock-<alias>は
 # 標準セットに無いaliasのときだけ追記する。標準セットのbedrock-opusと
@@ -498,7 +494,7 @@ profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-role.leader: configured model=sonnet-main
+role.leader: configured model=sonnet-high
 role.researcher: configured model=bedrock-${alias}
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
@@ -1442,7 +1438,7 @@ echo "=== 32. §3.9対話: configuredなrole.leaderにAIENV_LEADER_ROLEが不一
   write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
 
   rc=0
-  out="$(AIENV_LEADER_ROLE='model=opus-main' \
+  out="$(AIENV_LEADER_ROLE='model=opus-high' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
   assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "LEADER_ROLE_CONFLICTが出る" \
@@ -1505,21 +1501,21 @@ profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-role.researcher: configured model=sonnet-main
+role.researcher: configured model=sonnet-high
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
 
   rc=0
-  AIENV_LEADER_ROLE='model=opus-main' \
+  AIENV_LEADER_ROLE='model=opus-high' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
   rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "role.leader行が新規に挿入される" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-main' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=opus-high' "$PROFILE_PATH" && echo 1 || echo 0)"
   assert_true "role.researcher行は変化しない" \
-    "$(grep -q '^role.researcher: configured model=sonnet-main$' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -q '^role.researcher: configured model=sonnet-high$' "$PROFILE_PATH" && echo 1 || echo 0)"
   assert_true "フロントマターの終端---が保たれている" \
     "$([[ "$(tail -1 "$PROFILE_PATH")" == "---" ]] && echo 1 || echo 0)"
 
@@ -1537,7 +1533,7 @@ echo "=== 36. §3.9対話: role.leaderが2行ある実体は非0終了する（�
 schema_version: 6
 profile_slug: test
 role.leader: unknown
-role.leader: configured model=opus-main
+role.leader: configured model=opus-high
 excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
@@ -1578,13 +1574,13 @@ EOF
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
 
   rc=0
-  AIENV_LEADER_ROLE='model=opus-main' \
+  AIENV_LEADER_ROLE='model=opus-high' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1 || rc=$?
 
   assert_true "installer全体は非0終了する（設計書S16・S4）" \
     "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "profile.mdは新しいリーダー値へ更新されている（profile更新自体は成功）" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-main' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=opus-high' "$PROFILE_PATH" && echo 1 || echo 0)"
   POST_SETTINGS_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
   assert_eq "settings.jsonは旧内容のまま保持される（バイト単位で不変）" "$PRE_SETTINGS_SHA" "$POST_SETTINGS_SHA"
 
@@ -1616,7 +1612,7 @@ echo "=== 38b. 検証職(Codex)2巡目指摘・MINOR回帰: role.leaderが既に
   # 「リーダー配役を対話で確認します」は、この場合でも対話が起きるかの
   # ように誤解させた（実行時は対話しない＝テスト40で確認済み）。
   FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"  # role.leader: configured model=sonnet-main（既定値）
+  make_fake_home "$FAKE_HOME"  # role.leader: configured model=sonnet-high（既定値）
   PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
   PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
 
@@ -1654,11 +1650,11 @@ EOF
   # --non-interactive を付けていても（対話可否によらず）質問されずに
   # env値がそのまま採用されることを確認する（表の「対話可否」列が「—」＝
   # 無関係であることの直接確認）。
-  AIENV_LEADER_ROLE='model=opus-main' \
+  AIENV_LEADER_ROLE='model=opus-high' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --non-interactive >/dev/null 2>&1 || rc=$?
   assert_eq "exit code 0（質問されない）" "0" "$rc"
   assert_true "role.leaderがAIENV_LEADER_ROLEの値で確定する" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-main' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=opus-high' "$PROFILE_PATH" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1672,7 +1668,7 @@ echo "=== 40. §3.9優先順位表 行5: configured+AIENV_LEADER_ROLE有(既存�
   PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
 
   rc=0
-  AIENV_LEADER_ROLE='model=sonnet-main' \
+  AIENV_LEADER_ROLE='model=sonnet-high' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1 || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
@@ -1839,7 +1835,7 @@ team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
-role.leader: configured model=sonnet-main
+role.leader: configured model=sonnet-high
 ---
 EOF
 

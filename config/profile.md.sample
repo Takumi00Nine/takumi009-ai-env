@@ -41,21 +41,21 @@ profile_slug: authoring
 #     セッションで起動する職種は、コア側の職種定義 agents/<職種>.md も要る）
 #  ⚠️ 行を書かなかった職種は unknown 扱い＝保留して本人に確認する
 #     （「使わない」つもりなら not_adopted と明示的に書くこと）
-role.leader:               configured model=fable-main
+role.leader:               configured model=fable-high
 role.navi:                 unknown        # 未実装（Projects/navi-orchestrator 設計中）
-role.requirements-analyst: configured model=opus-main
-role.system-designer:      configured model=opus-main
-role.adoption-critic:      configured model=opus-main
-role.implementer:          configured model=sonnet-main
-role.researcher:           configured model=sonnet-main
-role.operator:             configured model=sonnet-main
-role.vault-scribe:         configured model=sonnet-main
+role.requirements-analyst: configured model=opus-high
+role.system-designer:      configured model=opus-high
+role.adoption-critic:      configured model=opus-high
+role.implementer:          configured model=sonnet-high
+role.researcher:           configured model=sonnet-high
+role.operator:             configured model=sonnet-high
+role.vault-scribe:         configured model=sonnet-high
 role.verifier:             configured model=codex-review-default
 role.ja-doc:               unknown        # 候補=Qwen（H17 実測評価待ち・経路未実装）
 
 # --- ② 代替配役：本命が使えないときに使う（無い職種は書かなくてよい）--
 # 書式は ① と同じ。⚠️ 状態が configured のものだけが代替として採用される
-fallback.verifier: configured model=opus-main  # 候補は1件だけ（2件以上あると本命不能時に機構が選べず止まる）
+fallback.verifier: configured model=opus-high  # 候補は1件だけ（2件以上あると本命不能時に機構が選べず止まる）
 
 # --- ③ このマシンで配役してはいけないモデル -------------------------
 # 書式: excluded_models: <状態> [value=<値>]

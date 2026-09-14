@@ -122,11 +122,11 @@ write_models_conf_at() {
   local dir="$1"
   mkdir -p "$dir"
   cat > "$dir/models.conf" <<'EOF'
-[sonnet-main]
+[sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 
-[opus-main]
+[opus-high]
 provider=anthropic-api
 model=claude-opus-5
 EOF
@@ -152,7 +152,7 @@ team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
 excluded_models: configured value=none
-role.leader: configured model=sonnet-main
+role.leader: configured model=sonnet-high
 ---
 EOF
 }
@@ -163,7 +163,7 @@ EOF
 # 対話可否の判定で止まる。本ファイルの主眼＝Vault骨格配置・symlink化・
 # 機役割の案内ログとは無関係なテストは、この既定値をexportしておくことで
 # 「未確定→envの値を検査して採用（質問しない）」経路を常に通す。
-export AIENV_LEADER_ROLE='model=sonnet-main'
+export AIENV_LEADER_ROLE='model=sonnet-high'
 
 # seed_v1_profile <home> — ローカル実体プロファイルを不在にする。
 # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）: legacy
@@ -209,7 +209,7 @@ seed_v2_profile() {
 ---
 schema_version: 6
 profile_slug: test
-role.leader: configured model=opus-main
+role.leader: configured model=opus-high
 excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable
@@ -511,7 +511,7 @@ echo "=== 11. §3.9対話フラグの転送: --reconfigure-leaderがinstall-main
 ---
 schema_version: 6
 profile_slug: test
-role.leader: configured model=opus-main
+role.leader: configured model=opus-high
 excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable
@@ -520,11 +520,11 @@ machine_role: configured value=sub
 EOF
 
   rc=0
-  AIENV_LEADER_ROLE='model=sonnet-main' \
+  AIENV_LEADER_ROLE='model=sonnet-high' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1 || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "--reconfigure-leaderがinstall-main.shへ転送され、AIENV_LEADER_ROLEの新しい値が採用される" \
-    "$(grep -qE '^role\.leader:.*configured model=sonnet-main' "$PROFILE_PATH" && echo 1 || echo 0)"
+    "$(grep -qE '^role\.leader:.*configured model=sonnet-high' "$PROFILE_PATH" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -596,7 +596,7 @@ echo "=== 13b. --check-profile: 不正プロファイル（role.leader重複=T6�
 schema_version: 6
 profile_slug: test
 role.leader: unknown
-role.leader: configured model=opus-main
+role.leader: configured model=opus-high
 excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable

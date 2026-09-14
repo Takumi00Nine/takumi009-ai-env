@@ -724,7 +724,7 @@ echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC
 # 同レビューのMAJOR-3指摘（定義名と件数だけでは値の誤りを検知できない）に
 # 対応し、名前だけの集合比較から
 # name/provider/model/execution/effortの完全なタプル比較へ強化した
-# （既存4定義=fable-main/opus-main/sonnet-main/codex-review-defaultの
+# （既存4定義=fable-high/opus-high/sonnet-high/codex-review-defaultの
 # 値回帰も、この完全一致比較に含めて恒久的に検知する。profile.md.sampleは
 # 編集不要）。
 echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実値規約（XXXX無し）を満たし、resolverの定義パーサで34定義が値まで一致して読める ==="
@@ -793,9 +793,9 @@ codex-terra-high	external	gpt-5.6-terra	external-cli	high
 codex-terra-low	external	gpt-5.6-terra	external-cli	low
 codex-terra-medium	external	gpt-5.6-terra	external-cli	medium
 fable-5-legacy	anthropic-api	claude-fable-5	subagent	high
-fable-main	anthropic-api	claude-fable-5-1	subagent	high
+fable-high	anthropic-api	claude-fable-5-1	subagent	high
 fable-max	anthropic-api	claude-fable-5-1	subagent	max
-haiku-main	anthropic-api	claude-haiku-4-5-20251001	subagent
+haiku	anthropic-api	claude-haiku-4-5-20251001	subagent
 mantle-fable	bedrock-mantle	anthropic.claude-fable-5-1	subagent
 mantle-haiku	bedrock-mantle	anthropic.claude-haiku-4-5	subagent
 mantle-opus	bedrock-mantle	anthropic.claude-opus-5	subagent
@@ -803,11 +803,11 @@ mantle-sonnet	bedrock-mantle	anthropic.claude-sonnet-5	subagent
 opus-4-6-legacy	anthropic-api	claude-opus-4-6	subagent	high
 opus-4-7-legacy	anthropic-api	claude-opus-4-7	subagent	high
 opus-4-8-legacy	anthropic-api	claude-opus-4-8	subagent	high
+opus-high	anthropic-api	claude-opus-5	subagent	high
 opus-low	anthropic-api	claude-opus-5	subagent	low
-opus-main	anthropic-api	claude-opus-5	subagent	high
 sonnet-4-6-legacy	anthropic-api	claude-sonnet-4-6	subagent	high
+sonnet-high	anthropic-api	claude-sonnet-5	subagent	high
 sonnet-low	anthropic-api	claude-sonnet-5	subagent	low
-sonnet-main	anthropic-api	claude-sonnet-5	subagent	high
 EXPECTED_D16
 )"
         if [ "$defs_tuples" = "$expected_tuples_d16" ]; then

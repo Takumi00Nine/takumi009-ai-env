@@ -192,7 +192,7 @@ team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
 excluded_models: configured value=none
-role.leader: configured model=sonnet-main
+role.leader: configured model=sonnet-high
 ---
 EOF
   write_model_defs "$home/.config/takumi009-ai-env/models.conf"
@@ -238,16 +238,16 @@ write_model_defs() {
   local dest="$1"
   mkdir -p "$(dirname "$dest")"
   cat > "$dest" <<'EOF'
-[sonnet-main]
-provider=anthropic-api
-model=claude-sonnet-5
-
 [sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 effort=high
 
-[opus-main]
+[sonnet-noeffort]
+provider=anthropic-api
+model=claude-sonnet-5
+
+[opus-high]
 provider=anthropic-api
 model=claude-opus-5
 
@@ -463,7 +463,7 @@ echo "=== 5. PA-7: ff-only不可（サブ側にローカルcommitがある）な
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
-  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured model=sonnet-main"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured model=sonnet-high"
   LOCK="$WORK/lock"
 
   # サブ側でローカルcommitを作る（本来は起きないはずだが、ff不可を人工的に再現）
@@ -609,7 +609,7 @@ echo "=== 9b. 配役表machine_role: 値が「sub」以外(例: main)でも即FA
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main"
+    "configured model=sonnet-high"
   sed -i.bak 's/^machine_role:.*/machine_role: configured value=main/' \
     "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
   rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
@@ -656,7 +656,7 @@ echo "=== 9c2. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJ
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.config/takumi009-ai-env"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main"
+    "configured model=sonnet-high"
   sed -i.bak 's/^machine_role:.*/machine_role: configured value=main/' \
     "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
   rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
@@ -711,7 +711,7 @@ echo "=== 9d. 配役表machine_role: 値に内部空白(s u b)があると属性
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main"
+    "configured model=sonnet-high"
   sed -i.bak 's/^machine_role:.*/machine_role: configured value=s u b/' \
     "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
   rm -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md.bak"
@@ -768,7 +768,7 @@ echo "=== 10. settings.json再生成: HEADが変わっていなくても実体�
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   LOCK="$WORK/lock"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured model=opus-main"
+    "configured model=opus-high"
 
   # HEADは変わらない（pull時点で既に最新）ケースでも再生成されることを見る。
   out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK")
@@ -798,7 +798,7 @@ echo "=== 11. settings.json再生成: v2実体ではAIENV_MODEL_SUBのローカ�
   LOCK="$WORK/lock"
 
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured model=opus-main"
+    "configured model=opus-high"
   AIENV_MODEL_SUB='custom-sub-model' DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" "$SCRIPT" >/dev/null
 
   assert_true "AIENV_MODEL_SUBの上書きは反映されない(v2実体ではrole.leaderが正本)" \
@@ -866,7 +866,7 @@ EOF
   # （リーダー実査指摘・結合確認対応: tests/test-install-main.shの
   # write_v2_profile_with_bedrock_role()と同じ様式）。
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main" \
+    "configured model=sonnet-high" \
     "role.researcher: configured model=bedrock-opus"
   LOCK="$WORK/lock"
 
@@ -1375,7 +1375,7 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   # （リーダー実査指摘・結合確認対応）。role.leaderはAIENV_LEADER_ROLEと
   # 一致させ対話を発生させない（既存の値と一致→そのまま通す・冪等＝§3.9）。
   write_v2_profile "$FAKE_HOME_INSTALLER/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main" \
+    "configured model=sonnet-high" \
     "role.researcher: configured model=bedrock-opus" \
     "role.verifier: configured model=bedrock-sonnet" \
     "role.operator: configured model=bedrock-haiku"
@@ -1384,7 +1384,7 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   # 雛形配置（非破壊・初回のみ）はskipされ、対話にも入らない
   # （tests/test-install-main.shが採用している既定パターンと同じ＝担当B
   # からの引き継ぎ）。
-  AIENV_LEADER_ROLE='model=sonnet-main' \
+  AIENV_LEADER_ROLE='model=sonnet-high' \
     SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME_INSTALLER" bash "$REPO_ROOT/scripts/install-main.sh" --sub-delegate >/dev/null 2>&1
 
   # --- update-sub.sh（pull経路。SUBクローン＝add_settings_json_templateが
@@ -1395,7 +1395,7 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   # updater側にも同じ配役のv2プロファイルを置く（installer側と同一集合の
   # Bedrock由来envキーが動的に許可されることの前提を揃える）。
   write_v2_profile "$FAKE_HOME_UPDATER/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main" \
+    "configured model=sonnet-high" \
     "role.researcher: configured model=bedrock-opus" \
     "role.verifier: configured model=bedrock-sonnet" \
     "role.operator: configured model=bedrock-haiku"
@@ -1510,7 +1510,7 @@ echo "=== 21b. §4.3: リーダー行にeffort未指定ならeffortLevelキー�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main"
+    "configured model=sonnet-noeffort"
   LOCK="$WORK/lock"
 
   run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
@@ -1533,7 +1533,7 @@ echo "=== 22. §11.2 項目3の受入条件（設計書§4.3・リーダー確�
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
   PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_v2_profile "$PROFILE_PATH" "configured model=sonnet-main"
+  write_v2_profile "$PROFILE_PATH" "configured model=sonnet-high"
   LOCK="$WORK/lock"
   HEAD_BEFORE="$(git -C "$SUB" rev-parse HEAD)"
 
@@ -2313,7 +2313,7 @@ echo "=== 34. PA-8: HEAD不変で --resync を付けるとPreferencesの再同�
   make_sub_clone "$BARE" "$SUB"
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
-  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured model=sonnet-main"
+  write_v2_profile "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "configured model=sonnet-high"
   LOCK="$WORK/lock"
 
   # 通常実行（--resyncなし）: HEAD不変のため早期終了し、Preferencesは

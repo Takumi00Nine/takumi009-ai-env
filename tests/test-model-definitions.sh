@@ -62,20 +62,20 @@ team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
 excluded_models:  configured value=none
-role.leader:      configured model=opus-main
-role.implementer: configured model=sonnet-main,codex-high
+role.leader:      configured model=opus-high
+role.implementer: configured model=sonnet-noeffort,codex-high
 role.verifier:    configured model=codex-high
 ---
 EOF
 
 cat > "$BASE/models.conf" <<'EOF'
 # モデル定義（実体＝機ごとのローカル。config/models.conf.sampleのコピー）
-[opus-main]
+[opus-high]
 provider=anthropic-api
 model=claude-opus-5
 effort=high
 
-[sonnet-main]
+[sonnet-noeffort]
 provider=anthropic-api
 model=claude-sonnet-5
 
@@ -156,29 +156,29 @@ echo "=== AC-1: FX-B1・FX-B3（陽性）／FX-B2a・FX-B2b・FX-B2c（陰性）
   esac
 
   variant_profile "$WORK/b3.md" '/role.verifier:/a\
-role.ja-doc:      unavailable model=sonnet-main'
+role.ja-doc:      unavailable model=sonnet-noeffort'
   out="$(R "$WORK/b3.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B3: exit0" "0" "$rc"
   lroles="$(L "$WORK/b3.md")"
-  assert_contains "FX-B3: list-rolesにja-doc/unavailable/sonnet-mainの行" "$lroles" "$(printf 'role\tja-doc\tunavailable\tsonnet-main\tanthropic-api\tclaude-sonnet-5\tsubagent\t')"
+  assert_contains "FX-B3: list-rolesにja-doc/unavailable/sonnet-noeffortの行" "$lroles" "$(printf 'role\tja-doc\tunavailable\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5\tsubagent\t')"
 
   # 2026-09-08 Codexレビュー指摘・BLOCKING-1対応（1巡目）: 旧記法の断片
   # （"provider="）を変数へ分けてから展開する（AC-14のrepo検索＝完成
   # 文字列の直書き禁止に一致させないため。意図的な旧記法拒否fixtureで
   # あり、本物の旧記法の取りこぼしではない）。
   legacy_attr_frag="provider="
-  variant_profile "$WORK/b2a.md" "s/role.implementer: configured model=sonnet-main,codex-high/role.implementer: configured ${legacy_attr_frag}anthropic-api model=sonnet-main,codex-high/"
+  variant_profile "$WORK/b2a.md" "s/role.implementer: configured model=sonnet-noeffort,codex-high/role.implementer: configured ${legacy_attr_frag}anthropic-api model=sonnet-noeffort,codex-high/"
   out="$(R "$WORK/b2a.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B2a: exit1" "1" "$rc"
   case "$out" in MINIMAL*) pass "FX-B2a: MINIMALで始まる" ;; *) fail_case "FX-B2a: MINIMALで始まる (実際=$out)" ;; esac
 
-  variant_profile "$WORK/b2b.md" 's/role.implementer: configured model=sonnet-main,codex-high/role.implementer: unavailable/'
+  variant_profile "$WORK/b2b.md" 's/role.implementer: configured model=sonnet-noeffort,codex-high/role.implementer: unavailable/'
   out="$(R "$WORK/b2b.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B2b: exit1" "1" "$rc"
   case "$out" in MINIMAL*) pass "FX-B2b: MINIMALで始まる" ;; *) fail_case "FX-B2b: MINIMALで始まる (実際=$out)" ;; esac
 
   variant_profile "$WORK/b2c.md" '/role.verifier:/a\
-role.ja-doc:      not_adopted model=sonnet-main'
+role.ja-doc:      not_adopted model=sonnet-noeffort'
   out="$(R "$WORK/b2c.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B2c: exit1" "1" "$rc"
   case "$out" in MINIMAL*) pass "FX-B2c: MINIMALで始まる" ;; *) fail_case "FX-B2c: MINIMALで始まる (実際=$out)" ;; esac
@@ -187,7 +187,7 @@ role.ja-doc:      not_adopted model=sonnet-main'
 echo "=== AC-2: FX-B1のlist-rolesが4行に行単位完全一致 ==="
 {
   actual="$(L "$BASE/profile.md")"
-  expected="$(printf 'role\timplementer\tconfigured\tsonnet-main\tanthropic-api\tclaude-sonnet-5\tsubagent\t\nrole\timplementer\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh\nrole\tleader\tconfigured\topus-main\tanthropic-api\tclaude-opus-5\tsubagent\thigh\nrole\tverifier\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh')"
+  expected="$(printf 'role\timplementer\tconfigured\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5\tsubagent\t\nrole\timplementer\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh\nrole\tleader\tconfigured\topus-high\tanthropic-api\tclaude-opus-5\tsubagent\thigh\nrole\tverifier\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh')"
   assert_eq "AC-2: list-roles 4行完全一致" "$expected" "$actual"
 }
 
@@ -196,22 +196,22 @@ echo "=== AC-3: FX-B1・FX-B7（陽性）／FX-B4a〜FX-B4d（陰性） ==="
   # FX-B1自体が4 provider全定義（陽性は上のAC-1で確認済み）。
   cp "$BASE/models.conf" "$WORK/b7.conf"
   # 空行・#コメント・前後空白を混ぜる（FR-2）。
-  sed -i '' 's/^\[sonnet-main\]$/  [sonnet-main]  /' "$WORK/b7.conf"
+  sed -i '' 's/^\[sonnet-noeffort\]$/  [sonnet-noeffort]  /' "$WORK/b7.conf"
   out="$(AIENV_MODEL_DEFS_FILE="$WORK/b7.conf" R "$BASE/profile.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B7: exit0" "0" "$rc"
 
   cp "$BASE/models.conf" "$WORK/b4a.conf"
-  printf '\n[sonnet-main]\nprovider=anthropic-api\nmodel=claude-sonnet-5\n' >> "$WORK/b4a.conf"
+  printf '\n[sonnet-noeffort]\nprovider=anthropic-api\nmodel=claude-sonnet-5\n' >> "$WORK/b4a.conf"
   out="$(AIENV_MODEL_DEFS_FILE="$WORK/b4a.conf" R "$BASE/profile.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B4a: exit1（定義名重複）" "1" "$rc"
 
   cp "$BASE/models.conf" "$WORK/b4b.conf"
-  sed -i '' '/^\[opus-main\]$/,/^$/{/^model=/d;}' "$WORK/b4b.conf"
+  sed -i '' '/^\[opus-high\]$/,/^$/{/^model=/d;}' "$WORK/b4b.conf"
   out="$(AIENV_MODEL_DEFS_FILE="$WORK/b4b.conf" R "$BASE/profile.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B4b: exit1（model欠落）" "1" "$rc"
 
   cp "$BASE/models.conf" "$WORK/b4c.conf"
-  sed -i '' 's/^\[opus-main\]$/[Opus-Main]/' "$WORK/b4c.conf"
+  sed -i '' 's/^\[opus-high\]$/[Opus-High]/' "$WORK/b4c.conf"
   out="$(AIENV_MODEL_DEFS_FILE="$WORK/b4c.conf" R "$BASE/profile.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B4c: exit1（定義名が大文字を含む）" "1" "$rc"
 
@@ -221,7 +221,7 @@ echo "=== AC-3: FX-B1・FX-B7（陽性）／FX-B4a〜FX-B4d（陰性） ==="
 
 echo "=== AC-4: FX-B5（未定義の定義名を参照） ==="
 {
-  variant_profile "$WORK/b5.md" 's/role.implementer: configured model=sonnet-main,codex-high/role.implementer: configured model=sonnet-main,does-not-exist/'
+  variant_profile "$WORK/b5.md" 's/role.implementer: configured model=sonnet-noeffort,codex-high/role.implementer: configured model=sonnet-noeffort,does-not-exist/'
   out="$(R "$WORK/b5.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B5: exit1" "1" "$rc"
   assert_contains "FX-B5: 理由にimplementerを含む" "$out" "implementer"
@@ -273,7 +273,7 @@ EOF
   ldout="$(LD "$WORK/b6a.md" "$BASE/agents" 2>&1)"; ldrc=$?
   assert_eq "FX-B6a: resolve-leaderもexit1" "1" "$ldrc"
   assert_contains "FX-B6a: resolve-leaderの理由にT4-LEGACY" "$ldout" "T4-LEGACY"
-  cout="$(C "$WORK/b6a.md" implementer sonnet-main "$BASE/agents" 2>&1)"; crc=$?
+  cout="$(C "$WORK/b6a.md" implementer sonnet-noeffort "$BASE/agents" 2>&1)"; crc=$?
   assert_eq "FX-B6a: resolve-candidateもexit1" "1" "$crc"
   assert_contains "FX-B6a: resolve-candidateの理由にT4-LEGACY" "$cout" "T4-LEGACY"
 }
@@ -303,7 +303,7 @@ echo "=== AC-7: 定義ファイルの候補注入（bootstrap-vault.sh・I） ==
       AIENV_AGENTS_DIR="$BASE/agents" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 "$BOOTSTRAP" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])' 2>/dev/null)"
-  assert_contains "AC-7陽性: sonnet-mainが現れる" "$ctx" "sonnet-main"
+  assert_contains "AC-7陽性: sonnet-noeffortが現れる" "$ctx" "sonnet-noeffort"
   assert_contains "AC-7陽性: codex-highが現れる" "$ctx" "codex-high"
   assert_not_contains "AC-7陽性: claude-sonnet-5は現れない" "$ctx" "claude-sonnet-5"
 
@@ -329,7 +329,7 @@ echo "=== AC-8: known-keysの3行目がSCHEMA_VERSION:6 ==="
 
 echo "=== AC-9: FX-B9（リーダーは先頭候補のみ解決） ==="
 {
-  variant_profile "$WORK/b9.md" 's/role.leader:      configured model=opus-main/role.leader:      configured model=opus-main,sonnet-main/'
+  variant_profile "$WORK/b9.md" 's/role.leader:      configured model=opus-high/role.leader:      configured model=opus-high,sonnet-noeffort/'
   out="$(LD "$WORK/b9.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B9: exit0" "0" "$rc"
   keys="$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
@@ -393,7 +393,7 @@ echo "=== AC-11: FX-B12a（陽性）／FX-B12b・FX-B12c（陰性・exit2かつW
   assert_eq "FX-B12b: Wの記録が0行" "0" "$cnt_b"
 
   : > "$CALLS_LOG"
-  invoke_via_candidate "$BASE/profile.md" implementer opus-main "$BASE/agents"; rc=$?
+  invoke_via_candidate "$BASE/profile.md" implementer opus-high "$BASE/agents"; rc=$?
   assert_eq "FX-B12c: exit2（候補外）" "2" "$rc"
   cnt_c="$(wc -l < "$CALLS_LOG" | tr -d ' ')"
   assert_eq "FX-B12c: Wの記録が0行" "0" "$cnt_c"
@@ -419,10 +419,10 @@ echo "=== RG-2: resolve-candidateの2分岐（定義名省略の無条件exit2�
   # 評価せず直ちにfallbackへ進み、fallbackの定義（codex-high）を返す
   # （exit0）。
   variant_profile "$WORK/rg2c.md" \
-    's/role.implementer: configured model=sonnet-main,codex-high/role.implementer: unavailable model=sonnet-main/' \
+    's/role.implementer: configured model=sonnet-noeffort,codex-high/role.implementer: unavailable model=sonnet-noeffort/' \
     '/role.implementer:/a\
 fallback.implementer: configured model=codex-high'
-  out_rg2c="$(python3 "$LIB" resolve-candidate "$WORK/rg2c.md" --role implementer --model-def sonnet-main --agents-dir "$BASE/agents")"; rc_rg2c=$?
+  out_rg2c="$(python3 "$LIB" resolve-candidate "$WORK/rg2c.md" --role implementer --model-def sonnet-noeffort --agents-dir "$BASE/agents")"; rc_rg2c=$?
   assert_eq "RG-2③: exit0（unavailable→fallback発火）" "0" "$rc_rg2c"
   sel_rg2c="$(printf '%s' "$out_rg2c" | sed -n '1p' | awk -F'\t' '{print $2}')"
   assert_eq "RG-2③: 選択結果がcodex-high（fallback経由）" "codex-high" "$sel_rg2c"
@@ -430,8 +430,8 @@ fallback.implementer: configured model=codex-high'
   # ④role.implementerがunavailable＋fallback不在: CANDIDATE_UNUSABLE:
   # ROLE_UNAVAILABLEという安定コードでexit1になる。
   variant_profile "$WORK/rg2d.md" \
-    's/role.implementer: configured model=sonnet-main,codex-high/role.implementer: unavailable model=sonnet-main/'
-  out_rg2d="$(python3 "$LIB" resolve-candidate "$WORK/rg2d.md" --role implementer --model-def sonnet-main --agents-dir "$BASE/agents" 2>&1 1>/dev/null)"; rc_rg2d=$?
+    's/role.implementer: configured model=sonnet-noeffort,codex-high/role.implementer: unavailable model=sonnet-noeffort/'
+  out_rg2d="$(python3 "$LIB" resolve-candidate "$WORK/rg2d.md" --role implementer --model-def sonnet-noeffort --agents-dir "$BASE/agents" 2>&1 1>/dev/null)"; rc_rg2d=$?
   assert_eq "RG-2④: exit1（unavailable・fallback不在）" "1" "$rc_rg2d"
   assert_contains "RG-2④: CANDIDATE_UNUSABLE:ROLE_UNAVAILABLE" "$out_rg2d" "CANDIDATE_UNUSABLE:ROLE_UNAVAILABLE"
 }
@@ -498,7 +498,7 @@ EOF
 fallback.implementer: configured model=codex-fallback'
   mkdir -p "$WORK/agents-b13"
   cp "$BASE/agents/verifier.md" "$BASE/agents/ja-doc.md" "$WORK/agents-b13/"
-  # implementer.mdを置かない＝sonnet-mainが職種定義の存在検査(V1-b)で使用不可、
+  # implementer.mdを置かない＝sonnet-noeffortが職種定義の存在検査(V1-b)で使用不可、
   # codex-highは使用可（external-cliはV1-b対象外）。
 
   : > "$CALLS_LOG"
@@ -515,7 +515,7 @@ fallback.implementer: configured model=codex-fallback'
   assert_eq "FX-B13a: Wの記録はちょうど1行" "1" "$(wc -l < "$CALLS_LOG" | tr -d ' ')"
 
   : > "$CALLS_LOG"
-  c_out2="$(AIENV_MODEL_DEFS_FILE="$WORK/b13.conf" python3 "$LIB" resolve-candidate "$WORK/b13.md" --role implementer --model-def sonnet-main --agents-dir "$WORK/agents-b13")"; rc=$?
+  c_out2="$(AIENV_MODEL_DEFS_FILE="$WORK/b13.conf" python3 "$LIB" resolve-candidate "$WORK/b13.md" --role implementer --model-def sonnet-noeffort --agents-dir "$WORK/agents-b13")"; rc=$?
   assert_eq "FX-B13b: exit0" "0" "$rc"
   sel2="$(printf '%s' "$c_out2" | sed -n '1p' | awk -F'\t' '{print $2}')"
   assert_eq "FX-B13b: 選択結果がcodex-fallback（fallback発火）" "codex-fallback" "$sel2"
@@ -528,13 +528,13 @@ fallback.implementer: configured model=codex-fallback'
 echo "=== RG-1: 指定した非anthropic-api/subagentはfallback評価前に拒否 ==="
 {
   # bedrock-opusは本命（bedrock.envを渡さないので経路がdisabled＝V9-d3で
-  # 使用不可・決定的）。fallback.implementer=sonnet-main（anthropic-api/
+  # 使用不可・決定的）。fallback.implementer=sonnet-noeffort（anthropic-api/
   # subagentの1件）。職種定義implementer.mdはmodel: claude-opus-5にして
-  # sonnet-main（claude-sonnet-5）と不一致にする。
+  # sonnet-noeffort（claude-sonnet-5）と不一致にする。
   variant_profile "$WORK/rg1.md" \
-    's/role.implementer: configured model=sonnet-main,codex-high/role.implementer: configured model=bedrock-opus/' \
+    's/role.implementer: configured model=sonnet-noeffort,codex-high/role.implementer: configured model=bedrock-opus/' \
     '/role.implementer:/a\
-fallback.implementer: configured model=sonnet-main'
+fallback.implementer: configured model=sonnet-noeffort'
   mkdir -p "$WORK/agents-rg1"
   cat > "$WORK/agents-rg1/implementer.md" <<'EOF'
 ---
@@ -570,7 +570,7 @@ echo "=== T13: AIENV_MODEL_DEFS_FILEが相対パスならR/L/LD/Cの4口がT13�
   assert_eq "T13(LD): exit1" "1" "$ldrc"
   assert_contains "T13(LD): 理由文" "$ldout" "T13"
 
-  cout="$(cd /tmp && AIENV_MODEL_DEFS_FILE="relative/models.conf" python3 "$LIB" resolve-candidate "$BASE/profile.md" --role implementer --model-def sonnet-main --agents-dir "$BASE/agents" 2>&1)"; crc=$?
+  cout="$(cd /tmp && AIENV_MODEL_DEFS_FILE="relative/models.conf" python3 "$LIB" resolve-candidate "$BASE/profile.md" --role implementer --model-def sonnet-noeffort --agents-dir "$BASE/agents" 2>&1)"; crc=$?
   assert_eq "T13(C): exit1" "1" "$crc"
   assert_contains "T13(C): 理由文" "$cout" "T13"
 }
@@ -607,9 +607,9 @@ echo "=== cwd不変性: 同じ絶対パスなら呼び出し元cwdを変えて�
   assert_eq "cwd不変性(LD): /tmp と REPO_ROOT で同じ結果(exit+stdout)" "$ld1" "$ld2"
   assert_eq "cwd不変性(LD): /tmp と WORK で同じ結果(exit+stdout)" "$ld1" "$ld3"
 
-  c1="$(run_in_cwd /tmp resolve-candidate "$BASE/profile.md" --role implementer --model-def sonnet-main --agents-dir "$BASE/agents")"
-  c2="$(run_in_cwd "$REPO_ROOT" resolve-candidate "$BASE/profile.md" --role implementer --model-def sonnet-main --agents-dir "$BASE/agents")"
-  c3="$(run_in_cwd "$WORK" resolve-candidate "$BASE/profile.md" --role implementer --model-def sonnet-main --agents-dir "$BASE/agents")"
+  c1="$(run_in_cwd /tmp resolve-candidate "$BASE/profile.md" --role implementer --model-def sonnet-noeffort --agents-dir "$BASE/agents")"
+  c2="$(run_in_cwd "$REPO_ROOT" resolve-candidate "$BASE/profile.md" --role implementer --model-def sonnet-noeffort --agents-dir "$BASE/agents")"
+  c3="$(run_in_cwd "$WORK" resolve-candidate "$BASE/profile.md" --role implementer --model-def sonnet-noeffort --agents-dir "$BASE/agents")"
   assert_eq "cwd不変性(C): /tmp と REPO_ROOT で同じ結果(exit+stdout)" "$c1" "$c2"
   assert_eq "cwd不変性(C): /tmp と WORK で同じ結果(exit+stdout)" "$c1" "$c3"
 }
@@ -650,7 +650,7 @@ for n in range(1, 29):
                           f"role.requirements-analyst: {state} model={candidates}", profile, flags=re.M)
     assert count == 1
     if n in (5, 16, 17, 25, 26, 28):
-        fallback = "probe" if n in (25, 26) else ("opus-4-7-legacy" if n == 17 else "sonnet-main")
+        fallback = "probe" if n in (25, 26) else ("opus-4-7-legacy" if n == 17 else "sonnet-high")
         end = text.rfind("---")
         text = text[:end] + f"fallback.requirements-analyst: configured model={fallback}\n" + text[end:]
     (d / "profile.md").write_text(text)
@@ -691,8 +691,8 @@ p = run(11); assert p.returncode == 1 and p.stdout == b"" and p.stderr.startswit
 p = run(12); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tpick\tgpt-6-astra\texternal-cli\tlow\nCODEX_ARGS\t--model gpt-6-astra --effort low\n",b"")
 p = run(13); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tpick\tdefault\texternal-cli\t\nCODEX_ARGS\t\n",b"")
 p = run(14, model_def=None, profile_path=root/"missing.md"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"CANDIDATE_UNSPECIFIED\t")
-p = run(15, model_def="sonnet-main"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"CANDIDATE_NOT_IN_LIST\t")
-p = run(16); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tsonnet-main\tclaude-sonnet-5\tsubagent\thigh\nAGENT_MODEL\tsonnet\n",b"")
+p = run(15, model_def="sonnet-high"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"CANDIDATE_NOT_IN_LIST\t")
+p = run(16); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tsonnet-high\tclaude-sonnet-5\tsubagent\thigh\nAGENT_MODEL\tsonnet\n",b"")
 p = run(17); assert (p.returncode,p.stdout,p.stderr)==(2,b"",b"AGENT_MODEL_UNSUPPORTED\trole=requirements-analyst def=opus-4-7-legacy model=claude-opus-4-7\n")
 p = run(18); assert p.returncode==1 and p.stdout==b"" and b"V1-b" in p.stderr
 p = run(19); assert p.returncode==0 and p.stdout.endswith(b"AGENT_MODEL\topus\n")

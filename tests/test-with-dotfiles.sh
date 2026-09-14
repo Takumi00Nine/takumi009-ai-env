@@ -29,7 +29,7 @@ REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 # --non-interactiveいずれも指定せず実行すると対話可否の判定で止まる。
 # 本ファイルの主眼＝--with-dotfilesの呼び分けとは無関係なので、既定値を
 # exportして「未確定→envの値を検査して採用（質問しない）」経路を通す。
-export AIENV_LEADER_ROLE='model=sonnet-main'
+export AIENV_LEADER_ROLE='model=sonnet-high'
 
 PASS=0
 FAIL=0
@@ -78,7 +78,7 @@ write_models_conf_at() {
   local dir="$1"
   mkdir -p "$dir"
   cat > "$dir/models.conf" <<'EOF'
-[sonnet-main]
+[sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 EOF
@@ -103,7 +103,7 @@ team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 excluded_models: configured value=none
-role.leader: configured model=sonnet-main
+role.leader: configured model=sonnet-high
 ---
 EOF
 }

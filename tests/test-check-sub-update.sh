@@ -93,7 +93,7 @@ team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: ${mr}
 excluded_models: configured value=none
-role.leader: configured model=sonnet-main
+role.leader: configured model=sonnet-high
 ---
 EOF
   # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§11.3・schema6）:
@@ -102,7 +102,7 @@ EOF
   # run_hook_home()がAIENV_MODEL_DEFS_FILEをこのパスへ向ける（向け忘れると
   # 本人の実ファイルを読みに行くため必ず対にする）。
   cat > "$(dirname "$path")/models.conf" <<'EOF'
-[sonnet-main]
+[sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 EOF

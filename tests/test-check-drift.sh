@@ -326,11 +326,11 @@ write_model_defs() {
   local dest="$1"
   mkdir -p "$(dirname "$dest")"
   cat > "$dest" <<'EOF'
-[sonnet-main]
+[sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 
-[opus-main]
+[opus-high]
 provider=anthropic-api
 model=claude-opus-5
 
@@ -687,7 +687,7 @@ echo "=== 4j5. FX-M1直接検証(Codex一次レビュー指摘・MAJOR-1・第2�
   # 差分でこのテストの意図が濁る。
   install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5" ""
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=opus-main" \
+    "configured model=opus-high" \
     "machine_role: configured value=main"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -710,7 +710,7 @@ echo "=== 4j6. FX-M2直接検証(Codex一次レビュー指摘・MAJOR-1・第2�
   # するため）。
   install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5" ""
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=opus-main" \
+    "configured model=opus-high" \
     "machine_role: configured value=sub"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -3018,8 +3018,8 @@ echo "=== 68. ⑧ --check-profileが非0終了するとPROFILE-VALIDATION-FAILED
   # V15（禁止キー名ガード）に違反する行を書く＝fail区分のvalidator違反を
   # 決定的に起こす（構文エラーの中でも最も再現しやすいケースを選ぶ）。
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main" \
-    "role.leader_api_token: configured model=sonnet-main"
+    "configured model=sonnet-high" \
+    "role.leader_api_token: configured model=sonnet-high"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "PROFILE-VALIDATION-FAILEDとして検知される" "$out" "[PROFILE-VALIDATION-FAILED]"
@@ -3052,7 +3052,7 @@ echo "=== 70. ⑧ advisory（V1-a・V9-f）がdriftとして週次通知に出�
   install_fake_home "$REPO" "$HOME_DIR"
   echo "# researcher" > "$REPO/claude/agents/researcher.md"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main" \
+    "configured model=sonnet-high" \
     "role.researcher: configured model=opus-46-xhigh" \
     "mystery_key: configured value=abc"
 
@@ -3082,7 +3082,7 @@ echo "=== 70b. ⑧ advisory T4-PRIME（実体の版がコードの期待版よ�
 ---
 schema_version: 7
 profile_slug: test
-role.leader: configured model=sonnet-main
+role.leader: configured model=sonnet-high
 excluded_models: configured value=none
 team_mode: configured value=full
 ---
@@ -3109,7 +3109,7 @@ echo "=== 70c. ⑧ advisory JUDGEMENT_UNKNOWN（ワーカーのBedrock経路有�
   # advisoryへ積む＝profile_resolve.py _evaluate_single_candidate()）。
   mkdir -p "$HOME_DIR/.config/takumi009-ai-env/bedrock.env"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main" \
+    "configured model=sonnet-high" \
     "role.researcher: configured model=bedrock-sonnet"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -3131,7 +3131,7 @@ echo "=== 70d. ⑧ advisory EFFORT_COMPATIBILITY_UNVERIFIED（Bedrock別名で�
   # EFFORT_COMPATIBILITY_UNVERIFIEDになる（profile_resolve.py
   # model_effort_advisory()）。
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-main" \
+    "configured model=sonnet-high" \
     "role.researcher: configured model=bedrock-opus-xhigh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"

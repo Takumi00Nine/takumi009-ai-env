@@ -34,24 +34,24 @@
 # =====================================================================
 
 # --- 現行世代・参照用3定義（配役表・テストが参照。名前と値を変えない）---
-[fable-main]
+[fable-high]
 provider=anthropic-api
 model=claude-fable-5-1
 effort=high
 
-[opus-main]
+[opus-high]
 provider=anthropic-api
 model=claude-opus-5
 effort=high
 
-[sonnet-main]
+[sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 effort=high
 
 # 現行世代・Haiku 4.5。分類・抽出・定型変換など判断の軽い大量処理向け。
 # effort非対応のため書かない（日付付きID）
-[haiku-main]
+[haiku]
 provider=anthropic-api
 model=claude-haiku-4-5-20251001
 

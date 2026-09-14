@@ -1,6 +1,6 @@
 ---
 date: 2026-09-08
-updated: 2026-09-10
+updated: 2026-09-14
 tags: [preference, core, profile, sample, model]
 project: takumi009-ai-env
 related:
@@ -33,7 +33,7 @@ aliases:
 
 | 属性 | サンプルの値（例） | 確認手順（1行） |
 |---|---|---|
-| `[定義名]` | `[opus-main]` | 自分で決めてよい（`^[a-z0-9][a-z0-9-]*$`）。配役表の `role.*`／`fallback.*` の `model=` からこの名前で参照する |
+| `[定義名]` | `[opus-high]` | 自分で決めてよい（`^[a-z0-9][a-z0-9-]*$`）。配役表の `role.*`／`fallback.*` の `model=` からこの名前で参照する |
 | `provider` | `anthropic-api` / `bedrock` / `external` | このマシンで実際に使う経路を選ぶ |
 | `model` | 実モデルID（サンプルはメイン機の実値） | `anthropic-api`＝具体ID（別名は書かない）／`bedrock`＝別名だけ（実IDは `bedrock.env` のピン留め側）／`external`＝外部CLIが受理する実モデルID、または予約語（CLI側の既定を使う指定） |
 | `execution` | `external-cli` | `provider=external` のときだけ必ず書く |

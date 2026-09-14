@@ -91,17 +91,17 @@ echo "=== AC-2: resolve-candidate が各職種の候補で exit0（configured �
   # vault-scribe/verifier）。navi・ja-docはunknownなので対象外。全9件を通す
   # （2026-09-08 Codexレビュー指摘・MAJOR対応・1巡目: 代表5件だけでは
   # 職種ごとの候補所属判定を固定できない）。
-  check_candidate leader fable-main
-  check_candidate requirements-analyst opus-main
-  check_candidate system-designer opus-main
-  check_candidate adoption-critic opus-main
-  check_candidate implementer sonnet-main
-  check_candidate researcher sonnet-main
-  check_candidate operator sonnet-main
-  check_candidate vault-scribe sonnet-main
+  check_candidate leader fable-high
+  check_candidate requirements-analyst opus-high
+  check_candidate system-designer opus-high
+  check_candidate adoption-critic opus-high
+  check_candidate implementer sonnet-high
+  check_candidate researcher sonnet-high
+  check_candidate operator sonnet-high
+  check_candidate vault-scribe sonnet-high
   check_candidate verifier codex-review-default
 
-  # fallback.verifier（opus-main・候補ちょうど1件）は--model-defで直接指定
+  # fallback.verifier（opus-high・候補ちょうど1件）は--model-defで直接指定
   # できない（D-5＝fallbackの定義名を直接指定させない）ので、role.verifierの
   # 候補を一時的にunavailableにした変異コピーでfallback発火を実際に通す
   # （2026-09-08 Codexレビュー指摘・MAJOR対応・1巡目）。
@@ -113,7 +113,7 @@ echo "=== AC-2: resolve-candidate が各職種の候補で exit0（configured �
   fb_out="$(AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" python3 "$LIB" resolve-candidate "$mutant_fb" --role verifier --model-def codex-review-default --agents-dir "$AGENTS_DIR" 2>&1)"; fb_rc=$?
   assert_eq "AC-2: fallback.verifier発火時にexit0" "0" "$fb_rc"
   fb_def="$(printf '%s' "$fb_out" | sed -n '1p' | awk -F'\t' '{print $2}')"
-  assert_eq "AC-2: fallback.verifierの定義名がopus-main" "opus-main" "$fb_def"
+  assert_eq "AC-2: fallback.verifierの定義名がopus-high" "opus-high" "$fb_def"
 }
 
 echo "=== AC-3: --print-bedrock-env-json が認証情報キーを1つも出さず正常終了 ==="
