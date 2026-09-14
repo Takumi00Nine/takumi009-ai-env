@@ -32,7 +32,7 @@ If a case arises on a sub machine where a rule needs fixing, don't fix it there 
 takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # Template for ~/.claude/settings.json (generated, not a symlink; see below)
-│   ├── hooks/                 # bootstrap-vault.sh, usage-inject.sh, check-sub-update.sh, delegation-gate-v2.sh, bash-danger-gate.sh, next-pane-resolve.sh, vault-recall.sh, vault-read-log.sh
+│   ├── hooks/                 # bootstrap-vault.sh, usage-inject.sh, check-sub-update.sh, delegation-gate-v2.sh, bash-danger-gate.sh, next-pane-resolve.sh, task-pane-resolve.sh, vault-recall.sh, vault-read-log.sh
 │   └── agents/                # Worker role definitions (7 roles)
 ├── codex/
 │   ├── AGENTS.md               # ~/.codex/AGENTS.md (symlink target)
@@ -148,10 +148,10 @@ Measured 2026-09-10 (sub machine, schema 4→6). `scripts/update-sub.sh` reads t
 5. `scripts/update-sub.sh --resync` — step 1 already pulled, so `HEAD` hasn't moved; `update-sub.sh` still regenerates `settings.json`, re-syncs role-definition symlinks, and runs its managed-symlink drift auto-heal on every run regardless of `HEAD`, but `--resync` is what additionally forces the `vault-public/Preferences/` re-sync for this no-`HEAD`-change case (it does not regenerate `codex/config.toml` — that only happens when `HEAD` actually moves).
 6. New hooks or role definitions shipped in the version you pulled are picked up automatically by `update-sub.sh`'s managed-symlink drift auto-heal described above — you don't need a manual `install-sub.sh` re-run just for that. Only re-run `scripts/install-sub.sh` (places symlinks, regenerates `settings.json`; never touches the existing profile) if `update-sub.sh` printed a warning that this automatic re-sync itself failed. If it prints `AGENTS: dangling`, delete the file(s) it names.
 7. Verify with `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → expect `OK schema_version=<expected version> ... MACHINE_ROLE:sub`. Also check the mode line printed at the start of a new session.
-8. **Show cmux Dock's "Next Task" pane on a sub machine too (optional, dotfiles-installed machines only)**: the display source is that machine's own local Vault Projects note (its `## Tasks` section), so no data sync is needed. The pieces live in the dotfiles repo (`cmux/cmux-task-watch/`, the shared lib, and `dock.json`'s 4th pane).
+8. **Show cmux Dock's "Task" pane on a sub machine too (optional, dotfiles-installed machines only)**: the display source is that machine's own local Vault Projects note (its `## Tasks` section), so no data sync is needed. The pieces live in the dotfiles repo (`cmux/cmux-task-watch/`, the shared lib, and `dock.json`'s 4th pane).
    - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh` (on a machine without dotfiles yet, use `scripts/install-sub.sh --with-dotfiles` instead). `install.sh` sets up the `~/.config/cmux/dock.json` symlink, the `~/work/tools/cmux-next-watch` symlink, and the dock-guard LaunchAgent.
-   - `mkdir -p ~/work/tools && ln -sfn ~/work/dotfiles/cmux/cmux-task-watch ~/work/tools/cmux-task-watch` (⚠️ `dock.json`'s Next Task pane launches `~/work/tools/cmux-task-watch/cmux-task-watch.sh`, but `install.sh` does not create this symlink — it's a manual step, as of 2026-09-10).
-   - Restart cmux → dock-guard re-seeds all four panes: Usage / Next Project / Next Task / System.
+   - `mkdir -p ~/work/tools && ln -sfn ~/work/dotfiles/cmux/cmux-task-watch ~/work/tools/cmux-task-watch` (⚠️ `dock.json`'s Task pane launches `~/work/tools/cmux-task-watch/cmux-task-watch.sh`, but `install.sh` does not create this symlink — it's a manual step, as of 2026-09-10).
+   - Restart cmux → dock-guard re-seeds all four panes: Usage / Project / Task / System.
    - The pane only shows content once the leader declares a project during the session with `~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>` (the target `Projects/<slug>.md` needs a `## Tasks` section; this declaration step is intentionally not hooked automatically).
 
 ⚠️ `update-sub.sh`'s failure message attributes the cause to "the role-cast profile's `machine_role` isn't `sub`", but the exact same message also appears when the real cause is an old-schema profile whose fixed keys read as `unknown` (the resolver's own `stderr` is discarded). Run `profile_resolve.py resolve` directly first to see what it's actually reading before assuming which cause applies.
@@ -323,7 +323,7 @@ None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the
 takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json のテンプレ（symlinkではなく生成、後述）
-│   ├── hooks/                 # bootstrap-vault.sh・usage-inject.sh・check-sub-update.sh・delegation-gate-v2.sh・bash-danger-gate.sh・next-pane-resolve.sh・vault-recall.sh・vault-read-log.sh
+│   ├── hooks/                 # bootstrap-vault.sh・usage-inject.sh・check-sub-update.sh・delegation-gate-v2.sh・bash-danger-gate.sh・next-pane-resolve.sh・task-pane-resolve.sh・vault-recall.sh・vault-read-log.sh
 │   └── agents/                # ワーカー役割定義（7ロール）
 ├── codex/
 │   ├── AGENTS.md               # ~/.codex/AGENTS.md （symlink先）
@@ -439,10 +439,10 @@ scripts/install-sub.sh
 5. `scripts/update-sub.sh --resync` — 1で既に pull 済み（`HEAD` は不変）。`update-sub.sh` は `HEAD` の増減に関わらず毎回 `settings.json` の再生成・職種定義symlinkの再同期・管理symlinkのdrift自動収束を行うが、`--resync` はこの「`HEAD`不変」の場合に限って `vault-public/Preferences/` の再同期だけを追加で強制する（`codex/config.toml` の再生成は`--resync`では行われず、`HEAD`が実際に進んだときだけ走る）。
 6. 取得した版に新しいフックや職種定義が含まれていても、上記の `update-sub.sh` 管理symlink drift自動収束が自動的に取り込むため、そのためだけに `scripts/install-sub.sh` を手動再実行する必要はありません。手動再実行（symlink 配置・`settings.json` の再生成。既存プロファイルには一切触れない）が必要なのは、`update-sub.sh` がこの自動再同期自体の失敗を警告したときだけです。`AGENTS: dangling` が出た場合は、表示されたファイルを削除する。
 7. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub` を確認する。新しいセッションの開幕1行でもモードを確認する。
-8. **cmux Dock の「Next Task」をサブ機でも出す（任意・dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。部品は dotfiles 側にある（`cmux/cmux-task-watch/`・共有 lib・`dock.json` の4枠目）。
+8. **cmux Dock の「Task」をサブ機でも出す（任意・dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。部品は dotfiles 側にある（`cmux/cmux-task-watch/`・共有 lib・`dock.json` の4枠目）。
    - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は代わりに `scripts/install-sub.sh --with-dotfiles`）。`install.sh` が `~/.config/cmux/dock.json` の symlink・`~/work/tools/cmux-next-watch` の symlink・dock-guard LaunchAgent を整える。
-   - `mkdir -p ~/work/tools && ln -sfn ~/work/dotfiles/cmux/cmux-task-watch ~/work/tools/cmux-task-watch`（⚠️ `dock.json` の Next Task 枠は `~/work/tools/cmux-task-watch/cmux-task-watch.sh` を起動するが、`install.sh` はこの symlink を作らない＝手作業。2026-09-10時点）。
-   - cmux を再起動 → dock-guard が Usage／Next Project／Next Task／System の4枠へ再シードする。
+   - `mkdir -p ~/work/tools && ln -sfn ~/work/dotfiles/cmux/cmux-task-watch ~/work/tools/cmux-task-watch`（⚠️ `dock.json` の Task 枠は `~/work/tools/cmux-task-watch/cmux-task-watch.sh` を起動するが、`install.sh` はこの symlink を作らない＝手作業。2026-09-10時点）。
+   - cmux を再起動 → dock-guard が Usage／Project／Task／System の4枠へ再シードする。
    - セッション中にリーダーが `~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言は自動フック化しない）。
 
 ⚠️ `update-sub.sh` の失敗文面は原因を「配役表の `machine_role` が `sub` でない」と示しますが、実際の起点が「プロファイルが旧 schema で固定キーが `unknown` 扱いになっている」場合でも同じ文面になります（resolver 自身の `stderr` は捨てられます）。まず `profile_resolve.py resolve` を直接叩いて何が読めているかを確認してから、原因を判断してください。
@@ -508,7 +508,7 @@ scripts/check-drift.sh
 
 以下5点を検査し、一覧表示します（**検知しても exit 1 にはしません**。あくまで手動確認用のレポートツールです）:
 
-1. symlink 19ファイルが repo の実体を指しているか。加えて生成物 `~/.claude/settings.json` の内容がプレースホルダ展開込みで repo テンプレと一致しているか（`model` フィールドも他のキーと同様、この機の `machine_role` から期待される値と比較する。`/model` での切替によって生じた差分も含め、不一致は他のキーと同じくdrift計上する＝特別扱いしない）
+1. symlink（`install-main.sh` が配置する集合）が repo の実体を指しているか。加えて生成物 `~/.claude/settings.json` の内容がプレースホルダ展開込みで repo テンプレと一致しているか（`model` フィールドも他のキーと同様、この機の `machine_role` から期待される値と比較する。`/model` での切替によって生じた差分も含め、不一致は他のキーと同じくdrift計上する＝特別扱いしない）
 2. `~/.codex/config.toml`（生成物）が repo のテンプレとプレースホルダ展開込みで一致しているか
 3. このリポジトリに未commitの変更が無いか
 4. `vault-public/Preferences` と実Vaultの `Preferences` に差分が無いか（`export-public-vault.sh` のエクスポート漏れ検知）

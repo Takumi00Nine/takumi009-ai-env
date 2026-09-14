@@ -101,6 +101,7 @@ EOF
   echo '#!/bin/bash' > "$repo/claude/hooks/vault-recall.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/vault-read-log.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/next-pane-resolve.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/task-pane-resolve.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/check-sub-update.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/context-size-warn.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/agent-model-guard.sh"
@@ -206,6 +207,7 @@ with open(sys.argv[2], 'w') as f:
   ln -s "$repo/claude/hooks/vault-recall.sh" "$home/.claude/hooks/vault-recall.sh"
   ln -s "$repo/claude/hooks/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
   ln -s "$repo/claude/hooks/next-pane-resolve.sh" "$home/.claude/hooks/next-pane-resolve.sh"
+  ln -s "$repo/claude/hooks/task-pane-resolve.sh" "$home/.claude/hooks/task-pane-resolve.sh"
   ln -s "$repo/claude/hooks/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
   ln -s "$repo/claude/hooks/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"
   ln -s "$repo/claude/hooks/agent-model-guard.sh" "$home/.claude/hooks/agent-model-guard.sh"
@@ -404,7 +406,7 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "symlink drift 0件" "$out" "symlink総数: 13件 / drift: 0件"
+  assert_contains "symlink drift 0件" "$out" "symlink総数: 14件 / drift: 0件"
   assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
   assert_contains "config.toml一致" "$out" "TOML三分類で一致しています"
   assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
@@ -441,7 +443,7 @@ echo "=== 2. ①symlinkが無い（未インストール）を検知する ==="
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "MISSING検知" "$out" "[MISSING]"
-  assert_contains "13件全部drift" "$out" "symlink総数: 13件 / drift: 13件"
+  assert_contains "14件全部drift" "$out" "symlink総数: 14件 / drift: 14件"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -487,7 +489,7 @@ echo "=== DR-01. Agent model guardのリンク先一致を保ったまま実行b
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "非実行を汎用コードで検知" "$out" "[NOT-EXECUTABLE]"
-  assert_contains "非実行だけdrift増分1" "$out" "symlink総数: 13件 / drift: 1件"
+  assert_contains "非実行だけdrift増分1" "$out" "symlink総数: 14件 / drift: 1件"
 
   chmod +x "$REPO/claude/hooks/agent-model-guard.sh"
   out="$(run_check "$REPO" "$HOME_DIR")"

@@ -2,7 +2,7 @@
 # ポータブル化されたAI環境の「ズレ」を検知する手動実行ツール（Phase 1.5）。
 #
 # チェック項目:
-#   ① symlink 16ファイル（install-main.sh の link() 呼び出しと同じ集合）が
+#   ① symlink（install-main.sh の link() 呼び出しと同じ集合＋claude/agents/*.md）が
 #      repo の実体を指しているか。加えて①-2として、生成物 ~/.claude/settings.json
 #      （2026-08-21よりsymlinkではなく生成物。詳細は下記①-2セクション本体の
 #      コメント参照）がrepoテンプレとプレースホルダ展開込みで一致しているか
@@ -244,6 +244,7 @@ SYMLINKS=(
   "$HOME/.claude/hooks/vault-recall.sh|$DIR/claude/hooks/vault-recall.sh"
   "$HOME/.claude/hooks/vault-read-log.sh|$DIR/claude/hooks/vault-read-log.sh"
   "$HOME/.claude/hooks/next-pane-resolve.sh|$DIR/claude/hooks/next-pane-resolve.sh"
+  "$HOME/.claude/hooks/task-pane-resolve.sh|$DIR/claude/hooks/task-pane-resolve.sh"
   "$HOME/.claude/hooks/check-sub-update.sh|$DIR/claude/hooks/check-sub-update.sh"
   # 2026-08-30追加: settings.jsonには2026-08-10導入時から登録済みだったが、
   # install-main.shへのlink配置が漏れていた（同型4回目・§9.0 A-0-2で修理）。

@@ -303,6 +303,19 @@ echo "=== 5. settings.jsonに登録済みの全フックがinstall-main.shでも
     "$(readlink "$FAKE_HOME/.claude/hooks/usage-inject.sh")"
   assert_true "usage-inject.sh に実行権限が付与されている" \
     "$([[ -x "$REPO_ROOT/claude/hooks/usage-inject.sh" ]] && echo 1 || echo 0)"
+  assert_true "task-pane-resolve.sh が配置されている（cmux-session-todo v2・AC-75）" \
+    "$([[ -L "$FAKE_HOME/.claude/hooks/task-pane-resolve.sh" ]] && echo 1 || echo 0)"
+  assert_eq "task-pane-resolve.sh のsymlink先はrepo" "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" \
+    "$(readlink "$FAKE_HOME/.claude/hooks/task-pane-resolve.sh")"
+  assert_true "task-pane-resolve.sh に実行権限が付与されている" \
+    "$([[ -x "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" ]] && echo 1 || echo 0)"
+  # ⚠️ 上の「実行権限が付与されている」系アサーションは、install-main.shの
+  # chmod一覧への追加漏れを検出できない（本テストは実repo（$REPO_ROOT）の
+  # ファイルを[[ -x ]]で見るだけで、repo上のファイルは最初から実行可能な
+  # ため）。chmod一覧への追加を実質的に担保するのは、install-main.shの
+  # chmodブロックに当該ファイル名が現れることを見る静的検査（docs/design.md
+  # AC-75）であり、本テストの3アサーションは横並びの一貫性を保つためのもの
+  # と位置づける（§23の実査で確認済みの限界）。
 
   rm -rf "$FAKE_HOME"
 }

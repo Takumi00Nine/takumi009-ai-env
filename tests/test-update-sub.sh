@@ -108,6 +108,8 @@ EOF
   cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$src/claude/hooks/lib/profile_resolve.py"
   cp "$REPO_ROOT/claude/hooks/agent-model-guard.sh" "$src/claude/hooks/agent-model-guard.sh"
   chmod +x "$src/claude/hooks/agent-model-guard.sh"
+  cp "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" "$src/claude/hooks/task-pane-resolve.sh"
+  chmod +x "$src/claude/hooks/task-pane-resolve.sh"
   git -C "$src" init -q
   git -C "$src" config user.name test
   git -C "$src" config user.email test@example.invalid
@@ -2970,6 +2972,9 @@ echo "=== 45. 旧版サブ機を更新すると新しいusage-injectフックが
   # にも現行install-main.shとagent-model-guard.sh本体を併せて持たせないと、
   # check-drift.shの再同期判定が「agent-model-guard.sh未配置」で恒久的に
   # ずれ続ける（2026-09-14 main追随・衝突解消でSYMLINKS一覧が拡張された影響）。
+  # ⚠️ フックを1本足したら、この3か所（本ブロック／test 46第3段階／
+  # 上のmake_src_repo系ヘルパー）にも同じ型で足すこと（検証3巡目 BLOCKING
+  # B-1＝task-pane-resolve.sh追加時に同じ理由でここが赤くなった対応）。
   git -C "$SRC" checkout -q c5d465d
   cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
   cp "$REPO_ROOT/scripts/check-drift.sh" "$SRC/scripts/check-drift.sh"
@@ -2978,8 +2983,11 @@ echo "=== 45. 旧版サブ機を更新すると新しいusage-injectフックが
   cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
   cp "$REPO_ROOT/claude/hooks/agent-model-guard.sh" "$SRC/claude/hooks/agent-model-guard.sh"
   chmod +x "$SRC/claude/hooks/agent-model-guard.sh"
+  cp "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" "$SRC/claude/hooks/task-pane-resolve.sh"
+  chmod +x "$SRC/claude/hooks/task-pane-resolve.sh"
   git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/install-main.sh \
-    scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh
+    scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh \
+    claude/hooks/task-pane-resolve.sh
   git -C "$SRC" commit -q -m "fixture: place hooks after sub update"
   git -C "$SRC" push -q origin HEAD:main
 
@@ -3051,6 +3059,8 @@ PY
   # 第3段階: 50056aeを基点に、検証対象の修正版2ファイルを上乗せする。
   # ⚠️ test 45と同じ理由（main追随後のSYMLINKS一覧拡張）でagent-model-guard.sh
   # 本体とcurrent install-main.shも併せて持たせる。
+  # ⚠️ フックを1本足したら、この3か所（本ブロック／test 45／上の
+  # make_src_repo系ヘルパー）にも同じ型で足すこと（検証3巡目 BLOCKING B-1）。
   git -C "$SRC" checkout -q 50056ae
   cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
   cp "$REPO_ROOT/scripts/check-drift.sh" "$SRC/scripts/check-drift.sh"
@@ -3059,8 +3069,11 @@ PY
   cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
   cp "$REPO_ROOT/claude/hooks/agent-model-guard.sh" "$SRC/claude/hooks/agent-model-guard.sh"
   chmod +x "$SRC/claude/hooks/agent-model-guard.sh"
+  cp "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" "$SRC/claude/hooks/task-pane-resolve.sh"
+  chmod +x "$SRC/claude/hooks/task-pane-resolve.sh"
   git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/install-main.sh \
-    scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh
+    scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh \
+    claude/hooks/task-pane-resolve.sh
   if ! git -C "$SRC" diff --cached --quiet; then
     git -C "$SRC" commit -q -m "fixture: reconcile actual symlink state"
   fi

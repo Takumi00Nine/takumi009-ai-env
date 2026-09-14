@@ -156,7 +156,13 @@
             "type": "command",
             "command": "$HOME/.claude/hooks/next-pane-resolve.sh",
             "timeout": 5,
-            "statusMessage": "Nextペイン番号対応表を注入中"
+            "statusMessage": "Project番号対応表を注入中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/task-pane-resolve.sh",
+            "timeout": 5,
+            "statusMessage": "Task番号対応表を注入中"
           },
           {
             "type": "command",

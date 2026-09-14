@@ -3124,8 +3124,8 @@ echo "=== 84. FR-48/AC-59: 起動注入文に宣言コマンドの呼び出し�
   make_full_vault "$VD84"
   ctx84="$(run_bootstrap "$VD84")"
   assert_contains "84: ⑥の行が含まれる" "$ctx84" \
-    "⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Next Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）"
-  n_line84="$(printf '%s\n' "$ctx84" | grep -Fxc '⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Next Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）' || true)"
+    "⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）"
+  n_line84="$(printf '%s\n' "$ctx84" | grep -Fxc '⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）' || true)"
   assert_eq "84: ⑥はちょうど1行（改行を含まない）" "1" "$n_line84"
 
   # 既存①〜⑤が全部残っていること（文面も並びも変えない＝FR-48）。
