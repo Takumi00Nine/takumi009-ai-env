@@ -45,6 +45,14 @@
 #      信頼する＝環境変数の誤残留対策）を環境変数で引き継ぎ、pullを再実行せず
 #      before_head/after_headを復元する（引き継がないと「pull済みでHEAD
 #      不変」に見えてしまい、4.の変更検知が誤って空振りする）。
+#   2a. check-drift.shのinstaller管理symlink検査をHEAD不変時にも実行し、
+#       欠落・通常ファイル・誤リンク・hook実体の非実行を検知した場合、既存の
+#       install-main.sh --sub-delegateを再実行する。管理対象リストと判定の正本を
+#       増やさず、途中中断・installer失敗後の次回実行でも正しい配置へ収束する。
+#       agent-model-guard.sh・usage-inject.shはこの管理symlink一覧（check-drift.sh
+#       のSYMLINKS配列）に含まれており、個別の配置ロジックを持たない
+#       （2026-09-14 main追随・衝突解消: model廃止側が個別実装していた
+#       agent-model-guard.sh専用の配置処理は、この共通機構と重複するため撤去した）。
 #   2b. settings.json の再生成（§9.0 A-0-1・2026-08-30追加）。⚠️ ここは
 #       「HEADが変化していなくても」実行する＝下の3.の早期終了より前に置く
 #       （Codex一次レビュー指摘・Nit対応: 3.の「何もせず終了」は git pull由来の
@@ -340,6 +348,125 @@ else
       fail "update-sub.sh自身の更新を検知しましたが、新版への再実行(exec)に失敗しました: $DIR/scripts/update-sub.sh"
     fi
   fi
+fi
+
+# claude/agents/*.md 直接配置（2c.）がinstall-main.sh link()と共有する
+# sync_managed_symlink()を読み込む（検証4巡目 BLOCKING-1対応・2026-09-14。
+# 詳細はscripts/lib/managed-symlink.sh側のコメント参照）。
+# ⚠️ 検証5巡目 MAJOR-1対応（2026-09-14）: 従来はpull・自己再exec判定より前
+# （ロック取得の直前）でsourceしていたが、自己再exec判定は`update-sub.sh`
+# 本体の差分（--`scripts/update-sub.sh`）だけを見るため、この共有lib
+# だけを更新したコミットをpullしても再exec条件に一致せず、同一実行中は
+# メモリ上に読み込み済みの旧`sync_managed_symlink()`のまま2c.を処理して
+# しまう（検証職が実測＝lib_on_disk_new=yes・new_lib_used=no）。この
+# 共有関数はpullより前には使われないため、pull・自己再exec判定が完了した
+# 後、2a.の直前でsourceする（自己更新判定へこのlibも対象追加する代案も
+# あるが、pull後sourceの方が単純＝裁定採用）。
+# ⚠️ 検証6巡目 MAJOR対応（2026-09-14）: この位置は1.でacquire_pid_lock()が
+# 既にEXIT trap（_pid_lock_cleanup）を登録した後にあたる。bashには
+# 「`set -e`下でsource/.ビルトインがファイル欠落等で失敗して script が
+# 終了する経路は、明示的な`exit N`とは異なりEXIT trap実行後の最後の
+# コマンドの終了コードで上書きされる」という実測済みの挙動があり
+# （`source X || fail ...`のように`||`で明示的にfail()へ渡しても、
+# source自体の失敗はこの上書きの対象になる＝一時再現スクリプトで実測。
+# 一方`[ -r X ] || fail ...`や`bash -n X || fail ...`のような通常の
+# コマンド失敗は`||`経由のfail()〈exit 1〉がtrap後も正しく保持される）、
+# `scripts/lib/managed-symlink.sh`が欠落・構文破損している場合、bareな
+# `source`の失敗がEXIT trapの成功（rmdir系の`|| true`で常に0）に上書き
+# され、2a.以降が一切実行されないままrc=0で「成功」報告になっていた
+# （検証職の再現＝HEAD不変でlib削除→rc=0・stderrにNo such file or
+# directory／upstreamでlib削除→pullでもrc=0）。source自体の失敗検知に
+# 頼らず、source前に可読性（-r）と構文（bash -n）を明示的に検査し、
+# 失敗時はfail()で確実に非0終了させる。source後にはsync_managed_symlink()
+# が実際に定義されたかも`declare -F`で検証する（構文は正しいがこの関数
+# 定義部分だけが壊れている等の残余ケースに対する多層防御）。
+if [ ! -r "$DIR/scripts/lib/managed-symlink.sh" ]; then
+  fail "共有ライブラリが読み取れません（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
+fi
+if ! /bin/bash -n "$DIR/scripts/lib/managed-symlink.sh" 2>/dev/null; then
+  fail "共有ライブラリの構文が不正です（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
+fi
+# shellcheck source=scripts/lib/managed-symlink.sh
+source "$DIR/scripts/lib/managed-symlink.sh"
+if ! declare -F sync_managed_symlink >/dev/null 2>&1; then
+  fail "共有ライブラリの読み込みに失敗しました（sync_managed_symlink()が定義されていません）: $DIR/scripts/lib/managed-symlink.sh"
+fi
+
+# --- 2a. 実配置にdriftがあれば既存installerで再同期する（HEAD不変でも実行） ---
+# 2026-09-11 検証2巡目MAJOR-1対応: pull差分を起動条件にすると、配置前の中断や
+# installer非0の次回はHEAD不変になり、欠落したsymlinkを永久に再試行できない。
+# check-drift.shのinstaller管理symlink一覧・判定を内部モードで再利用し、現在の
+# desired stateだけを見る。検査自体が失敗した場合も配置漏れを見逃さないよう
+# installerを実行する側へ倒し、実行後に同じ検査で収束を再確認する。
+# ⚠️ 検証3巡目 MAJOR-1対応（2026-09-14）: 判定器（check-drift.sh）自体が欠落
+# している場合、従来は`[ -f ... ]`のガードでこのブロック全体を無警告で
+# 素通りしており（[[Knowledge/fail-open-and-observable-guards]]原則2「判定不能
+# はdriftなしに丸めない」に反する）、管理symlinkの欠落を検知できないまま
+# rc=0で成功終了していた。判定器が利用不能なら「driftなし」と混同せず、
+# installerは実行したうえで「検証不能」を警告し非0で終了する。
+# ⚠️ ただし「HEADのgit管理下にはscripts/check-drift.shが存在するのに、実際の
+# 作業ツリーから消えている」場合だけを異常（checkout破損）とみなす。HEADが
+# そもそもこのファイルを追跡していない場合（この機能自体を持たない旧版
+# チェックアウト、またはpull系ロジックだけを検証するための意図的な最小
+# fixture＝tests/test-update-sub.shの大半のテストがこれに該当）は、この
+# 2a.機能自体が最初から対象外の状態であり、旧来どおり何もしない（2026-09-14
+# 工程内実測: 単純に`-f`欠落=常に異常へ倒すと、check-drift.shを一度も
+# 含めたことのない既存の最小fixtureテスト群が軒並み巻き込まれて壊れることを
+# 確認した）。
+# ⚠️ 検証4巡目 MAJOR-1対応（2026-09-14）: HEAD追跡有無の判定に`git cat-file -e
+# HEAD:scripts/check-drift.sh`を使うと、対象不存在（HEAD非追跡）とGit自体の
+# 判定障害（オブジェクト破損・read-only等でコマンドが実行できない）が同じ
+# 非0で返り区別できず、後者もfail-openで「HEAD非追跡＝何もしない」に
+# 丸まっていた。`git ls-tree --name-only HEAD -- scripts/check-drift.sh`へ
+# 差し替え、コマンド自体の終了コードと出力の有無で三値化する: ①コマンドが
+# 非0＝Git判定コマンド自体の異常＝判定不能として installer＋警告＋非0
+# ②コマンドは0で出力が空＝HEAD非追跡＝従来どおり何もしない ③コマンドは0で
+# 出力が非空＝HEADには追跡されているのに作業ツリーから消えている＝
+# checkout破損として installer＋警告＋非0。
+if [ -f "$DIR/scripts/check-drift.sh" ]; then
+  managed_links_rc=0
+  DIR="$DIR" HOME="$HOME" /bin/bash "$DIR/scripts/check-drift.sh" \
+    --managed-symlinks-only >/dev/null 2>&1 || managed_links_rc=$?
+  if [ "$managed_links_rc" -ne 0 ]; then
+    if "$DIR/scripts/install-main.sh" --sub-delegate --non-interactive; then
+      managed_links_after_rc=0
+      DIR="$DIR" HOME="$HOME" /bin/bash "$DIR/scripts/check-drift.sh" \
+        --managed-symlinks-only >/dev/null 2>&1 || managed_links_after_rc=$?
+      if [ "$managed_links_after_rc" -eq 0 ]; then
+        log "実配置のdriftを検知し、既存installerでClaude/Codex配置を再同期しました。"
+      else
+        warn "既存installerの実行後も管理symlinkの実配置driftが残っています。"
+        EXIT_CODE=1
+      fi
+    else
+      warn "実配置のdriftを検知しましたが、既存installerによる配置の再同期に失敗しました。"
+      EXIT_CODE=1
+    fi
+  fi
+else
+  check_drift_ls_tree_out=""
+  check_drift_ls_tree_rc=0
+  check_drift_ls_tree_out="$(git -C "$DIR" ls-tree --name-only HEAD -- scripts/check-drift.sh 2>/dev/null)" \
+    || check_drift_ls_tree_rc=$?
+  if [ "$check_drift_ls_tree_rc" -ne 0 ] || [ -n "$check_drift_ls_tree_out" ]; then
+    if [ "$check_drift_ls_tree_rc" -ne 0 ]; then
+      warn "scripts/check-drift.sh の追跡状態をgitで判定できませんでした（git ls-tree失敗・コード${check_drift_ls_tree_rc}）。判定不能をdriftなしとは扱わず、既存installerを実行します。"
+    else
+      warn "scripts/check-drift.sh がgit管理下には存在するのに作業ツリーから消えています（checkout破損の可能性）。判定不能をdriftなしとは扱わず、既存installerを実行します。"
+    fi
+    if [ -f "$DIR/scripts/install-main.sh" ]; then
+      if "$DIR/scripts/install-main.sh" --sub-delegate --non-interactive; then
+        warn "既存installerは実行しましたが、check-drift.sh欠落のため実配置の収束を確認できていません。"
+      else
+        warn "実配置のdriftを検証できない状態で、既存installerによる配置の再同期にも失敗しました。"
+      fi
+    else
+      warn "check-drift.shに加えscripts/install-main.shも作業ツリーから消えているため、配置の再同期を実行できません（checkout破損の可能性）。"
+    fi
+    EXIT_CODE=1
+  fi
+  # else: check_drift_ls_tree_rc=0 かつ出力が空 ＝ HEAD非追跡。従来どおり
+  # 何もしない（意図的な最小fixture・この機能を持たない旧版チェックアウト）。
 fi
 
 # --- 2b. settings.json の再生成（git の HEAD が変わっていなくても実行する。
@@ -666,10 +793,13 @@ fi
 # サブ機へ配布されない欠落があった（install-main.sh は agents を含む全symlinkを
 # 再構築するが、update-sub.sh はサブ機の日常運用で使う軽量更新のため、新規
 # agentファイルの取り込みに install-sub.sh のフル再実行が必要になっていた）。
-# install-main.sh の agents symlinkループ・link()/backup_once()と同じ様式・
-# 同じ退避規則（意図的な複製。ロジックを変える場合は install-main.sh 側も
-# 合わせて見直すこと＝4a.の config.toml再生成と同じ流儀。共有関数化も検討したが
-# 「最小差分を優先」という本人指示により見送った）。
+# install-main.sh の agents symlinkループ・link()と同じ退避規則を、
+# scripts/lib/managed-symlink.sh の sync_managed_symlink() 経由で共有する
+# （検証4巡目 BLOCKING-1対応・2026-09-14。従来は「最小差分を優先」という
+# 本人指示で複製実装にしていたが、その結果install-main.sh側だけに
+# 検証3巡目 BLOCKING-1対応〈既存backupと内容が異なる通常ファイルの追加
+# 保存〉を入れた際、ここが二重実装のまま取り残されて同種のデータ消失が
+# 再発した。共有関数化してこの再発パターン自体を塞ぐ）。
 # ⚠️ 当初は4.配下（HEAD変化時のみ実行）に置いていたが、サブ機の実機で
 # 「2回目以降の実行はHEAD不変で3.の早期終了に入り、agentsのsymlink化に
 # 一切到達しない」という実バグが発生したため、2026-09-03 本人実査で2b.と
@@ -696,22 +826,14 @@ if [ -d "$AGENTS_SRC_DIR" ]; then
     if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
       AGENTS_NEWLY_PLACED+=("${name%.md}")
     fi
-    if [ -L "$dest" ]; then
-      # 既にsymlinkの場合: リンク先が正しければ何もしない（no-op）。違えば
-      # （古いrepoパスを指している・danglingを含む）張り直す＝install-main.shの
-      # `ln -sfn` と同じ「常に正しい状態へ収束させる」方針。
-      [ "$(readlink "$dest")" = "$f" ] && continue
-    elif [ -e "$dest" ]; then
-      # symlinkでない実ファイルが既にある場合はinstall-main.sh backup_once()と
-      # 同じ規則で退避してからsymlink化する（.pre-aienv.bakが既にあれば二重に
-      # 退避しない＝インストール前オリジナルを保持し続ける）。
-      if [ ! -e "$dest.pre-aienv.bak" ]; then
-        cp "$dest" "$dest.pre-aienv.bak"
-        log "backed up: $dest -> $dest.pre-aienv.bak"
-      fi
+    if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$f" ]; then
+      # 既にsymlinkでリンク先も正しければ何もしない（no-op）。それ以外
+      # （古いrepoパスを指している・danglingを含む・symlinkでない実ファイル）は
+      # sync_managed_symlink()が「常に正しい状態へ収束させる」＝install-main.sh
+      # link()と同じ方針・同じ退避規則で張り直す。
+      continue
     fi
-    ln -sfn "$f" "$dest"
-    log "linked: $dest -> $f"
+    sync_managed_symlink "$f" "$dest" "update-sub"
   done
   if [ "${#AGENTS_NEWLY_PLACED[@]}" -gt 0 ]; then
     log "AGENTS: 初回未配置 ${#AGENTS_NEWLY_PLACED[@]}件（正常・配置しました）: $(IFS=,; echo "${AGENTS_NEWLY_PLACED[*]}")"
@@ -758,7 +880,7 @@ fi
 
 # --- 3. repoの更新が無ければ、4.（config.toml再生成・Preferences再同期・
 #         骨格フォルダ補充）は行わず終了する（settings.json再生成は2b.・
-#         agents symlink化は2c.で既に済んでいる＝Codex一次レビュー指摘・
+#         guard配置は2a.・agents symlink化は2c.で既に済んでいる＝Codex一次レビュー指摘・
 #         Nit対応の横展開） ---
 if [ "$before_head" = "$after_head" ]; then
   # --resync（前提修正 P-3・3-b・設計§3.1・契約2）: HEAD不変の場合でも

@@ -150,6 +150,10 @@
 #     total_drift/drift_excluding_item4には含めないが、maintenance.sh側が
 #     informationalとしてlast_result_summaryへ拾えるようにするための値。
 #     詳細＝scripts/maintenance.sh側コメント参照）。
+#   --managed-symlinks-only: installer管理下symlinkの実配置状態だけを検査する
+#     内部利用向けモード。健全ならexit 0、欠落・通常ファイル・誤リンク、または
+#     hook実体が非実行ならexit 1。update-sub.shがHEAD不変時にも配置漏れから
+#     収束するために使う。--jsonとは併用しない。
 #   終了コード: --json未指定時は**常に0**（既存の「fail-fastしない設計」を
 #     維持＝tests/test-check-drift.sh「exit codeは常に0」の既存契約を壊さない）。
 #     --json指定時のみ、drift_excluding_item4>0でexit 1にする。この
@@ -183,12 +187,18 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 : "${AIENV_AGENTS_DIR:=$DIR/claude/agents}"
 
 JSON_MODE=0
+MANAGED_SYMLINKS_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --json) JSON_MODE=1 ;;
+    --managed-symlinks-only) MANAGED_SYMLINKS_ONLY=1 ;;
     *) echo "[check-drift] FAIL: 不明な引数です: $arg" >&2; exit 2 ;;
   esac
 done
+if [ "$JSON_MODE" = "1" ] && [ "$MANAGED_SYMLINKS_ONLY" = "1" ]; then
+  echo "[check-drift] FAIL: --json と --managed-symlinks-only は併用できません" >&2
+  exit 2
+fi
 
 TOTAL_DRIFT=0
 # ④(vault-public/Preferences差分)専用カウンタ。この項目だけはdrift_excluding_
@@ -239,6 +249,8 @@ SYMLINKS=(
   # install-main.shへのlink配置が漏れていた（同型4回目・§9.0 A-0-2で修理）。
   # このSYMLINKS一覧にも同時に漏れていたため、あわせて追加する。
   "$HOME/.claude/hooks/context-size-warn.sh|$DIR/claude/hooks/context-size-warn.sh"
+  "$HOME/.claude/hooks/agent-model-guard.sh|$DIR/claude/hooks/agent-model-guard.sh"
+  "$HOME/.claude/hooks/usage-inject.sh|$DIR/claude/hooks/usage-inject.sh"
   "$HOME/.codex/AGENTS.md|$DIR/codex/AGENTS.md"
   "$HOME/.codex/hooks.json|$DIR/codex/hooks.json"
 )
@@ -265,11 +277,19 @@ for pair in "${SYMLINKS[@]}"; do
     if [ "$actual" != "$expect" ]; then
       item_drift "[WRONG-TARGET] $dest -> ${actual} （期待: ${expect}）"
       sym_drift=$((sym_drift + 1))
+    elif [[ "$dest" == "$HOME/.claude/hooks/"*.sh ]] && [ ! -x "$dest" ]; then
+      item_drift "[NOT-EXECUTABLE] $dest の実体に実行権限がありません"
+      sym_drift=$((sym_drift + 1))
     fi
   fi
 done
 log "symlink総数: ${#SYMLINKS[@]}件 / drift: ${sym_drift}件"
 [ "$sym_drift" -eq 0 ] && log "  -> ✅ 全symlinkがrepoを指しています"
+
+if [ "$MANAGED_SYMLINKS_ONLY" = "1" ]; then
+  [ "$sym_drift" -eq 0 ] && exit 0
+  exit 1
+fi
 
 echo
 echo "======================================================================"

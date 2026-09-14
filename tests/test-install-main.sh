@@ -295,6 +295,18 @@ echo "=== 5. settings.jsonに登録済みの全フックがinstall-main.shでも
     "$(readlink "$FAKE_HOME/.claude/hooks/context-size-warn.sh")"
   assert_true "context-size-warn.sh に実行権限が付与されている" \
     "$([[ -x "$REPO_ROOT/claude/hooks/context-size-warn.sh" ]] && echo 1 || echo 0)"
+  assert_true "agent-model-guard.sh が配置されている" \
+    "$([[ -L "$FAKE_HOME/.claude/hooks/agent-model-guard.sh" ]] && echo 1 || echo 0)"
+  assert_eq "agent-model-guard.sh のsymlink先はrepo" "$REPO_ROOT/claude/hooks/agent-model-guard.sh" \
+    "$(readlink "$FAKE_HOME/.claude/hooks/agent-model-guard.sh")"
+  assert_true "agent-model-guard.sh に実行権限が付与されている" \
+    "$([[ -x "$REPO_ROOT/claude/hooks/agent-model-guard.sh" ]] && echo 1 || echo 0)"
+  assert_true "usage-inject.sh が配置されている" \
+    "$([[ -L "$FAKE_HOME/.claude/hooks/usage-inject.sh" ]] && echo 1 || echo 0)"
+  assert_eq "usage-inject.sh のsymlink先はrepo" "$REPO_ROOT/claude/hooks/usage-inject.sh" \
+    "$(readlink "$FAKE_HOME/.claude/hooks/usage-inject.sh")"
+  assert_true "usage-inject.sh に実行権限が付与されている" \
+    "$([[ -x "$REPO_ROOT/claude/hooks/usage-inject.sh" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -2053,6 +2065,80 @@ echo "=== 47. PA-12: 追加と削除が同時に起きる複合ケース（verif
   assert_true "④ old-role のsymlinkは残っている（削除しない）" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
   assert_true "⑤ 終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
+}
+
+echo "=== 48. link()でsymlink化する対象が、既存の.pre-aienv.bakと内容の異なる通常ファイルに置き換わっている場合、追加backupへ保存してから復旧する（検証3巡目 BLOCKING-1対応。従来はbackup_once()が『.pre-aienv.bak既に存在＝何もしない』へ丸め、続くln -sfnがその通常ファイルを削除していた） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  TMP_REPO="$(mktemp -d)"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
+
+  dest="$FAKE_HOME/.claude/hooks/bootstrap-vault.sh"
+  printf 'original-content\n' > "$dest"
+
+  # 1回目: baseline installで.pre-aienv.bak(元の内容)とsymlinkを作る。
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  assert_true "前提: baseline installでsymlink化される" \
+    "$([[ -L "$dest" ]] && echo 1 || echo 0)"
+  assert_eq "前提: 初回backupに元の内容が保存される" \
+    "original-content" "$(<"$dest.pre-aienv.bak")"
+
+  # symlinkを、既存backupとは異なる内容の通常ファイルへ外部要因で置換する
+  # （手動編集・別ツールの上書き等。HEAD不変の自動再同期の合間を想定）。
+  rm -f "$dest"
+  printf 'tampered-content\n' > "$dest"
+
+  # 2回目: repo無変更のまま再実行。
+  rc=0
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+
+  assert_eq "2回目もexit 0（追加backupの発生自体は失敗要因にならない）" "0" "$rc"
+  assert_true "symlinkへ復旧する" "$([[ -L "$dest" ]] && echo 1 || echo 0)"
+  assert_eq "既存backup(.pre-aienv.bak)は旧内容のまま変更されない" \
+    "original-content" "$(<"$dest.pre-aienv.bak")"
+
+  extra_baks=("$dest".pre-aienv.bak.*)
+  assert_true "既存backupと内容が異なっていた通常ファイルは追加backupへ保存され消えない" \
+    "$([[ -e "${extra_baks[0]}" ]] && echo 1 || echo 0)"
+  assert_eq "追加backupの内容はsymlink化直前の通常ファイルと一致する" \
+    "tampered-content" "$(<"${extra_baks[0]}")"
+
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
+}
+
+echo "=== 49. generate_settings_json()等（意図的に毎回内容が変わる正規の再生成経路）はbackup_once()の追加保存フラグ対象外のまま＝既存backupがあれば何度実行しても新規backupを量産しない（BLOCKING-1対応の副作用チェック。--additional-on-diffはlink()専用） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  TMP_REPO="$(mktemp -d)"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
+
+  dest="$FAKE_HOME/.claude/settings.json"
+  printf '{"pre-existing": true}' > "$dest"
+
+  # 1回目: settings.jsonの.pre-aienv.bakを作らせる（generate_settings_json()経由）。
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  assert_true "前提: settings.jsonの初回backupができる" \
+    "$([[ -e "$dest.pre-aienv.bak" ]] && echo 1 || echo 0)"
+  bak_content_before="$(<"$dest.pre-aienv.bak")"
+
+  # role.leaderの候補を変え、settings.jsonの内容がbackupと異なる状態を複数回作る
+  # （generate_settings_json()は毎回実ファイルへ実際のmodel値等を書くため、
+  # 通常運用でも.pre-aienv.bakとdestの内容は一致しなくなる）。
+  for _ in 1 2 3; do
+    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  done
+
+  assert_eq "settings.jsonの.pre-aienv.bakは初回のまま変わらない（意図的な再生成では追加保存しない）" \
+    "$bak_content_before" "$(<"$dest.pre-aienv.bak")"
+  extra_count=0
+  for f in "$dest".pre-aienv.bak.*; do
+    [ -e "$f" ] && extra_count=$((extra_count + 1))
+  done
+  assert_eq "settings.jsonの追加backup(.pre-aienv.bak.<timestamp>)は1件も作られない" "0" "$extra_count"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }

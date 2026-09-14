@@ -97,10 +97,17 @@ EOF
   # backup-vault.sh・maintenance.shと共通の scripts/lib/pid-lock.sh へ
   # 一本化したことに伴う対応）。
   cp "$REPO_ROOT/scripts/lib/pid-lock.sh" "$src/scripts/lib/pid-lock.sh"
+  # update-sub.shがclaude/agents/*.md直接配置(2c.)でinstall-main.sh link()と
+  # 共有するscripts/lib/managed-symlink.shをsourceするため、pid-lock.shと
+  # 同じ理由でfixtureにも実物をコピーして持たせる（検証4巡目 BLOCKING-1
+  # 対応・2026-09-14）。
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$src/scripts/lib/managed-symlink.sh"
   # 配役表-能力軸整理-設計-2026-09-07.md §10.2a: update-sub.shはstep 0で
   # machine_roleを読むためにresolverを常に呼ぶ（add_settings_json_template()
   # を呼ばないテストにもresolverが要る＝実測）。
   cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$src/claude/hooks/lib/profile_resolve.py"
+  cp "$REPO_ROOT/claude/hooks/agent-model-guard.sh" "$src/claude/hooks/agent-model-guard.sh"
+  chmod +x "$src/claude/hooks/agent-model-guard.sh"
   git -C "$src" init -q
   git -C "$src" config user.name test
   git -C "$src" config user.email test@example.invalid
@@ -129,6 +136,11 @@ add_settings_json_template() {
 EOF
   cp "$REPO_ROOT/scripts/install-main.sh" "$src/scripts/install-main.sh"
   chmod +x "$src/scripts/install-main.sh"
+  # install-main.shが（--print-leader-runtime等の副作用ゼロの早期exit経路も
+  # 含めて）冒頭でscripts/lib/managed-symlink.shをsourceするため、pid-lock.sh
+  # と同じ理由でfixtureにも実物を置く（検証4巡目 BLOCKING-1対応・2026-09-14）。
+  mkdir -p "$src/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$src/scripts/lib/managed-symlink.sh"
   # 2026-09-01 配役表解凍: --print-leader-runtime がv2実体を解決する際に
   # 共有lib（claude/hooks/lib/profile_resolve.py）を必要とする（実体が
   # 存在しない/v1のfixtureではこのlibを一切参照しない＝v1委譲経路のため、
@@ -149,7 +161,6 @@ add_agent_role() {
 name: ${name}
 description: テスト用ロール定義
 tools: Read
-model: sonnet
 color: green
 ---
 テスト用ロール定義（${name}）。
@@ -499,6 +510,7 @@ echo "=== 6. remote origin未設定ならWARNで終了しexit 0 ==="
   git -C "$SUB" config user.email test@example.invalid
   echo "x" > "$SUB/x.md"
   cp "$REPO_ROOT/scripts/lib/pid-lock.sh" "$SUB/scripts/lib/pid-lock.sh"
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SUB/scripts/lib/managed-symlink.sh"
   # update-sub.shはstep 0でmachine_roleを読むためにresolverを常に呼ぶ
   # （配役表-能力軸整理-設計-2026-09-07.md §10.2a）。
   cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$SUB/claude/hooks/lib/profile_resolve.py"
@@ -2782,6 +2794,717 @@ EOF
   assert_eq "install-usage-fetch.shの非0終了でもupdate-sub.sh自体はexit 0（soft-fail）" "0" "$rc"
   assert_true "WARNとして記録される" \
     "$(echo "$out" | grep -q "使用率取得器の再実行が非0終了しました" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== PD-01: 旧版サブ機を更新するとagent-model-guardフックが実体への実行可能symlinkとして配置される（main追随後は管理symlink機構〈2a.〉経由） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  SUB="$WORK/sub"
+  FAKE_HOME="$WORK/home"
+  LOCK="$WORK/lock"
+
+  git init -q --bare "$BARE"
+  git clone -q "$REPO_ROOT" "$SRC"
+  git -C "$SRC" config user.email "test@example.com"
+  git -C "$SRC" config user.name "Test"
+  git -C "$SRC" remote set-url origin "$BARE"
+  git -C "$SRC" push -q origin 3954355:refs/heads/main
+  git clone -q "$BARE" "$SUB"
+
+  mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.codex" \
+    "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  make_sub_profile "$FAKE_HOME"
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" \
+    AIENV_FORCE_INTERACTIVE_SETUP=0 \
+    /bin/bash "$SUB/scripts/install-main.sh" --sub-delegate --non-interactive \
+      >"$WORK/install-old.out" 2>&1
+  assert_true "旧版配置時点ではagent-model-guard symlinkが存在しない" \
+    "$([[ ! -e "$FAKE_HOME/.claude/hooks/agent-model-guard.sh" ]] && echo 1 || echo 0)"
+
+  # $SRCの作業ツリー自体はclone直後のHEAD（現行のmain追随後の最新状態）から
+  # 動かしていない（3954355はoriginのmain参照だけを一時的に古い状態へ
+  # 巻き戻すために使った）。ここでoriginのmainを$SRCの現行HEADへ進める。
+  git -C "$SRC" push -q origin HEAD:main
+
+  rc=0
+  DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" >"$WORK/update.out" 2>&1 || rc=$?
+  hook_link="$FAKE_HOME/.claude/hooks/agent-model-guard.sh"
+  assert_eq "PD-01 更新はexit 0" "0" "$rc"
+  assert_true "PD-01 更新後にguard symlinkが存在する" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+  assert_eq "PD-01 symlinkは更新repo内の実体を指す" \
+    "$SUB/claude/hooks/agent-model-guard.sh" "$(readlink "$hook_link" 2>/dev/null || true)"
+  assert_true "PD-01 symlink経由でguardを実行できる" \
+    "$([[ -x "$hook_link" ]] && echo 1 || echo 0)"
+  assert_true "PD-01 更新後settingsにもguardが登録される" \
+    "$(grep -qF '"command": "$HOME/.claude/hooks/agent-model-guard.sh"' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== PD-02: HEAD不変でも欠落したagent-model-guard symlinkを管理symlink機構(2a.)経由で復旧する ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  SUB="$WORK/sub"
+  FAKE_HOME="$WORK/home"
+  LOCK="$WORK/lock"
+
+  git init -q --bare "$BARE"
+  git clone -q "$REPO_ROOT" "$SRC"
+  git -C "$SRC" config user.email "test@example.com"
+  git -C "$SRC" config user.name "Test"
+  git -C "$SRC" remote set-url origin "$BARE"
+  git -C "$SRC" push -q origin HEAD:main
+  git clone -q "$BARE" "$SUB"
+
+  mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.codex" \
+    "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  make_sub_profile "$FAKE_HOME"
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" \
+    AIENV_FORCE_INTERACTIVE_SETUP=0 \
+    /bin/bash "$SUB/scripts/install-main.sh" --sub-delegate --non-interactive \
+      >"$WORK/install-baseline.out" 2>&1
+  hook_link="$FAKE_HOME/.claude/hooks/agent-model-guard.sh"
+  assert_true "前提: baseline installでguard symlinkが配置されている" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+
+  rm -f "$hook_link"
+  rc=0
+  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" 2>&1) || rc=$?
+  assert_eq "PD-02 HEAD不変の再実行はexit 0" "0" "$rc"
+  assert_true "PD-02 HEAD不変でも欠落リンクを復旧" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+  assert_eq "PD-02 復旧後のsymlinkはrepo実体を指す" \
+    "$SUB/claude/hooks/agent-model-guard.sh" "$(readlink "$hook_link" 2>/dev/null || true)"
+
+  out2=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" 2>&1)
+  assert_true "PD-02 driftなしの再実行はinstaller再配置ログを出さない" \
+    "$(printf '%s' "$out2" | grep -q 'linked: .*agent-model-guard.sh' && echo 0 || echo 1)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== PD-04: SUB上のagent-model-guard.sh実体そのものが欠落している場合は非0で終了する ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  SUB="$WORK/sub"
+  FAKE_HOME="$WORK/home"
+  LOCK="$WORK/lock"
+
+  git init -q --bare "$BARE"
+  git clone -q "$REPO_ROOT" "$SRC"
+  git -C "$SRC" config user.email "test@example.com"
+  git -C "$SRC" config user.name "Test"
+  git -C "$SRC" remote set-url origin "$BARE"
+  git -C "$SRC" push -q origin HEAD:main
+  git clone -q "$BARE" "$SUB"
+
+  mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.codex" \
+    "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  make_sub_profile "$FAKE_HOME"
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" \
+    AIENV_FORCE_INTERACTIVE_SETUP=0 \
+    /bin/bash "$SUB/scripts/install-main.sh" --sub-delegate --non-interactive \
+      >"$WORK/install-baseline.out" 2>&1
+  hook_link="$FAKE_HOME/.claude/hooks/agent-model-guard.sh"
+  assert_true "前提: baseline installでguard symlinkが配置されている" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+
+  rm -f "$hook_link"
+  rm -f "$SUB/claude/hooks/agent-model-guard.sh"
+  rc=0
+  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" 2>&1) || rc=$?
+  assert_eq "PD-04 source欠落は非0" "1" "$rc"
+  assert_true "PD-04 checkout破損の理由が出る" \
+    "$(printf '%s' "$out" | grep -q 'リポジトリのファイルが見つかりません' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 45. 旧版サブ機を更新すると新しいusage-injectフックが実体への実行可能symlinkとして配置される ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  SUB="$WORK/sub"
+  FAKE_HOME="$WORK/home"
+  LOCK="$WORK/lock"
+
+  git init -q --bare "$BARE"
+  git clone -q "$REPO_ROOT" "$SRC"
+  git -C "$SRC" config user.email "test@example.com"
+  git -C "$SRC" config user.name "Test"
+  git -C "$SRC" remote set-url origin "$BARE"
+  git -C "$SRC" push -q origin 3954355:refs/heads/main
+  git clone -q "$BARE" "$SUB"
+
+  mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.codex" \
+    "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  make_sub_profile "$FAKE_HOME"
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" \
+    AIENV_FORCE_INTERACTIVE_SETUP=0 \
+    /bin/bash "$SUB/scripts/install-main.sh" --sub-delegate --non-interactive \
+      >"$WORK/install-old.out" 2>&1
+  assert_true "旧版配置時点ではusage-inject symlinkが存在しない" \
+    "$([[ ! -e "$FAKE_HOME/.claude/hooks/usage-inject.sh" ]] && echo 1 || echo 0)"
+
+  # 新フックを含む既存コミットへ進め、実配置判定を共有する2ファイルを上乗せする。
+  # ⚠️ main追随後のcheck-drift.shは管理symlink一覧にagent-model-guard.shも
+  # 含むため、この古いコミット（usage-inject導入直後・model-removal未合流）
+  # にも現行install-main.shとagent-model-guard.sh本体を併せて持たせないと、
+  # check-drift.shの再同期判定が「agent-model-guard.sh未配置」で恒久的に
+  # ずれ続ける（2026-09-14 main追随・衝突解消でSYMLINKS一覧が拡張された影響）。
+  git -C "$SRC" checkout -q c5d465d
+  cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
+  cp "$REPO_ROOT/scripts/check-drift.sh" "$SRC/scripts/check-drift.sh"
+  cp "$REPO_ROOT/scripts/install-main.sh" "$SRC/scripts/install-main.sh"
+  mkdir -p "$SRC/scripts/lib" "$SRC/claude/hooks"
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
+  cp "$REPO_ROOT/claude/hooks/agent-model-guard.sh" "$SRC/claude/hooks/agent-model-guard.sh"
+  chmod +x "$SRC/claude/hooks/agent-model-guard.sh"
+  git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/install-main.sh \
+    scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh
+  git -C "$SRC" commit -q -m "fixture: place hooks after sub update"
+  git -C "$SRC" push -q origin HEAD:main
+
+  rc=0
+  DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" >"$WORK/update.out" 2>&1 || rc=$?
+  hook_link="$FAKE_HOME/.claude/hooks/usage-inject.sh"
+  assert_eq "旧版からのupdate-subはexit 0" "0" "$rc"
+  assert_true "更新後にusage-inject symlinkが存在する" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+  assert_eq "symlinkは更新repo内の実体を指す" \
+    "$SUB/claude/hooks/usage-inject.sh" "$(readlink "$hook_link" 2>/dev/null || true)"
+  assert_true "symlink経由でusage-injectを実行できる" \
+    "$([[ -x "$hook_link" ]] && echo 1 || echo 0)"
+  assert_true "更新後settingsにもusage-injectが登録される" \
+    "$(python3 - "$FAKE_HOME/.claude/settings.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+commands = [h.get("command") for g in d["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+print(1 if commands[-1] == "$HOME/.claude/hooks/usage-inject.sh" else 0)
+PY
+)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 46. 三段階更新（3954355→c5d465d→50056ae基点の修正版）でも欠落したusage-inject配置へ収束する ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  SUB="$WORK/sub"
+  FAKE_HOME="$WORK/home"
+  LOCK="$WORK/lock"
+
+  git init -q --bare "$BARE"
+  git clone -q "$REPO_ROOT" "$SRC"
+  git -C "$SRC" config user.email "test@example.com"
+  git -C "$SRC" config user.name "Test"
+  git -C "$SRC" remote set-url origin "$BARE"
+  git -C "$SRC" push -q origin 3954355:refs/heads/main
+  git clone -q "$BARE" "$SUB"
+  mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.codex" \
+    "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  make_sub_profile "$FAKE_HOME"
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" \
+    AIENV_FORCE_INTERACTIVE_SETUP=0 \
+    /bin/bash "$SUB/scripts/install-main.sh" --sub-delegate --non-interactive \
+      >"$WORK/install-old.out" 2>&1
+
+  # 第2段階: フック登録だけが届き、update-sub経由の実体配置はまだ無い版。
+  git -C "$SRC" checkout -q c5d465d
+  git -C "$SRC" push -q origin HEAD:main
+  rc_mid=0
+  DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" >"$WORK/update-mid.out" 2>&1 || rc_mid=$?
+  assert_eq "c5d465dへの中間更新はexit 0" "0" "$rc_mid"
+  assert_true "中間更新後はsettings登録済みでもlink未配置" \
+    "$(python3 - "$FAKE_HOME/.claude/settings.json" "$FAKE_HOME/.claude/hooks/usage-inject.sh" <<'PY'
+import json, os, sys
+d = json.load(open(sys.argv[1]))
+commands = [h.get("command") for g in d["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+print(1 if commands[-1] == "$HOME/.claude/hooks/usage-inject.sh" and not os.path.lexists(sys.argv[2]) else 0)
+PY
+)"
+
+  # 第3段階: 50056aeを基点に、検証対象の修正版2ファイルを上乗せする。
+  # ⚠️ test 45と同じ理由（main追随後のSYMLINKS一覧拡張）でagent-model-guard.sh
+  # 本体とcurrent install-main.shも併せて持たせる。
+  git -C "$SRC" checkout -q 50056ae
+  cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
+  cp "$REPO_ROOT/scripts/check-drift.sh" "$SRC/scripts/check-drift.sh"
+  cp "$REPO_ROOT/scripts/install-main.sh" "$SRC/scripts/install-main.sh"
+  mkdir -p "$SRC/scripts/lib" "$SRC/claude/hooks"
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
+  cp "$REPO_ROOT/claude/hooks/agent-model-guard.sh" "$SRC/claude/hooks/agent-model-guard.sh"
+  chmod +x "$SRC/claude/hooks/agent-model-guard.sh"
+  git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/install-main.sh \
+    scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh
+  if ! git -C "$SRC" diff --cached --quiet; then
+    git -C "$SRC" commit -q -m "fixture: reconcile actual symlink state"
+  fi
+  git -C "$SRC" push -q origin HEAD:main
+
+  rc_final=0
+  DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" >"$WORK/update-final.out" 2>&1 || rc_final=$?
+  hook_link="$FAKE_HOME/.claude/hooks/usage-inject.sh"
+  assert_eq "三段階の最終更新はexit 0" "0" "$rc_final"
+  assert_true "三段階更新後にusage-inject symlinkが存在する" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+  assert_eq "三段階更新後のlinkはrepo実体を指す" \
+    "$SUB/claude/hooks/usage-inject.sh" "$(readlink "$hook_link" 2>/dev/null || true)"
+  assert_true "三段階更新後のusage-injectは実行可能" \
+    "$([[ -x "$hook_link" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 47. installer失敗後もHEAD不変の再実行で実配置を検査し復旧する（追加副作用なし） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  SUB="$WORK/sub"
+  FAKE_HOME="$WORK/home"
+  LOCK="$WORK/lock"
+  SIDE_EFFECT_DIR="$WORK/side-effects"
+  mkdir -p "$SIDE_EFFECT_DIR"
+
+  git init -q --bare "$BARE"
+  git clone -q "$REPO_ROOT" "$SRC"
+  git -C "$SRC" config user.email "test@example.com"
+  git -C "$SRC" config user.name "Test"
+  git -C "$SRC" remote set-url origin "$BARE"
+  cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
+  cp "$REPO_ROOT/scripts/check-drift.sh" "$SRC/scripts/check-drift.sh"
+  mkdir -p "$SRC/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
+  git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/lib/managed-symlink.sh
+  if ! git -C "$SRC" diff --cached --quiet; then
+    git -C "$SRC" commit -q -m "fixture: reconcile actual symlink state"
+  fi
+  git -C "$SRC" push -q origin HEAD:main
+  git clone -q "$BARE" "$SUB"
+
+  mkdir -p "$FAKE_HOME/.claude/hooks" "$FAKE_HOME/.codex" \
+    "$FAKE_HOME/Data/obsidian/Preferences" "$FAKE_HOME/work/dotfiles" "$WORK/bin"
+  make_sub_profile "$FAKE_HOME"
+  printf '%s\n' 'unrelated-normal-file' > "$FAKE_HOME/keep.txt"
+  keep_before="$(shasum -a 256 "$FAKE_HOME/keep.txt" | awk '{print $1}')"
+  printf '%s\n' 'local-bootstrap' > "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh"
+  cat > "$FAKE_HOME/work/dotfiles/install.sh" <<EOF
+#!/usr/bin/env bash
+touch "$SIDE_EFFECT_DIR/dotfiles-called"
+EOF
+  chmod +x "$FAKE_HOME/work/dotfiles/install.sh"
+  cat > "$WORK/bin/rsync" <<EOF
+#!/usr/bin/env bash
+touch "$SIDE_EFFECT_DIR/rsync-called"
+exit 97
+EOF
+  cat > "$WORK/bin/launchctl" <<EOF
+#!/usr/bin/env bash
+touch "$SIDE_EFFECT_DIR/launchctl-called"
+exit 97
+EOF
+  chmod +x "$WORK/bin/rsync" "$WORK/bin/launchctl"
+
+  # 1回目はinstaller自体を実行不能にし、配置失敗状態を意図的に残す。
+  chmod -x "$SUB/scripts/install-main.sh"
+  failed_head="$(git -C "$SUB" rev-parse HEAD)"
+  rc_first=0
+  PATH="$WORK/bin:$PATH" DIR="$SUB" HOME="$FAKE_HOME" \
+    VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" \
+    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" >"$WORK/update-failed.out" 2>&1 || rc_first=$?
+  assert_true "installer失敗はupdate-subの非0へ反映される" \
+    "$([ "$rc_first" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "installer失敗後はusage-injectが未配置のまま" \
+    "$([[ ! -e "$FAKE_HOME/.claude/hooks/usage-inject.sh" ]] && echo 1 || echo 0)"
+
+  # 実行権限だけ戻し、同じHEADのまま再実行してdesired stateへ収束させる。
+  chmod +x "$SUB/scripts/install-main.sh"
+  rc_retry=0
+  PATH="$WORK/bin:$PATH" DIR="$SUB" HOME="$FAKE_HOME" \
+    VAULT="$FAKE_HOME/Data/obsidian" LOCK_FILE="$LOCK" \
+    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" >"$WORK/update-retry.out" 2>&1 || rc_retry=$?
+  hook_link="$FAKE_HOME/.claude/hooks/usage-inject.sh"
+  assert_eq "HEAD不変の再実行はexit 0" "0" "$rc_retry"
+  assert_eq "再試行の前後でHEADは不変" "$failed_head" "$(git -C "$SUB" rev-parse HEAD)"
+  assert_eq "HEAD不変でもusage-injectの正しいlinkへ復旧" \
+    "$SUB/claude/hooks/usage-inject.sh" "$(readlink "$hook_link" 2>/dev/null || true)"
+  assert_true "復旧したusage-injectは実行可能" \
+    "$([[ -x "$hook_link" ]] && echo 1 || echo 0)"
+  assert_eq "管理対象の通常ファイルは上書きせずbackupへ保存" \
+    "local-bootstrap" "$(<"$FAKE_HOME/.claude/hooks/bootstrap-vault.sh.pre-aienv.bak")"
+  assert_eq "管理外の通常ファイルは変更しない" "$keep_before" \
+    "$(shasum -a 256 "$FAKE_HOME/keep.txt" | awk '{print $1}')"
+  assert_true "HEAD不変の配置再同期ではrsync --deleteを呼ばない" \
+    "$([[ ! -e "$SIDE_EFFECT_DIR/rsync-called" ]] && echo 1 || echo 0)"
+  assert_true "配置再同期ではlaunchctlを呼ばない" \
+    "$([[ ! -e "$SIDE_EFFECT_DIR/launchctl-called" ]] && echo 1 || echo 0)"
+  assert_true "配置再同期ではdotfiles処理を呼ばない" \
+    "$([[ ! -e "$SIDE_EFFECT_DIR/dotfiles-called" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 48. 判定器（check-drift.sh）自体が欠落している場合、管理symlinkの欠落を『driftなし』とは扱わずinstallerを実行したうえで検証不能を警告し非0で終了する（検証3巡目 MAJOR-1対応。従来は\`[ -f check-drift.sh ]\`のガードでブロック全体が無警告のまま素通りし、rc=0で欠落を見逃していた） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  SUB="$WORK/sub"
+  FAKE_HOME="$WORK/home"
+  LOCK="$WORK/lock"
+
+  git init -q --bare "$BARE"
+  git clone -q "$REPO_ROOT" "$SRC"
+  git -C "$SRC" config user.email "test@example.com"
+  git -C "$SRC" config user.name "Test"
+  git -C "$SRC" remote set-url origin "$BARE"
+  cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
+  cp "$REPO_ROOT/scripts/install-main.sh" "$SRC/scripts/install-main.sh"
+  mkdir -p "$SRC/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
+  git -C "$SRC" add scripts/update-sub.sh scripts/install-main.sh scripts/lib/managed-symlink.sh
+  if ! git -C "$SRC" diff --cached --quiet; then
+    git -C "$SRC" commit -q -m "fixture: current scripts"
+  fi
+  git -C "$SRC" push -q origin HEAD:main
+  git clone -q "$BARE" "$SUB"
+
+  mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.codex" \
+    "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  make_sub_profile "$FAKE_HOME"
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" \
+    AIENV_FORCE_INTERACTIVE_SETUP=0 \
+    /bin/bash "$SUB/scripts/install-main.sh" --sub-delegate --non-interactive \
+      >"$WORK/install-baseline.out" 2>&1
+  hook_link="$FAKE_HOME/.claude/hooks/usage-inject.sh"
+  assert_true "前提: baseline installでusage-inject symlinkが配置されている" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+
+  # 判定器(check-drift.sh)と管理対象symlinkの両方を欠落させ、HEAD不変のまま
+  # 再実行する（検証職の再現手順どおり）。
+  head_before="$(git -C "$SUB" rev-parse HEAD)"
+  rm -f "$hook_link"
+  rm -f "$SUB/scripts/check-drift.sh"
+
+  rc=0
+  out=$(DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" 2>&1) || rc=$?
+
+  assert_eq "HEADは不変のまま" "$head_before" "$(git -C "$SUB" rev-parse HEAD)"
+  assert_true "判定器欠落を『driftなし』とは扱わず非0で終了する" \
+    "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "判定不能である旨の警告が出る（無言のfail-openにしない）" \
+    "$(echo "$out" | grep -q "check-drift.sh がgit管理下には存在するのに作業ツリーから消えています" && echo 1 || echo 0)"
+  assert_true "判定器が無くてもinstallerは実行され欠落したsymlinkへ収束する" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 49. claude/agents/*.md直接配置(2c.)でも、既存backupと内容が異なる通常ファイルへ置き換わっている場合に追加backupへ保存してから復旧する（検証4巡目 BLOCKING-1対応。従来はinstall-main.sh link()専用の対応が2c.の複製実装には反映されておらず、同じデータ消失が再発していた） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  add_agent_role "$SRC" "reviewer"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  dest="$FAKE_HOME/.claude/agents/reviewer.md"
+  printf 'original-content\n' > "$dest"
+
+  # 1回目: HEAD不変のまま実行し、2c.で.pre-aienv.bak(元の内容)とsymlinkを作る。
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null 2>&1
+  assert_true "前提: 1回目でreviewer.mdがsymlink化される" \
+    "$([[ -L "$dest" ]] && echo 1 || echo 0)"
+  assert_eq "前提: 初回backupに元の内容が保存される" \
+    "original-content" "$(<"$dest.pre-aienv.bak")"
+
+  # symlinkを、既存backupとは異なる内容の通常ファイルへ外部要因で置換する。
+  rm -f "$dest"
+  printf 'tampered-content\n' > "$dest"
+
+  # 2回目: repo無変更のまま再実行。
+  rc=0
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
+
+  assert_eq "2回目もexit 0（追加backupの発生自体は失敗要因にならない）" "0" "$rc"
+  assert_true "symlinkへ復旧する" "$([[ -L "$dest" ]] && echo 1 || echo 0)"
+  assert_eq "既存backup(.pre-aienv.bak)は旧内容のまま変更されない" \
+    "original-content" "$(<"$dest.pre-aienv.bak")"
+
+  extra_baks=("$dest".pre-aienv.bak.*)
+  assert_true "既存backupと内容が異なっていた通常ファイルは追加backupへ保存され消えない" \
+    "$([[ -e "${extra_baks[0]}" ]] && echo 1 || echo 0)"
+  assert_eq "追加backupの内容はsymlink化直前の通常ファイルと一致する" \
+    "tampered-content" "$(<"${extra_baks[0]}")"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 50. git ls-tree自体が非0で失敗する場合（HEAD非追跡ではなくGit判定コマンド自体の障害）は『HEAD非追跡』に丸めず判定不能として非0終了する（検証4巡目 MAJOR-1対応。git cat-file -eの非0は対象不存在と実行障害を区別できずfail-openしていた） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  SUB="$WORK/sub"
+  FAKE_HOME="$WORK/home"
+  LOCK="$WORK/lock"
+
+  git init -q --bare "$BARE"
+  git clone -q "$REPO_ROOT" "$SRC"
+  git -C "$SRC" config user.email "test@example.com"
+  git -C "$SRC" config user.name "Test"
+  git -C "$SRC" remote set-url origin "$BARE"
+  cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
+  cp "$REPO_ROOT/scripts/install-main.sh" "$SRC/scripts/install-main.sh"
+  mkdir -p "$SRC/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
+  git -C "$SRC" add scripts/update-sub.sh scripts/install-main.sh scripts/lib/managed-symlink.sh
+  if ! git -C "$SRC" diff --cached --quiet; then
+    git -C "$SRC" commit -q -m "fixture: current scripts"
+  fi
+  git -C "$SRC" push -q origin HEAD:main
+  git clone -q "$BARE" "$SUB"
+
+  mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.codex" \
+    "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/Library/LaunchAgents"
+  make_sub_profile "$FAKE_HOME"
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" \
+    AIENV_FORCE_INTERACTIVE_SETUP=0 \
+    /bin/bash "$SUB/scripts/install-main.sh" --sub-delegate --non-interactive \
+      >"$WORK/install-baseline.out" 2>&1
+  hook_link="$FAKE_HOME/.claude/hooks/usage-inject.sh"
+  assert_true "前提: baseline installでusage-inject symlinkが配置されている" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+
+  # check-drift.shを作業ツリーから削除しHEAD不変のまま、`git ls-tree`と
+  # `git cat-file`の両方を非0で失敗させる偽gitをPATH先頭へ注入する（他の
+  # gitサブコマンドは実物へ委譲するため、pull等の通常経路は変えない）。
+  # ⚠️ 検証5巡目 MINOR対応（2026-09-14）: 当初は`ls-tree`だけを失敗させて
+  # いたが、旧コード（34e5f3c以前）が使う判定コマンドは`cat-file`であり、
+  # `ls-tree`だけの障害注入では旧コードの判定自体は成功してしまう
+  # （旧コードに対する陽性対照が「新版専用の警告文言が無い」という間接的な
+  # 1検査でしか成立せず、旧コードの本来のfail-open〈rc=0・警告なし・
+  # symlink未復旧〉を実際には発火させていなかった＝検証職の実測指摘）。
+  # 両方失敗させることで、新旧どちらの判定コマンドを使うコードに対しても
+  # 「Git判定コマンド自体の障害」を正しく注入する。
+  rm -f "$hook_link"
+  rm -f "$SUB/scripts/check-drift.sh"
+  REAL_GIT="$(command -v git)"
+  mkdir -p "$WORK/bin"
+  cat > "$WORK/bin/git" <<EOF
+#!/usr/bin/env bash
+# 呼び出しは \`git -C "\\\$DIR" ls-tree ...\` のように-Cが先頭に来るため、
+# \$1固定ではなくls-tree/cat-fileサブコマンドの有無を引数全体から見る。
+for arg in "\$@"; do
+  if [ "\$arg" = "ls-tree" ] || [ "\$arg" = "cat-file" ]; then
+    echo "fatal: injected failure for test" >&2
+    exit 128
+  fi
+done
+exec "$REAL_GIT" "\$@"
+EOF
+  chmod +x "$WORK/bin/git"
+  head_before="$(git -C "$SUB" rev-parse HEAD)"
+
+  rc=0
+  out=$(PATH="$WORK/bin:$PATH" DIR="$SUB" HOME="$FAKE_HOME" VAULT="$FAKE_HOME/Data/obsidian" \
+    LOCK_FILE="$LOCK" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
+    /bin/bash "$SUB/scripts/update-sub.sh" 2>&1) || rc=$?
+
+  assert_eq "HEADは不変のまま" "$head_before" "$(git -C "$SUB" rev-parse HEAD)"
+  assert_true "git ls-tree自体の障害を『HEAD非追跡』とは扱わず非0で終了する" \
+    "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "Git判定コマンド自体が失敗した旨の警告が出る（対象不存在の文言とは別）" \
+    "$(echo "$out" | grep -q "git ls-tree失敗" && echo 1 || echo 0)"
+  assert_true "判定不能でもinstallerは実行され欠落したsymlinkへ収束する" \
+    "$([[ -L "$hook_link" ]] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 51. scripts/lib/managed-symlink.shだけを更新したコミットをpullすると、update-sub.sh自身は不変（自己再exec無し）でも同一実行中に新版のsync_managed_symlink()が使われる（検証5巡目 MAJOR-1対応。従来はpull・自己再exec判定より前でsourceしており、自己再exec判定がupdate-sub.sh本体の差分しか見ないため、lib単独更新は同一実行に反映されなかった） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+
+  # baseline: 旧版libのまま1回実行しておく（2c.が正常に動く前提の確認）。
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null 2>&1
+
+  # upstream側でscripts/lib/managed-symlink.shだけを識別marker付きへ更新し、
+  # 併せて新しいagent roleを1本追加する（update-sub.sh自身は一切変更しない
+  # ＝検証職の再現手順どおり。roleの追加は、既に正しいsymlinkのroleは
+  # 2c.のno-op分岐でsync_managed_symlink()自体を呼ばないため、確実に
+  # この関数が呼ばれる新規対象を作るため）。
+  sed -e 's/linked: \$dest -> \$src/linked: $dest -> $src [MARKER-NEW-LIB-R5]/' \
+    "$REPO_ROOT/scripts/lib/managed-symlink.sh" > "$SRC/scripts/lib/managed-symlink.sh"
+  add_agent_role "$SRC" "reviewer-r5"
+
+  head_before="$(git -C "$SUB" rev-parse HEAD)"
+  rc=0
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
+  head_after="$(git -C "$SUB" rev-parse HEAD)"
+
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "HEADはpullで進んでいる（lib単独更新でもHEADは動く）" \
+    "$([ "$head_before" != "$head_after" ] && echo 1 || echo 0)"
+  assert_true "自己再execは起きない（update-sub.sh自体は不変のため）" \
+    "$(echo "$out" | grep -q "update-sub.sh自身が更新されました" && echo 0 || echo 1)"
+  assert_true "pull後のscripts/lib/managed-symlink.shは新版（marker付き）になっている" \
+    "$(grep -q 'MARKER-NEW-LIB-R5' "$SUB/scripts/lib/managed-symlink.sh" && echo 1 || echo 0)"
+  assert_true "新規agent roleはこの実行中にsymlink化される（2c.が実際に走った証拠）" \
+    "$([[ -L "$FAKE_HOME/.claude/agents/reviewer-r5.md" ]] && echo 1 || echo 0)"
+  assert_true "同一実行中の出力に新版markerが出る（pull後sourceにより新版関数が使われた証拠。修正前はここがNGだった＝lib_on_disk_new=yes・new_lib_used=no）" \
+    "$(echo "$out" | grep -q 'MARKER-NEW-LIB-R5' && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 52. HEAD不変のまま共有lib（scripts/lib/managed-symlink.sh）が作業ツリーから消えている場合、EXIT trap（多重起動防止ロックの後始末）にexit 0へ上書きされず明示的に非0で終了する（検証6巡目 MAJOR対応。従来はbareなsourceの失敗がPID lockのEXIT trap実行後の最終コマンドの終了コード〈常に0〉で上書きされ、2a.以降未実行のままrc=0の『成功』報告になっていた） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+
+  # baseline: libが正常な状態で1回実行しておく（正常動作の前提確認）。
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null 2>&1
+
+  # HEAD不変のまま、作業ツリーからだけ共有libを消す（checkout破損の再現。
+  # 検証職の再現手順どおり）。
+  head_before="$(git -C "$SUB" rev-parse HEAD)"
+  rm -f "$SUB/scripts/lib/managed-symlink.sh"
+
+  rc=0
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
+  head_after="$(git -C "$SUB" rev-parse HEAD)"
+
+  assert_eq "HEADは不変のまま" "$head_before" "$head_after"
+  assert_true "共有lib欠落を『成功』に丸めず非0終了する（EXIT trapに上書きされない）" \
+    "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "共有ライブラリが読み取れない旨の明示的なFAILが出る" \
+    "$(echo "$out" | grep -q "共有ライブラリが読み取れません" && echo 1 || echo 0)"
+  assert_true "bareなsourceの失敗によるNo such file or directory等の生の構文エラーは表に出ない（source前の事前検査で捕捉している証拠）" \
+    "$(echo "$out" | grep -qE 'managed-symlink\.sh: No such file or directory' && echo 0 || echo 1)"
+  assert_true "2a.以降（settings.json再生成）は実行されない" \
+    "$(echo "$out" | grep -q "settings.json を再生成しました" && echo 0 || echo 1)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== PD-03: model付き既存8職種を退避してmodel無しrepo定義へ置換 ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  mkdir -p "$SRC/claude/agents"
+  cp "$REPO_ROOT"/claude/agents/*.md "$SRC/claude/agents/"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "PD-03 add eight roles"
+  git -C "$SRC" push -q origin HEAD:main
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
+  LOCK="$WORK/lock"
+  for role in adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier; do
+    printf '%s\n' '---' "name: $role" 'model: claude-sonnet-5' '---' > "$FAKE_HOME/.claude/agents/$role.md"
+  done
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
+  pd03_ok=1
+  for role in adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier; do
+    [ -L "$FAKE_HOME/.claude/agents/$role.md" ] || pd03_ok=0
+    grep -q '^model:' "$FAKE_HOME/.claude/agents/$role.md.pre-aienv.bak" || pd03_ok=0
+    grep -q '^model:' "$FAKE_HOME/.claude/agents/$role.md" && pd03_ok=0
+  done
+  assert_true "PD-03 8職種すべて退避・symlink化・model行撤去" "$pd03_ok"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 53. pull後に共有lib（scripts/lib/managed-symlink.sh）が新HEADから消えている場合も、EXIT trapにexit 0へ上書きされず明示的に非0で終了する（検証6巡目 MAJOR対応。HEADが進む経路でも同じ丸め込みが起きることを確認） ==="
+{
+  WORK="$(mktemp -d)"
+  BARE="$WORK/origin.git"
+  SRC="$WORK/src"
+  make_origin "$BARE" "$SRC"
+  SUB="$WORK/sub"
+  make_sub_clone "$BARE" "$SUB"
+  FAKE_HOME="$WORK/home"
+  mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+  LOCK="$WORK/lock"
+
+  # baseline: libが正常な状態で1回実行しておく。
+  run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null 2>&1
+
+  # upstream側で共有libを削除してpushする（update-sub.sh自体は変更しない
+  # ため自己再execは起きない＝pullでHEADが進んだ直後にこの欠落へ到達する）。
+  rm -f "$SRC/scripts/lib/managed-symlink.sh"
+  git -C "$SRC" add -A
+  git -C "$SRC" commit -q -m "fixture: remove managed-symlink.sh from upstream"
+  git -C "$SRC" push -q origin HEAD:main
+
+  head_before="$(git -C "$SUB" rev-parse HEAD)"
+  rc=0
+  out=$(run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1) || rc=$?
+  head_after="$(git -C "$SUB" rev-parse HEAD)"
+
+  assert_true "HEADはpullで進んでいる（lib削除もHEADは動く）" \
+    "$([ "$head_before" != "$head_after" ] && echo 1 || echo 0)"
+  assert_true "pull後に共有lib欠落を『成功』に丸めず非0終了する（EXIT trapに上書きされない）" \
+    "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "共有ライブラリが読み取れない旨の明示的なFAILが出る" \
+    "$(echo "$out" | grep -q "共有ライブラリが読み取れません" && echo 1 || echo 0)"
+  assert_true "2a.以降（settings.json再生成）は実行されない" \
+    "$(echo "$out" | grep -q "settings.json を再生成しました" && echo 0 || echo 1)"
 
   rm -rf "$WORK"
 }

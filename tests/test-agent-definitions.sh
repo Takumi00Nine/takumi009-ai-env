@@ -25,6 +25,7 @@ REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 AGENTS_DIR="$REPO_ROOT/claude/agents"
 BOOTSTRAP_SCRIPT="$REPO_ROOT/claude/hooks/bootstrap-vault.sh"
 PROFILE_LIB="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
+BASE_COMMIT="3954355d2ceea7abd29633d822e51212cb4aa2bc"
 
 PASS=0
 FAIL=0
@@ -58,6 +59,28 @@ assert_contains_file() {
     fail_case "$desc (file=$file needle=[$needle])"
   fi
 }
+
+echo "=== model廃止 AC-1: 8職種集合・frontmatter model不在・基準差分 ==="
+if python3 - "$REPO_ROOT" "$BASE_COMMIT" <<'PYMODEL'
+from pathlib import Path
+import re, subprocess, sys
+r=Path(sys.argv[1]); base=sys.argv[2]
+roles=set('adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier'.split())
+assert {p.stem for p in (r/'claude/agents').glob('*.md')} == roles
+for role in sorted(roles):
+    rel=f'claude/agents/{role}.md'
+    old=subprocess.check_output(['git','-C',str(r),'show',f'{base}:{rel}'])
+    parts=old.split(b'---',2); assert len(parts)==3 and not parts[0].strip()
+    parts[1]=re.sub(rb'^[ \t]*model[ \t]*:.*\n',b'',parts[1],flags=re.M)
+    new=(r/rel).read_bytes()
+    assert new==b'---'.join(parts),role
+    assert not re.search(rb'^[ \t]*model[ \t]*:',new.split(b'---',2)[1],re.M)
+PYMODEL
+then
+  pass "8職種はmodel行だけ削除"
+else
+  fail_case "8職種はmodel行だけ削除"
+fi
 
 echo "=== 1. AC-12①: claude/agents/verifier.md が在り、tester.md が無い ==="
 {
@@ -359,6 +382,37 @@ echo "=== 10. §10.3-10: 開幕1行の文面がcore-conduct.md（正本・Vault�
     fail_case "core-conduct.mdが見つからない（Vault側の§7.2改訂がまだ反映されていない可能性。W5完了後に緑化想定）"
   fi
 }
+
+echo "=== model廃止 AC-8: 契約・README・規範・公開コピーの同期 ==="
+if python3 - "$REPO_ROOT" "$HOME/work/takumi009-ai-env-private/docs/core-split" "$HOME/Data/obsidian" <<'PYDOC'
+from pathlib import Path
+import sys
+r,docs,vault=map(Path,sys.argv[1:])
+names=['core-workflow.md','worker-role-prompts.md','core-conduct.md']
+texts={}
+for name in names:
+    original=(vault/'Preferences'/name).read_bytes()
+    assert original==(r/'vault-public/Preferences'/name).read_bytes(),name
+    texts[name]=original.decode()
+contract=(docs/'profile-resolve-contract-2026-09-01.md').read_text()
+readme=(r/'README.md').read_text()
+for name,text in list(texts.items())+[('contract',contract),('README',readme),
+        ('bootstrap',(r/'claude/hooks/bootstrap-vault.sh').read_text())]:
+    for forbidden in ('MODEL_MISMATCH','既定 model:','model パラメータは**渡さない**','model 引数は渡さない'):
+        assert forbidden not in text,(name,forbidden)
+for name in ('core-workflow.md','worker-role-prompts.md'):
+    for required in ('resolve-candidate','AGENT_MODEL','model'): assert required in texts[name],(name,required)
+assert 'SUBAGENT_PROVIDER_UNSUPPORTED' in contract and 'AGENT_MODEL_UNSUPPORTED' in contract
+assert 'AGENT_MODEL' in contract and '--agents-dir' in contract
+english,japanese=readme.split('## 日本語',1)
+for text in (english,japanese):
+    for required in ('resolve-candidate','AGENT_MODEL','Agent','model'): assert required in text,required
+PYDOC
+then
+  pass "AC-8 文書同期"
+else
+  fail_case "AC-8 文書同期（Vault正本更新・export完了後に緑化）"
+fi
 
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="

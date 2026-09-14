@@ -163,6 +163,12 @@
             "command": "$HOME/.claude/hooks/context-size-warn.sh",
             "timeout": 5,
             "statusMessage": "セッション肥大化チェック中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/usage-inject.sh",
+            "timeout": 5,
+            "statusMessage": "使用率を注入中"
           }
         ]
       }
@@ -215,6 +221,17 @@
             "command": "$HOME/.claude/hooks/delegation-gate-v2.sh",
             "timeout": 10,
             "statusMessage": "委任ゲート確認中"
+          }
+        ]
+      },
+      {
+        "matcher": "^Agent$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/agent-model-guard.sh",
+            "timeout": 5,
+            "statusMessage": "ワーカーモデル指定を確認中"
           }
         ]
       }

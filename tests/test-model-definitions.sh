@@ -338,30 +338,16 @@ echo "=== AC-9: FX-B9（リーダーは先頭候補のみ解決） ==="
   assert_eq "FX-B9: model==claude-opus-5（先頭候補）" "claude-opus-5" "$model_val"
 }
 
-echo "=== AC-10: FX-B1（MODEL_MISMATCH無し）／FX-B10・FX-B11（陰性） ==="
+echo "=== AC-10: 職種frontmatterのmodel値はresolver出力へ影響しない ==="
 {
-  out="$(R "$BASE/profile.md" "$BASE/agents")"
-  assert_not_contains "FX-B1: MODEL_MISMATCHを含まない" "$out" "MODEL_MISMATCH"
-
-  variant_profile "$WORK/b10.md" 's/role.implementer: configured model=sonnet-main,codex-high/role.implementer: configured model=sonnet-main,opus-main/'
-  out="$(R "$WORK/b10.md" "$BASE/agents")"; rc=$?
-  assert_eq "FX-B10: exit0" "0" "$rc"
-  cnt="$(printf '%s' "$out" | grep -o 'MODEL_MISMATCH:implementer:opus-main' | wc -l | tr -d ' ')"
-  assert_eq "FX-B10: MODEL_MISMATCH:implementer:opus-mainがちょうど1件" "1" "$cnt"
-  assert_not_contains "FX-B10: sonnet-main分は現れない" "$out" "MODEL_MISMATCH:implementer:sonnet-main"
-
-  mkdir -p "$WORK/agents-b11"
-  cat > "$WORK/agents-b11/implementer.md" <<'EOF'
----
-name: implementer
-model: sonnet
----
-EOF
-  cp "$BASE/agents/verifier.md" "$BASE/agents/ja-doc.md" "$WORK/agents-b11/"
-  variant_profile "$WORK/b11.md" 's/role.implementer: configured model=sonnet-main,codex-high/role.implementer: configured model=sonnet-main/'
-  out="$(R "$WORK/b11.md" "$WORK/agents-b11")"; rc=$?
-  assert_eq "FX-B11: exit0" "0" "$rc"
-  assert_contains "FX-B11: MODEL_MISMATCH:implementer:sonnet-main" "$out" "MODEL_MISMATCH:implementer:sonnet-main"
+  base_out="$(R "$BASE/profile.md" "$BASE/agents")"
+  cp -R "$BASE/agents" "$WORK/agents-model-ignored"
+  sed -i '' '2i\
+model: claude-fable-5-1
+' "$WORK/agents-model-ignored/implementer.md"
+  changed_out="$(R "$BASE/profile.md" "$WORK/agents-model-ignored")"; rc=$?
+  assert_eq "model行があってもresolveはexit0" "0" "$rc"
+  assert_eq "model行があってもresolve出力は同一" "$base_out" "$changed_out"
 }
 
 echo "=== W（ラッパー用一時スタブ）の準備 ==="
@@ -539,7 +525,7 @@ fallback.implementer: configured model=codex-fallback'
   assert_eq "FX-B13b: Wの記録はちょうど1行" "1" "$(wc -l < "$CALLS_LOG" | tr -d ' ')"
 }
 
-echo "=== RG-1: fallback側のMODEL_MISMATCH拒否（D-14。実装回帰・要件fixtureは増やさない） ==="
+echo "=== RG-1: 指定した非anthropic-api/subagentはfallback評価前に拒否 ==="
 {
   # bedrock-opusは本命（bedrock.envを渡さないので経路がdisabled＝V9-d3で
   # 使用不可・決定的）。fallback.implementer=sonnet-main（anthropic-api/
@@ -561,9 +547,9 @@ EOF
   out="$(python3 "$LIB" resolve-candidate "$WORK/rg1.md" --role implementer --model-def bedrock-opus --agents-dir "$WORK/agents-rg1" 2>&1 1>"$WORK/rg1.stdout")"
   rc=$?
   stdout_content="$(cat "$WORK/rg1.stdout")"
-  assert_eq "RG-1: exit1" "1" "$rc"
+  assert_eq "RG-1: exit2" "2" "$rc"
   assert_eq "RG-1: stdoutが1文字も出ない" "" "$stdout_content"
-  assert_contains "RG-1: stderrがCANDIDATE_UNUSABLE:MODEL_MISMATCHで始まる" "$out" "CANDIDATE_UNUSABLE:MODEL_MISMATCH"
+  assert_eq "RG-1: provider拒否が先勝ち" "SUBAGENT_PROVIDER_UNSUPPORTED	role=implementer def=bedrock-opus provider=bedrock" "$out"
 }
 
 # 2026-09-08 Codexレビュー指摘・MAJOR-3対応（1巡目）: 設計§11.3の
@@ -627,6 +613,110 @@ echo "=== cwd不変性: 同じ絶対パスなら呼び出し元cwdを変えて�
   assert_eq "cwd不変性(C): /tmp と REPO_ROOT で同じ結果(exit+stdout)" "$c1" "$c2"
   assert_eq "cwd不変性(C): /tmp と WORK で同じ結果(exit+stdout)" "$c1" "$c3"
 }
+
+echo "=== AC-2/3/4/5/6: FX-01〜28（新契約のbytes・評価順） ==="
+if python3 - "$REPO_ROOT" "$WORK" <<'PYFX'
+from pathlib import Path
+import os, re, shutil, subprocess, sys
+
+r, work = map(Path, sys.argv[1:])
+root = work / "model-removal-fx"
+root.mkdir()
+profile = (r / "config/profile.md.sample").read_text()
+defs = (r / "config/models.conf.sample").read_text()
+models = ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5",
+          "claude-haiku-4-5-20251001", "claude-fable-5", "claude-opus-4-8",
+          "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+          "claude-opus-5-unknown", "opus"]
+for n in range(1, 29):
+    d = root / f"FX-{n:02}"
+    (d / "agents").mkdir(parents=True)
+    for source in (r / "claude/agents").glob("*.md"):
+        shutil.copy2(source, d / "agents" / source.name)
+    attrs = dict(provider="anthropic-api", model=models[n-1] if n <= 11 else "claude-opus-5",
+                 execution="subagent", effort="high")
+    state, candidates = "configured", "pick"
+    if n in (12, 13):
+        attrs.update(provider="external", execution="external-cli",
+                     model="gpt-6-astra" if n == 12 else "default", effort="low")
+    if n in (4, 13): attrs.pop("effort")
+    if n in (16, 17, 25, 26, 28): state = "unavailable"
+    if n in (23, 28): attrs.update(provider="bedrock", model="opus")
+    if n == 24: attrs.update(provider="bedrock-mantle", model="anthropic.claude-opus-5")
+    if n == 27: candidates = "pick,probe"
+    if n == 19: candidates = "pick,opus-4-7-legacy"
+    if n == 20: attrs["effort"] = "low"
+    text, count = re.subn(r"^role\.requirements-analyst:.*$",
+                          f"role.requirements-analyst: {state} model={candidates}", profile, flags=re.M)
+    assert count == 1
+    if n in (5, 16, 17, 25, 26, 28):
+        fallback = "probe" if n in (25, 26) else ("opus-4-7-legacy" if n == 17 else "sonnet-main")
+        end = text.rfind("---")
+        text = text[:end] + f"fallback.requirements-analyst: configured model={fallback}\n" + text[end:]
+    (d / "profile.md").write_text(text)
+    (d / "models.conf").write_text(defs + "\n[pick]\n" + "".join(f"{k}={v}\n" for k, v in attrs.items()))
+    if n in (25, 26, 27):
+        provider = "bedrock-mantle" if n == 26 else "bedrock"
+        model = "anthropic.claude-opus-5" if n == 26 else "opus"
+        with (d / "models.conf").open("a") as f:
+            f.write(f"\n[probe]\nprovider={provider}\nmodel={model}\nexecution=subagent\n")
+    if n in (21, 22):
+        agent = d / "agents/requirements-analyst.md"
+        value = "claude-sonnet-5" if n == 21 else "claude-fable-5-1"
+        agent.write_text(agent.read_text().replace("---\n", f"---\nmodel: {value}\n", 1))
+    if n == 18: (d / "agents/requirements-analyst.md").unlink()
+
+lib = r / "claude/hooks/lib/profile_resolve.py"
+def run(n, *, model_def="pick", profile_path=None, command="resolve-candidate"):
+    d = root / f"FX-{n:02}"
+    args = ["python3", str(lib), command, str(profile_path or d / "profile.md")]
+    if command == "resolve-candidate":
+        args += ["--role", "requirements-analyst"]
+        if model_def is not None: args += ["--model-def", model_def]
+        args += ["--agents-dir", str(d / "agents")]
+    elif command == "resolve":
+        args += ["--agents-dir", str(d / "agents")]
+    return subprocess.run(args, env={**os.environ, "AIENV_MODEL_DEFS_FILE": str(d / "models.conf")}, capture_output=True)
+
+aliases = {"claude-fable-5-1":"fable", "claude-opus-5":"opus",
+           "claude-sonnet-5":"sonnet", "claude-haiku-4-5-20251001":"haiku"}
+for n, model in enumerate(list(aliases), 1):
+    p = run(n); effort = "" if n == 4 else "high"
+    expected = f"OK\tpick\t{model}\tsubagent\t{effort}\nAGENT_MODEL\t{aliases[model]}\n".encode()
+    assert (p.returncode, p.stdout, p.stderr) == (0, expected, b""), (n, p)
+for n, model in zip(range(5, 11), models[4:10]):
+    p = run(n); expected = f"AGENT_MODEL_UNSUPPORTED\trole=requirements-analyst def=pick model={model}\n".encode()
+    assert (p.returncode, p.stdout, p.stderr) == (2, b"", expected), (n, p)
+p = run(11); assert p.returncode == 1 and p.stdout == b"" and p.stderr.startswith(b"PROFILE_INVALID:T12\t")
+p = run(12); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tpick\tgpt-6-astra\texternal-cli\tlow\nCODEX_ARGS\t--model gpt-6-astra --effort low\n",b"")
+p = run(13); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tpick\tdefault\texternal-cli\t\nCODEX_ARGS\t\n",b"")
+p = run(14, model_def=None, profile_path=root/"missing.md"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"CANDIDATE_UNSPECIFIED\t")
+p = run(15, model_def="sonnet-main"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"CANDIDATE_NOT_IN_LIST\t")
+p = run(16); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tsonnet-main\tclaude-sonnet-5\tsubagent\thigh\nAGENT_MODEL\tsonnet\n",b"")
+p = run(17); assert (p.returncode,p.stdout,p.stderr)==(2,b"",b"AGENT_MODEL_UNSUPPORTED\trole=requirements-analyst def=opus-4-7-legacy model=claude-opus-4-7\n")
+p = run(18); assert p.returncode==1 and p.stdout==b"" and b"V1-b" in p.stderr
+p = run(19); assert p.returncode==0 and p.stdout.endswith(b"AGENT_MODEL\topus\n")
+p = run(20); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tpick\tclaude-opus-5\tsubagent\tlow\nAGENT_MODEL\topus\n",b"")
+fx02_candidate = run(2)
+fx02_resolve = run(2, command="resolve")
+for n in (21,22):
+    p = run(n)
+    assert (p.returncode, p.stdout, p.stderr) == (fx02_candidate.returncode, fx02_candidate.stdout, fx02_candidate.stderr)
+    p = run(n, command="resolve")
+    assert (p.returncode, p.stdout, p.stderr) == (fx02_resolve.returncode, fx02_resolve.stdout, fx02_resolve.stderr)
+for n, provider in ((23,"bedrock"),(24,"bedrock-mantle")):
+    p=run(n); assert (p.returncode,p.stdout,p.stderr)==(2,b"",f"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=pick provider={provider}\n".encode())
+for n, provider in ((25,"bedrock"),(26,"bedrock-mantle")):
+    p=run(n); assert (p.returncode,p.stdout,p.stderr)==(2,b"",f"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=probe provider={provider}\n".encode())
+p=run(27); assert p.returncode==0 and p.stdout.endswith(b"AGENT_MODEL\topus\n")
+p=run(28); assert (p.returncode,p.stdout,p.stderr)==(2,b"",b"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=pick provider=bedrock\n")
+print("PASS FX-01..28")
+PYFX
+then
+  pass "FX-01〜28"
+else
+  fail_test "FX-01〜28"
+fi
 
 echo ""
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="

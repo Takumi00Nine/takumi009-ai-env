@@ -278,6 +278,14 @@ echo "=== 4. claude/・codex/ の symlink化が install-main.sh 経由で行わ�
 
   assert_eq "bootstrap-vault.shがrepoへのsymlinkになっている" "$REPO_ROOT/claude/hooks/bootstrap-vault.sh" \
     "$(readlink "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh")"
+  assert_eq "agent-model-guard.shがrepoへのsymlinkになっている" "$REPO_ROOT/claude/hooks/agent-model-guard.sh" \
+    "$(readlink "$FAKE_HOME/.claude/hooks/agent-model-guard.sh")"
+  assert_true "agent-model-guard.shの実体が実行可能" \
+    "$([[ -f "$FAKE_HOME/.claude/hooks/agent-model-guard.sh" && -x "$FAKE_HOME/.claude/hooks/agent-model-guard.sh" ]] && echo 1 || echo 0)"
+  assert_true "settings.jsonにAgent guardが登録されている" \
+    "$(grep -qF '"command": "$HOME/.claude/hooks/agent-model-guard.sh"' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
+  assert_eq "usage-inject.shもinstall-main.sh委譲経由でrepoへのsymlinkになっている" "$REPO_ROOT/claude/hooks/usage-inject.sh" \
+    "$(readlink "$FAKE_HOME/.claude/hooks/usage-inject.sh")"
   assert_true "settings.jsonが生成されている（symlinkではなく実ファイル。2026-08-21 機役割対応でsymlinkから変更）" \
     "$([[ -f "$FAKE_HOME/.claude/settings.json" && ! -L "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
   assert_true "config.tomlが生成されている（symlinkではなく実ファイル）" \

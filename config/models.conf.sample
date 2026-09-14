@@ -33,7 +33,7 @@
 #  model は具体ID（別名不可）
 # =====================================================================
 
-# --- 現行世代・既定3定義（配役表・テストが参照。名前と値を変えない）---
+# --- 現行世代・参照用3定義（配役表・テストが参照。名前と値を変えない）---
 [fable-main]
 provider=anthropic-api
 model=claude-fable-5-1
@@ -81,7 +81,8 @@ provider=anthropic-api
 model=claude-sonnet-5
 effort=low
 
-# --- 旧世代（提供継続中。新規既定には使わないが経路として残す）---
+# --- 旧世代（保管・一覧参照用）。resolve-candidateでsubagentへ選ぶと
+# AGENT_MODEL_UNSUPPORTED（exit 2）で拒否される ---
 [fable-5-legacy]
 provider=anthropic-api
 model=claude-fable-5
@@ -228,7 +229,9 @@ effort=high
 #  haiku/fable）、実IDは bedrock.env のピン留め側（ANTHROPIC_DEFAULT_*_
 #  MODEL）が持つ。effortは現行のピン留め方式で効く保証が無いため書かない。
 #  メイン機は現状サブスク本命で未使用（2026-09-08実測）——サブ機・サブスク
-#  枠切迫時の保険用に定義だけ置く
+#  枠切迫時の保険用に定義だけ置く。定義と一覧表示は可能だが、非anthropic-api
+#  のsubagent起動は未対応であり、resolve-candidateは
+#  SUBAGENT_PROVIDER_UNSUPPORTED（exit 2）で拒否する
 # =====================================================================
 [bedrock-fable]
 provider=bedrock
@@ -249,7 +252,8 @@ model=haiku
 # =====================================================================
 # ④ Claude Bedrock Messages API（bedrock-mantle）。③と同じ枠・費用の性質
 #  だが、model は実ID（anthropic.<...>）をそのまま書ける＝bedrock.env側の
-#  ピン留めが要らない経路
+#  ピン留めが要らない経路。定義と一覧表示は可能だが、subagent起動は未対応で
+#  resolve-candidateはSUBAGENT_PROVIDER_UNSUPPORTED（exit 2）で拒否する
 # =====================================================================
 [mantle-fable]
 provider=bedrock-mantle

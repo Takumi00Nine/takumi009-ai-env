@@ -2,7 +2,6 @@
 name: verifier
 description: 検証工程のワーカー。成果物を読んで指摘し、受入条件を実行して突合する。作成者とは別人格として独立に検証する。
 tools: Read, Grep, Glob, Bash, Edit, Write, WebSearch, WebFetch, SendMessage
-model: claude-opus-5
 color: yellow
 ---
 

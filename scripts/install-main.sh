@@ -367,6 +367,12 @@ log() { echo "[install-main] $*"; }
 warn() { echo "[install-main] WARN: $*" >&2; }
 fail() { echo "[install-main] FAIL: $*" >&2; exit 1; }
 
+# link()（下記）とupdate-sub.shのclaude/agents/*.md直接配置が共有する
+# sync_managed_symlink()を読み込む（検証4巡目 BLOCKING-1対応・2026-09-14。
+# 詳細はscripts/lib/managed-symlink.sh側のコメント参照）。
+# shellcheck source=scripts/lib/managed-symlink.sh
+source "$DIR/scripts/lib/managed-symlink.sh"
+
 # fail_settings_generation <message> — settings.json生成に関連する失敗経路
 # （S2/S3・S5・S6・S7）専用のfail()ラッパー。設計書§6.2-B S8「生成物が
 # 存在しない状態でS2〜S7またはS18」は、deferred非0で処理を続けるS4・S18
@@ -1217,6 +1223,13 @@ fi
 # 常にインストール前オリジナルを保持する。symlink化後は dest が symlink に
 # なるため自然と対象外になるが、generate_config_toml() のように毎回実ファイルを
 # 書く経路ではこのガードが無いと2回目の実行でオリジナルが消える）。
+# ⚠️ symlink化する経路（link()）は、既存backupと内容が異なる通常ファイルへの
+# 対応（衝突しない追加backupへの保存）が別途必要なため、この単純な
+# backup_once()ではなく scripts/lib/managed-symlink.sh の
+# sync_managed_symlink() を使う（検証3巡目 BLOCKING-1・検証4巡目 BLOCKING-1
+# 対応。generate_config_toml()・generate_settings_json()・
+# write_and_verify_leader()は意図的に毎回内容が変わる正規の再生成・書換
+# 経路であり、この単純なbackup_once()のままでよい＝最初の1回だけ保持）。
 backup_once() {
   local dest="$1"
   # ⚠️ `cp`失敗を明示的にreturn 1へ変換する（2026-09-01工程横断レビュー
@@ -1235,14 +1248,25 @@ backup_once() {
   fi
 }
 
-# would_backup <dest> — dry-run表示用（backup_once相当の判定のみ、書き込みしない）
+# would_backup <dest> [--additional-on-diff] — dry-run表示用。第2引数無しは
+# backup_once()相当（.pre-aienv.bakがまだ無いかだけを見る）、
+# --additional-on-diff指定時はsync_managed_symlink()相当（既存backupと内容が
+# 異なるかも見る）の判定を、書き込みなしで再現する。link()のdry-run分岐だけが
+# 後者を使う。
 would_backup() {
-  local dest="$1"
-  [ -e "$dest" ] && [ ! -L "$dest" ] && [ ! -e "$dest.pre-aienv.bak" ]
+  local dest="$1" mode="${2:-}"
+  [ -e "$dest" ] && [ ! -L "$dest" ] || return 1
+  if [ ! -e "$dest.pre-aienv.bak" ]; then
+    return 0
+  fi
+  [ "$mode" = "--additional-on-diff" ] && ! cmp -s "$dest" "$dest.pre-aienv.bak"
 }
 
 # link <repo-relative-source> <destination>
-# dotfiles/install.sh の link() と同方式（バックアップは backup_once() 経由）。
+# dotfiles/install.sh の link() と同方式。実際の退避＋symlink化は
+# scripts/lib/managed-symlink.sh の sync_managed_symlink() へ委譲する
+# （update-sub.shのclaude/agents/*.md直接配置と共有＝検証4巡目 BLOCKING-1
+# 対応。同ファイルのコメント参照）。
 # source が無い場合は「このリポジトリの必須構成が壊れている」ことを意味するため
 # skip扱いにせず fail する（Codexレビュー指摘・Minor：黙って進むと壊れた
 # checkoutでも "done" と表示されてしまう）。
@@ -1250,14 +1274,17 @@ link() {
   local src="$DIR/$1" dest="$2"
   [ -e "$src" ] || fail "リポジトリのファイルが見つかりません（checkout破損の可能性）: $src"
   if [ "$DRY_RUN" = "1" ]; then
-    would_backup "$dest" && log "[dry-run] would back up: $dest -> $dest.pre-aienv.bak"
+    if would_backup "$dest" --additional-on-diff; then
+      if [ -e "$dest.pre-aienv.bak" ]; then
+        log "[dry-run] would back up (既存の.pre-aienv.bakと内容が異なる通常ファイルのため追加保存): $dest -> $dest.pre-aienv.bak.<timestamp>"
+      else
+        log "[dry-run] would back up: $dest -> $dest.pre-aienv.bak"
+      fi
+    fi
     log "[dry-run] would link: $dest -> $src"
     return
   fi
-  mkdir -p "$(dirname "$dest")"
-  backup_once "$dest"
-  ln -sfn "$src" "$dest"
-  log "linked: $dest -> $src"
+  sync_managed_symlink "$src" "$dest" "install-main"
 }
 
 # generate_config_toml <repo-relative-source> <destination>
@@ -1705,6 +1732,10 @@ link claude/hooks/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
 # に続く同型4回目。settings.json登録とinstaller配置の2点セット突合を
 # scripts/check-drift.sh側にも追加している＝§9.0 A-0-2）。
 link claude/hooks/context-size-warn.sh "$HOME/.claude/hooks/context-size-warn.sh"
+# 対象8職種のAgent呼出しへmodel明示を強制するPreToolUseガード。
+link claude/hooks/agent-model-guard.sh "$HOME/.claude/hooks/agent-model-guard.sh"
+# 使用率の毎発言注入(UserPromptSubmit)。SessionStart側と同じ共有関数を使う。
+link claude/hooks/usage-inject.sh "$HOME/.claude/hooks/usage-inject.sh"
 
 # 前提修正 P-2（設計§2）: 職種定義の配布結果を必ず報告する。
 # ①新しく配置した定義（初回未配置）②repoから消えた定義へのdangling symlinkの
@@ -1756,7 +1787,18 @@ if [ "$DRY_RUN" != "1" ]; then
   chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh" \
            "$DIR/claude/hooks/bash-danger-gate.sh" "$DIR/claude/hooks/next-pane-resolve.sh" \
            "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh" \
-           "$DIR/claude/hooks/check-sub-update.sh" "$DIR/claude/hooks/context-size-warn.sh"
+           "$DIR/claude/hooks/check-sub-update.sh" "$DIR/claude/hooks/context-size-warn.sh" \
+           "$DIR/claude/hooks/agent-model-guard.sh" \
+           "$DIR/claude/hooks/usage-inject.sh"
+  # 締めレビュー2巡目 #2対応（2026-09-14）: agent-model-guard.sh専用の
+  # 固有理由コード付き実行可能性チェックはここで削除した。
+  # 上のlink()がsync_managed_symlink()経由で既にsrc欠落を汎用の「リポジトリ
+  # のファイルが見つかりません（checkout破損の可能性）」でfail済みであり、
+  # このchmod自体もsrc欠落なら`set -euo pipefail`により非0で停止するため、
+  # この専用ガードは実際には発火しえない残骸だった（他のどのフックにも
+  # 同種の専用チェックは無く、汎用経路だけで担保されている）。実行可能性の
+  # 継続的な監視はscripts/check-drift.shの汎用`[NOT-EXECUTABLE]`検査
+  # （$HOME/.claude/hooks/*.sh全体対象）が担う。
 fi
 
 # --- codex/ ---

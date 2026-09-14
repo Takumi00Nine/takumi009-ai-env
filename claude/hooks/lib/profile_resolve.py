@@ -156,6 +156,15 @@ CORE_ROLES_WITHOUT_REPO_AGENT_FILE = frozenset(
 # leaderはspawn対象外なのでV1-bの対象から無条件除外する。
 ROLE_EXEMPT_FROM_DEFINITION_CHECK = frozenset({"leader"})
 
+# resolve-candidate が Agent ツールへ渡す、具体 model ID から受理別名への
+# 完全一致変換。旧世代IDの丸め・推測は行わない。
+AGENT_MODEL_ALIASES = {
+    "claude-fable-5-1": "fable",
+    "claude-opus-5": "opus",
+    "claude-sonnet-5": "sonnet",
+    "claude-haiku-4-5-20251001": "haiku",
+}
+
 # Bedrockピン留め論理名の導出（§1-3・§6.1）。人はこの名前を書けない
 # （role.*が参照する定義のproviderがbedrockのとき、その定義のmodelは
 # 別名しか持てないためbedrock_pin_*は常にコードが導出する側）。
@@ -772,37 +781,6 @@ def load_model_defs(path: str) -> dict[str, ModelDef]:
     defs = parse_model_defs(path)
     validate_model_defs(defs)
     return defs
-
-
-def agent_declared_model(role: str, agents_dir: Optional[str]) -> Optional[str]:
-    """claude/agents/<role>.md の frontmatter の model: を返す。ファイルが無い・
-    model: 行が無い・agents_dirがNoneならNone（＝突合しない）。
-    突合は文字列の完全一致で行う（前後の空白と引用符だけ除去する。⚠️ 別名へ
-    翻訳しない・[1m]を正規化しない＝FR-12）。
-    """
-    if not agents_dir:
-        return None
-    path = os.path.join(agents_dir, f"{role}.md")
-    try:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-    except (OSError, UnicodeDecodeError):
-        return None
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return None
-    end_idx = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end_idx = i
-            break
-    if end_idx is None:
-        return None
-    for raw in lines[1:end_idx]:
-        m = re.match(r"^model:\s*(.*)$", raw.strip())
-        if m:
-            return m.group(1).strip().strip("\"'")
-    return None
 
 
 # ============================================================
@@ -1486,23 +1464,6 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
     for w in warnings:
         advisory_codes.append(w.split(":", 1)[0])
 
-    # D-9・FR-12: 役割の行とfallback行の全候補（configured/unavailable）を
-    # claude/agents/<職種>.md のmodel:と突合する。⚠️ leaderは対象外
-    # （ROLE_EXEMPT_FROM_DEFINITION_CHECK）。agent_declared_model()がNoneを
-    # 返す職種（判定材料が無い）も対象外。
-    for (_kind, name), defs_list in resolved.items():
-        if name in ROLE_EXEMPT_FROM_DEFINITION_CHECK:
-            continue
-        declared_model = agent_declared_model(name, agents_dir)
-        if declared_model is None:
-            continue
-        for d in defs_list:
-            if d.provider != "anthropic-api" or d.execution != "subagent":
-                continue
-            actual = (d.model or "").strip().strip("\"'")
-            if actual != declared_model:
-                advisory_codes.append(f"MODEL_MISMATCH:{name}:{d.name}")
-
     for defs_list in resolved.values():
         for d in defs_list:
             adv = model_effort_advisory(d.provider, d.model, d.effort)
@@ -1613,8 +1574,8 @@ def do_list_roles(path: str) -> tuple[Optional[list[tuple]], Optional[tuple[str,
     扱わない——role/fallback行にはBedrockの別名（opus/sonnet等）しか
     書けないため、値を再掲してもピン実値の秘匿設計とは矛盾しない。
     2026-09-08 モデル定義ファイルと候補指定対応（FR-17）: 1候補1行・8列
-    （kind,name,state,定義名,provider,model,execution,effort）。⚠️ 突合は
-    しない（一致状態もadvisoryも持たない＝resolveだけが行う。FR-12）。
+    （kind,name,state,定義名,provider,model,execution,effort）。候補の起動可否・
+    Agent別名変換は行わない。
     戻り値: (成功時のタプル一覧 or None, (機械可読コード, 短い理由) or None)。
     """
     parsed, _model_defs, resolved, _declared, err = _load_and_validate_v2_self_contained(path)
@@ -1679,25 +1640,22 @@ def do_resolve_candidate(
     ):
         return None, ("CANDIDATE_NOT_IN_LIST", f"{model_def_name}はrole.{role}の候補にありません")
 
-    def _mismatch(d: "ModelDef") -> bool:
-        # D-14: 突合が一致しないanthropic-api/subagentの定義は返さない。
-        if d.provider != "anthropic-api" or d.execution != "subagent":
-            return False
-        if role in ROLE_EXEMPT_FROM_DEFINITION_CHECK:
-            return False
-        declared_model = agent_declared_model(role, agents_dir)
-        if declared_model is None:
-            return False
-        return (d.model or "").strip().strip("\"'") != declared_model
-
     selected = next(d for d in role_candidates if d.name == model_def_name)
+    if selected.execution == "subagent" and selected.provider != "anthropic-api":
+        return None, (
+            "SUBAGENT_PROVIDER_UNSUPPORTED",
+            f"role={role} def={selected.name} provider={selected.provider}",
+        )
     if role_line.state == "configured":
         ok, reason, _note = _evaluate_single_candidate(
             Candidate(role, selected), agents_dir, bedrock_env, False
         )
         if ok:
-            if _mismatch(selected):
-                return None, ("CANDIDATE_UNUSABLE:MODEL_MISMATCH", f"{selected.name}のmodelが職種定義と一致しません")
+            if selected.execution == "subagent" and selected.model not in AGENT_MODEL_ALIASES:
+                return None, (
+                    "AGENT_MODEL_UNSUPPORTED",
+                    f"role={role} def={selected.name} model={selected.model}",
+                )
             return selected, None
         primary_reason = reason
     else:
@@ -1717,13 +1675,21 @@ def do_resolve_candidate(
         )
 
     fb_def = fb_candidates[0]
+    if fb_def.execution == "subagent" and fb_def.provider != "anthropic-api":
+        return None, (
+            "SUBAGENT_PROVIDER_UNSUPPORTED",
+            f"role={role} def={fb_def.name} provider={fb_def.provider}",
+        )
     fb_ok, fb_reason, _note2 = _evaluate_single_candidate(
         Candidate(role, fb_def), agents_dir, bedrock_env, False
     )
     if not fb_ok:
         return None, (f"CANDIDATE_UNUSABLE:{fb_reason}", "fallbackの候補も使用不可です")
-    if _mismatch(fb_def):
-        return None, ("CANDIDATE_UNUSABLE:MODEL_MISMATCH", f"{fb_def.name}のmodelが職種定義と一致しません")
+    if fb_def.execution == "subagent" and fb_def.model not in AGENT_MODEL_ALIASES:
+        return None, (
+            "AGENT_MODEL_UNSUPPORTED",
+            f"role={role} def={fb_def.name} model={fb_def.model}",
+        )
     return fb_def, None
 
 
@@ -1827,7 +1793,13 @@ def main(argv: list[str]) -> int:
         if err is not None:
             code, reason = err
             sys.stderr.write(f"{code}\t{reason}\n")
-            return 2 if code in ("CANDIDATE_UNSPECIFIED", "CANDIDATE_NOT_IN_LIST", "FALLBACK_AMBIGUOUS") else 1
+            return 2 if code in (
+                "CANDIDATE_UNSPECIFIED",
+                "CANDIDATE_NOT_IN_LIST",
+                "FALLBACK_AMBIGUOUS",
+                "AGENT_MODEL_UNSUPPORTED",
+                "SUBAGENT_PROVIDER_UNSUPPORTED",
+            ) else 1
         _print_out(f"OK\t{selected.name}\t{selected.model}\t{selected.execution}\t{selected.effort or ''}")
         if selected.execution == "external-cli":
             parts = []
@@ -1836,6 +1808,8 @@ def main(argv: list[str]) -> int:
             if selected.effort:
                 parts.append(f"--effort {selected.effort}")
             _print_out("CODEX_ARGS\t" + " ".join(parts))
+        elif selected.execution == "subagent":
+            _print_out("AGENT_MODEL\t" + AGENT_MODEL_ALIASES[selected.model])
         return 0
 
     if args.cmd == "check-candidate":

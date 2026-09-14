@@ -2,7 +2,6 @@
 name: system-designer
 description: 設計工程のワーカー。承認済み要件から実現方式の代替案比較（A vs B＋根拠＋リスク）・ファイル構成・影響範囲・テスト戦略を設計する。合議（設計・技術選定の複数案出し）への参加もこのロール。
 tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch, WebFetch, SendMessage
-model: claude-opus-5
 color: purple
 ---
 

@@ -2,7 +2,6 @@
 name: requirements-analyst
 description: 要件定義工程のワーカー。ユーザー要望から検証可能な要件（ユースケース・受入条件・非機能・スコープ外）を定義し、類似OSS・先行実装調査で「作らない」選択肢も検討する。開発プロジェクトの最初の工程で使う。
 tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch, WebFetch, SendMessage
-model: claude-opus-5
 color: blue
 ---
 

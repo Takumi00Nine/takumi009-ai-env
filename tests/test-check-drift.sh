@@ -76,6 +76,11 @@ make_fake_repo() {
   # ため、fixture内で呼んでも実システムに一切触れない）。
   cp "$REPO_ROOT/scripts/install-main.sh" "$repo/scripts/install-main.sh"
   chmod +x "$repo/scripts/install-main.sh"
+  # install-main.shが（--print-leader-runtime等の副作用ゼロの早期exit経路も
+  # 含めて）冒頭でscripts/lib/managed-symlink.shをsourceするため同梱する
+  # （検証4巡目 BLOCKING-1対応・2026-09-14）。
+  mkdir -p "$repo/scripts/lib"
+  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$repo/scripts/lib/managed-symlink.sh"
   mkdir -p "$repo/claude/hooks/lib"
   # ローカル実体プロファイルを置かないfixture（大半のテスト）はv1委譲経路
   # （§3.5）に入るため、この共有libは通常参照されない。v2プロファイルを
@@ -98,6 +103,9 @@ EOF
   echo '#!/bin/bash' > "$repo/claude/hooks/next-pane-resolve.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/check-sub-update.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/context-size-warn.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/agent-model-guard.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/usage-inject.sh"
+  chmod +x "$repo"/claude/hooks/*.sh
   echo '# agent' > "$repo/claude/agents/sample-agent.md"
   echo '# AGENTS' > "$repo/codex/AGENTS.md"
   echo '{}' > "$repo/codex/hooks.json"
@@ -200,6 +208,8 @@ with open(sys.argv[2], 'w') as f:
   ln -s "$repo/claude/hooks/next-pane-resolve.sh" "$home/.claude/hooks/next-pane-resolve.sh"
   ln -s "$repo/claude/hooks/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
   ln -s "$repo/claude/hooks/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"
+  ln -s "$repo/claude/hooks/agent-model-guard.sh" "$home/.claude/hooks/agent-model-guard.sh"
+  ln -s "$repo/claude/hooks/usage-inject.sh" "$home/.claude/hooks/usage-inject.sh"
   ln -s "$repo/claude/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/codex/AGENTS.md" "$home/.codex/AGENTS.md"
   ln -s "$repo/codex/hooks.json" "$home/.codex/hooks.json"
@@ -394,7 +404,7 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "symlink drift 0件" "$out" "symlink総数: 11件 / drift: 0件"
+  assert_contains "symlink drift 0件" "$out" "symlink総数: 13件 / drift: 0件"
   assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
   assert_contains "config.toml一致" "$out" "TOML三分類で一致しています"
   assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
@@ -431,7 +441,7 @@ echo "=== 2. ①symlinkが無い（未インストール）を検知する ==="
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "MISSING検知" "$out" "[MISSING]"
-  assert_contains "11件全部drift" "$out" "symlink総数: 11件 / drift: 11件"
+  assert_contains "13件全部drift" "$out" "symlink総数: 13件 / drift: 13件"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -463,6 +473,49 @@ echo "=== 4. ①symlinkが別の場所を指している（WRONG-TARGET）を検
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "WRONG-TARGET検知" "$out" "[WRONG-TARGET]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== DR-01. Agent model guardのリンク先一致を保ったまま実行bit欠落を検知する（main追随後は汎用[NOT-EXECUTABLE]分類に統合） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  chmod a-x "$REPO/claude/hooks/agent-model-guard.sh"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "非実行を汎用コードで検知" "$out" "[NOT-EXECUTABLE]"
+  assert_contains "非実行だけdrift増分1" "$out" "symlink総数: 13件 / drift: 1件"
+
+  chmod +x "$REPO/claude/hooks/agent-model-guard.sh"
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_not_contains "実行bit復旧後はdrift 0" "$out" "[NOT-EXECUTABLE]"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== 4a. --managed-symlinks-onlyは同じ管理一覧だけを検査し、hook実体の非実行もexit 1にする ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+
+  rc=0
+  DIR="$REPO" HOME="$HOME_DIR" bash "$REPO/scripts/check-drift.sh" \
+    --managed-symlinks-only >"$REPO/managed-ok.out" 2>&1 || rc=$?
+  assert_eq_num "管理symlinkが健全なら内部検査はexit 0" "$rc" "0"
+  assert_not_contains "内部検査は①-2以降を実行しない" \
+    "$(<"$REPO/managed-ok.out")" "①-2 ~/.claude/settings.json"
+
+  chmod -x "$REPO/claude/hooks/usage-inject.sh"
+  rc=0
+  DIR="$REPO" HOME="$HOME_DIR" bash "$REPO/scripts/check-drift.sh" \
+    --managed-symlinks-only >"$REPO/managed-ng.out" 2>&1 || rc=$?
+  assert_eq_num "hook実体が非実行なら内部検査はexit 1" "$rc" "1"
+  assert_contains "非実行の分類を出す" "$(<"$REPO/managed-ng.out")" "[NOT-EXECUTABLE]"
 
   rm -rf "$REPO" "$HOME_DIR"
 }

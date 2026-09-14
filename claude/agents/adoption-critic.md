@@ -2,7 +2,6 @@
 name: adoption-critic
 description: 採用判定のワーカー。アイデア（着手前）・成果物（採用前）・運用結果（継続判断）・外部の技術/AIツール/OSS/論文/記事/リポジトリを敵対的にレビューし、「本当に採用する価値があるか」の判定案を出す。品質レビュー（検証職の担当）とは別軸。着手判断・導入判断・棚卸しで使う。
 tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch, WebFetch, SendMessage
-model: claude-opus-5
 color: red
 ---
 

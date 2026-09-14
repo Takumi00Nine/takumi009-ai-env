@@ -92,6 +92,11 @@ BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 # FR-104/FR-108①）: bootstrap-vault.sh自身のsymlinkを解決した実体ディレクトリ
 # 直下のlib/を見る（PROFILE_RESOLVE_LIBと同じ二重管理防止の考え方）。
 : "${USAGE_SNAPSHOT_LIB:=$BOOTSTRAP_SELF_DIR/lib/usage_snapshot.py}"
+: "${USAGE_BLOCK_LIB:=$BOOTSTRAP_SELF_DIR/lib/usage-block.sh}"
+# shellcheck source=lib/usage-block.sh
+if ! . "$USAGE_BLOCK_LIB" 2>/dev/null; then
+  compute_usage_block() { printf '%s取得口が使えません（内部エラー）' "$1"; }
+fi
 # Bedrockのピン留め実値ファイル（install-main.shと同じ既定値。§6.1）。
 # V9-d③・V12の判定にだけ使う＝値そのものは読まず特定キーの有無/非空だけ見る。
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
@@ -206,12 +211,8 @@ is_v2_resolve_output_well_formed() {
   # ⚠️ POSIX ERE（bashの=~が使うバックエンド）はブラケット式内で\tを
   # タブへ解釈しない。実際のタブ文字を埋め込む必要がある。
   notab="[^${tab}]+"
-  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.3(b)・D-9）:
-  # ADVISORY:には`MODEL_MISMATCH:<職種名>:<定義名>`（コロン区切り2段）が
-  # 追加されたため、ADVISORYの1要素だけ`code`より広い`adv_code`を使う
-  # （VACANT_REASON等の他フィールドはコロンを含まないので`code`のまま）。
-  # 定義名は既存のMODEL_DEF_NAME_RE（^[a-z0-9][a-z0-9-]*$）に一致する文字列
-  # なので`[A-Za-z0-9_.-]+`（name）で十分包含できる。
+  # ADVISORYの将来拡張でコロン区切りの補助情報を持つコードも読めるよう、
+  # 1要素だけ`code`より広い`adv_code`を使う。未知advisoryは呼出側で観測する。
   local adv_code="${code}(:${name}(:${name})?)?"
   case "$s" in
     OK"$tab"*)
@@ -698,9 +699,9 @@ compute_health_lines() {
   printf '%s' "$lines"
 }
 
-# 使用率ブロック（B1a「使用率の見える化」-実装-2026-09-08.md・FR-108①）:
-# usage_snapshot.pyの既定出力（枠あたり1行・常に3行）に見出しと末尾1行を
-# 添えて返す。⚠️ timeoutは使わない（macOSに無い＝設計指示書§2.2）。
+# 使用率ブロックの本体は lib/usage-block.sh の compute_usage_block() に置く。
+# usage_snapshot.pyの既定出力（枠あたり1行・常に3行）へ、この入口では
+# 見出しと末尾1行を添える。⚠️ timeoutは使わない（macOSに無い）。
 # ⚠️ AIENV_USAGE_CACHE_DIRはこの関数が明示的に転送しなくても、bashの子
 # プロセス（python3）へ環境変数として自然に継承される（テストで
 # fixtureディレクトリを差すときは呼び出し元でこの変数をexportするだけでよい）。
@@ -710,38 +711,7 @@ compute_health_lines() {
 # 実時刻から切り離して決定的にテストできるようにするため
 # （resolve_local_profile()の--nowに相当する既存の設計則をこの新機能にも
 # 踏襲した）。本番では未設定のため無効＝常に実時刻を使う。
-# fail-open: python3不在・lib不在・実行失敗のいずれでも1行のメッセージへ
-# 縮退するだけで、ブートストラップ本文は必ず出す（呼び出し側が
-# `compute_usage_block 2>/dev/null`する二重の安全網もある）。
-compute_usage_block() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    printf '【使用率】取得口が使えません（python3 なし）'
-    return
-  fi
-  if [ ! -f "$USAGE_SNAPSHOT_LIB" ]; then
-    printf '【使用率】取得口が使えません（usage_snapshot.py が見つかりません）'
-    return
-  fi
-  local body rc
-  if [ -n "${AIENV_USAGE_NOW:-}" ]; then
-    body="$(python3 "$USAGE_SNAPSHOT_LIB" --now "$AIENV_USAGE_NOW" 2>/dev/null)"
-  else
-    body="$(python3 "$USAGE_SNAPSHOT_LIB" 2>/dev/null)"
-  fi
-  rc=$?
-  # ⚠️ 2026-09-08 worker-driven一次レビューMAJOR-3対応: 従来は`$body`が
-  # 空かどうかだけを見ており、終了コードを確認していなかった（usage_
-  # snapshot.py自身の契約は「exit常に0」だが、想定外のクラッシュで一部
-  # 出力を吐いてから非0で落ちるような将来の実装変化があっても、ここで
-  # 拾えるようにする多重防御）。空出力に加えて非0終了コードも失敗として
-  # 扱う。
-  if [ -z "$body" ] || [ "$rc" != "0" ]; then
-    printf '【使用率】取得口が使えません（usage_snapshot.py の実行に失敗しました）'
-    return
-  fi
-  printf '【使用率】\n%s\n委任の前に見直すときは同じ口＝usage_snapshot.py（配役表・Preferencesの規則参照）' "$body"
-}
-
+# fail-open契約も共有関数が担い、呼び出し側でも空出力を内部エラーへ縮退する。
 INPUT=$(cat 2>/dev/null || true)
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // ""' 2>/dev/null)
 AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // ""' 2>/dev/null)
@@ -1017,7 +987,7 @@ ${leader_settings_drift_warning}"
   # 使用率ブロック（B1a・FR-108①）: 外部脳ヘルスの直後・常に出す
   # （HEALTH_LINESと違い空になることはない＝AC-91④「起動注入に枠あたり
   # 1行のブロックが現れる」は取得失敗時でも行数を変えない設計のため）。
-  USAGE_BLOCK="$(compute_usage_block 2>/dev/null)"
+  USAGE_BLOCK="$(compute_usage_block '【使用率】' '委任の前に見直すときは同じ口＝usage_snapshot.py（配役表・Preferencesの規則参照）' 2>/dev/null)"
   [ -z "$USAGE_BLOCK" ] && USAGE_BLOCK='【使用率】取得口が使えません（内部エラー）'
 
   read -r -d '' DIRECTIVE <<EOF

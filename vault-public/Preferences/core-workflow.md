@@ -48,7 +48,7 @@ aliases:
 > spawn 時の条文（設計書§3.2 §1 復活）:
 > 1. 命名は `<配役>-<職種名>`
 > 2. spawn 時に渡す7点（配役の明示指定を含む）
-> 3. 配役表の `model` は定義名の候補である。リーダーがspawn前に候補からちょうど1つ選び、`profile_resolve.py resolve-candidate` に職種・選択定義名と、実配置の職種ディレクトリを `--agents-dir` で渡す。機構は候補を選ばない。判断材料は [[Preferences/model-catalog]] と【使用率】ブロック。具体IDから起動引数を推測しない。⚠️ 再選択点＝①新しい巡の開始 ②上限回復後の再開 ③セッション再開 では、途中作業の resume でも使用率を再取得して候補から選び直す（同じ選択でもよい。平時の目安は持たない＝[[Decisions/2026-09-14-recast-points-on-resume]]）。
+> 3. 配役表の `model` は定義名の候補である。リーダーがspawn前に候補からちょうど1つ選び、`profile_resolve.py resolve-candidate` に職種・選択定義名と、実配置の職種ディレクトリを `--agents-dir` で渡す。機構は候補を選ばない。判断材料は [[Preferences/model-catalog]] と【使用率】ブロック。具体IDから起動引数を推測しない。⚠️ 再選択点＝①新しい巡の開始 ②上限回復後の再開 ③セッション再開 では、途中作業の resume でも使用率を再取得して候補から選び直す（同じ選択でもよい。平時の目安は持たない＝[[Decisions/2026-09-14-recast-points-on-resume]]）。再選択の結果の別名（`AGENT_MODEL`）が起動中の個体と同じなら resume（SendMessage で続行）、違えば引継ぎ付きの新規 spawn（Agent イベントを通るのでガードの対象）とする。既存個体の model は変更しない（2026-09-14 締めレビュー #2 反映）。
 > 4. Bedrock系のsubagent候補は `resolve-candidate` が未対応として拒否する。起動対応はローカルLLM段階経路スライスBで扱う。
 > 5. 配役表を読むのはセッション開始時（起動のたびに読み直さない）
 > 6. `execution` が `subagent` 以外の職種は spawn せず、決められた呼び出し口から依頼する（`resolve-candidate` の出力をそのままラッパーへ渡す。exit が0でなければ1つも起動しない）
