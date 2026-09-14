@@ -61,7 +61,7 @@ aliases:
 2. sample を実体へコピー: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は `profile.md.bak.v<旧版>-<日付>` に退避してから。権限 0600）
 3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-high`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
 4. `scripts/install-sub.sh --check-profile`（副作用ゼロの検査。OK を確認）
-5. `scripts/update-sub.sh --resync`（1 で pull 済み＝HEAD 不変のため、`--resync` を付けないと Preferences 再同期・config.toml 再生成が走らず静かに終わる）
+5. `scripts/update-sub.sh --resync`（1 で pull 済み＝HEAD 不変。update-sub.sh は HEAD 不変でも settings.json 再生成・職種定義 symlink 再同期・管理 symlink の drift 自動収束を毎回行うが、Preferences 再同期は `--resync` を付けたときだけ追加で走る。config.toml の再生成は HEAD が進んだときだけで、この流れでは手順6の install-sub.sh 再実行で生成される）
 6. 新しいフック・職種定義が届いた版では `scripts/install-sub.sh` を再実行（symlink 配置・settings.json 再生成。既存プロファイルには触れない。`AGENTS: dangling` が出たら表示されたファイルを削除）
 7. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
 8. **cmux Dock の「Next Task」をサブ機でも出す（任意・dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。部品は dotfiles 側にある（`cmux/cmux-task-watch/`・共有 lib・`dock.json` の4枠目）。
