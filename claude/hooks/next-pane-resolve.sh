@@ -83,7 +83,7 @@
 # 実測で確認したため（fail-silent要件を満たすための追加対策）。
 # どの経路で失敗しても何も出力せず正常終了する（fail-silent・会話を妨げない）。
 
-LIST_CMD="${NEXT_RESOLVE_LIST_CMD:-$HOME/work/tools/cmux-next-watch/cmux-next-watch.sh}"
+LIST_CMD="${NEXT_RESOLVE_LIST_CMD:-$HOME/work/takumi009-ai-env/cmux/cmux-next-model.sh}"
 
 RWD_OUT_FILE=""
 RWD_CMD_PID=""

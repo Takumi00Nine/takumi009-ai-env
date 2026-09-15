@@ -783,7 +783,7 @@ log "=== Phase 3: サマリ・通知 ==="
 # backup-vault.shとも干渉しない。
 # 新しいエラー隔離の仕組みは作らず、既存のrun_wrapped_step（timeout付き
 # 起動＋status-file）にそのまま載せる（設計書§16.2）。
-TASK_PRUNE_CMD="${MAINTENANCE_TASK_PRUNE_CMD:-$HOME/work/tools/cmux-task-watch/cmux-task-declare.sh}"
+TASK_PRUNE_CMD="${MAINTENANCE_TASK_PRUNE_CMD:-$HOME/work/takumi009-ai-env/cmux/cmux-task-declare.sh}"
 TASK_PRUNE_SEGMENT=""            # 実施サマリへ足す1セグメント
 if [[ ! -x "$TASK_PRUNE_CMD" ]]; then
   # 掃除の入口そのものが存在しない（段②でai-env側だけ先に入った期間・

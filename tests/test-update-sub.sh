@@ -14,9 +14,26 @@
 # 2026-09-07: 判定元を旧マーカーファイルから配役表の能力軸`machine_role`へ
 # 変更した（配役表-能力軸整理-設計-2026-09-07.md §2）。
 #
+# 検証1巡目 MAJOR #13: macOSのBSD mktempは、裸の`mktemp -d`（テンプレート
+# 無し）では$TMPDIRを無視し常に/var/folders配下へ解決する（実測確認済み）。
+# サンドボックス環境で$TMPDIRだけを隔離しても効かず、隔離漏れの原因になる
+# ため、全81箇所を`mktemp -d "$_TMPBASE/test-update-sub.XXXXXX"`へ
+# 統一した（テンプレート付きなら$TMPDIRを正しく尊重する）。
+#
 # 実行方法: bash tests/test-update-sub.sh
 
 set -euo pipefail
+
+# $TMPDIRの値がmacOSでは末尾に/を含むことがあり（例: /var/.../T/）、
+# `"${TMPDIR:-/tmp}/prefix.XXXXXX"`をそのまま使うと生成されるパスに
+# 二重スラッシュ（.../T//prefix.XXXXXX）が混入する。mktemp自身はこれを
+# 正規化しないため、後段で`cd -P && pwd`等により正規化された値と文字列
+# 比較すると、実体は同じでも不一致になる（実測で発生・PD-01/PD-02が
+# falseに落ちる）。末尾スラッシュを剥がした値を1箇所で作り、以後は
+# これだけを使う。
+_TMPBASE="${TMPDIR:-/tmp}"
+_TMPBASE="${_TMPBASE%/}"
+[ -n "$_TMPBASE" ] || _TMPBASE="/tmp"
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
@@ -307,7 +324,7 @@ write_v2_profile() {
 
 echo "=== 1. 変更なし: 何もしない（静か・冪等） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -328,7 +345,7 @@ echo "=== 1. 変更なし: 何もしない（静か・冪等） ==="
 
 echo "=== 2. 変更あり: pull + config.toml再生成 + Preferences再同期 + 新骨格フォルダ補充 ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -369,7 +386,7 @@ echo "=== 2b. HOMEに正規表現メタ文字（.）が含まれても config.to
   # メタ文字（. 等）まで一律エスケープすると生成物に余計な"\"が混じる
   # （Codexレビュー指摘・Minor）。install-main.shと同じ簡易エスケープに揃えたことを
   # 実際に「.」を含むHOMEパスで確認する。
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -396,7 +413,7 @@ echo "=== 2b. HOMEに正規表現メタ文字（.）が含まれても config.to
 
 echo "=== 3. サブローカルのFragments等は絶対に消えない（Preferences以外に触らない） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -422,7 +439,7 @@ echo "=== 3. サブローカルのFragments等は絶対に消えない（Prefere
 
 echo "=== 4. 既存の骨格フォルダは上書きしない（README.md等をそのまま保持） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   mkdir -p "$SRC/vault-public/Personal"
@@ -455,7 +472,7 @@ echo "=== 4. 既存の骨格フォルダは上書きしない（README.md等を�
 
 echo "=== 5. PA-7: ff-only不可（サブ側にローカルcommitがある）なら非0終了し、後続処理（agents symlink・settings.json・Preferences更新）は一切走らない（前提修正 P-3・3-a） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -504,7 +521,7 @@ echo "=== 5. PA-7: ff-only不可（サブ側にローカルcommitがある）な
 
 echo "=== 6. remote origin未設定ならWARNで終了しexit 0 ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   SUB="$WORK/sub-no-remote"
   mkdir -p "$SUB" "$SUB/scripts/lib" "$SUB/claude/hooks/lib"
   git -C "$SUB" init -q
@@ -534,7 +551,7 @@ echo "=== 6. remote origin未設定ならWARNで終了しexit 0 ==="
 
 echo "=== 7. ロック: 生存しているPIDのロックがあれば今回はskipする ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -554,7 +571,7 @@ echo "=== 7. ロック: 生存しているPIDのロックがあれば今回はsk
 
 echo "=== 8. ロック: staleなPIDは自動解除して続行する ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -576,7 +593,7 @@ echo "=== 8. ロック: staleなPIDは自動解除して続行する ==="
 
 echo "=== 9. 配役表machine_role: 実体プロファイルが無ければ即FAILで拒否する（メインでの誤実行防止・2026-07-24追加。2026-09-07で判定元を旧マーカーから配役表へ移行） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -602,7 +619,7 @@ echo "=== 9. 配役表machine_role: 実体プロファイルが無ければ即FA
 
 echo "=== 9b. 配役表machine_role: 値が「sub」以外(例: main)でも即FAILで拒否する ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -628,7 +645,7 @@ echo "=== 9b. 配役表machine_role: 値が「sub」以外(例: main)でも即FA
 
 echo "=== 9c. 配役表machine_role: 正常な値(configured value=sub)なら正常に動作する（旧マーカーのtrim観点は値の形式検査に代替＝設計書§10.2a） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -649,7 +666,7 @@ echo "=== 9c. 配役表machine_role: 正常な値(configured value=sub)なら正
 
 echo "=== 9c2. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=main・本番と同じ場所に旧マーカー(sub)を併設してもFAILで拒否されたまま(main扱い) ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -676,7 +693,7 @@ echo "=== 9c2. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJ
 
 echo "=== 9c3. FX-M2(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=sub・旧マーカー無しで正常に動作する（9cと同型だが旧マーカー不在を明示） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -704,7 +721,7 @@ echo "=== 9c3. FX-M2(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJ
 
 echo "=== 9d. 配役表machine_role: 値に内部空白(s u b)があると属性の形式検査(T6)で解決失敗しFAILで拒否する(Codex再レビュー指摘Minor対応の観点を値の形式検査へ引き継ぐ) ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -736,7 +753,7 @@ echo "=== 9f. 配役表machine_role: ja_JP.UTF-8ロケール環境でも本来�
   # 表示されない欠陥が実装中に一度発生した（${AIENV_LOCAL_PROFILE_PATH}と
   # 波括弧で囲んで修正済み）。元バグはこのロケール下でのみ再現するため、CI等の
   # 別ロケール環境でも確実にこの回帰を検出できるようLC_ALL/LANGを明示指定する。
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -759,7 +776,7 @@ echo "=== 9f. 配役表machine_role: ja_JP.UTF-8ロケール環境でも本来�
 
 echo "=== 10. settings.json再生成: HEADが変わっていなくても実体のrole.leaderの値で再生成される（v2実体ではmachine_roleにも--sub-delegateにも依存しない＝配役表-能力軸整理-設計-2026-09-07.md §5.2 D-6。§9.0 A-0-1・§11.2 項目3の受入条件） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -788,7 +805,7 @@ echo "=== 10. settings.json再生成: HEADが変わっていなくても実体�
 
 echo "=== 11. settings.json再生成: v2実体ではAIENV_MODEL_SUBのローカル上書きはmodel値に影響しない（v1委譲・実体不在に縮退したときのlegacy値選択にしか効かない＝D-6） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -813,7 +830,7 @@ echo "=== 11. settings.json再生成: v2実体ではAIENV_MODEL_SUBのローカ�
 
 echo "=== 12. settings.json再生成: テンプレのmodelが__AIENV_MODEL__の目印から変わっていれば生成失敗し、旧ファイルを保持する ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -846,7 +863,7 @@ EOF
 
 echo "=== 13. settings.json再生成: Bedrock envファイルの値がenvブロックへ取り込まれる（§9.0 A-1-4） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -886,7 +903,7 @@ EOF
 
 echo "=== 14. settings.json再生成: 許可リスト外のキー（AWS認証情報等を想定）は取り込まずWARNする（Codex一次レビュー指摘・Major対応の横展開） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -915,7 +932,7 @@ EOF
 
 echo "=== 15. settings.json再生成: パーミッションを0600へ矯正できない場合はsettings.json本体の再生成ごと中止し既存ファイルを保持する（2026-08-30 Codex 3巡目差し戻し・MAJOR対応: 従来は取り込みだけskipしsettings.json本体は再生成・上書きしていたため、既存設定にあったCLAUDE_CODE_USE_BEDROCK等が消え得た。設計書§11.2「生成失敗時は旧ファイルを触らない」契約どおりに修正。2026-08-30 リーダー追補: tester独立検証がbedrock.envを644＋chflags uchgで矯正恒久失敗させ、install-main.sh/update-sub.sh双方でCLAUDE_CODE_USE_BEDROCK・AWS_REGIONが黙って消えることを別経路で実再現済み＝本テストはその再現シナリオそのもの） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -974,7 +991,7 @@ EOF
 
 echo "=== 15b. settings.json再生成: Bedrock envパスがディレクトリの場合もsettings.json本体の再生成を中止し既存ファイルを保持する（2026-08-30 Codex 3巡目差し戻し・MAJOR対応） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1010,7 +1027,7 @@ EOF
 
 echo "=== 15b2. settings.json再生成: Bedrock envパスがdangling symlink(実体が既に無いsymlink)の場合もsettings.json本体の再生成を中止し既存ファイルを保持する（2026-08-30 Codex四次レビュー指摘・MAJOR対応: 従来は'[ -e ]'だけの判定だとdangling symlinkが「存在しない＝ABSENT」に丸められ、無警告のまま空設定で生成・上書きしていた） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1049,7 +1066,7 @@ EOF
 
 echo "=== 15c. settings.json再生成: 値出力口(install-main.sh --print-bedrock-env-json)が非0終了する場合もsettings.json本体の再生成を中止し既存ファイルを保持する（2026-08-30 Codex 3巡目差し戻し・MAJOR対応: 従来はBEDROCK_PAYLOADを空へ丸めてそのまま再生成・上書きしていた） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1090,7 +1107,7 @@ EOF
 
 echo "=== 15d. settings.json再生成: 親ディレクトリの探索権限不足(EACCES)で存在確認自体ができない場合もsettings.json本体の再生成を中止し既存ファイルを保持する（2026-08-30 Codex五次レビュー指摘・Minor対応: bedrock_env_file_kind()のFileNotFoundError以外のOSError→UNAVAILABLE経路をchmod 000で直接踏む） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1129,7 +1146,7 @@ EOF
 
 echo "=== 15e. settings.json再生成が中止され最終的に非0終了する場合でも、4a〜4c（config.toml再生成・Preferences再同期）は実際に続行されている（S4のdeferred方式の振る舞いカバレッジ・Codexレビュー指摘Major対応: HEAD変化を伴わない15/15b〜15dだけでは4a〜4cの続行そのものは検証できていなかった） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1186,7 +1203,7 @@ EOF
 
 echo "=== 16. settings.json再生成: Bedrock envファイルの解析できない行は行番号付きでWARNし、値は出さない（Codex一次レビュー指摘・Minor対応の横展開） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1217,7 +1234,7 @@ EOF
 
 echo "=== 16b. settings.json再生成: model値の出力口が部分出力を残しつつ非0終了しても、取得失敗として扱い既存settings.jsonを保持しWARN＋非0終了する（2026-08-30 Codex四次レビュー指摘・MAJOR対応: 従来は\$MODEL_VALUEが非空かどうかだけで成功/失敗を判定しており、部分出力を残す非0終了を誤って成功扱いし、BEDROCK_STATUS/BEDROCK_PAYLOAD未初期化のままset -u下で異常終了しうる欠陥があった。2026-09-01 Codex一次レビュー指摘・Blocking対応: 取得失敗時はスクリプト全体もexit 0ではなく非0で終わる＝設計書§3.9「WARN＋非0終了」） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1269,7 +1286,7 @@ EOF
 
 echo "=== 17. P1受入④(HEAD不変): update-sub.sh実行後もPreferencesがrepoとrsync差分ゼロ、かつローカル実体プロファイルのSHA-256が不変（差し戻し対応・設計書§9.3 P1受入条件④の判定式どおり） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1301,7 +1318,7 @@ echo "=== 17. P1受入④(HEAD不変): update-sub.sh実行後もPreferencesがre
 
 echo "=== 18. P1受入④(HEAD変化あり): update-sub.sh実行後にPreferencesがrepoとrsync差分ゼロ、かつローカル実体プロファイルのSHA-256が不変 ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1345,7 +1362,7 @@ echo "=== 18. P1受入④(HEAD変化あり): update-sub.sh実行後にPreference
 
 echo "=== 19. MAJOR-A結合: 同一Bedrock envファイルに対しinstall-main.sh(--sub-delegate)とupdate-sub.shが生成するsettings.jsonのenvブロックが完全一致する（installer/updaterの生成結果同一性・2026-08-30 工程横断レビュー指摘・MAJOR-A対応: 両者が独自に値表・解析ロジックを複製していたため食い違いうる構造だった） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1437,7 +1454,7 @@ print(json.dumps({k: env[k] for k in keys if k in env}, sort_keys=True))
 
 echo "=== 20. §4.3→配役表-能力軸整理-設計-2026-09-07.md §7.2 S6: リーダー配役未確定(role.leader: unknown)は配役表のresolve自体が失敗しMACHINE_ROLE:を持たないため、settings.json再生成のリーダー個別WARNより前の機役割ゲート（step 0）でメイン機扱いとして拒否される（旧ファイル保持・fail-closed。role.leader未確定は積極的な証明〈D-3〉の対象外のため機役割ごと解決できない） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1477,7 +1494,7 @@ EOF
 
 echo "=== 21. §4.3: リーダー行のeffortが3者一致で追随する（modelとeffortの両方＝設計書§4.3「updateはmodelとeffortの両方へ追随」） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1502,7 +1519,7 @@ echo "=== 21. §4.3: リーダー行のeffortが3者一致で追随する（mode
 
 echo "=== 21b. §4.3: リーダー行にeffort未指定ならeffortLevelキー自体が出力されない（正常な省略と解決失敗を混同しない・4.2-a） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1525,7 +1542,7 @@ echo "=== 21b. §4.3: リーダー行にeffort未指定ならeffortLevelキー�
 
 echo "=== 22. §11.2 項目3の受入条件（設計書§4.3・リーダー確認）: repoのHEADが不変でも、プロファイルのリーダー行だけを書き換えればsettings.jsonが追随する ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1566,7 +1583,7 @@ echo "=== 22. §11.2 項目3の受入条件（設計書§4.3・リーダー確�
 
 echo "=== 23. §4.2-a契約検証: --print-leader-runtimeがeffortキーを空文字列で返す契約違反はJSON解析失敗として拒否しWARN＋非0終了する（未指定＝キー省略との混同を防ぐ・2026-09-01 Codex二次レビュー指摘・Major対応） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1608,7 +1625,7 @@ EOF
 
 echo "=== 24. §4.2-b契約検証: 標準エラーが複数行・タブ無し等の契約違反のときは生テキストを再掲せず汎用文言へ倒す（2026-09-01 Codex二次レビュー指摘・Major対応） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1648,7 +1665,7 @@ EOF
 
 echo "=== 25. §4.2-b契約検証: 構文上はcleanだが契約に無い未知の機械可読コードは拒否し、コード自体をログへ再掲しない（2026-09-01 Codex三次レビュー指摘・Major対応） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1684,7 +1701,7 @@ EOF
 
 echo "=== 26. 4d. claude/agents/*.md のsymlink化: 新規追加されたロール定義（例: vault-scribe.md）で、サブ機に既に実ファイルが置かれている場合は退避してからsymlink化する（本人指示・2026-09-03最優先・受入条件6） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1720,7 +1737,7 @@ echo "=== 26. 4d. claude/agents/*.md のsymlink化: 新規追加されたロー�
 
 echo "=== 26b. 4d.: 既に正しいsymlinkが張られているロールは何もしない（no-op・退避ファイルを作らない） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1755,7 +1772,7 @@ echo "=== 26b. 4d.: 既に正しいsymlinkが張られているロールは何�
 
 echo "=== 26c. 4d.: repoから削除されたロールへのdangling symlinkは削除せずWARNのみに留める（本人指示: 削除は本人判断） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1797,7 +1814,7 @@ echo "=== 26c. 4d.: repoから削除されたロールへのdangling symlinkは�
 
 echo "=== 26d. 4d.: aienv管理下でないdangling symlink（\$AGENTS_SRC_DIR配下以外を指す）はWARN対象にしない（誤検知防止・Codexレビュー指摘対応） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1833,7 +1850,7 @@ echo "=== 26d. 4d.: aienv管理下でないdangling symlink（\$AGENTS_SRC_DIR�
 
 echo "=== 26e. 4d.: 古いrepoパス・別ファイルを指す誤ったsymlinkは現在のrepoパスへ張り直す（no-opではなく修復する） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1863,7 +1880,7 @@ echo "=== 26e. 4d.: 古いrepoパス・別ファイルを指す誤ったsymlink�
 
 echo "=== 26f. 4d.: 既に .pre-aienv.bak が存在する場合は2回目以降の実行で上書き・二重退避しない ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1913,7 +1930,7 @@ echo "=== 26f. 4d.: 既に .pre-aienv.bak が存在する場合は2回目以降�
 
 echo "=== 26g. 4d.: claude/agents/ ディレクトリ自体が無い（checkout破損）場合はfailせずWARNのみで他の処理は続行する ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1954,7 +1971,7 @@ echo "=== 26g. 4d.: claude/agents/ ディレクトリ自体が無い（checkout�
 
 echo "=== 26h. 2c.（旧4d）はHEADが不変でも実行される（本人実査・2026-09-03緊急対応の回帰テスト: 当初4d.は4.配下〈HEAD変化時のみ〉に置いており、サブ機の2回目以降の実行がHEAD不変で3.の早期終了に入るとagentsのsymlink化に一切到達しない実バグがあった。SUBを最初からrepoの最新HEADでclone〈＝pullで進む差分が無い〉した状態でも、まだsymlink化されていない実ファイルが正しくsymlink化されることを確認する） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -1984,7 +2001,7 @@ echo "=== 26h. 2c.（旧4d）はHEADが不変でも実行される（本人実�
 
 echo "=== 27. 自己更新対策: update-sub.sh自身がpullで更新された場合、新版のスクリプトへexecしなおして最初からやり直す（本人実査・2026-09-03緊急対応: bashはスクリプトを逐次読みするため、実行中の自分自身をpullで書き換えたまま処理を続けると不定動作になる実害があった。テスト③〈無限ループしない〉も兼ねる＝ログの重複有無で検証） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2047,7 +2064,7 @@ echo "=== 27. 自己更新対策: update-sub.sh自身がpullで更新された�
 
 echo "=== 27c. 自己更新対策(handoff): ロックファイルのPIDは自分自身と一致するが指紋（プロセス開始時刻）が食い違う場合はfail-closedで拒否する（PID再利用対策。Codexフォローアップレビュー指摘・Major対応: 当初はPID一致だけで引き継いでおり、環境変数の誤残留＋異常終了した旧ロックの残留＋PID番号の再利用が偶然重なると、他プロセスのロックを誤って『自分のもの』として引き継いでしまう穴があった） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2092,7 +2109,7 @@ RELAYEOF
 
 echo "=== 27d. 自己更新対策(handoff): 記録された指紋が『取得不能』予約値（FINGERPRINT-UNAVAILABLE）の場合はPIDが一致していてもfail-closedで拒否する（Codexフォローアップレビュー指摘・Major対応: 共有ライブラリ本体の_pid_lock_is_alive()は『他者の正当なロックを誤って削除しない』ためにこの予約値をPID生存のみで生存扱いへ倒すが、handoffは向きが逆＝『自分のものと証明できるか』が問われるため、証明できない予約値は受理してはならない） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2129,9 +2146,42 @@ RELAYEOF
   rm -rf "$WORK"
 }
 
+echo "=== 27e. scripts/lib/pid-lock.sh: _pid_lock_fingerprint()は\${PID_LOCK_PS_BIN:-ps}で差し替え可能で、psが失敗する環境でも決定的に『取得不能』経路をテストできる（Codex実装レビュー1巡目 MAJOR #13対応: 実psはサンドボックスで権限制限により失敗しうるため、成功／失敗の両経路をテスト側から固定できる必要がある） ==="
+{
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
+  PSLIB="$WORK/pid-lock.sh"
+  cp "$REPO_ROOT/scripts/lib/pid-lock.sh" "$PSLIB"
+
+  PS_OK="$WORK/ps-ok.sh"
+  cat > "$PS_OK" <<'PSEOF'
+#!/usr/bin/env bash
+printf 'Mon Jan  1 00:00:00 2026\n'
+PSEOF
+  chmod +x "$PS_OK"
+
+  PS_FAIL="$WORK/ps-fail.sh"
+  cat > "$PS_FAIL" <<'PSEOF'
+#!/usr/bin/env bash
+exit 1
+PSEOF
+  chmod +x "$PS_FAIL"
+
+  fp_ok="$(PID_LOCK_PS_BIN="$PS_OK" bash -c "source '$PSLIB'; _pid_lock_fingerprint \$\$")"
+  rc_ok=$?
+  assert_eq "PID_LOCK_PS_BINが成功するスタブなら指紋を返す(rc=0)" "0" "$rc_ok"
+  assert_eq "指紋の中身はスタブ出力を正規化したもの" "Mon Jan 1 00:00:00 2026" "$fp_ok"
+
+  rc_fail=0
+  fp_fail="$(PID_LOCK_PS_BIN="$PS_FAIL" bash -c "source '$PSLIB'; _pid_lock_fingerprint \$\$")" || rc_fail=$?
+  assert_eq "PID_LOCK_PS_BINが失敗するスタブなら非0で『取得不能』経路になる" "1" "$rc_fail"
+  assert_eq "失敗時は空文字を返す" "" "$fp_fail"
+
+  rm -rf "$WORK"
+}
+
 echo "=== 27b. 自己更新対策: AIENV_UPDATE_SUB_REEXECガードが立っていても、引き継ぐべき多重起動防止ロックが実在しない（execによる正当な引き継ぎではない）場合はfail-closedで拒否する（本人環境・LaunchAgent等へこの内部専用環境変数が誤って残留・伝播した場合の安全策。Codexフォローアップレビュー指摘・Minor対応: ロックを解放してから再取得する旧方式ではこの検証手段自体が無かったが、1.をhandoff方式へ変更したことで『引き継ぐべきロックが無ければ拒否する』という直接的なfail-closed経路が持てるようになった。無限ループしないことの直接証拠でもある＝サイレントにpullをスキップし続けず即fail()する） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2181,7 +2231,7 @@ echo "=== 27b. 自己更新対策: AIENV_UPDATE_SUB_REEXECガードが立って�
 
 echo "=== 30. PA-4: repoに定義を1本足して実行するとsymlinkができ、AGENTS: 初回未配置 の固定文に名前が出る（終了コード0） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2206,7 +2256,7 @@ echo "=== 30. PA-4: repoに定義を1本足して実行するとsymlinkができ
 
 echo "=== 31. PA-5: repoから定義を1本消して実行するとAGENTS: dangling の固定文に名前が出て終了コードが非0（symlink自体は消えない） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2243,7 +2293,7 @@ echo "=== 31. PA-5: repoから定義を1本消して実行するとAGENTS: dangl
 
 echo "=== 32. PA-6: 追加もdanglingも無ければ AGENTS: 行が出ず終了コード0（既存の挙動が変わらない） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2269,7 +2319,7 @@ echo "=== 32. PA-6: 追加もdanglingも無ければ AGENTS: 行が出ず終了�
 
 echo "=== 33. PA-12: 追加と削除が同時に起きる複合ケース（verifier追加・tester退役相当）で両方の固定文が出て新規は配置・旧は残存・終了コード非0 ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2306,7 +2356,7 @@ echo "=== 33. PA-12: 追加と削除が同時に起きる複合ケース（verif
 
 echo "=== 34. PA-8: HEAD不変で --resync を付けるとPreferencesの再同期が走る（前提修正 P-3・3-b・契約2） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2337,7 +2387,7 @@ echo "=== 34. PA-8: HEAD不変で --resync を付けるとPreferencesの再同�
 
 echo "=== 35. PA-9: --resync を付けなければPreferencesの再同期は走らない（現行挙動の回帰ガード・契約5） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2363,7 +2413,7 @@ echo "=== 35. PA-9: --resync を付けなければPreferencesの再同期は走�
 echo "=== 36. PA-10: --resync は同期元の欠落・rsyncの失敗のいずれでも非0で終わり、固有のエラー文で判別できる（契約3） ==="
 {
   # (a) 同期元（vault-public/Preferences）の欠落
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2393,7 +2443,7 @@ echo "=== 36. PA-10: --resync は同期元の欠落・rsyncの失敗のいずれ
   # 権限を一時的に緩めてから書き込み、最後に同期元と同じ権限へ戻してしまい
   # 失敗を再現できなかった（実測で確認）。chflags uchg は所有者でも通常操作では
   # 解除できないため確実に失敗を再現できる。
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2424,7 +2474,7 @@ echo "=== 36. PA-10: --resync は同期元の欠落・rsyncの失敗のいずれ
   # HEADが進んだ場合は既存4bのWARN-continueへ抜けて最終的にexit 0になり
   # 得た。同期元欠落とHEAD更新が同時に起きるfixtureで、この経路も
   # fail-closedになっていることを確認する）。
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2459,7 +2509,7 @@ echo "=== 37. PA-11: 非0の原因が相互に誤分類されない（settings.j
   #    無い）状態でもAGENTS:行は出ない（「AGENTS:が無ければ他の原因」という
   #    不在からの推定を禁じる規則の裏付け＝pull失敗のケースは PA-7 で確認済み。
   #    §2.1）。
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2512,7 +2562,7 @@ echo "=== 37. PA-11: 非0の原因が相互に誤分類されない（settings.j
 
 echo "=== 38. 契約1: --resync の引数解析は不正な組み合わせを拒否する（回帰ガード・2026-09-07 Codex一次レビュー指摘・MINOR対応） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2547,7 +2597,7 @@ echo "=== 38. 契約1: --resync の引数解析は不正な組み合わせを拒
 
 echo "=== 39. 配役表-能力軸整理: AIENV_AGENTS_DIRが未設定でもset -euo pipefail下で落ちない（§2.2の共通レシピの既定値初期化位置を固定する） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2571,7 +2621,7 @@ echo "=== 39. 配役表-能力軸整理: AIENV_AGENTS_DIRが未設定でもset -
 
 echo "=== 40. 版境界の移行: 旧版update-sub.sh（旧マーカー判定）がpull後に新版（machine_role判定）へ自己execし、schema 5の実体1つで1回の起動が完走する（配役表-能力軸整理-設計-2026-09-07.md §9.3・§10.2b。切替当日の実機の状態＝実体は先に書き換え済み・旧マーカーは削除前、を再現する） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2626,7 +2676,7 @@ echo "=== 40. 版境界の移行: 旧版update-sub.sh（旧マーカー判定）
 
 echo "=== 41. 版境界の1回通し(設計§10.3・§11.3 B-2): af72d16時点(machine_role方式・schema5のresolver)のサブ機で、PROFILE_RESOLVE_LIBへ新版resolverを注入するとpull→自己execを1回の起動で完走し、注入がexec後も効いてschema 6実体のmachine_roleが読める ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2696,7 +2746,7 @@ echo "=== 41. 版境界の1回通し(設計§10.3・§11.3 B-2): af72d16時点(m
 
 echo "=== 42. 4d. 使用率取得器（scripts/install-usage-fetch.sh）が導入済み（plistが実在する）ときだけ再実行して追随させる（B1-b・使用率取得器移設） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2736,7 +2786,7 @@ EOF
 
 echo "=== 43. 4d. plistが無い（未導入）サブ機ではinstall-usage-fetch.shを実行しない（install-sub.shの『LaunchAgentを一切設置しない』方針を崩さない） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2769,7 +2819,7 @@ EOF
 
 echo "=== 44. 4d. install-usage-fetch.shが非0終了しても update-sub.sh 自体は失敗にしない（soft-fail） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -2802,7 +2852,7 @@ EOF
 
 echo "=== PD-01: 旧版サブ機を更新するとagent-model-guardフックが実体への実行可能symlinkとして配置される（main追随後は管理symlink機構〈2a.〉経由） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   SUB="$WORK/sub"
@@ -2852,7 +2902,7 @@ echo "=== PD-01: 旧版サブ機を更新するとagent-model-guardフックが�
 
 echo "=== PD-02: HEAD不変でも欠落したagent-model-guard symlinkを管理symlink機構(2a.)経由で復旧する ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   SUB="$WORK/sub"
@@ -2900,7 +2950,7 @@ echo "=== PD-02: HEAD不変でも欠落したagent-model-guard symlinkを管理s
 
 echo "=== PD-04: SUB上のagent-model-guard.sh実体そのものが欠落している場合は非0で終了する ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   SUB="$WORK/sub"
@@ -2941,7 +2991,7 @@ echo "=== PD-04: SUB上のagent-model-guard.sh実体そのものが欠落して�
 
 echo "=== 45. 旧版サブ機を更新すると新しいusage-injectフックが実体への実行可能symlinkとして配置される ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   SUB="$WORK/sub"
@@ -2985,9 +3035,21 @@ echo "=== 45. 旧版サブ機を更新すると新しいusage-injectフックが
   chmod +x "$SRC/claude/hooks/agent-model-guard.sh"
   cp "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" "$SRC/claude/hooks/task-pane-resolve.sh"
   chmod +x "$SRC/claude/hooks/task-pane-resolve.sh"
+  # cmux-session-todo v3（供給側・§28.2）: install-main.shのchmod一覧に
+  # cmux/配下の3本を足した（担当J）ため、このコミットにもcmux/一式を
+  # 併せて持たせないと、この古いコミット上でinstall-main.shのchmodが
+  # 「No such file or directory」で失敗する（上のコメントの警告どおり）。
+  mkdir -p "$SRC/cmux"
+  cp "$REPO_ROOT/cmux/cmux-task-model.sh" "$SRC/cmux/cmux-task-model.sh"
+  cp "$REPO_ROOT/cmux/cmux-next-model.sh" "$SRC/cmux/cmux-next-model.sh"
+  cp "$REPO_ROOT/cmux/cmux-task-declare.sh" "$SRC/cmux/cmux-task-declare.sh"
+  cp "$REPO_ROOT/cmux/lib-model-view.sh" "$SRC/cmux/lib-model-view.sh"
+  cp "$REPO_ROOT/cmux/lib-vault-tasks.sh" "$SRC/cmux/lib-vault-tasks.sh"
+  cp "$REPO_ROOT/cmux/lib-cmux-workspace.sh" "$SRC/cmux/lib-cmux-workspace.sh"
+  chmod +x "$SRC/cmux/cmux-task-model.sh" "$SRC/cmux/cmux-next-model.sh" "$SRC/cmux/cmux-task-declare.sh"
   git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/install-main.sh \
     scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh \
-    claude/hooks/task-pane-resolve.sh
+    claude/hooks/task-pane-resolve.sh cmux
   git -C "$SRC" commit -q -m "fixture: place hooks after sub update"
   git -C "$SRC" push -q origin HEAD:main
 
@@ -3017,7 +3079,7 @@ PY
 
 echo "=== 46. 三段階更新（3954355→c5d465d→50056ae基点の修正版）でも欠落したusage-inject配置へ収束する ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   SUB="$WORK/sub"
@@ -3071,9 +3133,19 @@ PY
   chmod +x "$SRC/claude/hooks/agent-model-guard.sh"
   cp "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" "$SRC/claude/hooks/task-pane-resolve.sh"
   chmod +x "$SRC/claude/hooks/task-pane-resolve.sh"
+  # cmux-session-todo v3（供給側・§28.2）: test 45と同じ理由でcmux/一式も
+  # 併せて持たせる（担当Jがinstall-main.shのchmod一覧へ3本足したため）。
+  mkdir -p "$SRC/cmux"
+  cp "$REPO_ROOT/cmux/cmux-task-model.sh" "$SRC/cmux/cmux-task-model.sh"
+  cp "$REPO_ROOT/cmux/cmux-next-model.sh" "$SRC/cmux/cmux-next-model.sh"
+  cp "$REPO_ROOT/cmux/cmux-task-declare.sh" "$SRC/cmux/cmux-task-declare.sh"
+  cp "$REPO_ROOT/cmux/lib-model-view.sh" "$SRC/cmux/lib-model-view.sh"
+  cp "$REPO_ROOT/cmux/lib-vault-tasks.sh" "$SRC/cmux/lib-vault-tasks.sh"
+  cp "$REPO_ROOT/cmux/lib-cmux-workspace.sh" "$SRC/cmux/lib-cmux-workspace.sh"
+  chmod +x "$SRC/cmux/cmux-task-model.sh" "$SRC/cmux/cmux-next-model.sh" "$SRC/cmux/cmux-task-declare.sh"
   git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/install-main.sh \
     scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh \
-    claude/hooks/task-pane-resolve.sh
+    claude/hooks/task-pane-resolve.sh cmux
   if ! git -C "$SRC" diff --cached --quiet; then
     git -C "$SRC" commit -q -m "fixture: reconcile actual symlink state"
   fi
@@ -3097,7 +3169,7 @@ PY
 
 echo "=== 47. installer失敗後もHEAD不変の再実行で実配置を検査し復旧する（追加副作用なし） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   SUB="$WORK/sub"
@@ -3188,7 +3260,7 @@ EOF
 
 echo "=== 48. 判定器（check-drift.sh）自体が欠落している場合、管理symlinkの欠落を『driftなし』とは扱わずinstallerを実行したうえで検証不能を警告し非0で終了する（検証3巡目 MAJOR-1対応。従来は\`[ -f check-drift.sh ]\`のガードでブロック全体が無警告のまま素通りし、rc=0で欠落を見逃していた） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   SUB="$WORK/sub"
@@ -3246,7 +3318,7 @@ echo "=== 48. 判定器（check-drift.sh）自体が欠落している場合、�
 
 echo "=== 49. claude/agents/*.md直接配置(2c.)でも、既存backupと内容が異なる通常ファイルへ置き換わっている場合に追加backupへ保存してから復旧する（検証4巡目 BLOCKING-1対応。従来はinstall-main.sh link()専用の対応が2c.の複製実装には反映されておらず、同じデータ消失が再発していた） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -3291,7 +3363,7 @@ echo "=== 49. claude/agents/*.md直接配置(2c.)でも、既存backupと内容�
 
 echo "=== 50. git ls-tree自体が非0で失敗する場合（HEAD非追跡ではなくGit判定コマンド自体の障害）は『HEAD非追跡』に丸めず判定不能として非0終了する（検証4巡目 MAJOR-1対応。git cat-file -eの非0は対象不存在と実行障害を区別できずfail-openしていた） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   SUB="$WORK/sub"
@@ -3373,7 +3445,7 @@ EOF
 
 echo "=== 51. scripts/lib/managed-symlink.shだけを更新したコミットをpullすると、update-sub.sh自身は不変（自己再exec無し）でも同一実行中に新版のsync_managed_symlink()が使われる（検証5巡目 MAJOR-1対応。従来はpull・自己再exec判定より前でsourceしており、自己再exec判定がupdate-sub.sh本体の差分しか見ないため、lib単独更新は同一実行に反映されなかった） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -3417,7 +3489,7 @@ echo "=== 51. scripts/lib/managed-symlink.shだけを更新したコミットを
 
 echo "=== 52. HEAD不変のまま共有lib（scripts/lib/managed-symlink.sh）が作業ツリーから消えている場合、EXIT trap（多重起動防止ロックの後始末）にexit 0へ上書きされず明示的に非0で終了する（検証6巡目 MAJOR対応。従来はbareなsourceの失敗がPID lockのEXIT trap実行後の最終コマンドの終了コード〈常に0〉で上書きされ、2a.以降未実行のままrc=0の『成功』報告になっていた） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -3454,7 +3526,7 @@ echo "=== 52. HEAD不変のまま共有lib（scripts/lib/managed-symlink.sh）�
 
 echo "=== PD-03: model付き既存8職種を退避してmodel無しrepo定義へ置換 ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"
@@ -3485,7 +3557,7 @@ echo "=== PD-03: model付き既存8職種を退避してmodel無しrepo定義へ
 
 echo "=== 53. pull後に共有lib（scripts/lib/managed-symlink.sh）が新HEADから消えている場合も、EXIT trapにexit 0へ上書きされず明示的に非0で終了する（検証6巡目 MAJOR対応。HEADが進む経路でも同じ丸め込みが起きることを確認） ==="
 {
-  WORK="$(mktemp -d)"
+  WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
   SRC="$WORK/src"
   make_origin "$BARE" "$SRC"

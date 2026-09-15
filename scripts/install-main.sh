@@ -1791,7 +1791,9 @@ if [ "$DRY_RUN" != "1" ]; then
            "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh" \
            "$DIR/claude/hooks/check-sub-update.sh" "$DIR/claude/hooks/context-size-warn.sh" \
            "$DIR/claude/hooks/agent-model-guard.sh" \
-           "$DIR/claude/hooks/usage-inject.sh"
+           "$DIR/claude/hooks/usage-inject.sh" \
+           "$DIR/cmux/cmux-task-model.sh" "$DIR/cmux/cmux-next-model.sh" \
+           "$DIR/cmux/cmux-task-declare.sh"
   # 締めレビュー2巡目 #2対応（2026-09-14）: agent-model-guard.sh専用の
   # 固有理由コード付き実行可能性チェックはここで削除した。
   # 上のlink()がsync_managed_symlink()経由で既にsrc欠落を汎用の「リポジトリ

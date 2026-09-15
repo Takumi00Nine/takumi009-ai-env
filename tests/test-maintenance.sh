@@ -17,9 +17,13 @@
 # 差し替える）を組み立ててmaintenance.shを実行する。backup-vault.shだけは
 # 実物を使う（MAINTENANCE_INTERNAL_CALLバイパスの実結線を検証するため）。
 # 例外が1つだけある: §16.6.2系統①（実cmux-task-declare.shとの結合試験・
-# DT-7とは独立）は、別リポジトリ~/work/dotfiles/cmux/cmux-task-watch/の
-# 実物スクリプトを読みに行く（cmux自体は隔離スタブに差し替え、宣言記録も
-# 隔離パスへ書く＝実cmuxにも実記録にも触れない。実物が無い環境ではSKIP）。
+# DT-7とは独立）は、REPO_ROOT（このテストが実際に走っている本リポジトリ・
+# 移設先のワークツリー）配下の cmux/cmux-task-declare.sh の実物スクリプトを
+# 読みに行く（cmux-session-todo v3で宣言CLIの実体がdotfilesからai-envへ
+# 移設されたため。実machineの ~/work/takumi009-ai-env が未マージでも
+# ここは常に「今テストしている木」を見るので影響されない＝検証1巡目
+# MAJOR #12対応。cmux自体は隔離スタブに差し替え、宣言記録も隔離パスへ
+# 書く＝実cmuxにも実記録にも触れない）。
 #
 # 実行方法: bash tests/test-maintenance.sh
 
@@ -62,13 +66,15 @@ trap 'rm -rf "$HOME" "$WORK_ROOT"' EXIT
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-# §16.6.2系統①（実物cmux-task-declare.shとの結合テスト）だけは、HOME隔離の
-# 例外として実dotfilesリポジトリのパスを参照する。HOMEを上書きする前の
-# 本来のHOMEを保存しておく（本ファイルはHOME隔離を前提とするが、系統①は
-# 実物のスクリプト自体を読みに行く必要があり、隔離HOME配下には実物が
-# 存在しないため）。
-REAL_HOME="${REAL_TEST_HOME:-$(eval echo "~$(id -un)")}"
-REAL_CMUX_TASK_DECLARE="$REAL_HOME/work/dotfiles/cmux/cmux-task-watch/cmux-task-declare.sh"
+# §16.6.2系統①（実物cmux-task-declare.shとの結合テスト）は、REPO_ROOT
+# （$TESTS_DIR/..＝本ファイルが属するリポジトリ／ワークツリー自身）配下の
+# 実物を参照する。検証1巡目 MAJOR #12: 以前は実machineの
+# ~/work/takumi009-ai-env を参照していたため、その場所が未マージ／未配置の
+# 環境（このワークツリーとは無関係な実行環境）では系統①がSKIPし続け、
+# 本来なら実行できるはずの検査を10件分黙って落としていた。REPO_ROOT基準
+# なら「今テストしている木」に常に実体があるので、実machineの状態に
+# 依存しない。
+REAL_CMUX_TASK_DECLARE="$REPO_ROOT/cmux/cmux-task-declare.sh"
 WORK_ROOT="$(mktemp -d)" || {
   echo "FATAL: mktemp -dに失敗しました（WORK_ROOT隔離用）。書込み可能な一時領域が無い可能性があります。" >&2
   exit 1
@@ -1290,8 +1296,8 @@ print(','.join(k for k in required if k not in d))
 # rc=1/2/3は空）を演じ、maintenance.sh側の統合＝1回だけ呼ぶ・エラーを隔離する・
 # サマリのセグメントを§16.3の固定文字列へ正しく写像する・last_success_atを
 # 進める、を検査する。
-# 続くcase 40・41（§16.6.2系統①）は実物のcmux-task-declare.sh（別リポジトリ
-# ~/work/dotfiles/cmux/cmux-task-watch/）との実物結合試験で、記録が本当に
+# 続くcase 40・41（§16.6.2系統①）は実物のcmux-task-declare.sh（REPO_ROOT配下の
+# cmux/）との実物結合試験で、記録が本当に
 # 2件→1件へ減る／1バイトも変わらないところまで見る（実物が無い環境では
 # SKIP。実cmux・実記録には触れない・verifier実装レビュー2巡目#12対応）。
 
@@ -1416,12 +1422,118 @@ echo "=== 39. Phase3宣言掃除: 入口のパスはMAINTENANCE_TASK_PRUNE_CMD�
   assert_contains "上書きしたパスの応答が反映される" "$FRAG_TEXT" "・宣言掃除 実施・1件（UUID-ALT=slug-alt）"
 }
 
+echo "=== 39b. FR-78/AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしないとき、既定は ai-env の cmux/cmux-task-declare.sh を指す（cmux-session-todo v3・供給側の移設） ==="
+{
+  T="$WORK_ROOT/t39b"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # 既定パスの解決先（新）は $HOME/work/takumi009-ai-env/cmux/cmux-task-declare.sh。
+  # 本ファイルの $HOME は隔離済み（冒頭 mktemp -d）なので、そこへ直接スタブを
+  # 置き、MAINTENANCE_TASK_PRUNE_CMD を一切渡さずに maintenance.sh を実行する
+  # （run_maintenance() は `:=$PRUNE_STUB` で常に上書きしてしまうため、ここだけ
+  # 直接 bash 呼び出しにする）。
+  DEFAULT_PRUNE_DIR="$HOME/work/takumi009-ai-env/cmux"
+  mkdir -p "$DEFAULT_PRUNE_DIR"
+  DEFAULT_PRUNE_STUB="$DEFAULT_PRUNE_DIR/cmux-task-declare.sh"
+  PRUNE_CALL_LOG="$T/prune-call-39b.log"
+  setup_fake_prune_cmd "$DEFAULT_PRUNE_STUB"
+  rc=0
+  VAULT="$VAULT" AIENV_REPO="$AIENV_REPO" MAINTENANCE_LOG_ROOT="$LOG_ROOT" TMPDIR="$TEST_TMPDIR" \
+    FAKE_OSASCRIPT_LOG="$OSASCRIPT_LOG" FAKE_EXPORT_CALL_LOG="$EXPORT_CALL_LOG" \
+    FAKE_APPLY_ARGV_LOG="$APPLY_ARGV_LOG" FAKE_PRUNE_CALL_LOG="$PRUNE_CALL_LOG" \
+    TIMEOUT_BACKUP_VAULT=10 TIMEOUT_EXPORT_PUBLIC_VAULT=10 TIMEOUT_CHECK_DRIFT=2 \
+    TIMEOUT_FRAGMENTS_LOG=10 TIMEOUT_VAULT_INVENTORY=10 TIMEOUT_KNOWLEDGE_MERGE=10 \
+    TIMEOUT_DECISION_PROPAGATION=10 TIMEOUT_MAINTENANCE_APPLY=10 TIMEOUT_TASK_PRUNE=5 \
+    MAINTENANCE_STALE_LOCK_SECONDS=3600 \
+    GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
+    bash "$REPO/scripts/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR" || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  assert_eq "既定パスのスタブ（ai-env/cmux/cmux-task-declare.sh）が呼ばれた" \
+    "1" "$([ -s "$PRUNE_CALL_LOG" ] && echo 1 || echo 0)"
+  rm -rf "$DEFAULT_PRUNE_DIR"
+}
+
+echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経路で、実物cmux-task-declare.shを通した実削除（workspace listに無いUUIDだけが消えて残り1件は残る）と実施サマリへの反映まで検査する（検証1巡目 MAJOR #14対応: 39bは既定パスへのルーティングだけ、40/41は実物だが明示上書き経路だけを見ており、『既定パス×実物×実削除』の組合せが未検査だった） ==="
+{
+  T="$WORK_ROOT/t39c"; mkdir -p "$T"
+  setup_test_env "$T"
+  rm -rf "$HOME/.claude/logs/maintenance/preferences-proposals" 2>/dev/null || true
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # 検証2巡目 MINOR #33: REAL_CMUX_TASK_DECLAREはREPO_ROOT基準（このワーク
+  # ツリー自身）なので、SKIPだと将来のリネーム等で本ケースが無言で落ちる
+  # （#12と同型の事故）。無ければfail_caseで異常として可視化する。
+  if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
+    fail_case "AC-104(39c・既定経路): 実物cmux-task-declare.shが見つかりません（${REAL_CMUX_TASK_DECLARE}）"
+  else
+    # 既定パス（$HOME/work/takumi009-ai-env/cmux/cmux-task-declare.sh）へ
+    # 実物をコピーして置く。cp なのでLIB_DIR解決（dirname "$0"）はコピー先
+    # 基準になるが、cmux-task-declare.shはcmux/lib-vault-tasks.sh・
+    # lib-cmux-workspace.shと同じ相対位置にある前提のため、依存libも
+    # 一緑にコピーする。
+    DEFAULT_PRUNE_DIR="$HOME/work/takumi009-ai-env/cmux"
+    mkdir -p "$DEFAULT_PRUNE_DIR"
+    cp "$REAL_CMUX_TASK_DECLARE" "$DEFAULT_PRUNE_DIR/cmux-task-declare.sh"
+    REAL_CMUX_TASK_DECLARE_DIR="$(cd "$(dirname "$REAL_CMUX_TASK_DECLARE")" && pwd)"
+    for lib in lib-model-view.sh lib-cmux-workspace.sh lib-vault-tasks.sh; do
+      [ -f "$REAL_CMUX_TASK_DECLARE_DIR/$lib" ] && cp "$REAL_CMUX_TASK_DECLARE_DIR/$lib" "$DEFAULT_PRUNE_DIR/$lib"
+    done
+    chmod +x "$DEFAULT_PRUNE_DIR/cmux-task-declare.sh"
+
+    # --- 隔離cmuxスタブ: window "1" に生存UUIDが1件だけ含まれる（case 40と同型） ---
+    CMUX_STUB_DIR="$T/real-cmux-stub"
+    CMUX_STUB_BIN="$CMUX_STUB_DIR/cmux"
+    CMUX_STUB_STATE="$CMUX_STUB_DIR/state"
+    setup_real_cmux_stub "$CMUX_STUB_BIN" "$CMUX_STUB_STATE"
+    printf '[{"id":"1","index":0}]' > "$CMUX_STUB_STATE/windows.json"
+    printf '{"workspaces":[{"id":"FB3B2F30-00D7-4093-91CE-0DE32B43165C"}]}' \
+      > "$CMUX_STUB_STATE/workspaces.1.json"
+
+    # --- 隔離宣言記録: 2件（うち1件はworkspace listに無いUUID＝W-8相当） ---
+    DECLARE_STATE_DIR="$T/real-declare-state"
+    mkdir -p "$DECLARE_STATE_DIR"
+    DECLARE_STATE_FILE="$DECLARE_STATE_DIR/workspaces.json"
+    printf '{"version":1,"workspaces":{"FB3B2F30-00D7-4093-91CE-0DE32B43165C":"slug-a","22222222-2222-2222-2222-222222222222":"slug-c"}}' \
+      > "$DECLARE_STATE_FILE"
+
+    rc=0
+    VAULT="$VAULT" AIENV_REPO="$AIENV_REPO" MAINTENANCE_LOG_ROOT="$LOG_ROOT" TMPDIR="$TEST_TMPDIR" \
+      FAKE_OSASCRIPT_LOG="$OSASCRIPT_LOG" FAKE_EXPORT_CALL_LOG="$EXPORT_CALL_LOG" \
+      FAKE_APPLY_ARGV_LOG="$APPLY_ARGV_LOG" \
+      CMUX_TASK_STATE="$DECLARE_STATE_FILE" \
+      CMUX_TASK_CMUX_BIN="$CMUX_STUB_BIN" \
+      CMUX_TASK_VAULT="$T/unused-vault" \
+      TIMEOUT_BACKUP_VAULT=10 TIMEOUT_EXPORT_PUBLIC_VAULT=10 TIMEOUT_CHECK_DRIFT=2 \
+      TIMEOUT_FRAGMENTS_LOG=10 TIMEOUT_VAULT_INVENTORY=10 TIMEOUT_KNOWLEDGE_MERGE=10 \
+      TIMEOUT_DECISION_PROPAGATION=10 TIMEOUT_MAINTENANCE_APPLY=10 TIMEOUT_TASK_PRUNE=5 \
+      MAINTENANCE_STALE_LOCK_SECONDS=3600 \
+      GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
+      bash "$REPO/scripts/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR" || rc=$?
+    assert_eq "AC-104: exit 0（既定経路・実物）" "0" "$rc"
+
+    REMAINING_KEYS="$(jq -r '.workspaces | keys | length' "$DECLARE_STATE_FILE" 2>/dev/null)"
+    assert_eq "AC-104: 記録が2件→1件になる(既定経路でも実物の削除が実際に起きる)" "1" "$REMAINING_KEYS"
+    assert_contains "AC-104: 残る1件はworkspace listにあるUUIDである" \
+      "$(cat "$DECLARE_STATE_FILE")" "FB3B2F30-00D7-4093-91CE-0DE32B43165C"
+    assert_not_contains "AC-104: workspace listに無いUUIDは消えている" \
+      "$(cat "$DECLARE_STATE_FILE")" "22222222-2222-2222-2222-222222222222"
+
+    RUN_DIR="$(readlink "$LOG_ROOT/latest")"
+    FRAG_FILE="$(find "$VAULT/Fragments" -name '20*.md' | head -1)"
+    FRAG_LINE="$(grep '^- 定常メンテ(週次): ' "$FRAG_FILE" 2>/dev/null)"
+    EXPECTED_FRAG_LINE="- 定常メンテ(週次): 昇格0件・マージ0件（部分適用0件）・見送り0件・Preferences未確認提案0件（要承認）・波及漏れ疑い0件・宣言掃除 実施・1件（22222222-2222-2222-2222-222222222222=slug-c）（詳細: ${RUN_DIR}）"
+    assert_eq "AC-104: サマリ行が既定経路でも削除対象のUUID=slugとRUN_DIRを含め完全一致する" "$EXPECTED_FRAG_LINE" "$FRAG_LINE"
+
+    rm -rf "$DEFAULT_PRUNE_DIR"
+  fi
+}
+
 # =============================================================================
 # §16.6.2 系統①: 実cmux-task-declare.shとの結合試験（担当Bの成果物）
 # =============================================================================
 # ここまでの契約スタブ系（②）はmaintenance.sh側の統合ロジックだけを検査して
-# きた。ここからは実物のcmux-task-declare.sh（別リポジトリ~/work/dotfiles/
-# cmux/cmux-task-watch/）を実際に呼び、記録が本当に2件→1件へ減る／
+# きた。ここからは実物のcmux-task-declare.sh（REPO_ROOT配下のcmux/。
+# cmux-session-todo v3で宣言CLIの実体がdotfilesからai-envへ移設された）を
+# 実際に呼び、記録が本当に2件→1件へ減る／
 # 1バイトも変わらないところまで見る（verifier実装レビュー1巡目#2対応）。
 # cmux自体は隔離cmuxスタブ（setup_real_cmux_stub）に差し替え、宣言記録も
 # 隔離パス（CMUX_TASK_STATE）へ書く＝実cmux・実記録には一切触れない。
@@ -1437,8 +1549,12 @@ echo "=== 40. 系統①(設計書§16.6.2): 実cmux-task-declare.shをmaintenanc
   # ここで明示的に空にする(verifier実装レビュー3巡目#14対応)。
   rm -rf "$HOME/.claude/logs/maintenance/preferences-proposals" 2>/dev/null || true
   LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # 検証2巡目 MINOR #33: SKIPだと将来ファイルをリネーム・削除しても本ケースが
+  # 無言で落ちる（#12で起きた事故と同じ形）。REAL_CMUX_TASK_DECLAREは本ファイル
+  # 冒頭で必ず解決される前提のパスなので、無ければ検査すべきものが検査でき
+  # ていない異常としてfail_caseにする。
   if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
-    echo "SKIP: 実物cmux-task-declare.shがこの環境に無いため（${REAL_CMUX_TASK_DECLARE}）、系統①の結合テストをスキップします"
+    fail_case "系統①(40): 実物cmux-task-declare.shが見つかりません（${REAL_CMUX_TASK_DECLARE}）"
   else
     # --- 隔離cmuxスタブ: window "1" に生存UUIDが1件だけ含まれる ---
     CMUX_STUB_DIR="$T/real-cmux-stub"
@@ -1523,8 +1639,9 @@ echo "=== 41. 系統①(設計書§16.6.2): 実cmux-task-declare.shの接続に�
   # case 40と同じ理由(#14対応): 他ケースの残留物に依存しないよう明示的に空にする。
   rm -rf "$HOME/.claude/logs/maintenance/preferences-proposals" 2>/dev/null || true
   LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # 検証2巡目 MINOR #33（case 40と同じ理由）: SKIPをやめてfail_caseにする。
   if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
-    echo "SKIP: 実物cmux-task-declare.shがこの環境に無いため（${REAL_CMUX_TASK_DECLARE}）、系統①の結合テストをスキップします"
+    fail_case "系統①(41): 実物cmux-task-declare.shが見つかりません（${REAL_CMUX_TASK_DECLARE}）"
   else
     CMUX_STUB_DIR="$T/real-cmux-stub"
     CMUX_STUB_BIN="$CMUX_STUB_DIR/cmux"

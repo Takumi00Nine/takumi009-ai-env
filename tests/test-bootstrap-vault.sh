@@ -3124,8 +3124,8 @@ echo "=== 84. FR-48/AC-59: 起動注入文に宣言コマンドの呼び出し�
   make_full_vault "$VD84"
   ctx84="$(run_bootstrap "$VD84")"
   assert_contains "84: ⑥の行が含まれる" "$ctx84" \
-    "⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）"
-  n_line84="$(printf '%s\n' "$ctx84" | grep -Fxc '⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）' || true)"
+    "⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）"
+  n_line84="$(printf '%s\n' "$ctx84" | grep -Fxc '⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）' || true)"
   assert_eq "84: ⑥はちょうど1行（改行を含まない）" "1" "$n_line84"
 
   # 既存①〜⑤が全部残っていること（文面も並びも変えない＝FR-48）。
@@ -3160,18 +3160,20 @@ EOF
   chmod +x "$SPY_DIR85/cmux-task-declare.sh"
 
   # 差分レビュー指摘#6: PATH上だけでなく、注入文に書かれている固定パス
-  # $HOME/work/tools/cmux-task-watch/cmux-task-declare.sh にもスパイを置く
-  # （固定パスを直接実行する誤実装がPATHスパイを迂回してもここで捕まる）。
-  # 実機の~/work/toolsには一切触れないよう、隔離HOMEを別途用意する。
+  # $HOME/work/takumi009-ai-env/cmux/cmux-task-declare.sh にもスパイを置く
+  # （固定パスを直接実行する誤実装がPATHスパイを迂回してもここで捕まる。
+  # cmux-session-todo v3で宣言CLIの実体がdotfilesからai-envへ移設された
+  # ことに合わせ、スパイの置き場も新しい既定パスへ更新した）。
+  # 実機の~/work/takumi009-ai-envには一切触れないよう、隔離HOMEを別途用意する。
   FAKE_HOME85="$(safe_mktemp_d)" || exit 1
-  mkdir -p "$FAKE_HOME85/work/tools/cmux-task-watch"
+  mkdir -p "$FAKE_HOME85/work/takumi009-ai-env/cmux"
   MARKER_DIR85B="$(safe_mktemp_d)" || exit 1
   MARKER85B="$MARKER_DIR85B/declare-was-called-fixedpath.marker"
-  cat > "$FAKE_HOME85/work/tools/cmux-task-watch/cmux-task-declare.sh" <<EOF
+  cat > "$FAKE_HOME85/work/takumi009-ai-env/cmux/cmux-task-declare.sh" <<EOF
 #!/bin/bash
 touch "$MARKER85B"
 EOF
-  chmod +x "$FAKE_HOME85/work/tools/cmux-task-watch/cmux-task-declare.sh"
+  chmod +x "$FAKE_HOME85/work/takumi009-ai-env/cmux/cmux-task-declare.sh"
 
   # CMUX_TASK_STATE相当の宣言記録ファイル（フックが誤って書けば存在するようになる）。
   STATE_DIR85="$(safe_mktemp_d)" || exit 1
@@ -3187,7 +3189,7 @@ EOF
 
   marker_exists85b=0
   if [ -e "$MARKER85B" ]; then marker_exists85b=1; fi
-  assert_eq "85: 偽cmux-task-declare.sh(固定パス \$HOME/work/tools/cmux-task-watch/経由)も呼ばれない" "0" "$marker_exists85b"
+  assert_eq "85: 偽cmux-task-declare.sh(固定パス \$HOME/work/takumi009-ai-env/cmux/経由)も呼ばれない" "0" "$marker_exists85b"
 
   state_exists85=0
   if [ -e "$STATE85" ]; then state_exists85=1; fi

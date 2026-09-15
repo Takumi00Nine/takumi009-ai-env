@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-14
+updated: 2026-09-15
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -64,10 +64,10 @@ aliases:
 5. `scripts/update-sub.sh --resync`（1 で pull 済み＝HEAD 不変。update-sub.sh は HEAD 不変でも settings.json 再生成・職種定義 symlink 再同期・管理 symlink の drift 自動収束を毎回行うが、Preferences 再同期は `--resync` を付けたときだけ追加で走る。config.toml の再生成は HEAD が進んだときだけで、この流れでは手順6の install-sub.sh 再実行で生成される）
 6. 新しいフック・職種定義が届いた版では `scripts/install-sub.sh` を再実行（symlink 配置・settings.json 再生成。既存プロファイルには触れない。`AGENTS: dangling` が出たら表示されたファイルを削除）
 7. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
-8. **cmux Dock の「Next Task」をサブ機でも出す（任意・dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。部品は dotfiles 側にある（`cmux/cmux-task-watch/`・共有 lib・`dock.json` の4枠目）。
-   - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は `scripts/install-sub.sh --with-dotfiles`）。install.sh が `~/.config/cmux/dock.json` の symlink・`~/work/tools/cmux-next-watch` の symlink・dock-guard LaunchAgent を整える。
-   - `mkdir -p ~/work/tools && ln -sfn ~/work/dotfiles/cmux/cmux-task-watch ~/work/tools/cmux-task-watch`（⚠️ `dock.json` の Next Task 枠は `~/work/tools/cmux-task-watch/cmux-task-watch.sh` を起動するが、install.sh はこの symlink を作らない＝手作業。2026-09-10 時点）
-   - cmux を再起動 → dock-guard が Usage／Next Project／Next Task／System の4枠へ再シードする。
-   - セッション中にリーダーが `~/work/tools/cmux-task-watch/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言はフック化しない＝[[Decisions/2026-09-09-cmux-session-todo-operation]]）。
+8. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/work/takumi009-ai-env/cmux/`、描画側（Dock 常駐）は dotfiles の `~/work/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。
+   - `cd ~/work/takumi009-ai-env && git pull --ff-only && scripts/install-main.sh`（供給側の実体を配置。ai-env 未導入機は Dock 側が縮退表示）
+   - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は `scripts/install-sub.sh --with-dotfiles`）。install.sh が `~/.config/cmux/dock.json` の symlink・dock-guard LaunchAgent を整える。
+   - cmux を再起動 → dock-guard が Usage／Project／Task／System の4枠へ再シードする。
+   - セッション中にリーダーが `~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言はフック化しない＝[[Decisions/2026-09-09-cmux-session-todo-operation]]）。
 
 ⚠️ update-sub.sh の失敗文面は原因を「配役表の machine_role が sub でない」と示すが、実際の起点は「プロファイルが旧 schema で固定キーが unknown 扱い」でも同じ文面になる（resolver の stderr は捨てられる）。まず resolve を直接叩いて何が読めているかを見る。

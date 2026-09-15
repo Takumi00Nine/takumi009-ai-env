@@ -1,6 +1,6 @@
 ---
 date: 2026-09-06
-updated: 2026-09-14
+updated: 2026-09-16
 tags: [preference, core, worker, roles, conduct]
 project: takumi009-ai-env
 related:
@@ -50,6 +50,7 @@ aliases:
 ## 5. 安全
 - 破壊的操作（`launchctl bootout/load`・`kill`・`rm -rf`・インストール系・常駐設定の変更）を含む可能性があるスクリプト・コマンドは、実行前に中身を確認し、隔離（sandbox・temp HOME）できる場合だけ隔離して実行する。隔離できなければ実行せずコマンド案として報告する。読み取り系のコマンドや、破壊的操作を含まないことが明らかな自作の単体テストは、この確認を省いてそのまま実行してよい。実行を主務とする職種（verifier・operator）は、職種定義のより厳しい規定に従う。
 - 認証情報・シークレットを出力・成果物・ログに含めない（絶対厳守③）。
+- **テスト・ゲート・検証から installer（dotfiles `install.sh`・ai-env `install-main.sh`／`install-sub.sh`）を呼ぶときは、HOME の差し替えだけでは実 launchd を隔離できないので、installer 自身が用意する `SKIP_LAUNCHCTL=1`（＋`LAUNCHCTL_TIMEOUT_SECS=1`）を必ず渡す。`check-drift.sh` を呼ぶときは PATH 先頭に偽 `launchctl`。実 `$HOME`・実 launchd・実 cmux ソケット・実 git を書き換える経路が無いことを投入前に棚卸しする**（2026-09-15 実機で 2 件発生＝[[Knowledge/launchctl-enable-pitfalls]]）。
 
 ## 6. 検証（リーダーが起動する）
 - 検証を起動するのはリーダー。工程の成果物が完成した時点で1回起動する（単独モードでは検証職を立てない）。

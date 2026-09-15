@@ -1,6 +1,6 @@
 ---
 date: 2026-06-28
-updated: 2026-07-21
+updated: 2026-09-15
 tags: [preference, tools, workflow, scripts]
 project: meta
 related:
@@ -20,6 +20,7 @@ aliases:
 - **候補級（もしかしたら使えるかも）**: `~/work/tools/worker-scripts/<YYYY-MM-DD>/`（日付フォルダ・ワーカー終業時退避＝[[Preferences/coding-delegation]]。汎用に化けたら tools/ へ、特定プロジェクト専用と判明したらそのプロジェクトへ昇格）
 - **tools/ 配下は自由に育ててよい（2026-07-21 本人方針）**: 既存の汎用ツールへの機能追加（プロジェクトのニーズ由来の機能も含む）を柔軟に**許可・推奨**する。専用スクリプトを新設するより、汎用ツール側にオプションとして取り込む（成功例＝pixel-finisher への `--key auto` 追加）。守るのは2点だけ: ①既存機能の後方互換（回帰テスト・既存成果物の再現一致で担保）②変更したら [[Knowledge/tools-inventory]] を更新。
 - **例外**: AI 環境の一部として再現すべきツールは takumi009-ai-env（基本パッケージ）へ、メイン専用の個人ツールは私的パッチへ置く（判定則＝[[Preferences/coding-delegation]]「AI本体／部品」）。
+- **例外**: cmux の Dock 常駐（Project／Task 枠）は ai-env（供給側）と dotfiles（描画側）が配る構成部品であり `~/work/tools/` 集約の対象外（2026-09-15 本人裁定）。
 - 再編の経緯＝[[Decisions/2026-07-21-work-projects-tools-restructure]]
 
 ## 適用

@@ -64,7 +64,12 @@ _pid_lock_fingerprint() {
   # とインタラクティブシェルのja_JP.UTF-8など）だと、同一プロセスでも表示
   # 文字列が変わり指紋不一致＝誤stale判定になりうる。生成環境を固定すれば
   # 呼び出し元のロケール設定に関わらず常に同じ文字列になる）。
-  fp="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null)" || return 1
+  # 検証1巡目 MAJOR #13: 実`ps`はサンドボックス環境で権限制限されて失敗し
+  # うる（`-p`によるプロセス選択がsyscallレベルで拒否される等）ため、
+  # 「指紋あり」「FINGERPRINT-UNAVAILABLE」の両経路をテストから決定的に
+  # 再現できるよう、実行するpsバイナリを`${PID_LOCK_PS_BIN:-ps}`で
+  # 差し替え可能にする（既定は素の`ps`のまま・本番挙動は不変）。
+  fp="$(LC_ALL=C TZ=UTC "${PID_LOCK_PS_BIN:-ps}" -o lstart= -p "$pid" 2>/dev/null)" || return 1
   fp="$(printf '%s' "$fp" | tr -s '[:space:]' ' ')"
   fp="${fp# }"; fp="${fp% }"
   [[ -n "$fp" ]] || return 1

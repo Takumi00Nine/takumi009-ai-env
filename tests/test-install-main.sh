@@ -309,6 +309,16 @@ echo "=== 5. settings.jsonに登録済みの全フックがinstall-main.shでも
     "$(readlink "$FAKE_HOME/.claude/hooks/task-pane-resolve.sh")"
   assert_true "task-pane-resolve.sh に実行権限が付与されている" \
     "$([[ -x "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" ]] && echo 1 || echo 0)"
+  # cmux-session-todo v3（供給側・§28.2）: cmux/ 配下の3本は symlink せず
+  # repo内の実体を絶対パスで指す（tools の symlink 作成は足さない＝設計
+  # §28.2 根拠3・§36 担当Jの表）。ここでは chmod 一覧への追加漏れが無い
+  # ことだけを見る（AC-98の「6パスが実行可能」のうち、この2本＋宣言CLI分）。
+  assert_true "cmux-task-model.sh に実行権限が付与されている（cmux-session-todo v3・AC-98）" \
+    "$([[ -x "$REPO_ROOT/cmux/cmux-task-model.sh" ]] && echo 1 || echo 0)"
+  assert_true "cmux-next-model.sh に実行権限が付与されている（cmux-session-todo v3・AC-98）" \
+    "$([[ -x "$REPO_ROOT/cmux/cmux-next-model.sh" ]] && echo 1 || echo 0)"
+  assert_true "cmux-task-declare.sh に実行権限が付与されている（cmux-session-todo v3・AC-98）" \
+    "$([[ -x "$REPO_ROOT/cmux/cmux-task-declare.sh" ]] && echo 1 || echo 0)"
   # ⚠️ 上の「実行権限が付与されている」系アサーションは、install-main.shの
   # chmod一覧への追加漏れを検出できない（本テストは実repo（$REPO_ROOT）の
   # ファイルを[[ -x ]]で見るだけで、repo上のファイルは最初から実行可能な
