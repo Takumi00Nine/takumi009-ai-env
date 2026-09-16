@@ -85,6 +85,7 @@ aliases:
 
 呼び方: チームメイト＝「Spawn a teammate using the implementer agent type…」／サブエージェント＝Agent ツールの subagent_type。
 7. **配役の指定＝正本は配役表**。選択・起動条件は [[Preferences/core-workflow]] §1 spawn条文に従う。属性の正本はモデル定義ファイル（[[Preferences/model-definitions-sample]]）。選んだ候補を実agents-dir付きの `resolve-candidate` で解決し、subagentでは返却された `AGENT_MODEL` をAgentの `model` へ明示する。external-cliでは既存 `CODEX_ARGS` を所定のwrapperへ渡す。命名は `<配役>-<職種名>` とし、配役部分を実際の選択に合わせる。名前だけを実効モデルの証拠にしない。判断材料は [[Preferences/model-catalog]] と【使用率】ブロック。
+8. **起動と依頼を分ける（常駐基準・2026-09-16 本人決定）**: すべてのワーカーは常駐前提で起動する。起動プロンプトに書くのは「職種の確認・全依頼に共通する制約（上記 5〜7＝報告書式と報告先・ツール境界・配役）・待機指示」だけで、**個別の依頼（上記 1〜4＝背景・対象パス・担当範囲・受入条件・参照ノート）は起動後に SendMessage で渡す**。起動プロンプトに最初の依頼を混ぜない（個体の文脈に最後まで残り、後の依頼まで引きずる）。「単発」の区分は設けない＝要件・設計も検証巡の差し戻しで同じ個体に戻るため常駐と同じ扱い。起動1往復分のコストは許容する。理由＝[[Decisions/2026-09-16-spawn-then-assign]]。
 
 **モデル指定は「受理された」ことと「意図どおり解決された」ことは別**（詳細＝[[Knowledge/model-param-accepted-vs-resolved]]）。実効モデルの確認手段: リーダー行＝`/status`・ワーカー行（named/cmux・in-process とも）＝ワーカー別トランスクリプトの `model` フィールドが正本。ペイン先頭のモデル表記はペイン運用時のみ存在し、in-process（既定）では無い（2026-09-02 実測）。ピン留め効果が未検証の指定経路（例: settings.json 単体経由）ではエイリアス指定を避け、疑わしければ本人へ確認する。
 
