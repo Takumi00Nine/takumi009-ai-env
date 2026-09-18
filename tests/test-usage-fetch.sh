@@ -803,32 +803,38 @@ echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（
 }
 {
   # (5) 表示ツール互換（AC-98①相当・検証職1巡目MAJOR-4対応で現物実行へ
-  # 変更）: テスト側でjqの読み方を再実装するのではなく、現物
-  # `~/work/claude-codex-usage/tmux-usage.sh`（読み取り専用・無改修）を
-  # 拡張後のキャッシュに対して実際に実行し、exit 0・ERR非表示・実値の
-  # 反映を確認する。
+  # 変更。検証職1巡目VU-M2対応で退役済み旧repo `~/work/claude-codex-usage/
+  # tmux-usage.sh` から、dotfiles へ取り込み済みの現物
+  # `cmux/cmux-usage-watch.sh`（読み取り専用・無改修）へ差し替え）:
+  # テスト側でjqの読み方を再実装するのではなく、拡張後のキャッシュに
+  # 対して --once（1フレームだけ描画して終了）で実際に実行し、
+  # exit 0・ERR非表示・Claude/Codex両行の反映を確認する。表示スクリプト
+  # の既定パスは $HOME/work/dotfiles/cmux/cmux-usage-watch.sh。worktree等
+  # で差し替えるときは AIENV_USAGE_DISPLAY_SCRIPT を渡す。
   E="$(new_env)"; load_entry_for "$E"; reset_stubs; valid_claude_token
   STUB_CODEX_RESULT_LINE="$(codex_success_result_line)"
   refresh_service codex >/dev/null
   STUB_CURL_STATUS=200
   STUB_CURL_BODY="$(claude_success_body)"
   refresh_service claude >/dev/null
-  TMUX_USAGE_SH="$HOME_REAL/work/claude-codex-usage/tmux-usage.sh"
-  if [ ! -f "$TMUX_USAGE_SH" ]; then
-    echo "  未実施 - B1-c⑤表示ツール互換: $TMUX_USAGE_SH が無い（別repo未クローン環境のためスキップ）"
+  DISPLAY_SH="${AIENV_USAGE_DISPLAY_SCRIPT:-$HOME_REAL/work/dotfiles/cmux/cmux-usage-watch.sh}"
+  if [ ! -f "$DISPLAY_SH" ]; then
+    echo "  未実施 - B1-c⑤表示ツール互換: $DISPLAY_SH が無い（dotfiles未導入環境のためスキップ）"
   else
     TMUX_XDG_CACHE="$(mktemp -d)"
     TMUX_XDG_CONFIG="$(mktemp -d)"
     mkdir -p "$TMUX_XDG_CACHE/claude-codex-usage"
     cp "$CODEX_CACHE" "$TMUX_XDG_CACHE/claude-codex-usage/codex-cache.json"
     cp "$CLAUDE_CACHE" "$TMUX_XDG_CACHE/claude-codex-usage/claude-cache.json"
-    tmux_out="$(XDG_CACHE_HOME="$TMUX_XDG_CACHE" XDG_CONFIG_HOME="$TMUX_XDG_CONFIG" HOME="$HOME_REAL" bash "$TMUX_USAGE_SH" 2>&1)"
+    tmux_out="$(XDG_CACHE_HOME="$TMUX_XDG_CACHE" XDG_CONFIG_HOME="$TMUX_XDG_CONFIG" HOME="$HOME_REAL" bash "$DISPLAY_SH" --once 2>&1)"
     tmux_rc=$?
-    assert_eq "B1-c⑤表示ツール互換: 現物tmux-usage.shの実行はexit 0" "0" "$tmux_rc"
+    assert_eq "B1-c⑤表示ツール互換: 現物cmux-usage-watch.shの実行はexit 0" "0" "$tmux_rc"
     assert_true "B1-c⑤表示ツール互換: ERR表示になっていない" \
       "$(printf '%s' "$tmux_out" | grep -q "ERR" && echo 0 || echo 1)"
-    assert_true "B1-c⑤表示ツール互換: Codex側(CX)の実値が反映される" \
-      "$(printf '%s' "$tmux_out" | grep -q "CX" && echo 1 || echo 0)"
+    assert_true "B1-c⑤表示ツール互換: Claude行が出る" \
+      "$(printf '%s' "$tmux_out" | grep -q "Claude" && echo 1 || echo 0)"
+    assert_true "B1-c⑤表示ツール互換: Codex行が出る（実値が反映される）" \
+      "$(printf '%s' "$tmux_out" | grep -q "Codex" && echo 1 || echo 0)"
     rm -rf "$TMUX_XDG_CACHE" "$TMUX_XDG_CONFIG"
   fi
   rm -rf "$E"

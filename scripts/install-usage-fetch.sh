@@ -3,6 +3,11 @@
 # 旧ジョブ（com.claude-codex-usage.refresh）からの移行・巻き戻し・復旧
 # （B1-b・使用率取得器移設）。
 #
+# ⚠️ 旧リポジトリ claude-codex-usage 自体は退役済み（2026-09-18・表示側は
+# dotfiles へ取り込み移設）。OLD_REPO_DIR 配下が存在しないのは平常状態で、
+# その場合は巻き戻し（--rollback）の P5 経路（戻す手段なし＝新しい取得器を
+# 直す）を辿る。OLD_REPO_DIR 参照自体は巻き戻し経路として本ファイルに残す。
+#
 # 要件＝ローカルLLM段階経路-要件-2026-09-03.md v20 FR-77b・AC-98。
 # 設計＝docs/core-split/使用率取得器移設B1b-設計-2026-09-08.md §2.4・§3。
 #
@@ -67,6 +72,7 @@ STATE_FILE="$STATE_DIR/state.json"
 OLD_REPO_DIR="${AIENV_USAGE_OLD_REPO_DIR:-$HOME/work/claude-codex-usage}"
 OLD_REPO_REFRESH="$OLD_REPO_DIR/refresh.sh"
 OLD_REPO_INSTALLER="$OLD_REPO_DIR/install.sh"
+DOTFILES_USAGE_SCRIPT="${AIENV_USAGE_DISPLAY_SCRIPT:-$HOME/work/dotfiles/cmux/cmux-usage-watch.sh}"
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-codex-usage"
 CLAUDE_CACHE="$CACHE_DIR/claude-cache.json"
 CODEX_CACHE="$CACHE_DIR/codex-cache.json"
@@ -631,11 +637,21 @@ step_c_verify_cache() {
 # ============================================================
 
 capture_display_now() {
+  local found=0
   if [ -x "$OLD_REPO_DIR/tmux-usage.sh" ]; then
+    found=1
     "$OLD_REPO_DIR/tmux-usage.sh" 120 2>&1 || true
   fi
   if [ -x "$OLD_REPO_DIR/cmux-usage-watch.sh" ]; then
+    found=1
     "$OLD_REPO_DIR/cmux-usage-watch.sh" --once 2>&1 || true
+  fi
+  if [ -x "$DOTFILES_USAGE_SCRIPT" ]; then
+    found=1
+    "$DOTFILES_USAGE_SCRIPT" --once 2>&1 || true
+  fi
+  if [ "$found" = "0" ]; then
+    log "表示比較なし（$OLD_REPO_DIR 配下・$DOTFILES_USAGE_SCRIPT のいずれも見つかりません）。"
   fi
 }
 
@@ -809,7 +825,11 @@ cmd_confirm() {
     rmdir "$(dirname "$safe_dest")" 2>/dev/null || true
   fi
   state_apply '.phase="confirmed"' || fail "phase更新に失敗しました（退避物の削除自体は完了しています）。"
-  log "確定しました。⚠️ 旧repo（${OLD_REPO_DIR}）の取得コードはまだ残っています（本人が別PRで表示専用化するまでは ${OLD_REPO_INSTALLER} の再実行で復元できます）。"
+  if [ -d "$OLD_REPO_DIR" ]; then
+    log "確定しました。⚠️ 旧repo（${OLD_REPO_DIR}）はこの機ではまだ残っています。${OLD_REPO_INSTALLER} の再実行で復元できます。"
+  else
+    log "確定しました。旧repo（${OLD_REPO_DIR}）は退役済みで不在です。復元経路はありません（P5）。"
+  fi
 }
 
 # ============================================================
@@ -952,7 +972,7 @@ cmd_rollback() {
     if [ "$(old_code_present)" = "true" ]; then
       fail "退避物がありません。旧repoの取得コード（${OLD_REPO_REFRESH}）はまだ存在するため、旧repoの install.sh を再実行すればplistを作り直せます（P4）。⚠️ 手順の順序を守ってください＝①launchctl bootout ${DOMAIN}/${LABEL} ②launchctl disable ${DOMAIN}/${LABEL} ③新plistを退避 ④NEW_ACTIVEが偽であることを確認 ⑤（そのうえで）${OLD_REPO_INSTALLER} を実行 ⑥キャッシュが更新されることを確認（新を止める前に旧installerを実行すると即座に二重取得になります）。"
     else
-      fail "退避物がなく、旧repoの取得コード（${OLD_REPO_REFRESH}）も見つかりません（P5＝戻す手段がありません）。対処は「新しい取得器を直す」ことです。旧へ戻す道はありません。"
+      fail "退避物がなく、旧repoの取得コード（${OLD_REPO_REFRESH}）も見つかりません（旧repo claude-codex-usageは退役済みのため不在が正常です。P5＝戻す手段がありません）。対処は「新しい取得器を直す」ことです。旧へ戻す道はありません。"
     fi
   fi
 

@@ -8,11 +8,13 @@
       ローカルLLM段階経路-要件-2026-09-03.md（v20）FR-104・FR-108①②・FR-116・
       AC-91・AC-95。
 
-読み取り元（そのまま使う・触らない）: `~/work/claude-codex-usage` の
-LaunchAgent（1分毎）が書くキャッシュ
+読み取り元（そのまま使う・触らない）: 取得器＝ai-env の `scripts/usage-fetch.sh`
+（導入＝`scripts/install-usage-fetch.sh`。LaunchAgent `com.takumi009.usage-fetch`・
+1分毎）が書くキャッシュ
   <cache_dir>/claude-cache.json
   <cache_dir>/codex-cache.json
-既定 cache_dir = ${XDG_CACHE_HOME:-$HOME/.cache}/claude-codex-usage。
+既定 cache_dir = ${XDG_CACHE_HOME:-$HOME/.cache}/claude-codex-usage（旧・退役済み
+リポジトリ claude-codex-usage に由来する名前だが、互換のため据え置き）。
 環境変数 AIENV_USAGE_CACHE_DIR で上書き可（テスト用にfixtureディレクトリを
 差せるように）。
 
@@ -131,7 +133,8 @@ WINDOW_HUMAN_LABEL = {
 # 伏せる」という否定リスト方式だったが、これは①危険語の網羅が原理的に
 # 不可能（`password`・`Authorization: Basic`・`ghp_`・`AKIA`・日本語の
 # 「パスワード」等、リストに無い語は素通りする）②実際の取得器
-# （~/work/claude-codex-usage/refresh.sh）が書く`last_error`はそもそも
+# （現在: ai-env `scripts/usage-fetch.sh`。当時は旧・退役済みリポジトリ
+# claude-codex-usageの`refresh.sh`）が書く`last_error`はそもそも
 # 自由文字列ではなくオブジェクト`{at,type,message,status,attempts}`であり、
 # 旧実装（文字列専用）は常にNoneを返して黙って情報を捨てていた、という
 # 二重の欠陥を持っていた（実測: refresh.sh 253〜297行目・write_failure_cache
@@ -660,9 +663,9 @@ def _human_line_for_subscription(pool: dict, now: int) -> str:
     name = POOL_HUMAN_LABEL[pool["pool_ref"]]
     state = pool["usage_state"]
     if state == "missing":
-        return f"{name}: 取得できません（キャッシュ無し＝claude-codex-usage 未導入。導入手順: README §使用率）"
+        return f"{name}: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: scripts/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
     if state == "error":
-        return f"{name}: 取得できません（キャッシュが壊れています。導入手順: README §使用率）"
+        return f"{name}: 取得できません（キャッシュが壊れています。導入手順: README §使用率取得器）"
 
     segments = [_format_window_segment(w, now) for w in pool["windows"]]
     age_min = pool["age_seconds"] // 60

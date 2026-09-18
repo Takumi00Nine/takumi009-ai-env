@@ -316,7 +316,7 @@ echo "=== FX-3: claudeのみ欠落（陽性） ==="
   human3="$(run_human "$FX3")"
   n_lines3="$(printf '%s\n' "$human3" | wc -l | tr -d ' ')"
   assert_eq "FX-3 欠落時も人可読は3行のまま（行数を変えない）" "3" "$n_lines3"
-  assert_contains "FX-3 Claude枠が導入手順つきの固定文" "$human3" "Claude枠: 取得できません（キャッシュ無し＝claude-codex-usage 未導入。導入手順: README §使用率）"
+  assert_contains "FX-3 Claude枠が導入手順つきの固定文" "$human3" "Claude枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: scripts/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
 }
 
 # ============================================================
@@ -359,7 +359,7 @@ echo "=== FX-5: 壊れたJSON（陽性） ==="
   human5="$(run_human "$FX5")"
   n_lines5="$(printf '%s\n' "$human5" | wc -l | tr -d ' ')"
   assert_eq "FX-5 壊れたJSONでも人可読は3行のまま" "3" "$n_lines5"
-  assert_contains "FX-5 Claude枠が「壊れています」の固定文" "$human5" "Claude枠: 取得できません（キャッシュが壊れています。導入手順: README §使用率）"
+  assert_contains "FX-5 Claude枠が「壊れています」の固定文" "$human5" "Claude枠: 取得できません（キャッシュが壊れています。導入手順: README §使用率取得器）"
 }
 
 # ============================================================

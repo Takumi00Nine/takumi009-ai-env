@@ -3124,8 +3124,8 @@ echo "=== 80. B1a「使用率の見える化」AC-91④⑤: キャッシュ欠�
   ctx80="$(AIENV_USAGE_CACHE_DIR="$UC80" run_bootstrap "$VD80")"
   assert_contains "80: キャッシュ欠落でも必読ファイル案内は出る（起動は止まらない）" "$ctx80" "① タスクに着手する前に"
   assert_contains "80: 【使用率】見出しは出る" "$ctx80" "【使用率】"
-  assert_contains "80: Claude枠は未導入の固定文言" "$ctx80" "Claude枠: 取得できません（キャッシュ無し＝claude-codex-usage 未導入。導入手順: README §使用率）"
-  assert_contains "80: Codex枠は未導入の固定文言" "$ctx80" "Codex枠: 取得できません（キャッシュ無し＝claude-codex-usage 未導入。導入手順: README §使用率）"
+  assert_contains "80: Claude枠は未導入の固定文言" "$ctx80" "Claude枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: scripts/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
+  assert_contains "80: Codex枠は未導入の固定文言" "$ctx80" "Codex枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: scripts/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
   n_unlimited80="$(printf '%s\n' "$ctx80" | grep -Fxc 'unlimited（Bedrock・ローカル）: 使用率なし' || true)"
   assert_eq "80: unlimited行はちょうど1行（欠落でも行数を変えない）" "1" "$n_unlimited80"
 
