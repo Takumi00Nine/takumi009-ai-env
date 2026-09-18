@@ -105,73 +105,187 @@ assert_frame_reason() {
   run_frame_raw "$vault" "$state_file"
   assert_eq "$desc: rc=0" "0" "$(cat "$FRAME_RC")"
   assert_eq "$desc: フレームが版宣言+R+Eの3行" "3" "$(wc -l < "$FRAME_OUT" | tr -d ' ')"
-  assert_eq "$desc: #V行" "#V	cmux-dock-frame/1	Task" "$(sed -n '1p' "$FRAME_OUT")"
+  assert_eq "$desc: #V行" "#V	cmux-dock-frame/2	Task" "$(sed -n '1p' "$FRAME_OUT")"
   assert_eq "$desc: R行の理由が「${expected}」" "$expected" "$(frame_reason)"
   assert_eq "$desc: E行" "E	1" "$(sed -n '3p' "$FRAME_OUT")"
 }
 
 # ==========================================================================
-# 表示基底（V-1・W-1・S-1）
+# 表示基底（V-1・W-1・S-1・v4＝P-6′と一致する fixture）
 # ==========================================================================
 reset_stub_state "$STUB_STATE"
 mk_note_V1 "$VAULT"
 mk_decl_single "v1proj" "$STATE_FILE"
 
-echo "=== 基底: --frame が P-6 の形と一致する ==="
+echo "=== 基底/AC-125: --frame が P-6′ の形とリテラル一致する ==="
 run_frame_raw "$VAULT" "$STATE_FILE"
 assert_eq "基底: rc=0" "0" "$(cat "$FRAME_RC")"
-expected_frame='#V	cmux-dock-frame/1	Task
-H	▶	v1proj		v2	1/3
-V	v1	✅	3/3
-V	v2	▶	1/3
-V	v3	・	0/4
-C	1	[x]	要件定義
-C	2	[/]	設計
-C	3	[ ]	実装
-X	2
-E	8'
-assert_eq "基底: --frame がリテラル一致" "$expected_frame" "$(cat "$FRAME_OUT")"
+expected_frame='#V	cmux-dock-frame/2	Task
+V	1	v2	1/3	cur	open
+C	[x]	要件定義
+C	[/]	設計
+C	[ ]	実装
+V	2	v3	0/4	-	fold
+D	1
+E	6'
+assert_eq "基底/AC-125: --frame がP-6′とリテラル一致" "$expected_frame" "$(cat "$FRAME_OUT")"
 
-echo "=== 基底: --list が v1/v2 と同一契約 ==="
+echo "=== 基底/AC-129: --list が5列でv1(fold・0/4)の子行4つも含む7行 ==="
 run_list_raw "$VAULT" "$STATE_FILE"
-expected_list='1	v2	[x]	要件定義
-2	v2	[/]	設計
-3	v2	[ ]	実装'
-assert_eq "基底: --list がリテラル一致" "$expected_list" "$(cat "$LIST_OUT")"
-assert_eq "基底: --list rc=0" "0" "$(cat "$LIST_RC")"
+expected_list='1	v2	1/3	[x]	要件定義
+1	v2	1/3	[/]	設計
+1	v2	1/3	[ ]	実装
+2	v3	0/4	[ ]	t1
+2	v3	0/4	[ ]	t2
+2	v3	0/4	[ ]	t3
+2	v3	0/4	[ ]	t4'
+assert_eq "基底/AC-129: --list がリテラル一致（foldのv3の子行4つも出る）" "$expected_list" "$(cat "$LIST_OUT")"
+assert_eq "基底/AC-129: --list rc=0" "0" "$(cat "$LIST_RC")"
 
-echo "=== N-2/AC-79相当: --frame の C 行 と --list の (番号,状態,本文) が完全一致 ==="
-frame_triple="$(awk -F '\t' '$1=="C"{print $2"\t"$3"\t"$4}' "$FRAME_OUT")"
-list_triple="$(awk -F '\t' '{print $1"\t"$3"\t"$4}' "$LIST_OUT")"
-assert_eq "N-2: --frame と --list の番号・状態・本文が一致" "$list_triple" "$frame_triple"
+echo "=== N-2′: --frame のV番号集合==--list第1列集合／openの版のC列がlistの同番号行と順序含め一致／foldの版の子行はlistだけに現れる ==="
+frame_v_nums="$(awk -F '\t' '$1=="V"{print $2}' "$FRAME_OUT" | sort -u)"
+list_nums_uniq="$(awk -F '\t' '{print $1}' "$LIST_OUT" | sort -u)"
+assert_eq "N-2′①(AC-90′①(MT)): --frameのV番号集合==--list第1列集合" "$list_nums_uniq" "$frame_v_nums"
+frame_open_triple="$(awk -F '\t' '
+  $1=="V" { num=$2; open=($6=="open") }
+  $1=="C" && open { print num"\t"$2"\t"$3 }
+' "$FRAME_OUT")"
+list_num1_triple="$(awk -F '\t' '$1==1{print $1"\t"$4"\t"$5}' "$LIST_OUT")"
+assert_eq "N-2′②(AC-90′①(MT)): openの版(番号1)のC行(状態,本文)がlistの番号1行(第4,5列)と順序含め一致" "$list_num1_triple" "$frame_open_triple"
+assert_true "N-2′③(AC-90′①(MT)): foldの版（番号2）の子行はlistだけに現れる（frameにC行が無くlistには4行ある）" \
+  "$([ "$(awk -F '\t' '$1=="C"' "$FRAME_OUT" | wc -l | tr -d ' ')" -eq 3 ] && [ "$(awk -F '\t' '$1==2' "$LIST_OUT" | wc -l | tr -d ' ')" -eq 4 ] && echo 1 || echo 0)"
 
-echo "=== AC-124①: 全版完了（V-10） → --frame は通常フレーム・--list は「全版完了」 ==="
-mk_note_V10 "$VAULT"
-mk_decl_single "v10proj" "$STATE_FILE"
+echo "=== AC-125: V-15はcurの版だけが番号1のV行1つ・D4 ==="
+reset_stub_state "$STUB_STATE"
+mk_note_V15 "$VAULT"
+mk_decl_single "v15proj" "$STATE_FILE"
 run_frame_raw "$VAULT" "$STATE_FILE"
-assert_eq "AC-124①: rc=0" "0" "$(cat "$FRAME_RC")"
-expected_v10='#V	cmux-dock-frame/1	Task
-H	✅	v10proj	全版完了		3/3
-V	v1	✅	2/2
-V	v2	✅	1/1
-V	v3	✅	3/3
-X	-
-E	5'
-assert_eq "AC-124①: 全版完了フレームがリテラル一致（子行0・X=-）" "$expected_v10" "$(cat "$FRAME_OUT")"
-assert_list_reason "AC-124①(--list)" "$VAULT" "$STATE_FILE" "全版完了"
+expected_v15_frame='#V	cmux-dock-frame/2	Task
+V	1	v2	5/12	cur	open
+C	[x]	t1
+C	[x]	t2
+C	[x]	t3
+C	[x]	t4
+C	[x]	t5
+C	[ ]	t6
+C	[ ]	t7
+C	[ ]	t8
+C	[ ]	t9
+C	[ ]	t10
+C	[/]	t11
+C	[ ]	t12
+D	4
+E	14'
+assert_eq "AC-125: V-15の--frameがリテラル一致" "$expected_v15_frame" "$(cat "$FRAME_OUT")"
 
-echo "=== AC-124②: [/]無し・未完版2つ（V-11） → 展開対象の版行の記号も・ ==="
+echo "=== AC-126: ▶（今の版）の3段判定 ==="
+mk_note_V1 "$VAULT"
+mk_decl_single "v1proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-126①: V-1（[/]あり）でcurは番号1(v2)" "1" "$(awk -F'\t' '$1=="V" && $5=="cur"{print $2}' "$FRAME_OUT")"
+
+mk_note_V19a "$VAULT"
+mk_decl_single "$V19A_SLUG" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-126②: V-19a（next:\"v2\"完全一致）でcurは番号2(v2)" "2" "$(awk -F'\t' '$1=="V" && $5=="cur"{print $2}' "$FRAME_OUT")"
+
 mk_note_V11 "$VAULT"
 mk_decl_single "v11proj" "$STATE_FILE"
 run_frame_raw "$VAULT" "$STATE_FILE"
-expected_v11='#V	cmux-dock-frame/1	Task
-H	・	v11proj	次: 	v1	0/1
-V	v1	・	0/1
-V	v2	・	0/1
-C	1	[ ]	a
-X	1
-E	5'
-assert_eq "AC-124②: [/]無しの正当フレームがリテラル一致（展開対象の版行も・）" "$expected_v11" "$(cat "$FRAME_OUT")"
+assert_eq "AC-126③: V-11（[/]無し・next:無し）でcurは番号1" "1" "$(awk -F'\t' '$1=="V" && $5=="cur"{print $2}' "$FRAME_OUT")"
+
+mk_note_V18 "$VAULT"
+mk_decl_single "$V18_SLUG" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-126④: V-18（[/]が2版）でcurは番号1（最初の[/]版=v1）" "1" "$(awk -F'\t' '$1=="V" && $5=="cur"{print $2}' "$FRAME_OUT")"
+
+mk_note_V19b "$VAULT"
+mk_decl_single "$V19B_SLUG" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-126⑤: V-19b（next:\"v\"は前方一致のみ・不一致）でcurは番号1" "1" "$(awk -F'\t' '$1=="V" && $5=="cur"{print $2}' "$FRAME_OUT")"
+
+mk_note_V19c "$VAULT"
+mk_decl_single "$V19C_SLUG" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-126⑥: V-19c（next:\"v1\"だがv1は完了済で候補外）でcurは番号1（=v2）" "1" "$(awk -F'\t' '$1=="V" && $5=="cur"{print $2}' "$FRAME_OUT")"
+
+echo "=== AC-127: 展開集合(OPEN = done>=1 ∨ [/])の判定 ==="
+mk_note_V11 "$VAULT"
+mk_decl_single "v11proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-127①: V-11の1番(cur・0/1・[/]なし)がfold" "fold" "$(awk -F'\t' '$1=="V" && $2==1{print $6}' "$FRAME_OUT")"
+assert_eq "AC-127①: V-11の1番のC行が0行" "0" "$(awk -F'\t' '$1=="V"{v=$2} $1=="C"{if(v==1) c++} END{print c+0}' "$FRAME_OUT")"
+
+mk_note_V20 "$VAULT"
+mk_decl_single "$V20_SLUG" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-127②: V-20の2番(v2・done1・非cur)がopen" "open" "$(awk -F'\t' '$1=="V" && $2==2{print $6}' "$FRAME_OUT")"
+assert_eq "AC-127②: V-20の2番のC行が2行" "2" "$(awk -F'\t' '$1=="V"{v=$2} $1=="C"{if(v==2) c++} END{print c+0}' "$FRAME_OUT")"
+assert_eq "AC-127③: V-20の3番(v3・0/1)がfold" "fold" "$(awk -F'\t' '$1=="V" && $2==3{print $6}' "$FRAME_OUT")"
+assert_eq "AC-127③: V-20の3番のC行が0行" "0" "$(awk -F'\t' '$1=="V"{v=$2} $1=="C"{if(v==3) c++} END{print c+0}' "$FRAME_OUT")"
+assert_eq "AC-127⑤: V-20の1番(v1・cur・[/]・0/2)がcur" "cur" "$(awk -F'\t' '$1=="V" && $2==1{print $5}' "$FRAME_OUT")"
+assert_eq "AC-127⑤: V-20の1番がopen" "open" "$(awk -F'\t' '$1=="V" && $2==1{print $6}' "$FRAME_OUT")"
+assert_eq "AC-127⑤: V-20の1番のC行が2行" "2" "$(awk -F'\t' '$1=="V"{v=$2} $1=="C"{if(v==1) c++} END{print c+0}' "$FRAME_OUT")"
+
+mk_note_V18 "$VAULT"
+mk_decl_single "$V18_SLUG" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-127④: V-18の2番(v2・[/]あり・done0・非cur)がopen" "open" "$(awk -F'\t' '$1=="V" && $2==2{print $6}' "$FRAME_OUT")"
+assert_eq "AC-127④: V-18の2番のC行が2行" "2" "$(awk -F'\t' '$1=="V"{v=$2} $1=="C"{if(v==2) c++} END{print c+0}' "$FRAME_OUT")"
+
+echo "=== AC-128: 完了件数(D)がfixtureごとに正しい・0/0の版も番号を持つ ==="
+mk_note_V1 "$VAULT"; mk_decl_single "v1proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-128: V-1のD" "1" "$(awk -F'\t' '$1=="D"{print $2}' "$FRAME_OUT")"
+
+mk_note_V15 "$VAULT"; mk_decl_single "v15proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-128: V-15のD" "4" "$(awk -F'\t' '$1=="D"{print $2}' "$FRAME_OUT")"
+
+mk_note_V10 "$VAULT"; mk_decl_single "v10proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-128: V-10のD" "3" "$(awk -F'\t' '$1=="D"{print $2}' "$FRAME_OUT")"
+
+mk_note_V11 "$VAULT"; mk_decl_single "v11proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-128: V-11のD" "0" "$(awk -F'\t' '$1=="D"{print $2}' "$FRAME_OUT")"
+
+mk_note_V5 "$VAULT"; mk_decl_single "v5proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-128: V-5のD" "1" "$(awk -F'\t' '$1=="D"{print $2}' "$FRAME_OUT")"
+expected_v5='#V	cmux-dock-frame/2	Task
+V	1	v2	0/0	cur	fold
+V	2	v3	0/1	-	fold
+D	1
+E	3'
+assert_eq "AC-128: V-5のフレームがリテラル一致(0/0の版v2が番号1・cur・fold・C0行)" "$expected_v5" "$(cat "$FRAME_OUT")"
+
+echo "=== AC-129: --list の5列・0/0の版は状態・本文が「-」の1行 ==="
+run_list_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-129: V-5の--listが2行(0/0の版は状態・本文-)" '1	v2	0/0	-	-
+2	v3	0/1	[ ]	b' "$(cat "$LIST_OUT")"
+
+echo "=== AC-124′①: 全版完了（V-10） → --frame はV0行・D3・E1の通常フレーム・--list は「全版完了」 ==="
+mk_note_V10 "$VAULT"
+mk_decl_single "v10proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "AC-124′①: rc=0" "0" "$(cat "$FRAME_RC")"
+expected_v10='#V	cmux-dock-frame/2	Task
+D	3
+E	1'
+assert_eq "AC-124′①: 全版完了フレームがリテラル一致（V行0・D3・E1）" "$expected_v10" "$(cat "$FRAME_OUT")"
+assert_list_reason "AC-124′①(--list)" "$VAULT" "$STATE_FILE" "全版完了"
+
+echo "=== AC-124′②: [/]無し・未完版2つとも未着手（V-11） → 両方cur/-・fold・C0行・D0 ==="
+mk_note_V11 "$VAULT"
+mk_decl_single "v11proj" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+expected_v11='#V	cmux-dock-frame/2	Task
+V	1	v1	0/1	cur	fold
+V	2	v2	0/1	-	fold
+D	0
+E	3'
+assert_eq "AC-124′②: [/]無しの正当フレームがリテラル一致（両版fold・C0行）" "$expected_v11" "$(cat "$FRAME_OUT")"
 
 echo "=== AC-13: 陰性4件（V-2/V-3/V-4/V-8）が理由フレーム・--list理由行・rc一致 ==="
 mk_note_V2 "$VAULT"; mk_note_V3 "$VAULT"; mk_note_V4 "$VAULT"; mk_note_V8 "$VAULT"
@@ -248,13 +362,13 @@ rm -f "$STUB_STATE/fail_identify"
 run_frame_raw "$VAULT" "$STATE_FILE"
 assert_eq "AC-26(回復後): 直前の理由フレームを持ち越さず通常表示に戻る" "$expected_frame" "$(cat "$FRAME_OUT")"
 
-echo "=== AC-62: --list の制御文字除去（V-6拡張・4列固定・コードポイント単位） ==="
+echo "=== AC-62′: --list の制御文字除去（V-6拡張・5列固定・コードポイント単位） ==="
 mk_note_V6 "$VAULT"
 mk_decl_single "v6proj" "$STATE_FILE"
 run_list_raw "$VAULT" "$STATE_FILE"
-assert_eq "AC-62: --list 終了コード0" "0" "$(cat "$LIST_RC")"
+assert_eq "AC-62′: --list 終了コード0" "0" "$(cat "$LIST_RC")"
 ac62_nlines="$(wc -l < "$LIST_OUT" | tr -d ' ')"
-ac62_bad_cols="$(awk -F '\t' 'NF!=4' "$LIST_OUT" | wc -l | tr -d ' ')"
+ac62_bad_cols="$(awk -F '\t' 'NF!=5' "$LIST_OUT" | wc -l | tr -d ' ')"
 ac62_bad_cp="$(python3 -c "
 import sys
 bad = 0
@@ -268,17 +382,38 @@ with open('$LIST_OUT', encoding='utf-8') as f:
                     bad += 1
 print(bad)
 ")"
-assert_eq "AC-62: --list の全行が4列のまま" "0" "$ac62_bad_cols"
-assert_eq "AC-62: 4列に分解した各データ列に制御文字コードポイントが無い" "0" "$ac62_bad_cp"
-assert_true "AC-62: 出力が1行以上ある（検査が空振りでない）" "$([ "$ac62_nlines" -gt 0 ] && echo 1 || echo 0)"
+assert_eq "AC-62′: --list の全行が5列のまま" "0" "$ac62_bad_cols"
+assert_eq "AC-62′: 5列に分解した各データ列に制御文字コードポイントが無い" "0" "$ac62_bad_cp"
+assert_true "AC-62′: 出力が1行以上ある（検査が空振りでない）" "$([ "$ac62_nlines" -gt 0 ] && echo 1 || echo 0)"
 
-echo "=== AC-64: V-18: [/]を持つ版が2つあるとき最初の版の子行だけが番号を持つ ==="
+echo "=== AC-64′: V-18: [/]を持つ版が2つあるとき両方openになる（cur=最初の[/]版だけ） ==="
 mk_note_V18 "$VAULT"
 mk_decl_single "$V18_SLUG" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+expected_v18='#V	cmux-dock-frame/2	Task
+V	1	v1	1/3	cur	open
+C	[x]	a
+C	[/]	b
+C	[ ]	c
+V	2	v2	0/2	-	open
+C	[/]	d
+C	[ ]	e
+D	0
+E	8'
+assert_eq "AC-64′: --frameがリテラル一致（v2はdone0でも[/]でopen）" "$expected_v18" "$(cat "$FRAME_OUT")"
 run_list_raw "$VAULT" "$STATE_FILE"
-assert_eq "AC-64: --list 終了コード0" "0" "$(cat "$LIST_RC")"
-assert_eq "AC-64: --listの行数が最初の[/]版(v1・3件)と一致" "3" "$(wc -l < "$LIST_OUT" | tr -d ' ')"
-assert_eq "AC-64: 全行の版名がv1" "v1" "$(awk -F'\t' '{print $2}' "$LIST_OUT" | sort -u)"
+assert_eq "AC-64′: --list 終了コード0" "0" "$(cat "$LIST_RC")"
+assert_eq "AC-64′: --listの行数が5行（v1の3件+v2の2件）" "5" "$(wc -l < "$LIST_OUT" | tr -d ' ')"
+assert_eq "AC-64′: 第2列がv1 v1 v1 v2 v2の順" "v1
+v1
+v1
+v2
+v2" "$(awk -F'\t' '{print $2}' "$LIST_OUT")"
+assert_eq "AC-64′: 第4列が[x] [/] [ ] [/] [ ]の順" '[x]
+[/]
+[ ]
+[/]
+[ ]' "$(awk -F'\t' '{print $4}' "$LIST_OUT")"
 
 echo "=== AC-65/AC-81: caller≠focused → --list は対象不一致（--frameはfocused側=W-10相当） ==="
 reset_stub_state "$STUB_STATE"
@@ -289,7 +424,7 @@ date: 2026-01-01
 ---
 ## Tasks
 
-### v1
+### proj2ver
 - [ ] only task
 EOF
 mk_decl_pair "UUID-AAA" "v1proj" "UUID-BBB" "proj2" "$STATE_FILE"
@@ -300,7 +435,9 @@ echo "workspace:1" > "$STUB_STATE/caller_ref"
 echo "workspace:2" > "$STUB_STATE/focused_ref"
 assert_list_reason "AC-65" "$VAULT" "$STATE_FILE" "対象不一致"
 run_frame_raw "$VAULT" "$STATE_FILE"
-assert_contains "AC-65: --frameはfocused側(proj2)を表示" "$(cat "$FRAME_OUT")" "proj2"
+# v4はフレームにslug(proj2)を出さない（H行廃止）ため、proj2ノート固有の
+# 版名で focused 側(proj2)のデータであることを確認する。
+assert_contains "AC-65: --frameはfocused側(proj2)を表示" "$(cat "$FRAME_OUT")" "proj2ver"
 
 echo "workspace:2" > "$STUB_STATE/caller_ref"
 echo "workspace:1" > "$STUB_STATE/focused_ref"
@@ -341,12 +478,12 @@ mk_note_V8 "$VAULT"
 mk_decl_single "v8proj" "$STATE_FILE"
 assert_list_reason "AC-67(空タスク・V-8)" "$VAULT" "$STATE_FILE" "空タスク"
 
-echo "=== AC-68/AC-83②: 全版完了(V-10) → --list 全版完了・--frameは通常フレーム ==="
+echo "=== AC-68′/AC-83②′: 全版完了(V-10) → --list 全版完了・--frameは通常フレーム ==="
 mk_note_V10 "$VAULT"
 mk_decl_single "v10proj" "$STATE_FILE"
-assert_list_reason "AC-68/AC-83②" "$VAULT" "$STATE_FILE" "全版完了"
+assert_list_reason "AC-68′/AC-83②′" "$VAULT" "$STATE_FILE" "全版完了"
 run_frame_raw "$VAULT" "$STATE_FILE"
-assert_eq "AC-68/AC-83②: --frameは版宣言つきの通常フレーム（R行0行）" "0" "$(awk -F '\t' '$1=="R"' "$FRAME_OUT" | wc -l | tr -d ' ')"
+assert_eq "AC-68′/AC-83②′: --frameは版宣言つきの通常フレーム（R行0行）" "0" "$(awk -F '\t' '$1=="R"' "$FRAME_OUT" | wc -l | tr -d ' ')"
 
 echo "=== AC-69相当: 未知引数・併用・過剰引数は使い方1件・非0 ==="
 reset_stub_state "$STUB_STATE"
@@ -398,6 +535,33 @@ fi
 assert_true "AC-78: 孤児ゼロ" "$orphan_free"
 rm -f "$STUB_STATE/hang_identify" "$STUB_STATE/hang_pids"
 
+echo "=== AC-78補強: TERMを無視する子孫がいてもタイムアウト予算内で終了し、子孫も生存しない（cmux/lib-model-view.sh run_with_timeout・scripts/session-handoff.sh側の同型回帰の写し） ==="
+# TERM無視の子孫（trap '' TERM）が標準出力のパイプ書き込み端を握ったまま
+# 残ると、wait後にKILLで掃除しない実装ではcmd_pid自体がTERMで終了しても
+# 呼び出し元の command substitution（$(...)）がEOF待ちで子孫のsleep終了
+# （60秒後）までブロックする＝AC-78（子孫を作らないhang）では検出できない
+# 実害。elapsed（AC-78と同じ予算内終了の検査）がその実害を直接捉える。
+rm -f "$STUB_STATE/term_ignoring_grandchild_pid"
+touch "$STUB_STATE/term_ignoring_hang_identify"
+t0=$(python3 -c 'import time;print(time.monotonic())')
+CMUX_TASK_VAULT="$VAULT" CMUX_TASK_STATE="$STATE_FILE" CMUX_TASK_CALL_TIMEOUT=1 \
+  bash "$TARGET" --list > "$LIST_OUT" 2>"$LIST_STDERR"
+t1=$(python3 -c 'import time;print(time.monotonic())')
+elapsed_term="$(python3 -c "print($t1 - $t0)")"
+assert_true "AC-78補強: 4秒未満で終了（TERM無視の子孫にEOF待ちでブロックされない）" \
+  "$(python3 -c "print(1 if $elapsed_term < 4.0 else 0)")"
+sleep 1.5
+grandchild_pid="$(cat "$STUB_STATE/term_ignoring_grandchild_pid" 2>/dev/null)"
+assert_true "AC-78補強: 子孫PIDが記録されている（検査自体が空振りでない）" \
+  "$([ -n "$grandchild_pid" ] && echo 1 || echo 0)"
+if [ -n "$grandchild_pid" ] && kill -0 "$grandchild_pid" 2>/dev/null; then
+  kill -9 "$grandchild_pid" 2>/dev/null
+  assert_eq "AC-78補強: TERM無視の子孫がタイムアウト後に生存しない（elapsedが主検査・本assertは補助）" "生存しない" "生存した"
+else
+  assert_eq "AC-78補強: TERM無視の子孫がタイムアウト後に生存しない（elapsedが主検査・本assertは補助）" "生存しない" "生存しない"
+fi
+rm -f "$STUB_STATE/term_ignoring_hang_identify" "$STUB_STATE/term_ignoring_grandchild_pid"
+
 echo "=== AC-44（v2移管・単発呼出向けに再定義）: --list/--frameの単発呼び出しが宣言記録ファイルの内容・mtimeを変えない ==="
 # 元のAC-44（dotfiles v2 main・cmux-task-watch.sh）は常駐が2ティック後も
 # 記録ファイル・mtimeが不変であることを検査していたが、v3供給側
@@ -421,35 +585,35 @@ after_mtime="$(stat -f '%m' "$STATE_FILE")"
 assert_eq "AC-44: 記録ファイルの内容が不変" "$before_state" "$after_state"
 assert_eq "AC-44: 記録ファイルのmtimeが不変" "$before_mtime" "$after_mtime"
 
-echo "=== AC-63（v2移管）: V-15 x M-3: --list はクランプの影響を受けず12行を1〜12の番号で出す ==="
-# 元のAC-63（dotfiles v2 main）は見出しにM-3（40x8列）を含むが、本体は
-# 一度も端末寸法を渡さずrun_list_raw（--list）だけを呼んでいた（実査で
-# 確認済み）。--listは元々端末寸法を一切参照しない契約（FR-52の4列TSVは
-# 寸法非依存）ため、この3件は純粋にデータ層の検査であり、V-15フィクス
-# チャ（既にlib-cmux-fixtures.shに移設済み・test-cmux-task-model.shでは
-# 未使用だった）を使えばv3供給側でもそのまま3件とも再現できる
-# （検証3巡目 リーダー裁定「--listのai-env移管で観測できない1件」の調査で
-# 判明。実際には1件も欠けておらず、AC-63.1のbase_n引き下げは不要と判断し、
-# base_n=3のまま全3件を復元した＝旧IDを見出しに残す形）。
+echo "=== AC-63′: V-15 x M-3: --list はクランプの影響を受けず12行すべて番号1・版名v2・分数5/12を記載順で返す ==="
+# v4では番号は子行でなく版を指す（N-1）。V-15はv1/v3/v4/v5が完了しU={v2}
+# だけになるため、v2の12子行すべてが番号1・版名v2・分数5/12になる
+# （design.md §39.7.3 AC-63′）。
 reset_stub_state "$STUB_STATE"
 mk_note_V15 "$VAULT"
 mk_decl_single "v15proj" "$STATE_FILE"
 run_list_raw "$VAULT" "$STATE_FILE"
-assert_eq "AC-63: --list 終了コード0" "0" "$(cat "$LIST_RC")"
+assert_eq "AC-63′: --list 終了コード0" "0" "$(cat "$LIST_RC")"
 ac63_list_out="$(cat "$LIST_OUT")"
-assert_eq "AC-63: --list が12行" "12" "$(printf '%s\n' "$ac63_list_out" | wc -l | tr -d ' ')"
-assert_eq "AC-63: 番号が1〜12の連番" "1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12" "$(printf '%s\n' "$ac63_list_out" | awk -F '\t' '{print $1}')"
+assert_eq "AC-63′: --list が12行" "12" "$(printf '%s\n' "$ac63_list_out" | wc -l | tr -d ' ')"
+assert_true "AC-63′: 番号が全行1" \
+  "$([ "$(printf '%s\n' "$ac63_list_out" | awk -F '\t' '{print $1}' | sort -u)" = "1" ] && echo 1 || echo 0)"
+assert_true "AC-63′: 版名が全行v2" \
+  "$([ "$(printf '%s\n' "$ac63_list_out" | awk -F '\t' '{print $2}' | sort -u)" = "v2" ] && echo 1 || echo 0)"
+assert_true "AC-63′: 分数が全行5/12" \
+  "$([ "$(printf '%s\n' "$ac63_list_out" | awk -F '\t' '{print $3}' | sort -u)" = "5/12" ] && echo 1 || echo 0)"
+assert_eq "AC-63′: 状態欄が記載順（[x]x5,[ ]x5,[/],[ ]）" '[x]
+[x]
+[x]
+[x]
+[x]
+[ ]
+[ ]
+[ ]
+[ ]
+[ ]
+[/]
+[ ]' "$(printf '%s\n' "$ac63_list_out" | awk -F '\t' '{print $4}')"
 
 echo "=== AC-117: 実際の供給側（スタブでない）を表示基底（V-1）で20回連続実行し、中央値・最大値ともに0.4秒以下（単調時計） ==="
 if command -v python3 >/dev/null 2>&1; then

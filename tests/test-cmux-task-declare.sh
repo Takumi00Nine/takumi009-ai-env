@@ -179,13 +179,16 @@ JSON
 mk_declare_base() {
   reset_stub_state
   rm -f "$STATE_FILE"
+  # 版名 v1-slug-a はslug-b（版名v1のまま）と区別するための固有マーカー
+  # （v4フレームにプロジェクトスラグを運ぶ列が無くなったため、AC-43が
+  # 「slug-aの宣言が解決された」ことを版名から観測する＝末尾のAC-43参照）。
   cat > "$VAULT/Projects/slug-a.md" <<'EOF'
 ---
 date: 2026-01-01
 ---
 ## Tasks
 
-### v1
+### v1-slug-a
 - [ ] task
 EOF
   cat > "$VAULT/Projects/slug-b.md" <<'EOF'
@@ -227,8 +230,9 @@ run_declare_with_state() {
 # 不変を見る）。v3では常駐（--plain --once）が無いため --frame を使う。
 # フレームが理由フレーム（R行を持つ）なら理由文字列だけを返し（v1/v2の
 # 「理由行1行がそのまま出る」契約と同じ形で比較できるようにする）、通常
-# フレームならフレーム全文を返す（"slug-a" 等の contains 検査はヘッダー
-# 行の中の値に対して行える）。
+# フレームならフレーム全文を返す（v4はヘッダー行を持たないので、プロ
+# ジェクト固有の contains 検査はmk_declare_baseが仕込む版名等の固有値を
+# V行から拾って行う＝AC-43参照）。
 run_watch_plain() {
   local before after out reason
   before="$(vault_snapshot)"
@@ -437,7 +441,10 @@ lst1="$(run_declare bash "$TARGET" list)"
 lst2="$(run_declare bash "$TARGET" list)"
 assert_eq "AC-43: 別プロセスでも同じ宣言が解決される" "$lst1" "$lst2"
 watch_out1="$(run_watch_plain)"
-assert_contains "AC-43: cmux-task-watch.shの表示にslug-aが現れる" "$watch_out1" "slug-a"
+# v4は#V行にプロジェクトスラグを運ばないため、slug-a固有の版名
+# （v1-slug-a・mk_declare_base参照）がV行に現れることで、供給側が
+# slug-aの宣言を解決していることを観測する。
+assert_contains "AC-43: cmux-task-model.shの--frameにslug-a由来の版名(v1-slug-a)が現れる" "$watch_out1" "v1-slug-a"
 
 # ==========================================================================
 # DT-3: prune の全ウィンドウ列挙と取得失敗（4ケース）

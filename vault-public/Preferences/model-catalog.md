@@ -1,9 +1,10 @@
 ---
 date: 2026-09-09
-updated: 2026-09-16
+updated: 2026-09-18
 tags: [preference, model, catalog, claude, codex, routing, quota, bedrock, vllm]
 project: meta
 related:
+  - "[[Preferences/model-definitions-usage]]"
   - "[[Preferences/coding-delegation]]"
   - "[[Preferences/codex-review-protocol]]"
   - "[[Preferences/core-conduct]]"

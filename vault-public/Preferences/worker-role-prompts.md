@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-17
+updated: 2026-09-18
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -99,6 +99,8 @@ aliases:
 
 ## 起動形態の既定（2026-09-17 B-1）
 起動形態は2段に分かれる。(1) **配役表に職種行がある職種**＝ラッパー `scripts/claude-exec.sh`（別プロセス・1回の呼び出し＝1依頼・報告は `result`）。(2) **配役表外の組み込み subagent**＝名前無し subagent（`subagent_type`＝職種名・`model`＝`resolve-candidate` が返す `AGENT_MODEL`）。理由＝名前を付けるとチームメイト経路になり、職種定義 frontmatter の `effort:` が無視される（公式・実測 2026-09-17＝[[Knowledge/claude-effort-delivery-paths]]）。本人はペインを見ないため、名前無し化に伴うペイン消滅は許容する。同ロールを並行させるときの識別は名前でなく委任文の担当名（例: 担当A／担当B）で行う。
+
+**ラッパーの呼び出しは必ずバックグラウンドで起動する（本人指示 2026-09-18）**: `scripts/claude-exec.sh` は Bash ツールの `run_in_background: true` で呼び、完了は通知で受けて `--out` の `result` を読む。前面（同期待ち）で呼ばない＝子が終わるまでリーダーの応答が塞がり本人が話しかけられなくなる上、Bash の上限（10分）で子ごと強制終了され成果物が失われる。記録職の短い依頼も例外にしない（[[Decisions/2026-09-18-wrapper-launch-background-only]]）。
 
 **例外（名前付きチームメイト）**: 本人指示があるとき・delegation-gate rule 4 の例外運用に限り、名前付きチームメイトを使ってよい。そのときの**命名規則（2026-07-20 本人指示・2026-09-16 定義名へ統一）＝`<職種名>-<配役（定義名）>[-識別子]`**：名前の先頭に職種名、ハイフンの後に配役表の定義名（7ロール: requirements-analyst/system-designer/implementer/verifier/researcher/operator/adoption-critic）。例: `implementer-sonnet-high`・`researcher-sonnet-high`・`system-designer-opus-high`・並行時 `implementer-sonnet-high-op-keyframes`。一覧・通知・ペインで「どの配役がどの職種か」を一目で判別するため。名前の配役部分は、明示して起動した配役に合わせる。末尾に**タスク識別子を任意で付けてよい（リーダー裁量・2026-07-20 本人確認）**: 例 `sonnet-implementer-op-keyframes`。同ロール並行時は衝突回避のため必須。cmux では名前付きだけが分割ペインに表示され、本人が進行を目視できる。
 

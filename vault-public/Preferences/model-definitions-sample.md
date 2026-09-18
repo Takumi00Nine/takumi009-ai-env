@@ -1,14 +1,16 @@
 ---
 date: 2026-09-08
-updated: 2026-09-17
+updated: 2026-09-18
 tags: [preference, core, profile, sample, model]
 project: takumi009-ai-env
 related:
+  - "[[Preferences/model-definitions-usage]]"
   - "[[Preferences/profile-sample]]"
   - "[[Preferences/bedrock-env-sample]]"
   - "[[Decisions/2026-09-08-model-definitions-file]]"
   - "[[Decisions/2026-09-10-models-conf-comprehensive]]"
   - "[[Decisions/2026-09-17-effort-per-role-v2]]"
+  - "[[Decisions/2026-09-17-worker-wrapper-b1]]"
 aliases:
   - "モデル定義ファイルサンプル"
   - "models.conf サンプル"
@@ -37,4 +39,4 @@ aliases:
 | `provider` | `anthropic-api` / `bedrock` / `external` | このマシンで実際に使う経路を選ぶ |
 | `model` | 実モデルID（サンプルはメイン機の実値） | `anthropic-api`＝具体ID（別名は書かない）／`bedrock`＝別名だけ（実IDは `bedrock.env` のピン留め側）／`external`＝外部CLIが受理する実モデルID、または予約語（CLI側の既定を使う指定） |
 | `execution` | `external-cli` | `provider=external` のときだけ必ず書く |
-| `effort` | `high` | 任意。書かなければセッション既定を継承する。Claude 定義の `effort` は**実行値**＝リーダー行は `settings.json` へ、ワーカー行は installer／update-sub が職種定義 `~/.claude/agents/<職種>.md` の frontmatter `effort:` へ生成して届く（配役表の記載順で最初に subagent 経路で OK になった候補の値・名前無し subagent 経路で効く）。Codex 定義は `CODEX_ARGS --effort` で実行値。参考値に留まるのは Bedrock 経路の定義だけ |
+| `effort` | `high` | 任意。書かなければセッション既定を継承する。Claude 定義の `effort` は**実行値**＝リーダー行は `settings.json` へ書き出され、ワーカー行はラッパー `scripts/claude-exec.sh` が呼び出しのたびに `resolve-candidate` で解決してワーカー起動コマンドの `--effort` に渡す（職種定義 `~/.claude/agents/<職種>.md` に `effort:` は載らない＝生成方式は退役）。Codex 定義は `CODEX_ARGS --effort` で実行値。参考値に留まるのは Bedrock 経路の定義だけ |

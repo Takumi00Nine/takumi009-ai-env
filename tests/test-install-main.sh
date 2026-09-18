@@ -2174,6 +2174,25 @@ echo "=== 55. MINOR-1(検証1巡目対応・差し戻し): 共有lib（scripts/l
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
+echo "=== 56. --check-profile: resolver本体（\$lib）が見つからないとき、全角括弧直後のunbound variable誤検知で握り潰されず、実パスを含むFAILメッセージがそのまま出る（bash-fullwidth-var-boundary-pitfall再発防止・scripts/install-main.sh:1013） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  MISSING_LIB="$(mktemp -u)/nonexistent-resolver-lib.py"
+
+  rc=0
+  out="$(HOME="$FAKE_HOME" AIENV_PROFILE_RESOLVE_LIB="$MISSING_LIB" bash "$SCRIPT" --check-profile 2>&1)" || rc=$?
+
+  assert_true "exit非0" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "unbound variableのbashエラーで意図したFAILが握り潰されない" \
+    "$(echo "$out" | LC_ALL=C grep -q 'unbound variable' && echo 0 || echo 1)"
+  assert_true "意図したFAILメッセージ（resolver本体（…）が見つかりません）が出る" \
+    "$(echo "$out" | grep -q 'resolver本体（.*）が見つかりません' && echo 1 || echo 0)"
+  assert_true "FAILメッセージに実パス（${MISSING_LIB}）がそのまま含まれる" \
+    "$(echo "$out" | grep -qF "$MISSING_LIB" && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

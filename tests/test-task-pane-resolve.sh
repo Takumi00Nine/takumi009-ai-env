@@ -42,14 +42,14 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 STDERR_TMP="$WORK_DIR/stderr.tmp"
 
-# --list スタブ（cmux-task-watch.sh --list 相当。4列TSV）。
+# --list スタブ（cmux-task-model.sh --list 相当。v4・5列TSV。番号は版）。
 STUB_LIST_CMD="$WORK_DIR/cmux-task-watch-stub.sh"
 cat >"$STUB_LIST_CMD" <<'EOF'
 #!/bin/bash
 if [ "$1" = "--list" ]; then
-  printf '1\tv2\t[x]\t要件定義\n'
-  printf '2\tv2\t[/]\t設計\n'
-  printf '3\tv2\t[ ]\t実装\n'
+  printf '1\tv2\t1/3\t[x]\t要件定義\n'
+  printf '1\tv2\t1/3\t[/]\t設計\n'
+  printf '1\tv2\t1/3\t[ ]\t実装\n'
 fi
 EOF
 chmod +x "$STUB_LIST_CMD"
@@ -144,7 +144,7 @@ assert_no_injection() {
   assert_fail_silent "$desc"
 }
 
-EXPECTED_HEADING='Task番号対応表（この瞬間の表示順。ユーザーの「Task の N 番」はこの表で解決する）:'
+EXPECTED_HEADING='Task番号対応表（番号は版を指す・この瞬間の表示順。ユーザーの「Task の N 番」は同じ番号の行の版で解決する。列＝番号・版名・分数・状態・本文）:'
 
 assert_injected() {
   local desc="$1" prompt="$2"
@@ -345,6 +345,13 @@ if [ -n "$HOOK_STDOUT" ]; then
     pass "見出し文が「${EXPECTED_HEADING}」と完全一致する"
   else
     fail_case "見出し文の完全一致 (firstline=[$firstline])"
+  fi
+  secondline="$(printf '%s' "$ctx" | sed -n '2p')"
+  secondline_ncols="$(printf '%s' "$secondline" | awk -F '\t' '{print NF}')"
+  if [ "$secondline_ncols" = "5" ]; then
+    pass "AC-73′: 注入文の2行目（--listの先頭行）が5列である"
+  else
+    fail_case "AC-73′: 注入文の2行目が5列である (line=[$secondline] ncols=$secondline_ncols)"
   fi
 else
   fail_case "見出し文の完全一致 (注入されなかった)"

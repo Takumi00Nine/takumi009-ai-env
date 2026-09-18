@@ -9,12 +9,12 @@ role.leader:               configured model=fable-high
 role.navi:                 unknown
 role.requirements-analyst: configured model=opus-high,codex-astra-low
 role.system-designer:      configured model=opus-high,codex-astra-low
-role.adoption-critic:      configured model=opus-high
-role.implementer:          configured model=sonnet-high,codex-sol-medium
-role.researcher:           configured model=sonnet-high
-role.operator:             configured model=sonnet-high
-role.vault-scribe:         configured model=sonnet-high
-role.verifier:             configured model=opus-high,codex-sol-high
+role.adoption-critic:      configured model=opus-high,fable-high
+role.implementer:          configured model=sonnet-medium,sonnet-high,opus-medium,opus-high,codex-sol-medium
+role.researcher:           configured model=haiku,sonnet-medium,sonnet-high
+role.operator:             configured model=haiku,sonnet-low,sonnet-medium,sonnet-high
+role.vault-scribe:         configured model=haiku,sonnet-low
+role.verifier:             configured model=opus-high,codex-sol-high,codex-terra-medium
 role.ja-doc:               unknown
 team_mode:        configured value=full
 no_read_paths:    configured value=~/work/old

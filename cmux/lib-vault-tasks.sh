@@ -94,14 +94,24 @@ parse_tasks() {
 }
 
 # C-4 の公開入口。ファイルパス $1 を読み、sanitize_lines → fm_extract →
-# parse_tasks の順に通して TSV ストリームを stdout へ出す（設計 §1.4）。
+# parse_tasks の順に通して TSV ストリームを stdout へ出す（設計 §1.4・
+# v4差分＝design.md §39.4.2・D-v4-12）。先頭に frontmatter の next: 値を
+# 「N<TAB><値>」の1行として出す（next: が無い／空でも常に1行出す。値は空
+# でもよい）。既存の消費者（cmux-next-model.sh の derive_next_from_tasks）は
+# `$1 == "T"` だけを読むので N 行は自然に無視される（grep実測で消費者は
+# cmux-task-model.sh と cmux-next-model.sh の2件だけ）。
 # 終了コード: 0=成功／2=サニタイズ失敗またはframontmatter不正（呼び出し側は
 # 「ノート破損」として扱う）。ファイルの存在確認は呼び出し側が先に行う。
-# サニタイズ結果を一度シェル変数へ受けてから2回使う（一時ファイルを作らない。
-# U+0000 はこの時点で空白に置換済みなので、変数へ入れても切り詰められない）。
+# サニタイズ結果を一度シェル変数へ受けてから複数回使う（一時ファイルを
+# 作らない。U+0000 はこの時点で空白に置換済みなので、変数へ入れても
+# 切り詰められない）。
 read_note() {
-  local clean
+  local clean fm rc nextval
   clean="$(sanitize_lines <"$1")" || return 2          # jq 失敗＝ノート破損
-  printf '%s\n' "$clean" | fm_extract >/dev/null || return 2   # frontmatter 不正＝ノート破損
+  fm="$(printf '%s\n' "$clean" | fm_extract)"
+  rc=$?
+  [ "$rc" -eq 0 ] || return 2                          # frontmatter 不正＝ノート破損
+  nextval="$(fm_field "$fm" next)"
+  printf 'N\t%s\n' "$nextval"
   printf '%s\n' "$clean" | parse_tasks                 # TSV を stdout へ
 }

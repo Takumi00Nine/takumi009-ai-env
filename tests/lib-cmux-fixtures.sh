@@ -13,7 +13,8 @@
 #   mk_note_V1 "$VAULT"
 
 # ==========================================================================
-# V群: Task 側 Vault ノート fixture（V-1〜V-18・v1/v2 と同一内容）
+# V群: Task 側 Vault ノート fixture（V-1〜V-18・v1/v2 と同一内容／
+# V-19a〜c・V-20＝v4新設・design.md §39.7.2）
 # ==========================================================================
 mk_note_V1() {
   cat > "$1/Projects/v1proj.md" <<'EOF'
@@ -241,6 +242,78 @@ date: 2026-01-01
 EOF
 }
 
+V19A_SLUG="v19aproj"
+mk_note_V19a() {
+  cat > "$1/Projects/${V19A_SLUG}.md" <<'EOF'
+---
+date: 2026-01-01
+next: "v2"
+---
+## Tasks
+
+### v1
+- [ ] a
+
+### v2
+- [ ] b
+EOF
+}
+
+V19B_SLUG="v19bproj"
+mk_note_V19b() {
+  cat > "$1/Projects/${V19B_SLUG}.md" <<'EOF'
+---
+date: 2026-01-01
+next: "v"
+---
+## Tasks
+
+### v1
+- [ ] a
+
+### v2
+- [ ] b
+EOF
+}
+
+V19C_SLUG="v19cproj"
+mk_note_V19c() {
+  cat > "$1/Projects/${V19C_SLUG}.md" <<'EOF'
+---
+date: 2026-01-01
+next: "v1"
+---
+## Tasks
+
+### v1
+- [x] a
+
+### v2
+- [ ] b
+EOF
+}
+
+V20_SLUG="v20proj"
+mk_note_V20() {
+  cat > "$1/Projects/${V20_SLUG}.md" <<'EOF'
+---
+date: 2026-01-01
+---
+## Tasks
+
+### v1
+- [/] a
+- [ ] b
+
+### v2
+- [x] c
+- [ ] d
+
+### v3
+- [ ] e
+EOF
+}
+
 V17_SLUG="v17projectname"
 mk_note_V17() {
   local longver
@@ -437,7 +510,8 @@ mk_notes_N_all() {
 # $STUB_STATE（呼び出し元が export した環境変数）配下のファイルで行う。
 # S-2〜S-5 はこのスタブが $STUB_STATE 配下のマーカーファイルで切り替える
 # （fail_identify・fail_workspace_list・broken_identify・
-# broken_workspace_list・hang_<sub>）。
+# broken_workspace_list・hang_<sub>・term_ignoring_hang_<sub>〈副産物
+# term_ignoring_grandchild_pid にTERM無視の子孫PIDを記録〉）。
 write_cmux_stub() {
   local bin="$1"
   cat > "$bin" <<'STUB'
@@ -448,6 +522,17 @@ echo "cmux $*" >> "$STATE/calls.log"
 
 sub2=""
 [ "$1" = "--json" ] && sub2="$2"
+
+if [ -n "$sub2" ] && [ -e "$STATE/term_ignoring_hang_$sub2" ]; then
+  # TERMを無視する子孫（本体は無視しない）を先に作ってからハングする
+  # （run_with_timeout の回帰用・scripts/session-handoff.sh 側の同型fixture
+  # に合わせる。本体はTERMで通常どおり終了するが、子孫はTERM無視のため
+  # 生き残りうる＝wait後にKILLを送らないと孤児化する）。
+  ( trap '' TERM; sleep 60 ) &
+  echo "$!" > "$STATE/term_ignoring_grandchild_pid"
+  sleep 60
+  exit 1
+fi
 
 if [ -n "$sub2" ] && [ -e "$STATE/hang_$sub2" ]; then
   echo "$$" >> "$STATE/hang_pids"

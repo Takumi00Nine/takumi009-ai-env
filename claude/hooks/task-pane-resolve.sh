@@ -4,9 +4,10 @@
 # Dock枠名からNextを外しProject/Taskにした。設計中の旧称はnext-task-resolve.sh
 # だったが、Dock枠名の改称に合わせtask-pane-resolve.shへ改称した）。
 # プロンプトに「Task／タスク」（表記ゆれ）＋「番」の両方が含まれるとき、
-# cmux-task-watch.sh --list（番号<TAB>版名<TAB>状態<TAB>タスク本文）の出力を
-# additionalContext として注入する。AI はツールを叩かずに番号→タスクを
-# 解決できる（正本: docs/design.md §22・cmux-session-todo）。
+# cmux-task-model.sh --list（v4・5列＝版番号<TAB>版名<TAB>分数<TAB>状態<TAB>
+# タスク本文。番号は版を指す）の出力を additionalContext として注入する。
+# AI はツールを叩かずに番号→タスクを解決できる（正本: docs/design.md
+# §22・§39.4.7・cmux-session-todo）。
 # 発火条件は「Task」（大小文字非依存）または「タスク」を含み、かつ「番」を
 # 含むことのみ。「Next」は発火語に要らない＝「Next Task の 3 番」はTask＋番を
 # 含むので自然に発火する（後方互換）。「Tasks」（複数形）・「task_id」・
@@ -162,7 +163,7 @@ emit_context() {
   local list
   list="$(CMUX_TASK_CALL_TIMEOUT=1 "$LIST_CMD" --list 2>/dev/null)" || return 1
   [ -n "$list" ] || return 1
-  jq -n --arg ctx "Task番号対応表（この瞬間の表示順。ユーザーの「Task の N 番」はこの表で解決する）:
+  jq -n --arg ctx "Task番号対応表（番号は版を指す・この瞬間の表示順。ユーザーの「Task の N 番」は同じ番号の行の版で解決する。列＝番号・版名・分数・状態・本文）:
 $list" '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $ctx}}'
 }
 

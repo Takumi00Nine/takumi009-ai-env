@@ -1010,7 +1010,7 @@ check_profile_cmd() {
   local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB"
 
   command -v python3 >/dev/null 2>&1 || fail "python3 が見つかりません（--check-profile の実行に必要です）"
-  [ -f "$lib" ] || fail "resolver本体（$lib）が見つかりません"
+  [ -f "$lib" ] || fail "resolver本体（${lib}）が見つかりません"
 
   if [ "$CHECK_PROFILE_SCHEMA_VERSION_ONLY" = "1" ]; then
     # print-schema-versionは自己完結ではない既存契約（§6）のため、

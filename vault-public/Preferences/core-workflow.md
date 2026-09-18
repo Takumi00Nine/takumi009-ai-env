@@ -1,10 +1,11 @@
 ---
 date: 2026-08-30
-updated: 2026-09-17
+updated: 2026-09-18
 tags: [preference, core, workflow, roles, quality-gate]
 project: takumi009-ai-env
 related:
   - "[[Decisions/2026-09-10-leader-free-model-choice]]"
+  - "[[Preferences/model-definitions-usage]]"
   - "[[Preferences/core-conduct]]"
   - "[[Preferences/profile-sample]]"
   - "[[Preferences/coding-delegation]]"
@@ -46,7 +47,7 @@ aliases:
 > spawn 時の条文:
 > 1. 配役表に職種行がある職種（候補一覧で `route=subagent` の職種）は `scripts/claude-exec.sh`（別プロセスの headless 起動）で起動する。Agent ツールでは起動できない（フックが拒否する）。名前無し subagent で起動してよいのは配役表に行が無い組み込み `subagent_type` だけ。名前付きは本人指示時の例外＝そのときだけ `<職種名>-<配役>`。理由＝headless の `--agent` 経路では職種定義 frontmatter の `effort:` は実行値にならない（実測＝[[Knowledge/claude-headless-child-facts]]）。effort はラッパーが `--effort` で渡す。
 > 2. spawn 時に渡す7点（配役の明示指定を含む）
-> 3. 配役表の `model` は定義名の候補。リーダーが spawn 前に候補からちょうど1つ選び、ラッパーへ `--model-def <定義名>` で渡す（既定は無い）。`resolve-candidate` はラッパーが内部で呼ぶ。判断材料＝[[Preferences/model-catalog]] と【使用率】。具体IDから起動引数を推測しない。⚠️ 再選択点＝①新しい巡 ②上限回復後 ③セッション再開 ④起動失敗時＝使用率を再取得して選び直す（[[Decisions/2026-09-14-recast-points-on-resume]]）。継続は `--resume <session_id>` をリーダーが明示したときだけ・既定は新規起動。
+> 3. 配役表の `model` は定義名の候補。リーダーが spawn 前に候補からちょうど1つ選び、ラッパーへ `--model-def <定義名>` で渡す（既定は無い）。`resolve-candidate` はラッパーが内部で呼ぶ。判断材料＝[[Preferences/model-catalog]]・[[Preferences/model-definitions-usage]] と【使用率】。具体IDから起動引数を推測しない。⚠️ 再選択点＝①新しい巡 ②上限回復後 ③セッション再開 ④起動失敗時＝使用率を再取得して選び直す（[[Decisions/2026-09-14-recast-points-on-resume]]）。継続は `--resume <session_id>` をリーダーが明示したときだけ・既定は新規起動。
 > 4. Bedrock系のsubagent候補は `resolve-candidate` が未対応として拒否する。起動対応はローカルLLM段階経路スライスBで扱う。
 > 5. 配役表は必読にしない。spawn のたびに候補一覧コマンド（`role_candidates.py`・呼び方は README。TSV 7列 `role def route pass ok h5 d7`・`ok=no` は枠上限か resolver 拒否のみ）で候補と枠を照会し、ちょうど1つ選んで条文3へ。候補一覧で `route=subagent` の職種はラッパー起動（条文1）。
 > 6. `execution` が `subagent` 以外の職種は spawn せず、決められた呼び出し口へ `resolve-candidate` の出力をそのまま渡す（exit 非0なら1つも起動しない）。`subagent` の職種はラッパーへ。

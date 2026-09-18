@@ -1,18 +1,22 @@
 #!/bin/bash
-# cmux Dock「Task」枠の供給側（cmux-session-todo 設計 §28〜§30）。
-# フォーカス中のワークスペースの宣言先プロジェクト（cmux-task-declare.sh
-# set で宣言）の Tasks 節を読み、対応表（--list・v1/v2 と同一契約）と
-# 1 ティック分のフレーム（--frame・設計 §29）を作る。描画（Dock への表示）
-# は一切行わない＝dotfiles 側の cmux-task-watch.sh が受け取って描くだけ
-# （FR-61・FR-62）。
+# cmux Dock「Task」枠の供給側（cmux-session-todo 設計 §28〜§30・v4差分＝
+# design.md §39）。フォーカス中のワークスペースの宣言先プロジェクト
+# （cmux-task-declare.sh set で宣言）の Tasks 節を読み、対応表
+# （--list・v4＝5列TSV）と1ティック分のフレーム（--frame・§39.3・
+# 契約版 cmux-dock-frame/2）を作る。描画（Dockへの表示）は一切行わない＝
+# dotfiles側のcmux-task-watch.shが受け取って描くだけ（FR-61・FR-62）。
+# 「Task の N 番」の N は版（未完の版に記載順で1から）を指す＝供給側だけが
+# 番号を振る（N-1）。
 #
 # 引数:
-#   --list  ＝ 展開対象の版の子行を4列TSV（番号・版名・状態・本文）で出す
-#             （FR-52・v1/v2 と同一契約。対象は caller で、caller と focused
-#             が一致するときだけ出す＝FR-53b）。
+#   --list  ＝ 未完の版の全子行を5列TSV（版番号・版名・分数・状態・本文）で
+#             出す（§39.4.6・R-v4-1。対象は caller で、caller と focused が
+#             一致するときだけ出す＝FR-53b）。子行を持たない版（0/0）は
+#             状態・本文を「-」にした1行だけ出す。
 #   --frame ＝ focused ワークスペースについて 1 ティック分のフレーム
-#             （§29 の行指向 TSV）を stdout へ出す（rc は常に 0。理由フレーム
-#             も版宣言つきの正当な出力として rc=0 で返す＝FR-82 #11）。
+#             （§39.3 の行指向 TSV・#V→(V→C*)*→D→E）を stdout へ出す
+#             （rc は常に 0。理由フレームも版宣言つきの正当な出力として
+#             rc=0 で返す＝FR-82 #11）。
 #
 # bash 3.2 互換（macOS標準bash）。連想配列・mapfileは使わない。
 #
@@ -54,14 +58,11 @@ CMUX_UUID=""
 LIST_REASON=""
 LIST_UUID=""
 MODEL_REASON=""
-MODEL_SLUG=""
-MODEL_SYM=""
-MODEL_LEADWORD=""
-MODEL_VERNAME=""
-MODEL_FRAC=""
 V_NAME=(); V_TOTAL=(); V_DONE=(); V_HASSLASH=()
 BL_KIND=(); BL_A=(); BL_B=(); BL_C=()
-NR_BLIDX=(); NR_NUM=(); NR_STATE=(); NR_BODY=()
+NR_BLIDX=(); NR_NUM=()
+DONE_N=0
+CUR_I=-1
 
 # --- 記録ファイル（読むだけ・書かない） ---------------------------------
 
@@ -177,24 +178,47 @@ probe_list_target() {
 
 # --- Vault 側（順3〜順10） -------------------------------------------------
 
-# UUID から表示モデルを組み立てる。以下のグローバルを設定する。
-#   MODEL_REASON      : 非空なら理由行（順3〜10）。空なら通常表示（順11）
-#   MODEL_SLUG        : プロジェクト名（宣言された slug）
-#   MODEL_SYM/MODEL_LEADWORD/MODEL_VERNAME/MODEL_FRAC : ヘッダーの版欄（FR-35）
-#   BL_KIND/BL_A/BL_B/BL_C : 版行＋展開対象の子行（クランプ前・記載順）
-#     VE/VC: A=記号 B=版名 C=分数"done/total"
+# next: の照合直前（§39.4.2・Q-v4-1・D-v4-2）に版名・NEXT の両側へかける
+# trim（ASCII空白とTABだけ・parse_tasksのawk trimと同じ式・
+# lib-vault-tasks.sh:65〜69）。全角空白（U+3000）は剥がさない＝一致に含む。
+# 外部プロセスを起こさない（AC-117の時間予算・NEXT側で1回＋②段の候補版ごとに呼ぶ）。
+trim_ascii() {
+  local s="$1" tab
+  tab=$'\t'
+  while [ -n "$s" ]; do
+    case "$s" in
+      " "*) s="${s# }" ;;
+      "$tab"*) s="${s#?}" ;;
+      *) break ;;
+    esac
+  done
+  while [ -n "$s" ]; do
+    case "$s" in
+      *" ") s="${s% }" ;;
+      *"$tab") s="${s%?}" ;;
+      *) break ;;
+    esac
+  done
+  printf '%s' "$s"
+}
+
+# UUID から表示モデルを組み立てる（v4・design.md §39.4.1〜§39.4.3）。
+# 以下のグローバルを設定する。
+#   MODEL_REASON : 非空なら理由行（順3〜10）。空なら通常表示（順11）
+#   DONE_N       : 完了した版の件数（`D` 行）
+#   CUR_I        : 今の版の版インデックス（vcount空間・無ければ-1）
+#   BL_KIND/BL_A/BL_B/BL_C : 未完の版（U・記載順）の版行＋その全子行
+#     VE（展開＝open）/VC（畳み＝fold）: A="cur"/"-" B=版名 C=分数"done/total"
 #     CX/CS/CB: A=状態1文字 B=タスク本文 C=（未使用）
+#   NR_BLIDX/NR_NUM : number_rows() が版行（VE/VC）だけに振った番号
 load_model() {
   local uuid="$1"
   MODEL_REASON=""
-  MODEL_SLUG=""
-  MODEL_SYM=""
-  MODEL_LEADWORD=""
-  MODEL_VERNAME=""
-  MODEL_FRAC=""
   V_NAME=(); V_TOTAL=(); V_DONE=(); V_HASSLASH=()
   BL_KIND=(); BL_A=(); BL_B=(); BL_C=()
-  NR_BLIDX=(); NR_NUM=(); NR_STATE=(); NR_BODY=()
+  NR_BLIDX=(); NR_NUM=()
+  DONE_N=0
+  CUR_I=-1
 
   if state_is_corrupt; then
     MODEL_REASON="宣言記録破損"
@@ -207,7 +231,6 @@ load_model() {
     MODEL_REASON="未宣言"
     return
   fi
-  MODEL_SLUG="$slug"
 
   if [ ! -d "$VAULT" ]; then
     MODEL_REASON="Vault 不在"
@@ -232,29 +255,35 @@ load_model() {
     return
   fi
 
-  local vcount=0 cur_vi=-1
+  local vcount=0 cur_vi=-1 next_raw=""
   local task_vidx=() task_state=() task_body=()
   local kind a b
   while IFS="$(printf '\t')" read -r kind a b; do
     [ -n "$kind" ] || continue
-    if [ "$kind" = "V" ]; then
-      V_NAME+=("$a")
-      V_TOTAL+=(0)
-      V_DONE+=(0)
-      V_HASSLASH+=(0)
-      cur_vi=$vcount
-      vcount=$(( vcount + 1 ))
-    elif [ "$kind" = "T" ]; then
-      [ "$cur_vi" -ge 0 ] || continue
-      V_TOTAL[$cur_vi]=$(( V_TOTAL[$cur_vi] + 1 ))
-      case "$a" in
-        x) V_DONE[$cur_vi]=$(( V_DONE[$cur_vi] + 1 )) ;;
-        /) V_HASSLASH[$cur_vi]=1 ;;
-      esac
-      task_vidx+=("$cur_vi")
-      task_state+=("$a")
-      task_body+=("$b")
-    fi
+    case "$kind" in
+      N)
+        next_raw="$a"
+        ;;
+      V)
+        V_NAME+=("$a")
+        V_TOTAL+=(0)
+        V_DONE+=(0)
+        V_HASSLASH+=(0)
+        cur_vi=$vcount
+        vcount=$(( vcount + 1 ))
+        ;;
+      T)
+        [ "$cur_vi" -ge 0 ] || continue
+        V_TOTAL[$cur_vi]=$(( V_TOTAL[$cur_vi] + 1 ))
+        case "$a" in
+          x) V_DONE[$cur_vi]=$(( V_DONE[$cur_vi] + 1 )) ;;
+          /) V_HASSLASH[$cur_vi]=1 ;;
+        esac
+        task_vidx+=("$cur_vi")
+        task_state+=("$a")
+        task_body+=("$b")
+        ;;
+    esac
   done <<TSV_EOF
 $tsv
 TSV_EOF
@@ -283,63 +312,61 @@ TSV_EOF
     done
   fi
 
-  # 展開対象の決定（FR-27）
-  local expand=-1
+  # 完了判定（順11・§39.4.1手順3）: done_i = (total>=1 && done==total)。
+  # U = 未完の版の列（記載順）・DONE_N = 完了版の件数。
+  local u_list=()
   for ((i = 0; i < vcount; i++)); do
-    if [ "${V_HASSLASH[$i]}" -eq 1 ]; then
-      expand=$i
+    if [ "${V_TOTAL[$i]}" -ge 1 ] && [ "${V_DONE[$i]}" -eq "${V_TOTAL[$i]}" ]; then
+      DONE_N=$(( DONE_N + 1 ))
+    else
+      u_list+=("$i")
+    fi
+  done
+
+  # 今の版 cur の3段判定（§39.4.2・Q-v4-1）。
+  local trimmed_next ui
+  trimmed_next="$(trim_ascii "$next_raw")"
+  for ui in "${u_list[@]+"${u_list[@]}"}"; do
+    if [ "${V_HASSLASH[$ui]}" -eq 1 ]; then
+      CUR_I="$ui"
       break
     fi
   done
-  if [ "$expand" -lt 0 ]; then
-    for ((i = 0; i < vcount; i++)); do
-      if [ "${V_DONE[$i]}" -lt "${V_TOTAL[$i]}" ]; then
-        expand=$i
+  if [ "$CUR_I" -lt 0 ] && [ -n "$trimmed_next" ]; then
+    for ui in "${u_list[@]+"${u_list[@]}"}"; do
+      if [ "$(trim_ascii "${V_NAME[$ui]}")" = "$trimmed_next" ]; then
+        CUR_I="$ui"
         break
       fi
     done
   fi
-
-  # ヘッダーの状態（FR-35）
-  if [ "$expand" -ge 0 ] && [ "${V_HASSLASH[$expand]}" -eq 1 ]; then
-    MODEL_SYM="▶"; MODEL_LEADWORD=""; MODEL_VERNAME="${V_NAME[$expand]}"
-    MODEL_FRAC="${V_DONE[$expand]}/${V_TOTAL[$expand]}"
-  elif [ "$expand" -ge 0 ]; then
-    MODEL_SYM="・"; MODEL_LEADWORD="次: "; MODEL_VERNAME="${V_NAME[$expand]}"
-    MODEL_FRAC="${V_DONE[$expand]}/${V_TOTAL[$expand]}"
-  else
-    MODEL_SYM="✅"; MODEL_LEADWORD="全版完了"; MODEL_VERNAME=""
-    local done_v=0
-    for ((i = 0; i < vcount; i++)); do
-      if [ "${V_TOTAL[$i]}" -ge 1 ] && [ "${V_DONE[$i]}" -eq "${V_TOTAL[$i]}" ]; then
-        done_v=$(( done_v + 1 ))
-      fi
-    done
-    MODEL_FRAC="${done_v}/${vcount}"
+  if [ "$CUR_I" -lt 0 ] && [ "${#u_list[@]}" -gt 0 ]; then
+    CUR_I="${u_list[0]}"
   fi
 
-  # BL_* の組み立て（版行＋展開対象版の子行・記載順）
-  local j sym_i
-  for ((i = 0; i < vcount; i++)); do
-    if [ "${V_TOTAL[$i]}" -ge 1 ] && [ "${V_DONE[$i]}" -eq "${V_TOTAL[$i]}" ]; then
-      sym_i="✅"
-    elif [ "${V_HASSLASH[$i]}" -eq 1 ]; then
-      sym_i="▶"
-    else
-      sym_i="・"
+  # BL_* の組み立て（U の全版＋その全子行・OPENに依らない＝§39.4.1手順6）。
+  local j is_open
+  for ui in "${u_list[@]+"${u_list[@]}"}"; do
+    is_open=0
+    if [ "${V_DONE[$ui]}" -ge 1 ] || [ "${V_HASSLASH[$ui]}" -eq 1 ]; then
+      is_open=1
     fi
-    if [ "$i" -eq "$expand" ]; then
+    if [ "$is_open" -eq 1 ]; then
       BL_KIND+=("VE")
     else
       BL_KIND+=("VC")
     fi
-    BL_A+=("$sym_i")
-    BL_B+=("${V_NAME[$i]}")
-    BL_C+=("${V_DONE[$i]}/${V_TOTAL[$i]}")
+    if [ "$ui" -eq "$CUR_I" ]; then
+      BL_A+=("cur")
+    else
+      BL_A+=("-")
+    fi
+    BL_B+=("${V_NAME[$ui]}")
+    BL_C+=("${V_DONE[$ui]}/${V_TOTAL[$ui]}")
 
-    if [ "$i" -eq "$expand" ] && [ "$n_tasks" -gt 0 ]; then
+    if [ "$n_tasks" -gt 0 ]; then
       for ((j = 0; j < n_tasks; j++)); do
-        if [ "${task_vidx[$j]}" -eq "$i" ]; then
+        if [ "${task_vidx[$j]}" -eq "$ui" ]; then
           case "${task_state[$j]}" in
             x) BL_KIND+=("CX") ;;
             /) BL_KIND+=("CS") ;;
@@ -356,31 +383,33 @@ TSV_EOF
   number_rows
 }
 
-# 表示番号の正本（設計 §19.1・N-1）。BL_KIND/BL_A/BL_B（load_model が
-# 組み立てた版行＋展開対象版の子行・記載順）を読み、展開対象版の子行
-# （CX/CS/CB）だけに記載順で1から番号を振る。並列配列
-# NR_BLIDX（BL_KIND上の位置）/NR_NUM/NR_STATE/NR_BODY を設定する。
-# --list も --frame もこの関数が返した配列を読むだけで、自分では数えない。
-# 純関数（副作用は上記グローバルの設定のみ・BL_* は変更しない）。
+# 表示番号の正本（設計 §39.4.1手順7・N-1）。BL_KIND（load_model が組み立てた
+# 未完の版・記載順の版行＋子行）を読み、版行（VE/VC）だけに記載順で1から
+# 番号を振る（v4では番号は版を指す＝子行はもう番号を持たない）。並列配列
+# NR_BLIDX（BL_KIND上の位置）/NR_NUM を設定する。--list も --frame もこの
+# 関数が返した配列を読むだけで、自分では数えない。純関数（副作用は上記
+# グローバルの設定のみ・BL_* は変更しない）。
 number_rows() {
-  NR_BLIDX=(); NR_NUM=(); NR_STATE=(); NR_BODY=()
+  NR_BLIDX=(); NR_NUM=()
   local n=${#BL_KIND[@]} i num=0
   for ((i = 0; i < n; i++)); do
     case "${BL_KIND[$i]}" in
-      CX|CS|CB)
+      VE|VC)
         num=$(( num + 1 ))
         NR_BLIDX+=("$i")
         NR_NUM+=("$num")
-        NR_STATE+=("${BL_A[$i]}")
-        NR_BODY+=("${BL_B[$i]}")
         ;;
     esac
   done
 }
 
-# --- `--list`（v1/v2 と同一契約・FR-52・設計 §20） -------------------------
-# 対象は caller。caller と focused が一致するときだけ4列TSVを出す
-# （FR-53b）。stdout: 成功時のみ4列TSVを1行以上。失敗時は0バイト。
+# --- `--list`（v4・5列・設計 §39.4.6・R-v4-1） -----------------------------
+# 対象は caller。caller と focused が一致するときだけ5列TSVを出す
+# （FR-53b）。1行＝未完の版の子行1つ（版番号・版名・分数を各行に繰り返す）。
+# 子行を持たない版（0/0）は1行だけ出し、状態・本文を「-」にする（§39.4.6）。
+# 展開欄fold（畳み）の版の子行も出す＝BL_*はUの全版の全子行を持つ
+# （load_modelの手順6・OPENに依らない）。
+# stdout: 成功時のみ5列TSVを1行以上。失敗時は0バイト。
 # stderr: 失敗時のみ理由1行。rc: 成功0／失敗1。
 run_list() {
   probe_list_target
@@ -397,54 +426,81 @@ run_list() {
 
   local n=${#NR_NUM[@]}
   if [ "$n" -eq 0 ]; then
-    # 展開対象の版が無い＝全版完了。MODEL_REASON は立たない（--frame は
-    # 通常フレームとして扱う）ので、--list はここで別に検出する。
+    # U が空＝全版完了。MODEL_REASON は立たない（--frame は通常フレーム
+    # として扱う）ので、--list はここで別に検出する（§39.4.4）。
     echo "全版完了" >&2
     return 1
   fi
 
-  local i
-  for ((i = 0; i < n; i++)); do
-    printf '%s\t%s\t[%s]\t%s\n' "${NR_NUM[$i]}" "$MODEL_VERNAME" "${NR_STATE[$i]}" "${NR_BODY[$i]}"
+  local bn=${#BL_KIND[@]} i ni=0 cur_num="" cur_name="" cur_frac="" has_child=0
+  for ((i = 0; i < bn; i++)); do
+    case "${BL_KIND[$i]}" in
+      VE|VC)
+        if [ "$ni" -gt 0 ] && [ "$has_child" -eq 0 ]; then
+          printf '%s\t%s\t%s\t-\t-\n' "$cur_num" "$cur_name" "$cur_frac"
+        fi
+        cur_num="${NR_NUM[$ni]}"
+        cur_name="${BL_B[$i]}"
+        cur_frac="${BL_C[$i]}"
+        has_child=0
+        ni=$(( ni + 1 ))
+        ;;
+      CX|CS|CB)
+        printf '%s\t%s\t%s\t[%s]\t%s\n' "$cur_num" "$cur_name" "$cur_frac" "${BL_A[$i]}" "${BL_B[$i]}"
+        has_child=1
+        ;;
+    esac
   done
+  if [ "$ni" -gt 0 ] && [ "$has_child" -eq 0 ]; then
+    printf '%s\t%s\t%s\t-\t-\n' "$cur_num" "$cur_name" "$cur_frac"
+  fi
   return 0
 }
 
-# --- `--frame`（新規・設計 §29） -------------------------------------------
+# --- `--frame`（v4・設計 §39.3） --------------------------------------------
 
-# 版宣言＋理由行＋終端行の理由フレームを stdout へ出す。
+# 版宣言＋理由行＋終端行の理由フレームを stdout へ出す（契約版はTask種別の
+# cmux-dock-frame/2＝D-v4-1。理由フレーム自体の行文法は#V→R→Eのまま）。
 print_reason_frame() {
   local reason="$1"
-  printf '#V\tcmux-dock-frame/1\tTask\n'
+  printf '#V\tcmux-dock-frame/2\tTask\n'
   printf 'R\t%s\n' "$reason"
   printf 'E\t1\n'
 }
 
-# 通常フレーム（版宣言＋ヘッダー＋版行＋子行＋展開位置＋終端行）を
-# stdout へ出す。load_model 済みであること（呼び出し側の前提）。
+# 通常フレーム（版宣言＋版行＋子行＋完了件数＋終端行）を stdout へ出す。
+# load_model 済みであること（呼び出し側の前提）。`V` 行はUの全版（番号・
+# 版名・分数・▶欄・展開欄）、`C` 行は展開欄openの版だけ（fold の子行は
+# BL_*上に存在するが出さない＝§39.4.1）。`D` 行はDONE_N。ヘッダー（H）・
+# 展開位置（X）はv4で廃止（規則4・Q-v4-3以降不要）。
 print_task_frame() {
-  printf '#V\tcmux-dock-frame/1\tTask\n'
-  printf 'H\t%s\t%s\t%s\t%s\t%s\n' "$MODEL_SYM" "$MODEL_SLUG" "$MODEL_LEADWORD" "$MODEL_VERNAME" "$MODEL_FRAC"
+  printf '#V\tcmux-dock-frame/2\tTask\n'
 
-  local n=${#BL_KIND[@]} i vpos=0 xpos="-" body_n=1
+  local n=${#BL_KIND[@]} i ni=0 in_open=0 cur_flag open_flag body_n=0
   for ((i = 0; i < n; i++)); do
     case "${BL_KIND[$i]}" in
       VE|VC)
-        vpos=$(( vpos + 1 ))
-        printf 'V\t%s\t%s\t%s\n' "${BL_B[$i]}" "${BL_A[$i]}" "${BL_C[$i]}"
+        cur_flag="-"
+        [ "${BL_A[$i]}" = "cur" ] && cur_flag="cur"
+        if [ "${BL_KIND[$i]}" = "VE" ]; then
+          open_flag="open"; in_open=1
+        else
+          open_flag="fold"; in_open=0
+        fi
+        printf 'V\t%s\t%s\t%s\t%s\t%s\n' "${NR_NUM[$ni]}" "${BL_B[$i]}" "${BL_C[$i]}" "$cur_flag" "$open_flag"
+        ni=$(( ni + 1 ))
         body_n=$(( body_n + 1 ))
-        [ "${BL_KIND[$i]}" = "VE" ] && xpos="$vpos"
+        ;;
+      CX|CS|CB)
+        if [ "$in_open" -eq 1 ]; then
+          printf 'C\t[%s]\t%s\n' "${BL_A[$i]}" "${BL_B[$i]}"
+          body_n=$(( body_n + 1 ))
+        fi
         ;;
     esac
   done
 
-  local cn=${#NR_NUM[@]}
-  for ((i = 0; i < cn; i++)); do
-    printf 'C\t%s\t[%s]\t%s\n' "${NR_NUM[$i]}" "${NR_STATE[$i]}" "${NR_BODY[$i]}"
-    body_n=$(( body_n + 1 ))
-  done
-
-  printf 'X\t%s\n' "$xpos"
+  printf 'D\t%s\n' "$DONE_N"
   body_n=$(( body_n + 1 ))
   printf 'E\t%s\n' "$body_n"
 }

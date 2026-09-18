@@ -87,6 +87,10 @@ truncate_plain() {
 #      効かせ、呼び出し元（このシェル）を巻き込まない。
 #   ③ 子孫が残らない: ウォッチャーとコマンドの両方をグループごと落とし、
 #      ウォッチャーの sleep が孤児として残らないよう最後に wait する。
+#      TERMを無視する子孫がいても、watcherを止める前にコマンド側
+#      プロセスグループへ改めてKILLを送って掃除する（コマンド自身が
+#      TERMで先に終了すると、以後のwatcherのKILLが届かないまま停止させ
+#      られ、TERMを無視した子孫だけが生き残ることがあるため）。
 run_with_timeout() {
   local secs="$1"
   shift
@@ -100,6 +104,7 @@ run_with_timeout() {
   [ "$had_monitor" = "1" ] || set +m
   local rc=0
   wait "$cmd_pid" 2>/dev/null || rc=$?
+  kill -KILL "-$cmd_pid" 2>/dev/null
   kill -TERM "-$watcher_pid" 2>/dev/null
   wait "$watcher_pid" 2>/dev/null
   return "$rc"
