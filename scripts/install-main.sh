@@ -71,7 +71,7 @@
 #
 # --print-leader-runtime（2026-09-01 設計書§4.2-a 新設・値出力口の一本化）:
 # ローカル実体プロファイル（$AIENV_LOCAL_PROFILE_PATH）を解決し、実効リーダー
-# 候補（§3.5-L・本命 or fallback）の model・effort を1行のJSON
+# 候補（§3.5-L・role.leader）の model・effort を1行のJSON
 # （例 {"model": "claude-opus-5", "effort": "high"}）で標準出力へ印字して
 # 即終了する（副作用ゼロ）。effort未指定時はキー自体を出さない（正常な省略と
 # 解決失敗を混同しない）。プロファイルがv1（旧7キーのみ・schema_versionが
@@ -181,7 +181,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 「値出力口の一本化」と同じ設計思想の横展開＝値表を3箇所に増やさない）。
 # 2026-09-01 配役表解凍 §4.2-d 改訂: 固定で許可するのは以下2キーだけへ縮小。
 # 旧版はANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODELも無条件固定で許可していたが、
-# それらは「プロファイルのrole.*/fallback.*が参照する定義名の実効providerが
+# それらは「プロファイルのrole.*が参照する定義名の実効providerが
 # bedrockで、実際にその別名を使っているときだけ」動的に許可する側へ移した
 # （compute_allowed_bedrock_env_keys()参照。2026-09-08モデル定義ファイルと
 # 候補指定対応でproviderは役割の行自身ではなくモデル定義ファイル側の属性に
@@ -195,7 +195,7 @@ AIENV_ALLOWED_BEDROCK_ENV_KEYS=(
 
 # compute_allowed_bedrock_env_keys — 固定2キー＋動的キーの和集合を1行1キーで
 # 標準出力へ書く（2026-09-01 §4.2-d）。動的キー＝ローカル実体プロファイルの
-# role.*/fallback.*の候補が参照するモデル定義（configured/unavailableの
+# role.*の候補が参照するモデル定義（configured/unavailableの
 # どちらも意図を残す設計＝V8-aに合わせ両方見る）のうちproviderがbedrockの
 # ものがあれば、その model 別名を共有libのlist-rolesサブコマンドへ渡して
 # bedrock_pin_<別名>のenvキー名を導出したものの重複排除。list-rolesは
@@ -235,7 +235,7 @@ compute_allowed_bedrock_env_keys() {
         fi
         [ -z "$var" ] && continue
         dynamic+=("$var")
-      done < <(awk -F'\t' '($3=="configured"||$3=="unavailable") && $5=="bedrock" {print $6}' "$rows_tmp" | sort -u)
+      done < <(awk -F'\t' '($2=="configured"||$2=="unavailable") && $4=="bedrock" {print $5}' "$rows_tmp" | sort -u)
     else
       case "$rows_err" in
         PROFILE_NOT_FOUND*)
@@ -370,8 +370,25 @@ fail() { echo "[install-main] FAIL: $*" >&2; exit 1; }
 # link()（下記）とupdate-sub.shのclaude/agents/*.md直接配置が共有する
 # sync_managed_symlink()を読み込む（検証4巡目 BLOCKING-1対応・2026-09-14。
 # 詳細はscripts/lib/managed-symlink.sh側のコメント参照）。
+# 2026-09-17検証1巡目差し戻し MINOR-1対応: 従来はbareな`source`のみで、
+# lib欠落・構文破損時にrc=127（関数未定義）のまま後段の`|| warn`に
+# 飲み込まれ得た（MAJOR-1と合流して「配置しました」報告のまま静かに壊れる）。
+# update-sub.sh L383〜393と同じ3段のガード（-r・bash -n・declare -F）を
+# 先に置く。
+if [ ! -r "$DIR/scripts/lib/managed-symlink.sh" ]; then
+  fail "共有ライブラリが読み取れません（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
+fi
+if ! /bin/bash -n "$DIR/scripts/lib/managed-symlink.sh" 2>/dev/null; then
+  fail "共有ライブラリの構文が不正です（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
+fi
 # shellcheck source=scripts/lib/managed-symlink.sh
 source "$DIR/scripts/lib/managed-symlink.sh"
+for _managed_symlink_fn in sync_managed_symlink; do
+  if ! declare -F "$_managed_symlink_fn" >/dev/null 2>&1; then
+    fail "共有ライブラリの読み込みに失敗しました（${_managed_symlink_fn}()が定義されていません）: $DIR/scripts/lib/managed-symlink.sh"
+  fi
+done
+unset _managed_symlink_fn
 
 # fail_settings_generation <message> — settings.json生成に関連する失敗経路
 # （S2/S3・S5・S6・S7）専用のfail()ラッパー。設計書§6.2-B S8「生成物が
@@ -491,7 +508,7 @@ resolve_leader_runtime() {
 }
 
 # list_roles_rows <path> — 共有libのlist-rolesを呼び、成功時はTSV行
-# （kind\tname\tstate\tprovider\tmodel\texecution\teffort）をそのまま標準
+# （name\tstate\t定義名\tprovider\tmodel\texecution\teffort）をそのまま標準
 # 出力へ流す。list-rolesは自己完結（存在確認・symlink拒否・preflight・
 # 分類・全validatorをlib側が内部で行う契約＝担当A確定）なので、呼び出し側は
 # これ以上の事前チェックを重複させない。失敗時は標準出力へ何も出さず、
@@ -628,8 +645,8 @@ leader_attrs_match() {
 # configured model=<生の並び>を一時ファイルへ書く③その一時ファイルに対して
 # resolve-leaderを1回走らせ、先頭候補が実際に解決できることを確認する
 # （check-candidateは1定義の形式とリーダー専用規則しか見ず、「先頭候補で
-# settings.jsonを作れるか」はresolve-leaderでしか確かめられない＝
-# fallback.leaderとの相互作用を含む）④preimage一致確認⑤原子的place。
+# settings.jsonを作れるか」はresolve-leaderでしか確かめられない）④preimage
+# 一致確認⑤原子的place。
 # 既存のファイルmode・所有者を維持し、書換前にbackup_once()でbackupを取る。
 # 他の行には一切触れない。
 write_and_verify_leader() {
@@ -719,7 +736,7 @@ with open(outpath, 'w', encoding='utf-8') as f:
         --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" \
         >/dev/null 2>&1; then
     rm -f "$tmp"
-    fail "LEADER_CANDIDATE_INVALID: 先頭候補（${model_defs%%,*}）でリーダー配役を解決できませんでした（fallback.leaderの候補が複数ある場合はFALLBACK_AMBIGUOUSの可能性があります）"
+    fail "LEADER_CANDIDATE_INVALID: 先頭候補（${model_defs%%,*}）でリーダー配役を解決できませんでした"
   fi
 
   local now_hash
@@ -904,17 +921,17 @@ ensure_leader_configured() {
   fi
 
   # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.1 B-6）: list-roles
-  # が8列（kind,name,state,定義名,provider,model,execution,effort）・
+  # が7列（name,state,定義名,provider,model,execution,effort）・
   # 1候補1行になったので`break`をやめてrole/leaderの全行を走査し、定義名を
   # 記述順に`,`で連結してLEADER_MODEL_DEFSにする（1候補1行になったので、
   # breakすると候補列の2件目以降が消える）。LEADER_STATEは最初の行から取る。
   # 旧provider/model/effort別変数は廃止（比較・対話・書込みが
   # 使うのは定義名の並びだけ）。
   LEADER_STATE=""
-  local kind name state model_def provider model execution effort
+  local name state model_def provider model execution effort
   local _elc_defs=()
-  while IFS=$'	' read -r kind name state model_def provider model execution effort; do
-    if [ "$kind" = "role" ] && [ "$name" = "leader" ]; then
+  while IFS=$'	' read -r name state model_def provider model execution effort; do
+    if [ "$name" = "leader" ]; then
       [ -z "$LEADER_STATE" ] && LEADER_STATE="$state"
       [ -n "$model_def" ] && _elc_defs+=("$model_def")
     fi
@@ -963,10 +980,10 @@ EOF_ROWS
       fi
       ;;
     unavailable)
-      # §3.5-L: unavailableは本命を評価せず直接fallback評価へ進む
-      # （§3.9の対話対象＝「未確定」はunknown/not_adopted/行が無いの3種のみ
-      # で、unavailableは含まれない。設計に無い対話分岐を追加しない）。
-      # fallback評価・空席判定はresolve_leader_runtime側の責務。
+      # §3.5-L: unavailableは本命を評価しない。空席判定は
+      # resolve_leader_runtime側の責務（§3.9の対話対象＝「未確定」は
+      # unknown/not_adopted/行が無いの3種のみで、unavailableは含まれない。
+      # 設計に無い対話分岐を追加しない）。
       return 0
       ;;
     unknown|not_adopted)
@@ -988,7 +1005,7 @@ EOF_ROWS
 
 # check_profile_cmd — 4.2-e。副作用ゼロの検査口。provider/modelごとに職種を
 # グループ化した配役一覧を表示する。list-roles（担当A確定・自己完結契約）で
-# 構造を取得し、resolve()でFALLBACK/VACANT/ADVISORY等の状態を補う。
+# 構造を取得し、resolve()でVACANT/ADVISORY等の状態を補う。
 check_profile_cmd() {
   local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB"
 
@@ -1070,23 +1087,23 @@ check_profile_cmd() {
 
   log "配役一覧（provider/modelでグループ化。値は再掲であり§4.1-f一般則の例外＝人が手編集を確認するための唯一の非AI向け表示）:"
   # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.1）: list-rolesが
-  # 8列（kind,name,state,定義名,provider,model,execution,effort）になった
+  # 7列（name,state,定義名,provider,model,execution,effort）になった
   # ので3箇所すべての列を1つずつ後ろへずらす。⚠️ effortが実行値になるのは
   # role.leader（実効候補）だけで、ワーカー行は「参考値（実行値ではない）」
   # （§3.8）。leader行にはこの注記を付けない（2026-09-01 Codex二次レビュー
-  # 指摘・MAJOR対応）。グループ見出しの行に定義名（$4）を足す。
+  # 指摘・MAJOR対応）。グループ見出しの行に定義名（$3）を足す。
   printf '%s\n' "$roles_tsv" \
     | awk -F'\t' '
-        $3=="configured" || $3=="unavailable" {
-          line = $1"."$2"("$3")[" $4 "]"
-          if ($8 != "") {
-            if ($1 == "role" && $2 == "leader") {
-              line = line " effort=" $8
+        $2=="configured" || $2=="unavailable" {
+          line = "role."$1"("$2")[" $3 "]"
+          if ($7 != "") {
+            if ($1 == "leader") {
+              line = line " effort=" $7
             } else {
-              line = line " effort=" $8 "（参考値・実行値ではない）"
+              line = line " effort=" $7 "（参考値・実行値ではない）"
             }
           }
-          print $5"/"$6"\t" line
+          print $4"/"$5"\t" line
         }' \
     | sort \
     | awk -F'\t' '{
@@ -1646,7 +1663,7 @@ print(d.get("effort", ""))
     # 「保持」を断定しない中立な表現にする。
     fail_settings_generation "リーダー実行値を解決できませんでした（${_leader_runtime_errline:-不明なエラー}）。settings.jsonの生成を中止します。"
   fi
-  # 動的Bedrock許可キー（§4.2-d）。プロファイルのrole.*/fallback.*が参照
+  # 動的Bedrock許可キー（§4.2-d）。プロファイルのrole.*が参照
   # する定義（モデル定義ファイル側）のproviderが実際にbedrockで使っている
   # 別名だけをここで確定させ、generate_settings_json()・
   # compute_bedrock_env_json()が唯一の値表として参照する配列を更新する。
@@ -1735,6 +1752,15 @@ link claude/hooks/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
 link claude/hooks/context-size-warn.sh "$HOME/.claude/hooks/context-size-warn.sh"
 # 対象8職種のAgent呼出しへmodel明示を強制するPreToolUseガード。
 link claude/hooks/agent-model-guard.sh "$HOME/.claude/hooks/agent-model-guard.sh"
+# 配役表に職種行がある職種のin-process起動（Agentツール）境界(PreToolUse
+# ^Agent$。ラッパー起動-設計-v1.1.1.md §4・D-3)。agent-model-guard.shと
+# 同じeventに並ぶ。
+link claude/hooks/inprocess-gate.sh "$HOME/.claude/hooks/inprocess-gate.sh"
+# 子（scripts/claude-exec.sh経由の名前無しworker）専用のVault保護柵。親の
+# settings.jsonのPreToolUseには登録しない（子の--settingsインライン
+# JSONが$HOME/.claude/hooks/vault-write-gate.shを直接参照する＝設計§2.5・
+# 裁定A）。配置だけはここで行う。
+link claude/hooks/vault-write-gate.sh "$HOME/.claude/hooks/vault-write-gate.sh"
 # 使用率の毎発言注入(UserPromptSubmit)。SessionStart側と同じ共有関数を使う。
 link claude/hooks/usage-inject.sh "$HOME/.claude/hooks/usage-inject.sh"
 
@@ -1743,6 +1769,11 @@ link claude/hooks/usage-inject.sh "$HOME/.claude/hooks/usage-inject.sh"
 # 2つを固定文（§2.1）で報告し、②が1件でもあれば非0終了する（①は終了コードに
 # 影響しない）。⚠️ dangling は削除しない（削除は本人判断という既存方針を
 # 変えない）。
+# 案件③ B-1 D-4（設計-v1.1.3.md §5 手順1）: effort-per-role v2が入れた
+# 「素材＋配役表由来のeffort行」を持つ生成実ファイル方式を退役し、配置先
+# 職種定義は再び symlink 化する（link()＝sync_managed_symlink() 経由。他の
+# 管理symlinkと同じ退避規則）。B-1のラッパーがeffortの実行値を--effortで
+# 子へ渡すため、職種定義ファイル側にeffort:行を持たせる必要が無くなった。
 AGENTS_SRC_DIR="$DIR/claude/agents"
 AGENTS_DEST_DIR="$HOME/.claude/agents"
 [ -d "$AGENTS_SRC_DIR" ] || fail "リポジトリのディレクトリが見つかりません（checkout破損の可能性）: $AGENTS_SRC_DIR"
@@ -1751,9 +1782,9 @@ for f in "$AGENTS_SRC_DIR"/*.md; do
   [ -e "$f" ] || fail "claude/agents/ 配下に .md が1つもありません（checkout破損の可能性）"
   name="$(basename "$f")"
   dest="$AGENTS_DEST_DIR/$name"
-  # dry-run では何も作らないため判定しない。symlink・実ファイルいずれの形でも
-  # 一切存在しなかったものだけを「初回未配置」として数える（既存の名前を
-  # 張り替えたケースは対象外＝設計§2.1「新しい定義を配置した」）。
+  # symlink・実ファイルいずれの形でも一切存在しなかったものだけを「初回未配置」
+  # として数える（既存の名前を張り替えたケースは対象外＝設計§2.1「新しい定義を
+  # 配置した」）。
   if [ "$DRY_RUN" != "1" ] && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
     AGENTS_NEWLY_PLACED+=("${name%.md}")
   fi
@@ -1791,6 +1822,7 @@ if [ "$DRY_RUN" != "1" ]; then
            "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh" \
            "$DIR/claude/hooks/check-sub-update.sh" "$DIR/claude/hooks/context-size-warn.sh" \
            "$DIR/claude/hooks/agent-model-guard.sh" \
+           "$DIR/claude/hooks/inprocess-gate.sh" "$DIR/claude/hooks/vault-write-gate.sh" \
            "$DIR/claude/hooks/usage-inject.sh" \
            "$DIR/cmux/cmux-task-model.sh" "$DIR/cmux/cmux-next-model.sh" \
            "$DIR/cmux/cmux-task-declare.sh"

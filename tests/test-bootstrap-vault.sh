@@ -314,12 +314,11 @@ run_bootstrap_health4() {
   mkdir -p "$(dirname "$profile_path")"
   {
     echo "---"
-    echo "schema_version: 6"
+    echo "schema_version: 7"
     echo "profile_slug: authoring"
     echo "team_mode:        configured value=full"
     echo "no_read_paths:    unavailable"
     echo "machine_role:     ${machine_role_line}"
-    echo "excluded_models: configured value=none"
     echo "role.leader: configured model=opus-high"
     echo "---"
   } > "$profile_path"
@@ -337,9 +336,9 @@ run_bootstrap_health4() {
   rm -rf "$fake_home"
 }
 
-# 「壊れていない」schema 6のprofile.mdを作る（2026-09-08 モデル定義ファイルと
+# 「壊れていない」schema 7のprofile.mdを作る（2026-09-08 モデル定義ファイルと
 # 候補指定対応: role.leaderまで含めて完全にOKへ解決できる最小の実体。旧版は
-# 能力軸3キーだけの自由値v1形式だったが、schema 6のコードは6未満（版なし
+# 能力軸3キーだけの自由値v1形式だったが、schema 7のコードは7未満（版なし
 # 含む）を一律T4-LEGACYで解決失敗にするため、role.leader込みの完全な実体に
 # 差し替えた＝§4.1・§4.2。整理前の中間状態の経緯はgit履歴を参照）。
 make_ok_profile() {
@@ -347,12 +346,11 @@ make_ok_profile() {
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: authoring
 team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
-excluded_models: configured value=none
 role.leader:      configured model=opus-high
 ---
 EOF
@@ -1080,7 +1078,7 @@ echo "=== 10. P1機構(ローカル実体プロファイル): ゲート無効(BO
   rm -rf "$VAULT_DIR" "$(dirname "$PROFILE_PATH")"
 }
 
-echo "=== 11. P1機構: 有効化すると、Vault側の必読ファイルに加えて固定パスが1件だけ現れる（P1受入条件①） ==="
+echo "=== 11. FR-10(要件v1.2.1): 有効化しても実体プロファイルの固定パスは必読リストに一切現れない（旧P1受入条件①は撤回。FR-11のモード行セグメントで代替） ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
@@ -1090,9 +1088,12 @@ echo "=== 11. P1機構: 有効化すると、Vault側の必読ファイルに加
 
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
   occurrences="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH" || true)"
-  assert_eq "固定パスがちょうど1件だけ現れる" "1" "$occurrences"
+  assert_eq "固定パスは必読リストに0件（FR-10）" "0" "$occurrences"
   assert_contains "Vault側の必読ファイル(absolute-rules.md)も引き続き現れる" "$ctx" "$VAULT_DIR/Preferences/absolute-rules.md"
   assert_not_contains "壊れていないprofileでは最小能力警告は出ない" "$ctx" "最小能力"
+  assert_contains "FR-11: モード行セグメントにschema_version=が含まれる" "$ctx" "schema_version=7"
+  assert_contains "FR-11: モード行セグメントにmachine_role=が含まれる" "$ctx" "machine_role=main"
+  assert_contains "FR-11: モード行セグメントに照会コマンド(role_candidates.py)が含まれる" "$ctx" "role_candidates.py"
 
   rm -rf "$VAULT_DIR" "$PROFILE_DIR"
 }
@@ -1106,7 +1107,18 @@ echo "=== 12. P1機構 T1(実体なし): 最小能力+⚠️になる ==="
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
   assert_contains "T1: 最小能力+⚠️の警告が出る" "$ctx" "最小能力"
   assert_contains "T1: 実体なしの理由が出る" "$ctx" "T1"
-  assert_contains "未作成の案内が必読リストに出る" "$ctx" "未作成"
+  # FR-10差し戻し（検証1巡目MINOR-4・2026-09-17）: 失敗経路（T1）でも必読
+  # リストへは一切追加しない（旧仕様は「未作成」の案内1行を必読リストへ
+  # 出していた。案内は🧭モード行の「利用不可（T1）」セグメントへ一本化）。
+  occurrences_t1="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH" || true)"
+  assert_eq "T1: 必読リストに実体プロファイルの行が0件" "0" "$occurrences_t1"
+
+  # FR-12（要件v1.2.1）: 不在(T1)は🧭モード行の同じ1行の中に「利用不可」
+  # 「本人確認へ倒す」が含まれる（値の再掲は無く区分コードのみ）。
+  mode_line_t1="$(printf '%s\n' "$ctx" | grep '^🧭 現在＝')"
+  assert_contains "T1: モード行に「利用不可」を含む" "$mode_line_t1" "利用不可"
+  assert_contains "T1: モード行に「本人確認へ倒す」を含む" "$mode_line_t1" "本人確認へ倒す"
+  assert_contains "T1: モード行の区分コードに（T1）を含む" "$mode_line_t1" "（T1）"
 
   rm -rf "$VAULT_DIR"
 }
@@ -1119,12 +1131,11 @@ echo "=== 13. P1機構 T2-MINIMAL(未記入sentinel): 最小能力+⚠️にな�
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: authoring
 team_mode: configured value=<fill-in>
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: configured model=opus-high
 ---
 EOF
@@ -1147,11 +1158,10 @@ echo "=== 14. P1機構 T5(既存キー欠落): 最小能力+⚠️になる ==="
   # 回帰テストの意図を保つ＝Codex一次レビュー指摘・Minor対応の型を継承）。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: authoring
 team_mode: configured value=full
 no_read_paths: unavailable
-excluded_models: configured value=none
 role.leader: configured model=opus-high
 ---
 EOF
@@ -1192,12 +1202,11 @@ echo "=== 16. P1機構 T9'(UNKNOWN_EXTRA): 機械側は既知キー部分が有�
   # 既知の3キーはすべて揃えたうえで、将来のスキーマ拡張を想定した未知キーを追加する。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: authoring
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: configured model=opus-high
 future_new_key: 未来のスキーマが追加した値
 ---
@@ -1214,6 +1223,18 @@ EOF
   assert_contains "T9': 「ワーカー起動は本人確認へ倒す」の文言が明示される（リーダー裁定・2026-09-01）" "$ctx" "ワーカー起動は本人確認へ倒してください"
   assert_not_contains "T9': 旧仕様のℹ️文言はもう出ない" "$ctx" "ℹ️ ローカル実体プロファイルに未知のキーがあります"
   assert_not_contains "T9': 全文Readの指示は付かない（必読除外）" "$ctx" "$PROFILE_PATH  （全"
+  # FR-10差し戻し（検証1巡目MINOR-4・2026-09-17）: UNKNOWN_EXTRAでも必読
+  # リストへは一切追加しない（旧仕様は⚠️の警告文とは別に必読リストへも
+  # 「プロファイル利用不可のため全文はReadさせません」の案内1行を出していた）。
+  occurrences_ue="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH" || true)"
+  assert_eq "T9': 必読リストに実体プロファイルの行が0件" "0" "$occurrences_ue"
+
+  # FR-12（要件v1.2.1）: UNKNOWN_EXTRAも🧭モード行の同じ1行の中に「利用不可」
+  # 「本人確認へ倒す」が含まれる（区分コードはUNKNOWN_EXTRA）。
+  mode_line_ue="$(printf '%s\n' "$ctx" | grep '^🧭 現在＝')"
+  assert_contains "T9': モード行に「利用不可」を含む" "$mode_line_ue" "利用不可"
+  assert_contains "T9': モード行に「本人確認へ倒す」を含む" "$mode_line_ue" "本人確認へ倒す"
+  assert_contains "T9': モード行の区分コードに（UNKNOWN_EXTRA）を含む" "$mode_line_ue" "（UNKNOWN_EXTRA）"
 
   rm -rf "$VAULT_DIR" "$PROFILE_DIR"
 }
@@ -1236,7 +1257,18 @@ echo "=== 17. P1機構: 実体がsymlinkの場合は受理せず最小能力+⚠
   # `-f`のみで判定していると、信頼しないはずのsymlink内容を「全文をRead
   # すること」として読ませる指示が残ってしまう）。
   assert_not_contains "symlinkは「全文をReadすること」の必読指示に載らない" "$ctx" "$PROFILE_PATH  （全"
-  assert_contains "symlinkのため受理しない旨が必読リスト側にも表示される" "$ctx" "symlinkのため実体として受理しません"
+  # FR-10差し戻し（検証1巡目MINOR-4・2026-09-17）: symlinkでも必読リストへは
+  # 一切追加しない（旧仕様は「symlinkのため実体として受理しません」の案内
+  # 1行を必読リストへ出していた。案内は🧭モード行の「利用不可（SYMLINK）」
+  # セグメントへ一本化する）。
+  occurrences_symlink="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH" || true)"
+  assert_eq "symlink: 必読リストに実体プロファイルの行が0件" "0" "$occurrences_symlink"
+
+  # FR-12（要件v1.2.1）: symlinkも🧭モード行の同じ1行の中に「利用不可」
+  # 「本人確認へ倒す」が含まれる（区分コードはSYMLINK）。
+  mode_line_symlink="$(printf '%s\n' "$ctx" | grep '^🧭 現在＝')"
+  assert_contains "symlink: モード行に「利用不可」を含む" "$mode_line_symlink" "利用不可"
+  assert_contains "symlink: モード行の区分コードに（SYMLINK）を含む" "$mode_line_symlink" "（SYMLINK）"
 
   rm -rf "$VAULT_DIR" "$PROFILE_DIR"
 }
@@ -1262,25 +1294,26 @@ resolve_leader_v2() {
   python3 "$PROFILE_LIB" resolve-leader "$path" --bedrock-env "$bedrock_env" --agents-dir "$agents_dir"
 }
 
-# v2の全6固定キー(メタ2+能力軸3+excluded_models)をすべて満たした最小の
-# base雛形。呼び出し側がrole./fallback.行だけを足して各シナリオを作る。
+# v2の全5固定キー(メタ2+能力軸3)をすべて満たした最小の
+# base雛形。呼び出し側がrole.行だけを足して各シナリオを作る。
 # 2026-09-08 モデル定義ファイルと候補指定対応: EXPECTED_SCHEMA_VERSIONを
 # 5→6へ引き上げた（モデル定義ファイルと候補指定-設計-2026-09-08.md・D-8）
 # のに合わせてbaseも更新した。役割の行の属性はmodel=<定義名>[,…]だけになり、
 # provider/execution/effortはモデル定義ファイル側（make_model_defs()）へ
-# 移した。
+# 移した。2026-09-16 代替配役の層と禁止モデル列挙の層の撤去-設計-
+# 2026-09-16.mdでEXPECTED_SCHEMA_VERSIONを6→7へ引き上げたのに合わせて
+# baseを再更新した。
 # ⚠️ team_mode:の行末揃え（8スペース）は下部のsed置換が字面で参照するため
 # 崩さないこと。
 V2_BASE='---
-schema_version: 6
+schema_version: 7
 profile_slug: authoring
 team_mode:        configured value=full
 no_read_paths:    unavailable
-machine_role:     configured value=main
-excluded_models: configured value=none'
+machine_role:     configured value=main'
 
 make_v2_profile() {
-  # $1=path、以降の引数は role./fallback. 行（そのまま追記）。
+  # $1=path、以降の引数は role.行（そのまま追記）。
   local path="$1"; shift
   mkdir -p "$(dirname "$path")"
   {
@@ -1416,34 +1449,55 @@ echo "=== 27. validator V9-d②: execution=external-apiは常にconfigured不可
   assert_contains "unavailableならexternal-apiでも構文上は許される(V9-d②はconfigured限定)" "$out" "OK"
 }
 
-echo "=== 28. validator V16: excluded_modelsに一致する配役はMINIMAL ==="
+echo "=== 29b. AC-5: 撤去済みキーが残存した実体はUNKNOWN_EXTRAとして扱われる（FR-3。エラーにも無視にもしない） ==="
 {
-  V16="$(mktemp -d)/v16.md"
-  make_v2_profile "$V16" \
-    "role.leader: configured model=opus-high"
-  sed -i '' 's/excluded_models: configured value=none/excluded_models: configured value=anthropic-api\/claude-opus-5/' "$V16"
-  out="$(resolve_v2 "$V16")"  || true
-  assert_contains "禁止モデル一致はV16でMINIMAL" "$out" "MINIMAL	T8	V16"
+  # ⚠️ 撤去済みキー名を検索語としてソースへ直書きしない（AC-1・AC-2の
+  # repo検索に一致しないよう分割代入する。上のlegacy_excluded_keyと同じ手口）。
+  retired_key_1="fall""back"".""verifier"
+  retired_key_2="excluded""_models"
 
-  V16_1M="$(mktemp -d)/v16_1m.md"
-  make_v2_profile "$V16_1M" \
-    "role.leader: configured model=fable-1m"
-  sed -i '' 's/excluded_models: configured value=none/excluded_models: configured value=anthropic-api\/claude-fable-5/' "$V16_1M"
-  out="$(resolve_v2 "$V16_1M")"  || true
-  assert_contains "[1m]は判定で無視されるので同じく一致してMINIMALになる" "$out" "MINIMAL	T8	V16"
-}
+  RESIDUAL_1="$(mktemp -d)/residual1.md"
+  cat > "$RESIDUAL_1" <<'EOF'
+---
+schema_version: 7
+profile_slug: authoring
+team_mode:        configured value=full
+no_read_paths:    unavailable
+machine_role:     configured value=main
+role.leader: configured model=opus-high
+fallback.verifier: configured model=opus-high # RETIRED-FIXTURE
+---
+EOF
+  out="$(resolve_v2 "$RESIDUAL_1")"  || true
+  assert_contains "残存する旧キーの行はUNKNOWN_EXTRAに出る(1)" "$out" "UNKNOWN_EXTRA:${retired_key_1}"
+  assert_not_contains "残存キーがあってもMINIMALへは倒さない(1)" "$out" "MINIMAL"
 
-echo "=== 29. validator V6: fallbackが指す職種がrole.表に無いとMINIMAL ==="
-{
-  V6="$(mktemp -d)/v6.md"
-  make_v2_profile "$V6" \
+  RESIDUAL_2="$(mktemp -d)/residual2.md"
+  cat > "$RESIDUAL_2" <<'EOF'
+---
+schema_version: 7
+profile_slug: authoring
+team_mode:        configured value=full
+no_read_paths:    unavailable
+machine_role:     configured value=main
+role.leader: configured model=opus-high
+excluded_models: configured value=none # RETIRED-FIXTURE
+---
+EOF
+  out="$(resolve_v2 "$RESIDUAL_2")"  || true
+  assert_contains "残存する旧キーの行はUNKNOWN_EXTRAに出る(2)" "$out" "UNKNOWN_EXTRA:${retired_key_2}"
+  assert_not_contains "残存キーがあってもMINIMALへは倒さない(2)" "$out" "MINIMAL"
+
+  echo "--- 廃止済みの複数候補あいまいコードは復活しない（AC-4の回帰） ---"
+  AMBIG="$(mktemp -d)/ambig.md"
+  make_v2_profile "$AMBIG" \
     "role.leader: configured model=opus-high" \
-    "fallback.ghost-role: configured model=opus-high"
-  out="$(resolve_v2 "$V6")"  || true
-  assert_contains "対応するrole.表が無いfallbackはV6でMINIMAL" "$out" "MINIMAL	T8	V6"
+    "role.verifier: configured model=opus-high,sonnet-high"
+  err="$(python3 "$PROFILE_LIB" resolve-candidate "$AMBIG" --role verifier --model-def opus-high 2>&1 1>/dev/null)"  || true
+  assert_not_contains "候補が複数あってもFALLBACK_AMBIGUOUSは出ない" "$err" "FALLBACK_AMBIGUOUS"  # RETIRED-FIXTURE
 }
 
-echo "=== 30. §3.5-L リーダー状態遷移: unknown/not_adopted/行が無い/unavailableでfallback無し は全てfail（resolveも非0・resolve-leaderも非0） ==="
+echo "=== 30. §3.5-L リーダー状態遷移: unknown/not_adopted/行が無い/unavailableは全てfail（resolveも非0・resolve-leaderも非0） ==="
 {
   for state in "role.leader: unknown" "role.leader: not_adopted"; do
     P="$(mktemp -d)/leaderfail.md"
@@ -1458,27 +1512,19 @@ echo "=== 30. §3.5-L リーダー状態遷移: unknown/not_adopted/行が無い
   out="$(resolve_v2 "$NOLEADER")"  || true
   assert_contains "role.leader行が無ければfail(MINIMAL)になる" "$out" "MINIMAL"
 
-  UNAVAIL_NOFB="$(mktemp -d)/leaderunavail.md"
-  make_v2_profile "$UNAVAIL_NOFB" "role.leader: unavailable model=opus-high"
-  out="$(resolve_v2 "$UNAVAIL_NOFB")"  || true
-  assert_contains "leader=unavailableでfallback無しはfail" "$out" "MINIMAL"
+  UNAVAIL="$(mktemp -d)/leaderunavail.md"
+  make_v2_profile "$UNAVAIL" "role.leader: unavailable model=opus-high"
+  out="$(resolve_v2 "$UNAVAIL")"  || true
+  assert_contains "leader=unavailableはfail" "$out" "MINIMAL"
 
-  err="$(resolve_leader_v2 "$UNAVAIL_NOFB" 2>&1 1>/dev/null)"  || true
-  assert_contains "resolve-leaderは機械可読コードLEADER_UNAVAILABLE_NO_FALLBACKをstderrへ出す" "$err" "LEADER_UNAVAILABLE_NO_FALLBACK"
+  err="$(resolve_leader_v2 "$UNAVAIL" 2>&1 1>/dev/null)"  || true
+  assert_contains "resolve-leaderは機械可読コードLEADER_UNAVAILABLEをstderrへ出す" "$err" "LEADER_UNAVAILABLE"
+  # 廃止済みコードは復活しない（AC-4の回帰。マーカー2/4本目）。
+  assert_not_contains "旧コードLEADER_UNAVAILABLE_NO_FALLBACKは出ない" "$err" "LEADER_UNAVAILABLE_NO_FALLBACK"  # RETIRED-FIXTURE
 }
 
-echo "=== 31. §3.5-L: leaderのfallback救済（本命unavailable→fallbackがconfigured→採用） ==="
+echo "=== 31. §3.5-L: leader専用規則: 実効候補のproviderがexternalならfail ==="
 {
-  RESCUE="$(mktemp -d)/leaderrescue.md"
-  make_v2_profile "$RESCUE" \
-    "role.leader: unavailable model=bedrock-opus" \
-    "fallback.leader: configured model=opus-high"
-  out="$(resolve_v2 "$RESCUE")"  || true
-  assert_contains "leaderがfallback救済されればOKになる" "$out" "OK"
-  json="$(resolve_leader_v2 "$RESCUE")"  || true
-  assert_contains "resolve-leaderはfallbackのmodelを返す" "$json" "claude-opus-5"
-
-  echo "--- leader専用規則: 実効候補のproviderがexternalならfail ---"
   EXT_LEADER="$(mktemp -d)/extleader.md"
   make_v2_profile "$EXT_LEADER" \
     "role.leader: configured model=codex-review"
@@ -1486,36 +1532,35 @@ echo "=== 31. §3.5-L: leaderのfallback救済（本命unavailable→fallbackが
   assert_contains "leaderのprovider=externalはfailになる" "$out" "MINIMAL"
 }
 
-echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空席にならず、使えるfallbackがあれば採用される ==="
+echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空席にならず、同じ行の2件目以降の候補が使えれば採用される ==="
 {
-  FB_RESCUE="$(mktemp -d)/workerfallback.md"
-  make_v2_profile "$FB_RESCUE" \
+  MULTI_CAND="$(mktemp -d)/workermulticand.md"
+  make_v2_profile "$MULTI_CAND" \
     "role.leader: configured model=opus-high" \
-    "role.verifier: configured model=bedrock-haiku" \
-    "fallback.verifier: configured model=sonnet-high"
-  # bedrock.envを与えない(ABSENT=disabled)のでverifierの本命(bedrock)はV9-dで使用不可
-  out="$(resolve_v2 "$FB_RESCUE")"  || true
-  assert_contains "本命が使用不可でもfallbackが使えればFALLBACK:verifierとして採用される" "$out" "FALLBACK:verifier"
-  assert_not_contains "fallbackが採用された職種はVACANTに出ない" "$out" "VACANT:verifier"
+    "role.verifier: configured model=bedrock-haiku,sonnet-high"
+  # bedrock.envを与えない(ABSENT=disabled)のでverifierの1件目(bedrock)はV9-dで使用不可・
+  # 2件目(sonnet-high)は使用可。
+  out="$(resolve_v2 "$MULTI_CAND")"  || true
+  assert_not_contains "1件目が使用不可でも2件目が使えれば空席にならない" "$out" "VACANT:verifier"
+  assert_contains "resolve自体はOKのまま" "$out" "OK"
 
-  echo "--- 双方使用不可のときだけVACANT+VACANT_REASON、優先順はV1-b→V9-d→V12 ---"
+  echo "--- 全候補が使用不可のときだけVACANT+VACANT_REASON、優先順はV1-b→V9-d→V12 ---"
   BOTH_BAD="$(mktemp -d)/bothbad.md"
   make_v2_profile "$BOTH_BAD" \
     "role.leader: configured model=opus-high" \
-    "role.verifier: configured model=bedrock-haiku" \
-    "fallback.verifier: configured model=bedrock-opus"
+    "role.verifier: configured model=bedrock-haiku,bedrock-opus"
   out="$(resolve_v2 "$BOTH_BAD")"  || true
-  assert_contains "双方bedrockで経路無効なら空席になる" "$out" "VACANT:verifier"
+  assert_contains "全候補がbedrockで経路無効なら空席になる" "$out" "VACANT:verifier"
   assert_contains "空席理由の条件番号が出る(V9-d)" "$out" "VACANT_REASON:verifier=V9-d"
 
-  echo "--- unavailableの本命は評価されず、fallbackだけが評価される ---"
-  UNAVAIL_SKIP="$(mktemp -d)/unavailskip.md"
-  make_v2_profile "$UNAVAIL_SKIP" \
+  echo "--- unavailableな行は候補を1件も評価せず、良い候補を持っていてもVACANTになる（§3.6：状態は行単位） ---"
+  UNAVAIL_LINE="$(mktemp -d)/unavailline.md"
+  make_v2_profile "$UNAVAIL_LINE" \
     "role.leader: configured model=opus-high" \
-    "role.verifier: unavailable model=bedrock-opus" \
-    "fallback.verifier: configured model=sonnet-high"
-  out="$(resolve_v2 "$UNAVAIL_SKIP")"  || true
-  assert_contains "unavailableな本命はスキップされfallbackが採用される" "$out" "FALLBACK:verifier"
+    "role.verifier: unavailable model=sonnet-high"
+  out="$(resolve_v2 "$UNAVAIL_LINE")"  || true
+  assert_contains "unavailableな行は候補が良くてもVACANTになる（意図的な不使用）" "$out" "VACANT:verifier"
+  assert_not_contains "評価しないので理由(VACANT_REASON)も付かない" "$out" "VACANT_REASON:verifier"
 }
 
 echo "=== 33. §3.7 判定不能: Bedrock経路の判定不能はワーカーなら通す・leaderならfail ==="
@@ -1573,14 +1618,13 @@ echo "=== 35. V15/T11: 禁止キー名はv1/v2どちらの分類でもpreflight�
   # frontmatter終端---の後ろに付けると構文が壊れるので、専用のfixtureを作り直す。
   cat > "$V15_V2" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: authoring
 role.leader: configured model=opus-high
 api_key: configured value=xyz
 team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
-excluded_models: configured value=none
 ---
 EOF
   out="$(resolve_v2 "$V15_V2")"  || true
@@ -1604,7 +1648,7 @@ EOF
   rm -rf "$VAULT_DIR" "$PROFILE_DIR"
 }
 
-echo "=== 36. 結合（DIRECTIVE）: VACANT_UNKNOWN・FALLBACK・VACANT_REASONが職種名と条件番号でDIRECTIVEへ注入される（4.1-f） ==="
+echo "=== 36. 結合（DIRECTIVE）: VACANT_UNKNOWN・VACANT_REASONが職種名と条件番号でDIRECTIVEへ注入される ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
@@ -1612,8 +1656,7 @@ echo "=== 36. 結合（DIRECTIVE）: VACANT_UNKNOWN・FALLBACK・VACANT_REASON�
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   make_v2_profile "$PROFILE_PATH" \
     "role.leader: configured model=opus-high" \
-    "role.verifier: configured model=bedrock-haiku" \
-    "fallback.verifier: configured model=bedrock-opus"
+    "role.verifier: configured model=bedrock-haiku,bedrock-opus"
   # 静的検証: このprofile単体でVACANT_REASON:verifier=V9-dが出ることを確認済み(#32)。
   # ここではDIRECTIVEへの伝播だけを確認する。
 
@@ -1621,19 +1664,21 @@ echo "=== 36. 結合（DIRECTIVE）: VACANT_UNKNOWN・FALLBACK・VACANT_REASON�
   assert_contains "DIRECTIVEに配役表の状態行が出る" "$ctx" "配役表の状態"
   assert_contains "VACANT:teseterの職種名が出る" "$ctx" "VACANT:verifier"
   assert_contains "VACANT_REASONの条件番号が出る" "$ctx" "VACANT_REASON:verifier=V9-d"
-  # 2026-09-08 モデル定義ファイルと候補指定対応: 定義名（例=bedrock-haiku）は
-  # D-10によりこの原則の対象外（配役表解凍-設計-2026-09-08.md §4.1-f）——候補
-  # 行に定義名だけが出ることは別のテスト（AC-7相当）で検証済み。ここで見るのは
-  # 生の属性構文（`model=`・`provider=`のkey=value形式）がDIRECTIVEへそのまま
-  # 再掲されないこと（機構が値を再包装せず生のprofile行を横流しした場合の
-  # 回帰を検知する）。
-  assert_not_contains "配役の属性構文(model=)がそのまま再掲されない（4.1-f）" "$ctx" "model="
-  assert_not_contains "配役の属性構文(provider=)がそのまま再掲されない（4.1-f）" "$ctx" "provider="
+  # ここで見るのは生の属性構文（`model=`・`provider=`のkey=value形式）が
+  # DIRECTIVEへそのまま再掲されないこと（機構が値を再包装せず生のprofile行を
+  # 横流しした場合の回帰を検知する）。
+  assert_not_contains "配役の属性構文(model=)がそのまま再掲されない" "$ctx" "model="
+  assert_not_contains "配役の属性構文(provider=)がそのまま再掲されない" "$ctx" "provider="
+  # FR-11（要件v1.2.1）: 職種ごとの候補一覧（定義名のみ）の注入行は撤去した
+  # （旧仕様=advisory直後にℹ️行を足す形。候補一覧コマンド新設に伴い
+  # SessionStart注入からは0件になる＝NFR-5）。
+  assert_eq "候補一覧のℹ️行は0件（FR-11で撤去）" "0" \
+    "$(printf '%s\n' "$ctx" | grep -c '^ℹ️ 職種ごとのモデル候補' || true)"
 
   rm -rf "$VAULT_DIR" "$PROFILE_DIR"
 }
 
-echo "=== 37. stdout契約: v2 OKでは全文Readが必読リストに載り、フィールドは固定順（OK→FALLBACK→VACANT→VACANT_REASON→VACANT_UNKNOWN→ADVISORY→UNKNOWN_EXTRA） ==="
+echo "=== 37. FR-10対応: v2 OKでも全文Read指示は必読リストに載らない（旧仕様は撤回）。フィールドは固定順（OK→VACANT→VACANT_REASON→VACANT_UNKNOWN→ADVISORY→UNKNOWN_EXTRA） ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
@@ -1645,7 +1690,7 @@ echo "=== 37. stdout契約: v2 OKでは全文Readが必読リストに載り、�
 
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
   occurrences="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH  （全" || true)"
-  assert_eq "壊れていないv2プロファイルは全文Read指示がちょうど1件" "1" "$occurrences"
+  assert_eq "壊れていないv2プロファイルでも全文Read指示は0件（FR-10）" "0" "$occurrences"
 
   out="$(resolve_v2 "$PROFILE_PATH")"  || true
   order_ok=1
@@ -1658,33 +1703,35 @@ echo "=== 37. stdout契約: v2 OKでは全文Readが必読リストに載り、�
   echo "--- フィールドが複数同時に出るケースで固定順を検証する（Codex一次レビュー指摘・Major対応: 従来は先頭がOKかしか見ていなかった） ---"
   MULTI="$(mktemp -d)/multi.md"
   make_v2_profile "$MULTI" \
-    "role.leader: unavailable model=bedrock-opus" \
-    "fallback.leader: configured model=opus-high" \
-    "role.verifier: configured model=bedrock-haiku" \
-    "fallback.verifier: configured model=sonnet-high" \
+    "role.leader: configured model=opus-high" \
+    "role.verifier: configured model=bedrock-haiku,bedrock-opus" \
     "role.researcher: configured model=sonnet-high"
   multi_out="$(resolve_v2 "$MULTI")"  || true
-  # 期待: OK -> FALLBACK:leader,verifier(順不同はソート済み) -> VACANT_UNKNOWN(コア
-  # マニフェストの他職種) -> ADVISORY:V1-a の順で、この並びどおりに現れること。
+  # 期待: OK -> VACANT:verifier -> VACANT_REASON:verifier=V9-d -> VACANT_UNKNOWN
+  # (コアマニフェストの他職種) -> ADVISORY:V1-a の順で、この並びどおりに現れること。
   idx_ok=$(printf '%s' "$multi_out" | grep -bo '^OK' | head -1 | cut -d: -f1)
-  idx_fallback=$(printf '%s' "$multi_out" | grep -bo 'FALLBACK:' | head -1 | cut -d: -f1)
+  idx_vacant=$(printf '%s' "$multi_out" | grep -bo 'VACANT:' | head -1 | cut -d: -f1)
+  idx_vacant_reason=$(printf '%s' "$multi_out" | grep -bo 'VACANT_REASON:' | head -1 | cut -d: -f1)
   idx_vacant_unknown=$(printf '%s' "$multi_out" | grep -bo 'VACANT_UNKNOWN:' | head -1 | cut -d: -f1)
   idx_advisory=$(printf '%s' "$multi_out" | grep -bo 'ADVISORY:' | head -1 | cut -d: -f1)
-  assert_contains "複合ケースでFALLBACKにleaderとverifierの両方が出る" "$multi_out" "FALLBACK:leader,verifier"
+  assert_contains "複合ケースでVACANTにverifierが出る" "$multi_out" "VACANT:verifier"
   order_multi_ok=1
-  [ -n "$idx_ok" ] && [ -n "$idx_fallback" ] && [ "$idx_ok" -lt "$idx_fallback" ] || order_multi_ok=0
-  [ -n "$idx_fallback" ] && [ -n "$idx_vacant_unknown" ] && [ "$idx_fallback" -lt "$idx_vacant_unknown" ] || order_multi_ok=0
+  [ -n "$idx_ok" ] && [ -n "$idx_vacant" ] && [ "$idx_ok" -lt "$idx_vacant" ] || order_multi_ok=0
+  [ -n "$idx_vacant" ] && [ -n "$idx_vacant_reason" ] && [ "$idx_vacant" -lt "$idx_vacant_reason" ] || order_multi_ok=0
+  [ -n "$idx_vacant_reason" ] && [ -n "$idx_vacant_unknown" ] && [ "$idx_vacant_reason" -lt "$idx_vacant_unknown" ] || order_multi_ok=0
   [ -n "$idx_vacant_unknown" ] && [ -n "$idx_advisory" ] && [ "$idx_vacant_unknown" -lt "$idx_advisory" ] || order_multi_ok=0
-  assert_eq "OK→FALLBACK→VACANT_UNKNOWN→ADVISORYの出現順が固定順どおり" "1" "$order_multi_ok"
+  assert_eq "OK→VACANT→VACANT_REASON→VACANT_UNKNOWN→ADVISORYの出現順が固定順どおり" "1" "$order_multi_ok"
 }
 
-echo "=== 38. 候補評価§3.6: 本命と代替の失敗理由が異なるとき、優先順(V1-b→V9-d→V12)で高い方が採用される（ホワイトボックス・Codex二次レビュー指摘・Major対応: CLI経由のfixtureでは本命/fallbackが同一職種名を共有するためV1-bは両者で必ず同じ結果になり、異なる理由の組み合わせを黒箱では再現できない。_evaluate_single_candidate()を差し替えて優先順ロジック自体を直接検証する） ==="
+echo "=== 38. 候補評価§3.6: 1件目と2件目の失敗理由が異なるとき、優先順(V1-b→V9-d→V12)で高い方が採用される（ホワイトボックス・Codex二次レビュー指摘・Major対応: CLI経由のfixtureでは1件目/2件目が同一職種名を共有するためV1-bは両者で必ず同じ結果になり、異なる理由の組み合わせを黒箱では再現できない。_evaluate_single_candidate()を差し替えて優先順ロジック自体を直接検証する） ==="
 {
   # 2026-09-08 モデル定義ファイルと候補指定対応: evaluate_worker_candidate()の
-  # シグネチャがresolved辞書（{(kind,name): [ModelDef,...]}）を取るように
-  # 変わり、内部で候補ごとにCandidate(name, ModelDef)を組み立ててから
+  # シグネチャがresolved辞書（{name: [ModelDef,...]}）を取るように変わり、
+  # 内部で候補ごとにCandidate(name, ModelDef)を組み立ててから
   # _evaluate_single_candidate()へ渡すようになった（1行1候補→1行n候補）。
   # そのためline識別はオブジェクトの同一性ではなくdef_nameで行う。
+  # 2026-09-16 代替配役の層の撤去に合わせ、resolved辞書のキーを
+  # (kind,name)からnameへ、evaluate_worker_candidate()の引数を5個へ縮める。
   result="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 - <<'PYEOF'
 import profile_resolve as pr
 
@@ -1704,27 +1751,25 @@ def make_def(name):
 
 
 def fake_eval(cand, agents_dir, bedrock_env, is_leader):
-    if cand.def_name == "primary-def":
+    if cand.def_name == "first-def":
         return False, "V9-d", None
     return False, "V1-b", None
 
 
 primary = Fake("verifier")
-fallback = Fake("verifier")
 resolved = {
-    ("role", "verifier"): [make_def("primary-def")],
-    ("fallback", "verifier"): [make_def("fallback-def")],
+    "verifier": [make_def("first-def"), make_def("second-def")],
 }
 orig = pr._evaluate_single_candidate
 pr._evaluate_single_candidate = fake_eval
 try:
-    cand = pr.evaluate_worker_candidate("verifier", {"verifier": primary}, {"verifier": fallback}, resolved, None, None)
+    cand = pr.evaluate_worker_candidate("verifier", {"verifier": primary}, resolved, None, None)
 finally:
     pr._evaluate_single_candidate = orig
 print(cand.vacant_reason)
 PYEOF
 )"
-  assert_eq "本命=V9-d・fallback=V1-bでもV1-bの方が優先順が高いのでV1-bが選ばれる" "V1-b" "$result"
+  assert_eq "1件目=V9-d・2件目=V1-bでもV1-bの方が優先順が高いのでV1-bが選ばれる" "V1-b" "$result"
 }
 
 echo "=== 39. §3.7 判定不能: ワーカーが判定不能で通ったこと自体がADVISORY(JUDGEMENT_UNKNOWN)として出る（Codex一次レビュー指摘・Major対応: 従来はunknown_noteを保持するだけで出力していなかった） ==="
@@ -1745,14 +1790,17 @@ echo "=== 39. §3.7 判定不能: ワーカーが判定不能で通ったこと�
   rm -rf /tmp/aienv-test-unreadable-env-dir2
 }
 
-echo "=== 40. §4.1-f: leaderがfallback救済されたときも職種名'leader'がFALLBACK:へ出る（Codex一次レビュー指摘・Major対応: 従来はワーカーだけが対象だった） ==="
+echo "=== 40. 代替配役の層の撤去の回帰: 職種の2件目の候補が採用されても撤去済みフィールドは一切出ない ==="
 {
-  LEADER_FB="$(mktemp -d)/leaderfb.md"
-  make_v2_profile "$LEADER_FB" \
-    "role.leader: unavailable model=bedrock-opus" \
-    "fallback.leader: configured model=opus-high"
-  out="$(resolve_v2 "$LEADER_FB")"  || true
-  assert_contains "leaderのfallback採用がFALLBACK:leaderとして出る" "$out" "FALLBACK:leader"
+  # ⚠️ 撤去済みフィールド名を検索語としてソースへ直書きしない（AC-1の
+  # repo検索に一致しないよう分割代入する。上のlegacy_excluded_keyと同じ手口）。
+  retired_field_name="FALL""BACK:"
+  MULTI_OK="$(mktemp -d)/multiok.md"
+  make_v2_profile "$MULTI_OK" \
+    "role.leader: configured model=opus-high" \
+    "role.verifier: configured model=bedrock-haiku,sonnet-high"
+  out="$(resolve_v2 "$MULTI_OK")"  || true
+  assert_not_contains "1件目が使用不可で2件目が採用されても撤去済みフィールドは出ない" "$out" "$retired_field_name"
 }
 
 echo "=== 41. 秘匿: check-candidateとresolve-leaderのstderr（失敗時）にもピン実値・AWS認証情報が一切現れない（Codex一次レビュー指摘・Major対応: 従来のテストはresolveの標準出力だけを見ていた） ==="
@@ -1784,7 +1832,7 @@ echo "=== 42. §3.4 T4'(実体の版>コードの版): 未知キーを無視しA
   T4PRIME="$(mktemp -d)/t4prime.md"
   make_v2_profile "$T4PRIME" \
     "role.leader: configured model=opus-high"
-  sed -i '' 's/schema_version: 6/schema_version: 7/' "$T4PRIME"
+  sed -i '' 's/schema_version: 7/schema_version: 8/' "$T4PRIME"
   # ---の直前に未知キーを挿入する。
 
   python3 - "$T4PRIME" <<'PYEOF'
@@ -1801,29 +1849,14 @@ PYEOF
   assert_contains "T4-PRIME: 未知キーはUNKNOWN_EXTRAにも出る" "$out" "UNKNOWN_EXTRA:future_key_v3"
 }
 
-echo "=== 44. V8-b共通規則・excluded_modelsの扱い統一（Codex一次レビュー指摘・Major対応） ==="
+echo "=== 44. V8-b共通規則（Codex一次レビュー指摘・Major対応） ==="
 {
-  EM_SENTINEL="$(mktemp -d)/emsentinel.md"
-  make_v2_profile "$EM_SENTINEL" \
-    "role.leader: configured model=opus-high"
-  sed -i '' 's/excluded_models: configured value=none/excluded_models: configured value=<fill-in>/' "$EM_SENTINEL"
-  out="$(resolve_v2 "$EM_SENTINEL")"  || true
-  assert_contains "excluded_modelsのsentinelもT2-MINIMALで検出される" "$out" "MINIMAL	T2-MINIMAL"
-  assert_contains "T2-MINIMALの理由にexcluded_modelsが出る" "$out" "excluded_models"
-
   DUP_VALUE="$(mktemp -d)/dupvalue.md"
   make_v2_profile "$DUP_VALUE" \
     "role.leader: configured model=opus-high"
   sed -i '' 's/team_mode:        configured value=full/team_mode:        configured value=full,full/' "$DUP_VALUE"
   out="$(resolve_v2 "$DUP_VALUE")"  || true
   assert_contains "value内の重複要素はV8-bでMINIMALになる（共通規則）" "$out" "MINIMAL	T8	V8-b"
-
-  EM_UNAVAIL="$(mktemp -d)/emunavail.md"
-  make_v2_profile "$EM_UNAVAIL" \
-    "role.leader: configured model=opus-high"
-  sed -i '' 's/excluded_models: configured value=none/excluded_models: unavailable/' "$EM_UNAVAIL"
-  out="$(resolve_v2 "$EM_UNAVAIL")"  || true
-  assert_contains "excluded_models: unavailable（属性無し）はOKになる（他の能力軸キーと同じ3状態）" "$out" "OK"
 }
 
 echo "=== 45. is_v2_resolve_output_well_formed(): ゴミ混入・重複・順序違反はいずれも拒否される（Codex三次レビュー指摘・Major対応） ==="
@@ -1841,11 +1874,11 @@ echo "=== 45. is_v2_resolve_output_well_formed(): ゴミ混入・重複・順序
   T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tGARBAGE:xyz')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "未知フィールド(GARBAGE)混入は拒否される" || fail_case "未知フィールド(GARBAGE)混入は拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tFALLBACK:verifier\tFALLBACK:verifier')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tVACANT:verifier\tVACANT:verifier')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "同一フィールドの重複は拒否される" || fail_case "同一フィールドの重複は拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tVACANT:verifier\tFALLBACK:verifier')"
-  ! is_v2_resolve_output_well_formed "$T" 0 && pass "フィールドの順序違反(VACANTがFALLBACKより先)は拒否される" || fail_case "フィールドの順序違反(VACANTがFALLBACKより先)は拒否される"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\tVACANT_REASON:verifier=V9-d\tVACANT:verifier')"
+  ! is_v2_resolve_output_well_formed "$T" 0 && pass "フィールドの順序違反(VACANT_REASONがVACANTより先)は拒否される" || fail_case "フィールドの順序違反(VACANT_REASONがVACANTより先)は拒否される"
 
   T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main')"
   ! is_v2_resolve_output_well_formed "$T" 1 && pass "OKなのにexit1は拒否される" || fail_case "OKなのにexit1は拒否される"
@@ -1875,7 +1908,7 @@ echo "=== 45. is_v2_resolve_output_well_formed(): ゴミ混入・重複・順序
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "TEAM_MODE:の値が4語のいずれでもないと拒否される" \
     || fail_case "TEAM_MODE:の値が4語のいずれでもないと拒否される"
 
-  T="$(printf 'OK\tschema_version=2\tFALLBACK:verifier\tTEAM_MODE:full\tMACHINE_ROLE:main')"
+  T="$(printf 'OK\tschema_version=2\tVACANT:verifier\tTEAM_MODE:full\tMACHINE_ROLE:main')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "TEAM_MODE:がschema_versionの直後以外の位置にあると拒否される" \
     || fail_case "TEAM_MODE:がschema_versionの直後以外の位置にあると拒否される"
 
@@ -1891,16 +1924,23 @@ echo "=== 45. is_v2_resolve_output_well_formed(): ゴミ混入・重複・順序
 
   # TEAM_MODEは正しい位置のまま、MACHINE_ROLEだけをTEAM_MODEの直後以外へ
   # 動かす（TEAM_MODEの位置違反とは独立にMACHINE_ROLEの位置だけを検証する）。
-  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tFALLBACK:verifier\tMACHINE_ROLE:main')"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tVACANT:verifier\tMACHINE_ROLE:main')"
   ! is_v2_resolve_output_well_formed "$T" 0 && pass "MACHINE_ROLE:がTEAM_MODE:の直後以外の位置にあると拒否される" \
     || fail_case "MACHINE_ROLE:がTEAM_MODE:の直後以外の位置にあると拒否される"
 
   T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:unknown')"
   is_v2_resolve_output_well_formed "$T" 0 && pass "MACHINE_ROLE:unknownは受理される" \
     || fail_case "MACHINE_ROLE:unknownは受理される"
+
+  # 検証1巡目MINOR-4対応（設計§6.3⑩）: 撤去済みフィールドを含む行は
+  # 不正として拒否される（AC-1・AC-2に引っかからないよう分割代入する）。
+  retired_field_name="FALL""BACK:verifier"
+  T="$(printf 'OK\tschema_version=2\tTEAM_MODE:full\tMACHINE_ROLE:main\t%s' "$retired_field_name")"
+  ! is_v2_resolve_output_well_formed "$T" 0 && pass "撤去済みフィールドを含む行は拒否される" \
+    || fail_case "撤去済みフィールドを含む行は拒否される"
 }
 
-echo "=== 46. list-roles: kind/state/定義名/execution既定値/not_adopted・unknownの空欄化・fallbackの並び（2026-09-08 モデル定義ファイルと候補指定対応で8列・1候補1行へ改訂＝設計§3.4） ==="
+echo "=== 46. list-roles: state/定義名/execution既定値/not_adopted・unknownの空欄化（2026-09-16 代替配役の層の撤去で7列・単一role.表へ改訂＝設計§3.4） ==="
 {
   LR="$(mktemp -d)/listroles.md"
   make_v2_profile "$LR" \
@@ -1908,24 +1948,19 @@ echo "=== 46. list-roles: kind/state/定義名/execution既定値/not_adopted・
     "role.navi: unknown" \
     "role.researcher: not_adopted" \
     "role.system-designer: configured model=opus-high" \
-    "role.verifier: unavailable model=bedrock-opus" \
-    "fallback.verifier: configured model=sonnet-high"
+    "role.verifier: unavailable model=bedrock-opus"
   out="$(python3 "$PROFILE_LIB" list-roles "$LR")"  || true
 
-  assert_contains "role.leaderの行がkind=role・state=configured・定義名=opus-highで出る" "$out" "role	leader	configured	opus-high	anthropic-api	claude-opus-5	subagent	"
+  assert_contains "role.leaderの行がstate=configured・定義名=opus-highで出る" "$out" "leader	configured	opus-high	anthropic-api	claude-opus-5	subagent	"
   assert_contains "executionが省略されていてもsubagentが補われて出る" "$out" "	subagent	"
-  assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "role	system-designer	configured	opus-high	anthropic-api	claude-opus-5	subagent	high"
-  assert_contains "unknown状態は定義名以降が全て空文字になる（5フィールド）" "$out" "role	navi	unknown					"
-  assert_contains "not_adopted状態も定義名以降が全て空文字になる（5フィールド）" "$out" "role	researcher	not_adopted					"
-  assert_contains "unavailable状態は定義名・provider/modelを保持したまま出る（意図の記録）" "$out" "role	verifier	unavailable	bedrock-opus	bedrock	opus	subagent	"
-  assert_contains "fallback行もkind=fallbackとして出る" "$out" "fallback	verifier	configured	sonnet-high	anthropic-api	claude-sonnet-5	subagent	"
+  assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "system-designer	configured	opus-high	anthropic-api	claude-opus-5	subagent	high"
+  assert_contains "unknown状態は定義名以降が全て空文字になる（5フィールド）" "$out" "navi	unknown					"
+  assert_contains "not_adopted状態も定義名以降が全て空文字になる（5フィールド）" "$out" "researcher	not_adopted					"
+  assert_contains "unavailable状態は定義名・provider/modelを保持したまま出る（意図の記録）" "$out" "verifier	unavailable	bedrock-opus	bedrock	opus	subagent	"
+  assert_not_contains "kind列は撤去済みなので先頭に'role'は出ない" "$out" "role	leader"
 
-  # role.表→fallback.表の順であることの確認（roleの最後の行より後にfallbackが来る）。
-  role_idx=$(printf '%s' "$out" | grep -n '^role	verifier' | head -1 | cut -d: -f1)
-  fallback_idx=$(printf '%s' "$out" | grep -n '^fallback	verifier' | head -1 | cut -d: -f1)
-  order_ok=1
-  [ -n "$role_idx" ] && [ -n "$fallback_idx" ] && [ "$role_idx" -lt "$fallback_idx" ] || order_ok=0
-  assert_eq "role.表の行がfallback.表の行より先に出る" "1" "$order_ok"
+  count="$(printf '%s' "$out" | awk -F'\t' '{print NF}' | sort -u | wc -l | tr -d ' ')"
+  assert_eq "全行が7列で揃っている（列数のばらつきが無い）" "1" "$count"
 }
 
 echo "=== 47. list-roles: 失敗時（自己完結・resolve-leaderと同じコード体系）はstdoutが空でstderrへ機械可読コードが出る ==="
@@ -1960,7 +1995,7 @@ EOF
   out="$(python3 "$PROFILE_LIB" list-roles "$LR_SECRET")"  || true
   assert_not_contains "list-roles出力にピン実値(ARN)が現れない" "$out" "supersecret-arn-3"
   assert_not_contains "list-roles出力にAWSキーが現れない" "$out" "SHOULD_NEVER_LEAK_3"
-  assert_contains "list-roles出力にはBedrockの別名(opus)だけが出る" "$out" "role	leader	configured	bedrock-opus	bedrock	opus	subagent	"
+  assert_contains "list-roles出力にはBedrockの別名(opus)だけが出る" "$out" "leader	configured	bedrock-opus	bedrock	opus	subagent	"
 }
 
 echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8があってもクラッシュせず、判定不能として扱われる（_read_bedrock_env_wanted()がUnicodeDecodeErrorを未捕捉だった実バグの回帰テスト） ==="
@@ -1996,13 +2031,13 @@ echo "=== 51. V14メタ構文の直接検証: schema_versionが正整数でな�
 {
   BADVER="$(mktemp -d)/badver.md"
   make_v2_profile "$BADVER" "role.leader: configured model=opus-high"
-  sed -i '' 's/schema_version: 6/schema_version: abc/' "$BADVER"
+  sed -i '' 's/schema_version: 7/schema_version: abc/' "$BADVER"
   out="$(resolve_v2 "$BADVER")"  || true
   assert_contains "schema_versionが数値でなければT3になる" "$out" "MINIMAL	T3"
 
   BADVER0="$(mktemp -d)/badver0.md"
   make_v2_profile "$BADVER0" "role.leader: configured model=opus-high"
-  sed -i '' 's/schema_version: 6/schema_version: 0/' "$BADVER0"
+  sed -i '' 's/schema_version: 7/schema_version: 0/' "$BADVER0"
   out="$(resolve_v2 "$BADVER0")"  || true
   assert_contains "schema_version=0(正整数でない)もT3になる" "$out" "MINIMAL	T3"
 
@@ -2233,7 +2268,11 @@ EOF
         AIENV_LOCAL_PROFILE_PATH="/nonexistent-dir/profile-for-default-gate-test.md" \
         "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext')"
-  assert_contains "フラグ未指定でも既定値1でP1機構が動く(未作成プロファイルのT1案内が出る)" "$ctx" "未作成。installerでサンプルから雛形を作成してください"
+  # FR-10差し戻し（検証1巡目MINOR-4・2026-09-17）: T1の案内は必読リストの
+  # 専用文言ではなく🧭モード行の区分コードで確認する（旧仕様の「未作成。
+  # installerでサンプルから雛形を作成してください」は必読リストごと撤去）。
+  mode_line_default_gate="$(printf '%s\n' "$ctx" | grep '^🧭 現在＝')"
+  assert_contains "フラグ未指定でも既定値1でP1機構が動く(T1のモード行区分コードが出る)" "$mode_line_default_gate" "（T1）"
 
   echo "--- 結合(SessionStart全体): ゲート有効・不一致プロファイルでDIRECTIVEの【ローカル実体プロファイル】ブロックに警告が注入される ---"
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$LEADER_PROFILE" "$SETTINGS_MODEL_MISMATCH")"
@@ -2442,10 +2481,10 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
   assert_not_contains "FX-P7: TEAM_MODE:は出ない" "$out" "TEAM_MODE:"
 }
 
-echo "=== 64. known-keysがSCHEMA_VERSION:6・FIXED:にteam_mode/machine_roleを含み廃止5キーを含まない・要素数は6（配役表-能力軸整理-設計-2026-09-07.md §3・2026-09-08モデル定義ファイルと候補指定対応でschema 5→6。要件AC-1・AC-2の基本口Kの実測はtest-core-docs-placeholder-schema.shが担う） ==="
+echo "=== 64. known-keysがSCHEMA_VERSION:7・FIXED:にteam_mode/machine_roleを含み廃止5キーを含まない・要素数は5（配役表-能力軸整理-設計-2026-09-07.md §3・代替配役の層と禁止モデル列挙の層の撤去-設計-2026-09-16.mdでschema 6→7。要件AC-1・AC-2の基本口Kの実測はtest-core-docs-placeholder-schema.shが担う） ==="
 {
   kk="$(python3 "$PROFILE_LIB" known-keys)"
-  assert_contains "known-keys: SCHEMA_VERSION:6" "$kk" "SCHEMA_VERSION:6"
+  assert_contains "known-keys: SCHEMA_VERSION:7" "$kk" "SCHEMA_VERSION:7"
   fixed_line="$(printf '%s' "$kk" | grep '^FIXED:')"
   assert_contains "known-keys: FIXED:にteam_modeを含む" "$fixed_line" "team_mode"
   assert_contains "known-keys: FIXED:にmachine_roleを含む" "$fixed_line" "machine_role"
@@ -2455,18 +2494,30 @@ echo "=== 64. known-keysがSCHEMA_VERSION:6・FIXED:にteam_mode/machine_roleを
   _retired_key="git${_underscore}role"
   assert_not_contains "known-keys: FIXED:に廃止済み能力軸キーを含まない（本人決定Decisions/2026-09-07-profile-axes-consolidation対象の1つ）" "$fixed_line" "$_retired_key"
   n="$(printf '%s' "${fixed_line#FIXED:}" | tr ',' '\n' | grep -c .)"
-  assert_eq "known-keys: FIXED:の要素数は6（メタ2＋能力軸3＋excluded_models）" "6" "$n"
+  assert_eq "known-keys: FIXED:の要素数は5（メタ2＋能力軸3）" "5" "$n"
 
   # ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 上のcontains/件数
-  # チェックだけでは、誤った6キーへ全体が同時に変わっても通ってしまう
-  # （例: team_mode/machine_roleが偶然両方含まれる別の6キー集合）。
-  # 要件AC-1が定めるリテラル6キー集合と、ソート済み文字列として直接比較する。
+  # チェックだけでは、誤った5キーへ全体が同時に変わっても通ってしまう
+  # （例: team_mode/machine_roleが偶然両方含まれる別の5キー集合）。
+  # 要件AC-1が定めるリテラル5キー集合と、ソート済み文字列として直接比較する。
   actual_sorted="$(printf '%s' "${fixed_line#FIXED:}" | tr ',' '\n' | sort | tr '\n' ',')"
-  expected_sorted="$(printf 'schema_version\nprofile_slug\nteam_mode\nno_read_paths\nmachine_role\nexcluded_models\n' | sort | tr '\n' ',')"
-  assert_eq "AC-1: known-keysのFIXED集合が期待6キー(リテラル集合)と完全一致する" "$expected_sorted" "$actual_sorted"
+  expected_sorted="$(printf 'schema_version\nprofile_slug\nteam_mode\nno_read_paths\nmachine_role\n' | sort | tr '\n' ',')"
+  assert_eq "AC-1: known-keysのFIXED集合が期待5キー(リテラル集合)と完全一致する" "$expected_sorted" "$actual_sorted"
 }
 
-echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞれちょうど1行現れ、他2モードは0行（AC-6①） ==="
+# FR-11・FR-12（要件v1.2.1・タスク2）: 🧭モード行の末尾セグメント（bootstrap-
+# vault.sh側の実装と同じ固定書式）を組み立てるヘルパー。BOOTSTRAP_ENABLE_
+# LOCAL_PROFILE=1で実体プロファイルを解決したとき、4本の固定文面（solo/
+# lean/full/未確定）の末尾にこの1セグメントが付く（行数は増やさない＝
+# ちょうど1行のまま）。
+mode_success_segment() {  # $1=schema_version $2=machine_role
+  printf '｜配役表＝OK schema_version=%s machine_role=%s 照会＝python3 ~/work/takumi009-ai-env/claude/hooks/lib/role_candidates.py [--role <職種>]' "$1" "$2"
+}
+mode_failure_segment() {  # $1=区分コード（T1/SYMLINK/T5/T4-LEGACY/UNKNOWN_EXTRA等）
+  printf '｜配役表＝利用不可（%s）＝最小能力として振る舞う・ワーカー起動は本人確認へ倒す' "$1"
+}
+
+echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞれちょうど1行現れ、他2モードは0行（AC-6①）。2026-09-17 FR-11対応でモード行末尾に配役表セグメントが付く形へexpect=を更新 ==="
 {
   # ⚠️ 「ちょうど1行」の計数は`grep -Fx -c`で行全体の完全一致を見る。
   # `-F`のみ（部分一致）だと、開幕行の末尾に余計な文言が付いても
@@ -2486,8 +2537,10 @@ echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞ�
       lean) expect='🧭 現在＝軽量モード（実装者と検証職を置き、適用工程ごとに1巡で回します）。他のモード＝単独／フル。切り替えたいときは言ってください' ;;
       full) expect='🧭 現在＝フルモード（職種ごとに担当を立て、指摘が収まるまで検証を回します）。他のモード＝単独／軽量。切り替えたいときは言ってください' ;;
     esac
+    # FX-Iのfixture（V2_BASE）はschema_version=7・machine_role=mainで解決OK。
+    expect="${expect}$(mode_success_segment 7 main)"
     assert_contains "FX-I(${v}): 期待文字列と完全一致する行が含まれる" "$ctx" "$expect"
-    n="$(printf '%s' "$ctx" | grep -Fx -c "$expect")"
+    n="$(printf '%s' "$ctx" | grep -Fx -c "$expect" || true)"
     assert_eq "FX-I(${v}): 期待文字列の行がちょうど1行" "1" "$n"
     total_mode_lines="$(printf '%s' "$ctx" | grep -c '^🧭 現在＝')"
     assert_eq "FX-I(${v}): 🧭で始まる行が合計ちょうど1行（他モードは0行）" "1" "$total_mode_lines"
@@ -2495,7 +2548,7 @@ echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞ�
   done
 }
 
-echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはresolveがMINIMALのときは未確定行がちょうど1行（AC-7） ==="
+echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはresolveがMINIMALのときは未確定行がちょうど1行（AC-7）。2026-09-17 FR-11/FR-12対応でセグメント込みのexpect=へ更新 ==="
 {
   UNCONFIRMED='🧭 現在＝モード未確定（配役表の team_mode が読めません）。委任の前に本人へ確認します。'
 
@@ -2505,8 +2558,12 @@ echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはre
     "role.leader: configured model=opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unknown/" "$FXI4"
   ctx="$(run_bootstrap_with_profile "$VD" "$FXI4")"
-  n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED")"
-  assert_eq "FX-I4(team_mode:unknown): 未確定行がちょうど1行" "1" "$n"
+  # ⚠️ FX-I4はteam_mode自体が"unknown"状態なだけで、配役表全体の解決
+  # （schema_version/machine_role）は成功する（FXI4はrole.leader・
+  # machine_role等は正常なまま）＝モード行は「未確定」固定文面＋成功セグメント。
+  fxi4_expect="${UNCONFIRMED}$(mode_success_segment 7 main)"
+  n="$(printf '%s' "$ctx" | grep -Fx -c "$fxi4_expect" || true)"
+  assert_eq "FX-I4(team_mode:unknown): 未確定行(成功セグメント込み)がちょうど1行" "1" "$n"
   total_mode_lines="$(printf '%s' "$ctx" | grep -c '^🧭 現在＝')"
   assert_eq "FX-I4: 🧭行の合計もちょうど1行（3モードの行は0行）" "1" "$total_mode_lines"
   rm -rf "$VD"
@@ -2522,21 +2579,23 @@ path = sys.argv[1]
 lines = [l for l in open(path).read().splitlines() if not l.startswith("machine_role:")]
 open(path, "w").write("\n".join(lines) + "\n")
 PYEOF
+  # FX-I6は解決そのものが失敗する（T5＝既知キーmachine_role欠落）ので
+  # モード行は「未確定」固定文面＋失敗セグメント（区分=T5）になる。
+  UNCONFIRMED="${UNCONFIRMED}$(mode_failure_segment T5)"
   ctx="$(run_bootstrap_with_profile "$VD2" "$FXI6")"
-  n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED")"
-  assert_eq "FX-I6(MINIMAL/T5): 未確定行がちょうど1行" "1" "$n"
+  n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED" || true)"
+  assert_eq "FX-I6(MINIMAL/T5): 未確定行(失敗セグメント込み)がちょうど1行" "1" "$n"
   total_mode_lines="$(printf '%s' "$ctx" | grep -c '^🧭 現在＝')"
   assert_eq "FX-I6: 🧭行の合計もちょうど1行（3モードの行は0行）" "1" "$total_mode_lines"
   rm -rf "$VD2"
 }
 
-echo "=== 67. FX-R1・FX-R2（AC-10）: 退役キー'primary-reviewer'はV1-bで空席、改名後'verifier'はagents/verifier.mdが実在するのでFALLBACK採用 ==="
+echo "=== 67. FX-R1・FX-R2（AC-10）: 退役キー'primary-reviewer'はV1-bで空席、改名後'verifier'はagents/verifier.mdが実在するので同じ行の2件目の候補が採用される ==="
 {
   FXR1="$(mktemp -d)/fxr1.md"
   make_v2_profile "$FXR1" \
     "role.leader: configured model=opus-high" \
-    "role.primary-reviewer: unavailable model=bedrock-opus" \
-    "fallback.primary-reviewer: configured model=opus-high"
+    "role.primary-reviewer: configured model=opus-high"
   out="$(resolve_v2 "$FXR1")"  || true
   assert_contains "FX-R1(陰性): VACANT:にprimary-reviewerが出る" "$out" "VACANT:primary-reviewer"
   assert_contains "FX-R1: VACANT_REASONがprimary-reviewer=V1-b" "$out" "VACANT_REASON:primary-reviewer=V1-b"
@@ -2544,24 +2603,24 @@ echo "=== 67. FX-R1・FX-R2（AC-10）: 退役キー'primary-reviewer'はV1-bで
   FXR2="$(mktemp -d)/fxr2.md"
   make_v2_profile "$FXR2" \
     "role.leader: configured model=opus-high" \
-    "role.verifier: unavailable model=bedrock-opus" \
-    "fallback.verifier: configured model=opus-high"
+    "role.verifier: configured model=bedrock-opus,opus-high"
+  # bedrock.envを与えない(ABSENT=disabled)ので1件目(bedrock-opus)はV9-dで
+  # 使用不可・2件目(opus-high)はagents/verifier.mdが実在するので使用可。
   out="$(resolve_v2 "$FXR2")"  || true
-  assert_contains "FX-R2(陽性): FALLBACK:にverifierが出る" "$out" "FALLBACK:verifier"
-  assert_not_contains "FX-R2: VACANT:に現れない" "$out" "VACANT:verifier"
+  assert_not_contains "FX-R2(陽性): 1件目が使用不可でも2件目で採用されVACANT:に現れない" "$out" "VACANT:verifier"
   head_ok=0; case "$out" in OK*) head_ok=1 ;; esac
   assert_eq "FX-R2: 先頭フィールドはOK（exit0）" "1" "$head_ok"
 }
 
-echo "=== 68. §6.3縮退経路の回帰(ID無し・要件のfixture表とは別枠): BOOTSTRAP_ENABLE_LOCAL_PROFILE=0／LEGACY_V1(v1実体)／UNKNOWN_EXTRAを伴うOK行のいずれも、未確定行がちょうど1行・3モードの行は0行 ==="
+echo "=== 68. §6.3縮退経路の回帰(ID無し・要件のfixture表とは別枠): BOOTSTRAP_ENABLE_LOCAL_PROFILE=0／LEGACY_V1(v1実体)／UNKNOWN_EXTRAを伴うOK行のいずれも、未確定行がちょうど1行・3モードの行は0行。2026-09-17 FR-11/FR-12対応で②③はセグメント込みのexpect=へ更新（①はBOOTSTRAP_ENABLE_LOCAL_PROFILE=0で解決自体を行わないためセグメント無しのまま） ==="
 {
   UNCONFIRMED='🧭 現在＝モード未確定（配役表の team_mode が読めません）。委任の前に本人へ確認します。'
 
   # ①BOOTSTRAP_ENABLE_LOCAL_PROFILE=0（解決そのものを行わない）。
   VD="$(mktemp -d)"; make_full_vault "$VD"
   ctx="$(run_bootstrap "$VD")"
-  n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED")"
-  assert_eq "①ゲート無効: 未確定行がちょうど1行" "1" "$n"
+  n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED" || true)"
+  assert_eq "①ゲート無効: 未確定行(セグメント無し。解決自体を行わないため)がちょうど1行" "1" "$n"
   total="$(printf '%s' "$ctx" | grep -c '^🧭 現在＝')"
   assert_eq "①ゲート無効: 🧭行の合計もちょうど1行" "1" "$total"
   rm -rf "$VD"
@@ -2578,8 +2637,9 @@ machine_role: 本人
 ---
 EOF
   ctx="$(run_bootstrap_with_profile "$VD2" "$V1P")"
-  n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED")"
-  assert_eq "②旧版(T4-LEGACY): 未確定行がちょうど1行" "1" "$n"
+  unconfirmed_t4legacy="${UNCONFIRMED}$(mode_failure_segment T4-LEGACY)"
+  n="$(printf '%s' "$ctx" | grep -Fx -c "$unconfirmed_t4legacy" || true)"
+  assert_eq "②旧版(T4-LEGACY): 未確定行(失敗セグメント込み)がちょうど1行" "1" "$n"
   total="$(printf '%s' "$ctx" | grep -c '^🧭 現在＝')"
   assert_eq "②旧版(T4-LEGACY): 🧭行の合計もちょうど1行" "1" "$total"
   rm -rf "$VD2"
@@ -2599,8 +2659,9 @@ lines.insert(idx, "future_key_v5: configured value=something")
 open(path, "w").write("\n".join(lines) + "\n")
 PYEOF
   ctx="$(run_bootstrap_with_profile "$VD3" "$FXUE")"
-  n="$(printf '%s' "$ctx" | grep -Fx -c "$UNCONFIRMED")"
-  assert_eq "③UNKNOWN_EXTRA: 未確定行がちょうど1行" "1" "$n"
+  unconfirmed_unknown_extra="${UNCONFIRMED}$(mode_failure_segment UNKNOWN_EXTRA)"
+  n="$(printf '%s' "$ctx" | grep -Fx -c "$unconfirmed_unknown_extra" || true)"
+  assert_eq "③UNKNOWN_EXTRA: 未確定行(失敗セグメント込み)がちょうど1行" "1" "$n"
   total="$(printf '%s' "$ctx" | grep -c '^🧭 現在＝')"
   assert_eq "③UNKNOWN_EXTRA: 🧭行の合計もちょうど1行" "1" "$total"
   rm -rf "$VD3"
@@ -2728,6 +2789,12 @@ EOF
   # 文字列の直書き禁止）に一致しないよう断片を変数へ分けてから展開する
   # （意図的な歴史再現fixtureであり、本物の旧記法の取りこぼしではない）。
   legacy_role_attr="provider="
+  # ⚠️ 代替配役の層と禁止モデル列挙の層の撤去-設計-2026-09-16.md §6.3
+  # （r1-#1対応）: 本fixtureは歴史的コミットの旧・禁止モデル列挙キーを
+  # そのまま再現する必要があるため、上のlegacy_role_attrと同じ手口で
+  # 完成語をソースへ直書きしない（AC-1のrepo検索に一致しないように分割
+  # 代入する）。生成されるfixtureの中身は不変。
+  legacy_excluded_key="excluded""_models"
   cat > "$FXP0" <<EOF
 ---
 schema_version: 3
@@ -2740,7 +2807,7 @@ ui.user_call:     configured value=send-message  # AC5-ALLOW:FXP0
 git_role:         configured value=aienv-repo:commit  # AC5-ALLOW:FXP0
 web_verification: configured value=websearch  # AC5-ALLOW:FXP0
 no_read_paths:    configured value=work-old  # AC5-ALLOW:FXP0
-excluded_models: configured value=none
+${legacy_excluded_key}: configured value=none
 role.leader: configured ${legacy_role_attr}anthropic-api model=claude-opus-5
 ---
 EOF
@@ -2802,8 +2869,13 @@ EOF
   # 2026-09-08 B1a「使用率の見える化」対応で29→30へ更新（上記の承認済み
   # +1予算どおり）。増やす変更を入れるときはNFR-4との突合を経てから更新
   # すること。
+  # 2026-09-17 FR-10・FR-11（要件v1.2.1）対応で30→26へ更新（実測）。
+  # 実体プロファイルの全文Read指示（`wc -l`1回）とFR-11で撤去した候補一覧
+  # ℹ️行の生成（`python3 profile_resolve.py list-roles`1回＋`awk`1回）が
+  # 減った分の正当な減少（この判定式は「増加しない」だけを見るので、
+  # NFR-1の趣旨どおり回帰扱いにしない）。
   AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07=29
-  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=30
+  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=26
   if [ "$before_count" != "$AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07" ] || [ "$after_count" != "$AC1_2_REFERENCE_COUNT_AFTER_2026_09_07" ]; then
     echo "  info - 参考値: 変更前${AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07}・変更後${AC1_2_REFERENCE_COUNT_AFTER_2026_09_07}を記録していたが今回は変更前${before_count}・変更後${after_count}だった"
   fi
@@ -2826,8 +2898,8 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   FXP1_72="$(mktemp -d)/fxp1.md"
   make_v2_profile "$FXP1_72" "role.leader: configured model=opus-high"
   rc=0; out="$(resolve_v2 "$FXP1_72")" || rc=$?
-  assert_eq "FX-P1: OK<TAB>schema_version=6で始まる" "1" \
-    "$([[ "$out" == $'OK\tschema_version=6'* ]] && echo 1 || echo 0)"
+  assert_eq "FX-P1: OK<TAB>schema_version=7で始まる" "1" \
+    "$([[ "$out" == $'OK\tschema_version=7'* ]] && echo 1 || echo 0)"
   assert_eq "FX-P1: exit 0" "0" "$rc"
   assert_contains "FX-P1: TEAM_MODE:fullを含む" "$out" "TEAM_MODE:full"
   assert_not_contains "FX-P1: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
@@ -2836,8 +2908,8 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   make_v2_profile "$FXP2_72" "role.leader: configured model=opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=sub/" "$FXP2_72"
   rc=0; out="$(resolve_v2 "$FXP2_72")" || rc=$?
-  assert_eq "FX-P2: OK<TAB>schema_version=6で始まる" "1" \
-    "$([[ "$out" == $'OK\tschema_version=6'* ]] && echo 1 || echo 0)"
+  assert_eq "FX-P2: OK<TAB>schema_version=7で始まる" "1" \
+    "$([[ "$out" == $'OK\tschema_version=7'* ]] && echo 1 || echo 0)"
   assert_eq "FX-P2: exit 0" "0" "$rc"
   assert_contains "FX-P2: TEAM_MODE:fullを含む" "$out" "TEAM_MODE:full"
   assert_not_contains "FX-P2: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
@@ -2909,7 +2981,12 @@ PYEOF
   out="$(resolve_v2 "$FXP1_75")"
   assert_not_contains "FX-P1: R=UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
   ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP1_75")"
-  assert_contains "FX-P1: I=全文Readを指示する" "$ctx" "Readで全文を読むこと"
+  # FR-10で全文Read指示自体を撤去した。解決成功はFR-11のモード行セグメント
+  # （schema_version=・machine_role=・role_candidates.py）で示す。
+  assert_not_contains "FX-P1: I=もう全文Readは指示しない（FR-10）" "$ctx" "Readで全文を読むこと"
+  assert_contains "FX-P1: I=モード行セグメントにschema_version=が含まれる" "$ctx" "schema_version=7"
+  assert_contains "FX-P1: I=モード行セグメントにmachine_role=が含まれる" "$ctx" "machine_role=main"
+  assert_contains "FX-P1: I=モード行セグメントに照会コマンド(role_candidates.py)が含まれる" "$ctx" "role_candidates.py"
 }
 
 echo "=== 76. AC-11(FR-9): machine_roleがunknownのときだけDIRECTIVEへ保留の1行が増える（FX-P8陽性・FX-P1陰性・同一HOME・同一パスでmachine_roleの値だけを変える） ==="
@@ -2929,6 +3006,10 @@ echo "=== 76. AC-11(FR-9): machine_roleがunknownのときだけDIRECTIVEへ保�
   # 既存メカニズムに由来する副作用）。この副作用を打ち消すため、両本文の
   # 診断行中のMACHINE_ROLE:<値>トークンを共通のプレースホルダへ正規化して
   # からdiffする（値そのものの一致は他のテスト＝§75等で別途検査済み）。
+  # ⚠️ FR-11対応（2026-09-17）: 🧭モード行の末尾セグメントにも
+  # machine_role=<値>が載るため、こちらも同じプレースホルダへ正規化する
+  # （さもないとセグメント内の値変化そのものが2本目の差分として現れ、
+  # AC-11が見たい「保留行の追加1行だけ」の判定を汚す）。
   FXP_76="$(mktemp -d)/fxp-ac11.md"
   make_v2_profile "$FXP_76" "role.leader: configured model=opus-high"
   ctx_p1="$(run_bootstrap_with_profile "$VD_76" "$FXP_76")"
@@ -2936,8 +3017,8 @@ echo "=== 76. AC-11(FR-9): machine_roleがunknownのときだけDIRECTIVEへ保�
   sed -i '' "s/machine_role:     configured value=main/machine_role:     unknown/" "$FXP_76"
   ctx_p8="$(run_bootstrap_with_profile "$VD_76" "$FXP_76")"
 
-  norm_p1="$(printf '%s\n' "$ctx_p1" | sed -E 's/MACHINE_ROLE:[a-z]+/MACHINE_ROLE:X/')"
-  norm_p8="$(printf '%s\n' "$ctx_p8" | sed -E 's/MACHINE_ROLE:[a-z]+/MACHINE_ROLE:X/')"
+  norm_p1="$(printf '%s\n' "$ctx_p1" | sed -E 's/MACHINE_ROLE:[a-z]+/MACHINE_ROLE:X/; s/machine_role=[a-z]+/machine_role=X/')"
+  norm_p8="$(printf '%s\n' "$ctx_p8" | sed -E 's/MACHINE_ROLE:[a-z]+/MACHINE_ROLE:X/; s/machine_role=[a-z]+/machine_role=X/')"
 
   diff_out="$(diff <(printf '%s\n' "$norm_p1") <(printf '%s\n' "$norm_p8") || true)"
   added_lines="$(printf '%s\n' "$diff_out" | grep -c '^> ' || true)"
@@ -2978,8 +3059,9 @@ echo "=== 77. 設計§11.3新設2件の①: AIENV_MODEL_DEFS_FILEが相対パス
   FXP77="$(mktemp -d)/fxp77.md"
   make_v2_profile "$FXP77" "role.leader: configured model=opus-high"
   ctx77="$(run_bootstrap_with_profile "$VD77" "$FXP77" "/nonexistent-dir/settings.json" "relative/models.conf")"
-  n77="$(printf '%s' "$ctx77" | grep -Fx -c "$UNCONFIRMED")"
-  assert_eq "I(T13): AIENV_MODEL_DEFS_FILEが相対パスだと未確定行がちょうど1行（resolve自体がT13でloud失敗する）" "1" "$n77"
+  unconfirmed_t13="${UNCONFIRMED}$(mode_failure_segment T13)"
+  n77="$(printf '%s' "$ctx77" | grep -Fx -c "$unconfirmed_t13" || true)"
+  assert_eq "I(T13): AIENV_MODEL_DEFS_FILEが相対パスだと未確定行(失敗セグメント込み)がちょうど1行（resolve自体がT13でloud失敗する）" "1" "$n77"
   total77="$(printf '%s' "$ctx77" | grep -c '^🧭 現在＝')"
   assert_eq "I(T13): 🧭行の合計もちょうど1行" "1" "$total77"
   rm -rf "$VD77"

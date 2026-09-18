@@ -15,6 +15,12 @@ RUN_RC=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
+# D-2（設計v1.2 §3.2・（ガード側）テスト戦略）: マーカー置き場をWORK配下へ
+# 隔離する（実`/tmp`へ書かせない）。delegation-gate-v2.shと同名の環境変数
+# GATE_MARKER_DIRで1変数だけ差し替える。
+MARKER_DIR="$WORK/markers"
+mkdir -p "$MARKER_DIR"
+
 run_guard() {
   # 締めレビュー1巡目 #1対応: ホスト環境に偶然 CLAUDE_CODE_SUBAGENT_MODEL_FORCE /
   # CLAUDE_CODE_SUBAGENT_MODEL が残っていると、新設したEF検査以外の既存ケース
@@ -23,7 +29,7 @@ run_guard() {
   out_file=$2
   err_file=$3
   RUN_RC=0
-  printf '%s' "$input" | env -u CLAUDE_CODE_SUBAGENT_MODEL_FORCE -u CLAUDE_CODE_SUBAGENT_MODEL /bin/bash "$GUARD" >"$out_file" 2>"$err_file" || RUN_RC=$?
+  printf '%s' "$input" | env -u CLAUDE_CODE_SUBAGENT_MODEL_FORCE -u CLAUDE_CODE_SUBAGENT_MODEL GATE_MARKER_DIR="$MARKER_DIR" /bin/bash "$GUARD" >"$out_file" 2>"$err_file" || RUN_RC=$?
 }
 
 run_guard_env() {
@@ -34,7 +40,7 @@ run_guard_env() {
   err_file=$3
   var_assign=$4
   RUN_RC=0
-  printf '%s' "$input" | env -u CLAUDE_CODE_SUBAGENT_MODEL_FORCE -u CLAUDE_CODE_SUBAGENT_MODEL "$var_assign" /bin/bash "$GUARD" >"$out_file" 2>"$err_file" || RUN_RC=$?
+  printf '%s' "$input" | env -u CLAUDE_CODE_SUBAGENT_MODEL_FORCE -u CLAUDE_CODE_SUBAGENT_MODEL GATE_MARKER_DIR="$MARKER_DIR" "$var_assign" /bin/bash "$GUARD" >"$out_file" 2>"$err_file" || RUN_RC=$?
 }
 
 assert_pass_case() {
@@ -138,6 +144,16 @@ check_error HF-01i '{"tool_name":"Task","tool_input":{}}' TOOL_NAME_UNEXPECTED
 check_error HF-01j '{"tool_name":"Bash","tool_input":{"command":"true"}}' TOOL_NAME_UNEXPECTED
 check_error HF-02 '' INPUT_INVALID
 
+# 検証1巡目 I1-B1 対応: guard自身のsymlink解決（resolve_agent_model_guard_
+# self_dir）がdirname/readlinkをPATH経由で呼ぶようになったため、「jqだけが
+# 無い」を再現するにはPATHを空にせずdirname/readlink/catは残す必要がある
+# （空PATHのままだとSELF_DIR_UNRESOLVABLEに倒れてしまいHF-03の意図＝
+# JQ_UNAVAILABLEを検証できない）。
+mkdir -p "$WORK/no-jq"
+for _hf03_tool in cat dirname readlink; do
+  _hf03_bin="$(command -v "$_hf03_tool" 2>/dev/null || true)"
+  [ -n "$_hf03_bin" ] && ln -sf "$_hf03_bin" "$WORK/no-jq/$_hf03_tool"
+done
 RUN_RC=0
 PATH="$WORK/no-jq" /bin/bash "$GUARD" <<<'{}' >"$WORK/hf03.out" 2>"$WORK/hf03.err" || RUN_RC=$?
 assert_deny_case "HF-03 jq不在はexit 0の完全なdeny JSON" "$WORK/hf03.out" "$WORK/hf03.err" 'MODEL_GUARD_ERROR: cause=JQ_UNAVAILABLE; model 指定を検査できません。フックの入力と配置を確認してください。'
@@ -148,6 +164,261 @@ chmod +x "$WORK/stub/jq"
 RUN_RC=0
 printf '{}' | PATH="$WORK/stub:/bin:/usr/bin" /bin/bash "$GUARD" >"$WORK/hf04.out" 2>"$WORK/hf04.err" || RUN_RC=$?
 assert_deny_case "HF-04 jq非0はexit 0の完全なdeny JSON" "$WORK/hf04.out" "$WORK/hf04.err" 'MODEL_GUARD_ERROR: cause=JQ_FAILED; model 指定を検査できません。フックの入力と配置を確認してください。'
+
+echo "=== D2-G1〜G3: 委任実績マーカー（設計v1.2 §3.1〜§3.2・OQ-4案B・（ガード側）テスト戦略） ==="
+marker_base='{"session_id":"sess-marker-test","tool_name":"Agent","tool_input":{"subagent_type":"requirements-analyst","description":"model guard marker smoke","prompt":"Reply GD-ID only; do not use tools.","name":"opus-requirements-analyst"'
+MARKER_FILE="$MARKER_DIR/claude-delegated-ok-sess-marker-test"
+
+rm -f "$MARKER_FILE"
+run_guard "$marker_base,"'"model":"opus"}}' "$WORK/d2g1.out" "$WORK/d2g1.err"
+if [ "$RUN_RC" -eq 0 ] && [ -f "$MARKER_FILE" ]; then
+  pass "D2-G1 PASS分岐でセッション固有マーカーが作られる"
+else
+  fail_case "D2-G1 PASS分岐でセッション固有マーカーが作られる"
+fi
+
+rm -f "$MARKER_FILE"
+run_guard "$marker_base}}" "$WORK/d2g2.out" "$WORK/d2g2.err"
+if [ ! -f "$MARKER_FILE" ]; then
+  pass "D2-G2 deny(REQUIRED)分岐ではマーカーが作られない"
+else
+  fail_case "D2-G2 deny(REQUIRED)分岐ではマーカーが作られない"
+fi
+
+rm -f "$MARKER_FILE"
+run_guard '{"session_id":"sess-marker-test","tool_name":"Bad"}' "$WORK/d2g3.out" "$WORK/d2g3.err"
+if [ ! -f "$MARKER_FILE" ]; then
+  pass "D2-G3 guard_error(TOOL_NAME_UNEXPECTED)分岐ではマーカーが作られない"
+else
+  fail_case "D2-G3 guard_error(TOOL_NAME_UNEXPECTED)分岐ではマーカーが作られない"
+fi
+
+echo "=== AC-10②: alias_literal_only_in_guard_common（許容別名の集合はguard_common.shにしか無い・NFR-7） ==="
+{
+  GUARD_COMMON="$REPO_ROOT/claude/hooks/lib/guard_common.sh"
+  DELEGATION_GATE="$REPO_ROOT/claude/hooks/delegation-gate-v2.sh"
+  VAULT_GATE="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
+  CLAUDE_EXEC="$REPO_ROOT/scripts/claude-exec.sh"
+
+  # guard_common.sh が正本を持つ（4別名すべてが1関数内に揃っている）
+  if grep -qE 'fable[^\n]*opus[^\n]*sonnet[^\n]*haiku' "$GUARD_COMMON"; then
+    pass "guard_common.sh が4別名（fable/opus/sonnet/haiku）の正本を持つ"
+  else
+    fail_case "guard_common.sh が4別名（fable/opus/sonnet/haiku）の正本を持つ"
+  fi
+
+  # agent-model-guard.sh・delegation-gate-v2.sh・vault-write-gate.sh には
+  # 別名の複製（4語すべてが同一ファイルに揃う形）が無い。scripts/claude-exec.sh
+  # は担当A が並行実装中で本テスト実行時点に存在しないことがあるため、
+  # 存在するときだけ同じ検査を掛ける。
+  dup=0
+  for f in "$GUARD" "$DELEGATION_GATE" "$VAULT_GATE"; do
+    grep -qE 'fable[^\n]*opus[^\n]*sonnet[^\n]*haiku' "$f" && dup=1
+  done
+  if [ -f "$CLAUDE_EXEC" ]; then
+    grep -qE 'fable[^\n]*opus[^\n]*sonnet[^\n]*haiku' "$CLAUDE_EXEC" && dup=1
+  fi
+  if [ "$dup" -eq 0 ]; then
+    pass "agent-model-guard.sh・delegation-gate-v2.sh・vault-write-gate.sh（・存在すればラッパー）に4別名の複製が無い"
+  else
+    fail_case "agent-model-guard.sh・delegation-gate-v2.sh・vault-write-gate.sh（・存在すればラッパー）に4別名の複製が無い"
+  fi
+
+  # マーカー名の規則（claude-delegated-ok-）を組み立てる関数はguard_common.sh
+  # にしか定義が無い（agent-model-guard.shはguard_mark_delegationを呼ぶだけ）
+  marker_fn_defs="$(grep -l 'guard_marker_path()' "$GUARD_COMMON" "$GUARD" "$VAULT_GATE" 2>/dev/null | wc -l | tr -d ' ')"
+  guard_calls_shared="$(grep -c 'guard_mark_delegation\|guard_allowed_model_aliases\|guard_is_allowed_model_alias' "$GUARD" 2>/dev/null || true)"
+  if [ "${marker_fn_defs:-9}" -eq 1 ] && [ "${guard_calls_shared:-0}" -ge 1 ]; then
+    pass "マーカー名の組み立て関数はguard_common.shにしか定義されず・agent-model-guard.shは共有関数を呼ぶだけ"
+  else
+    fail_case "マーカー名の組み立て関数はguard_common.shにしか定義されず・agent-model-guard.shは共有関数を呼ぶだけ (defs=$marker_fn_defs calls=$guard_calls_shared)"
+  fi
+
+  # guard_allowed_model_aliases の集合 ＝ profile_resolve.py の
+  # AGENT_MODEL_ALIASES の値集合（設計-v1.1.1.md §3 末尾）
+  guard_set="$(bash -c 'source "$0"; guard_allowed_model_aliases' "$GUARD_COMMON" | tr ' ' '\n' | sort | paste -sd ',' -)"
+  py_set="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c 'import profile_resolve as pr; print(",".join(sorted(set(pr.AGENT_MODEL_ALIASES.values()))))')"
+  assert_eq_local() {
+    if [ "$1" = "$2" ]; then pass "$3"; else fail_case "$3 (guard=[$1] profile_resolve=[$2])"; fi
+  }
+  assert_eq_local "$guard_set" "$py_set" "guard_allowed_model_aliasesの値集合＝profile_resolve.pyのAGENT_MODEL_ALIASESの値集合"
+}
+
+echo "=== AC-10②(裁定A): vault_folders_literal_only_in_guard_common（Vault6フォルダの判定literalはguard_common.shにしか無い） ==="
+{
+  GUARD_COMMON="$REPO_ROOT/claude/hooks/lib/guard_common.sh"
+  DELEGATION_GATE="$REPO_ROOT/claude/hooks/delegation-gate-v2.sh"
+  VAULT_GATE="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
+
+  # guard_common.sh のguard_vault_ai_prefixesが6フォルダすべての正本を持つ
+  # （printfの複数引数に分かれているため複数行にまたがる＝1関数の本文
+  # 全体をawkで抜き出してから6語すべての出現を見る）
+  fn_body="$(awk '/^guard_vault_ai_prefixes\(\)/{f=1} f{print} f&&/^}/{exit}' "$GUARD_COMMON")"
+  folders_ok=1
+  for name in Fragments Knowledge Decisions Projects Preferences Personal; do
+    printf '%s' "$fn_body" | grep -qF "$name" || folders_ok=0
+  done
+  if [ "$folders_ok" -eq 1 ]; then
+    pass "guard_common.sh がVault6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）の正本を持つ"
+  else
+    fail_case "guard_common.sh がVault6フォルダの正本を持つ"
+  fi
+
+  # delegation-gate-v2.sh・vault-write-gate.shは、6フォルダを判定する
+  # 独自のcase/esacブロック（判定listの複製）を持たない。判定は
+  # guard_is_vault_ai_pathの呼び出しに委ねている（デリー文面のプレーン
+  # テキストに6フォルダ名が現れること自体は変えない契約＝振る舞い不変。
+  # ここで見るのは「パターンマッチのための複製」の有無）。
+  dup_check="$(python3 - "$DELEGATION_GATE" "$VAULT_GATE" <<'PY'
+import re, sys
+FOLDERS = ["Fragments", "Knowledge", "Decisions", "Projects", "Preferences", "Personal"]
+bad = 0
+for path in sys.argv[1:]:
+    text = open(path, encoding="utf-8").read()
+    for m in re.finditer(r"case\b.*?\besac\b", text, re.S):
+        block = m.group(0)
+        n = sum(1 for f in FOLDERS if f in block)
+        if n >= 2:
+            bad += 1
+print(bad)
+PY
+)"
+  if [ "${dup_check:-1}" -eq 0 ]; then
+    pass "delegation-gate-v2.sh・vault-write-gate.shに6フォルダ判定のcase/esac複製が無い"
+  else
+    fail_case "delegation-gate-v2.sh・vault-write-gate.shに6フォルダ判定のcase/esac複製が無い (bad=$dup_check)"
+  fi
+
+  # 両ファイルが共有関数 guard_is_vault_ai_path を呼んでいる
+  calls_ok=1
+  grep -q 'guard_is_vault_ai_path' "$DELEGATION_GATE" || calls_ok=0
+  grep -q 'guard_is_vault_ai_path' "$VAULT_GATE" || calls_ok=0
+  if [ "$calls_ok" -eq 1 ]; then
+    pass "delegation-gate-v2.sh・vault-write-gate.shがguard_is_vault_ai_pathを呼ぶ"
+  else
+    fail_case "delegation-gate-v2.sh・vault-write-gate.shがguard_is_vault_ai_pathを呼ぶ"
+  fi
+}
+
+echo "=== I1-M3(検証1巡目・I1-B1回帰防止): symlink経由の起動でもagent-model-guard.shの結果がrepoパス直叩きと一致する ==="
+{
+  # installerはこの3フックを1本ずつ $HOME/.claude/hooks/<名前>.sh
+  # （repoへのsymlink）として配置し、$HOME/.claude/hooks/lib/ は作らない。
+  # その実経路を一時ディレクトリで再現する（symlinkのみを置き、隣にlib/を
+  # 作らない）。guard_common.shが実経路で解決できないと、PASS期待の入力が
+  # INVALID/REQUIREDへ倒れ、マーカーも作られない（I1-B1の実害そのもの）。
+  LINK_DIR="$WORK/linked-hooks"
+  mkdir -p "$LINK_DIR"
+  ln -s "$GUARD" "$LINK_DIR/agent-model-guard.sh"
+
+  run_via_link() {
+    input=$1; out_file=$2; err_file=$3
+    RUN_RC=0
+    printf '%s' "$input" | env -u CLAUDE_CODE_SUBAGENT_MODEL_FORCE -u CLAUDE_CODE_SUBAGENT_MODEL GATE_MARKER_DIR="$MARKER_DIR" /bin/bash "$LINK_DIR/agent-model-guard.sh" >"$out_file" 2>"$err_file" || RUN_RC=$?
+  }
+
+  # PASS系（有効な別名）: symlink経由でもexit 0・無出力・委任実績マーカーが作られる
+  SYMLINK_MARKER="$MARKER_DIR/claude-delegated-ok-sess-symlink-b1"
+  rm -f "$SYMLINK_MARKER"
+  pass_input='{"session_id":"sess-symlink-b1","tool_name":"Agent","tool_input":{"subagent_type":"requirements-analyst","description":"symlink smoke","prompt":"Reply GD-ID only; do not use tools.","name":"opus-requirements-analyst","model":"opus"}}'
+  run_via_link "$pass_input" "$WORK/symlink-pass.out" "$WORK/symlink-pass.err"
+  if [ "$RUN_RC" -eq 0 ] && [ ! -s "$WORK/symlink-pass.out" ] && [ ! -s "$WORK/symlink-pass.err" ] && [ -f "$SYMLINK_MARKER" ]; then
+    pass "I1-M3: symlink経由のPASS(有効別名)がrepoパス直叩きと同じくexit 0・無出力・マーカー作成"
+  else
+    fail_case "I1-M3: symlink経由のPASS(有効別名)がrepoパス直叩きと不一致 (rc=$RUN_RC out=[$(cat "$WORK/symlink-pass.out" 2>/dev/null)] err=[$(cat "$WORK/symlink-pass.err" 2>/dev/null)] marker=$([ -f "$SYMLINK_MARKER" ] && echo あり || echo なし)"
+  fi
+
+  # deny系（model欠落）: symlink経由でもrepoパス直叩きと同じ理由文で拒否される
+  # （guard_common.sh未解決によるMODEL_GUARD_ERRORへの後退が無いことを見る）
+  deny_input='{"session_id":"sess-symlink-b1-deny","tool_name":"Agent","tool_input":{"subagent_type":"requirements-analyst","description":"symlink smoke","prompt":"Reply GD-ID only; do not use tools.","name":"opus-requirements-analyst"}}'
+  run_via_link "$deny_input" "$WORK/symlink-deny.out" "$WORK/symlink-deny.err"
+  assert_deny_case "I1-M3: symlink経由のdeny(model欠落)がrepoパス直叩きと同じ理由(MODEL_ARGUMENT_REQUIRED)" "$WORK/symlink-deny.out" "$WORK/symlink-deny.err" 'MODEL_ARGUMENT_REQUIRED: resolve-candidate の AGENT_MODEL を Agent.model に明示してください。'
+}
+
+echo "=== I1-M3(検証1巡目・vault-write-gate.sh・test-claude-exec.shには入れずここに置く): symlink経由の起動でもrepoパス直叩きと結果が一致する ==="
+{
+  # vault-write-gate.shは設計§9.1の vault_gate_denies_ai_folders が
+  # tests/test-claude-exec.sh の担当だが、同ファイルは担当Cの担当範囲外
+  # （tests/test-claude-exec.shは触らない）のため、symlink回帰ケースは
+  # ここへ置く（リーダー裁定）。
+  VAULT_GATE="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
+  VG_LINK_DIR="$WORK/linked-vault-hooks"
+  mkdir -p "$VG_LINK_DIR"
+  ln -s "$VAULT_GATE" "$VG_LINK_DIR/vault-write-gate.sh"
+  VG_HOME="$WORK/vg-home"
+  mkdir -p "$VG_HOME"
+
+  run_vault_gate() {
+    hook_path=$1; input=$2; out_file=$3
+    rc=0
+    printf '%s' "$input" | HOME="$VG_HOME" /bin/bash "$hook_path" >"$out_file" 2>"$WORK/vg.err" || rc=$?
+    echo "$rc"
+  }
+
+  ai_fpath="$VG_HOME/Data/obsidian/Knowledge/note.md"
+  ai_input="{\"tool_input\":{\"file_path\":\"$ai_fpath\"},\"cwd\":\"$WORK\"}"
+  direct_rc="$(run_vault_gate "$VAULT_GATE" "$ai_input" "$WORK/vg-direct.out")"
+  link_rc="$(run_vault_gate "$VG_LINK_DIR/vault-write-gate.sh" "$ai_input" "$WORK/vg-link.out")"
+  if [ "$direct_rc" = "0" ] && [ "$link_rc" = "0" ] \
+     && grep -q '"permissionDecision": "deny"' "$WORK/vg-direct.out" \
+     && diff -q "$WORK/vg-direct.out" "$WORK/vg-link.out" >/dev/null 2>&1; then
+    pass "I1-M3: vault-write-gate.shはsymlink経由でもAI向け6フォルダ配下のEditをrepoパス直叩きと同じdeny JSONで拒否"
+  else
+    fail_case "I1-M3: vault-write-gate.sh symlink経由のdenyがrepoパス直叩きと不一致 (direct_rc=$direct_rc link_rc=$link_rc)"
+  fi
+
+  outside_fpath="$WORK/project/file.md"
+  outside_input="{\"tool_input\":{\"file_path\":\"$outside_fpath\"},\"cwd\":\"$WORK\"}"
+  direct_rc2="$(run_vault_gate "$VAULT_GATE" "$outside_input" "$WORK/vg-direct2.out")"
+  link_rc2="$(run_vault_gate "$VG_LINK_DIR/vault-write-gate.sh" "$outside_input" "$WORK/vg-link2.out")"
+  if [ "$direct_rc2" = "0" ] && [ "$link_rc2" = "0" ] \
+     && [ ! -s "$WORK/vg-direct2.out" ] && [ ! -s "$WORK/vg-link2.out" ]; then
+    pass "I1-M3: vault-write-gate.shはsymlink経由でも6フォルダ配下外は無出力で素通し（repoパス直叩きと一致）"
+  else
+    fail_case "I1-M3: vault-write-gate.sh symlink経由の素通しがrepoパス直叩きと不一致 (direct_rc=$direct_rc2 link_rc=$link_rc2)"
+  fi
+}
+
+echo "=== I2-m5(検証2巡目): source失敗時のfail-close分岐そのものに恒久テストを足す（lib/を持たない実体ディレクトリへフックをコピーして起動） ==="
+{
+  # I2-M2でenv上書き口（GUARD_COMMON_LIB）を撤去したため、source失敗を
+  # 再現する手段は「lib/を持たない場所へフック本体だけをコピーして実行する」
+  # 方式に一本化する（symlinkだと自身の実体を辿ってlib/を見つけてしまい
+  # source失敗を再現できない＝コピーでなければならない）。
+
+  # agent-model-guard.sh: lib/無しでコピー起動するとdeny(GUARD_COMMON_UNREADABLE)・exit 0（素通しにならない）
+  NOLIB_DIR="$WORK/nolib-agent-model-guard"
+  mkdir -p "$NOLIB_DIR"
+  cp "$GUARD" "$NOLIB_DIR/agent-model-guard.sh"
+  RUN_RC=0
+  printf '%s' '{"tool_name":"Agent","tool_input":{"subagent_type":"requirements-analyst","model":"opus"}}' \
+    | env -u CLAUDE_CODE_SUBAGENT_MODEL_FORCE -u CLAUDE_CODE_SUBAGENT_MODEL GATE_MARKER_DIR="$MARKER_DIR" /bin/bash "$NOLIB_DIR/agent-model-guard.sh" \
+    >"$WORK/nolib-guard.out" 2>"$WORK/nolib-guard.err" || RUN_RC=$?
+  if [ "$RUN_RC" -eq 0 ] && [ ! -s "$WORK/nolib-guard.err" ] \
+     && grep -q '"permissionDecision":"deny"' "$WORK/nolib-guard.out" \
+     && grep -q 'GUARD_COMMON_UNREADABLE' "$WORK/nolib-guard.out"; then
+    pass "I2-m5: agent-model-guard.shはlib/が無いとfail-close（deny・GUARD_COMMON_UNREADABLE・exit 0）で素通ししない"
+  else
+    fail_case "I2-m5: agent-model-guard.shのfail-closeが働かない (rc=$RUN_RC out=[$(cat "$WORK/nolib-guard.out" 2>/dev/null)] err=[$(cat "$WORK/nolib-guard.err" 2>/dev/null)])"
+  fi
+
+  # vault-write-gate.sh: lib/無しでコピー起動するとdeny(GUARD_COMMON_UNREADABLE)・exit 0（素通しにならない）
+  VAULT_GATE="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
+  NOLIB_VG_DIR="$WORK/nolib-vault-write-gate"
+  mkdir -p "$NOLIB_VG_DIR"
+  cp "$VAULT_GATE" "$NOLIB_VG_DIR/vault-write-gate.sh"
+  RUN_RC=0
+  printf '%s' '{"tool_input":{"file_path":"/tmp/whatever.md"},"cwd":"/tmp"}' \
+    | /bin/bash "$NOLIB_VG_DIR/vault-write-gate.sh" \
+    >"$WORK/nolib-vg.out" 2>"$WORK/nolib-vg.err" || RUN_RC=$?
+  if [ "$RUN_RC" -eq 0 ] \
+     && grep -q '"permissionDecision": "deny"' "$WORK/nolib-vg.out" \
+     && grep -q 'GUARD_COMMON_UNREADABLE' "$WORK/nolib-vg.out"; then
+    pass "I2-m5: vault-write-gate.shはlib/が無いとfail-close（deny・GUARD_COMMON_UNREADABLE・exit 0）で素通ししない"
+  else
+    fail_case "I2-m5: vault-write-gate.shのfail-closeが働かない (rc=$RUN_RC out=[$(cat "$WORK/nolib-vg.out" 2>/dev/null)] err=[$(cat "$WORK/nolib-vg.err" 2>/dev/null)])"
+  fi
+}
 
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="
 [ "$FAIL" -eq 0 ]

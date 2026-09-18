@@ -114,7 +114,7 @@ assert_agents_line() {
 
 # write_models_conf_at <dir> — モデル定義ファイル（models.conf）を<dir>/
 # models.conf へ書く（モデル定義ファイルと候補指定-設計-2026-09-08.md
-# §2.3・§2.4）。schema 6のrole/fallback行は`model=<定義名>[,...]`で定義名を
+# §2.3・§2.4）。schema 7のrole行は`model=<定義名>[,...]`で定義名を
 # 参照するだけになったため、role.leaderの解決を伴うテストは全てこの定義
 # ファイルを必要とする（無いとT7で解決不能になる）。tests/test-install-main.sh
 # と同じ最小の定義セットを使う。
@@ -146,12 +146,11 @@ make_fake_home() {
   write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-install-sub-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
-excluded_models: configured value=none
 role.leader: configured model=sonnet-high
 ---
 EOF
@@ -175,7 +174,7 @@ export AIENV_LEADER_ROLE='model=sonnet-high'
 # 呼び出し側は必ずrun_v1_legacy_repo()経由でTMP_REPO（config/profile.md.sample
 # を除いた実repoの複製）に対して実行すること（$REPO_ROOTを直接使うと、
 # install-main.sh自身のP1雛形自動配置が実サンプルをコピーしてしまい、コピー後に
-# 「実在するschema 6の実体」という別の非委譲ケースへ倒れて本テストの意図＝
+# 「実在するschema 7の実体」という別の非委譲ケースへ倒れて本テストの意図＝
 # legacy値置換ロジックの検証を阻害するため）。
 seed_v1_profile() {
   local home="$1"
@@ -196,7 +195,7 @@ run_v1_legacy_repo() {
   printf '%s\n' "$tmp_repo"
 }
 
-# seed_v2_profile <home> — v2形式（schema_version:6・新3キー・role.leaderが
+# seed_v2_profile <home> — v2形式（schema_version:7・新3キー・role.leaderが
 # configured）のプロファイルをあらかじめ置く。--check-profile系テスト
 # （13・14番）で使う。role.leaderは既にconfiguredのため、AIENV_LEADER_ROLEの
 # 値には依存しない。
@@ -207,10 +206,9 @@ seed_v2_profile() {
   write_models_conf_at "$(dirname "$dest")"
   cat > "$dest" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 role.leader: configured model=opus-high
-excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
@@ -476,12 +474,11 @@ echo "=== 10. §3.9対話フラグの転送: --non-interactiveがinstall-main.sh
   # role.leader未確定へ上書きする。
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-install-sub-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
-excluded_models: configured value=none
 role.leader: unknown
 ---
 EOF
@@ -509,10 +506,9 @@ echo "=== 11. §3.9対話フラグの転送: --reconfigure-leaderがinstall-main
   mkdir -p "$(dirname "$PROFILE_PATH")"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 role.leader: configured model=opus-high
-excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
@@ -593,11 +589,10 @@ echo "=== 13b. --check-profile: 不正プロファイル（role.leader重複=T6�
   FAKE_HOME_MAIN="$(mktemp -d)"
   make_fake_home "$FAKE_HOME_MAIN"
   invalid_profile='---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 role.leader: unknown
 role.leader: configured model=opus-high
-excluded_models: configured value=none
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
@@ -644,7 +639,7 @@ echo "=== 14. --check-profile --print-schema-version: install-sub.sh経由でも
   out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile --print-schema-version 2>&1)" || rc=$?
 
   assert_eq "exit code 0" "0" "$rc"
-  assert_eq "schema_versionの値だけを1行返す（見出しログ等が混ざらない）" "6" "$out"
+  assert_eq "schema_versionの値だけを1行返す（見出しログ等が混ざらない）" "7" "$out"
   assert_true "Vaultは作られない（副作用ゼロ）" \
     "$([[ ! -e "$FAKE_HOME/Data/obsidian" ]] && echo 1 || echo 0)"
   assert_true "機役割の案内ログは出ない（副作用ゼロ）" \
@@ -690,6 +685,7 @@ echo "=== 16. PA-5: install-sub.sh 経由でも repo から定義を1本消す�
   assert_true "前提: baseline実行でsymlinkができている" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
 
+  # repoから消す（symlinkはFAKE_HOME側に残ったまま＝dangling化させる）。
   rm -f "$TMP_REPO/claude/agents/test-pa5-role.md"
 
   rc=0
@@ -721,7 +717,7 @@ echo "=== 17. PA-6: install-sub.sh 経由で追加もdanglingも無ければ AGE
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 18. PA-12: install-sub.sh 経由でも追加と削除の複合ケースで両方の固定文が出て新規は配置・旧は残存・終了コード非0 ==="
+echo "=== 18. PA-12: install-sub.sh 経由でも追加と削除が同時に起きる複合ケース（verifier追加・tester退役相当）で両方の固定文が出て新規は配置・旧は残存・終了コード非0 ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -729,10 +725,12 @@ echo "=== 18. PA-12: install-sub.sh 経由でも追加と削除の複合ケー�
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   echo "# PA-12 用の退役予定ロール（1回目は存在・2回目に消す）" > "$TMP_REPO/claude/agents/test-pa12-old-role.md"
 
+  # 1回目: old-role が repo にある状態で baseline 配置。
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null 2>&1
   assert_true "前提: old-role がbaselineで配置されている" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
 
+  # 2回目: old-role を退役（削除）し、new-role を新設（追加）を同時に行う。
   rm -f "$TMP_REPO/claude/agents/test-pa12-old-role.md"
   echo "# PA-12 用の新設ロール" > "$TMP_REPO/claude/agents/test-pa12-new-role.md"
 

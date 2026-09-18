@@ -222,7 +222,7 @@ is_v2_resolve_output_well_formed() {
       # を文法が受理してしまい、位置が一意に決まらなくなる。MACHINE_ROLE:は
       # TEAM_MODE:の直後・同じく必須（配役表-能力軸整理-設計-2026-09-07.md
       # §2.1・D-2）。
-      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)${tab}MACHINE_ROLE:(main|sub|unknown|unavailable)(${tab}FALLBACK:${name}(,${name})*)?(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${adv_code}(,${adv_code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
+      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)${tab}MACHINE_ROLE:(main|sub|unknown|unavailable)(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${adv_code}(,${adv_code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
       [[ "$s" =~ $re ]]
       ;;
     MINIMAL"$tab"*)
@@ -247,7 +247,7 @@ is_v2_resolve_output_well_formed() {
 # 標準出力へタブ区切り1行:
 #   MINIMAL\t<コード>\t<理由>          … 最小能力+⚠️（§6.2状態機械A。
 #     schema_version無し・6未満の実体はT4-LEGACYとしてここに含まれる）
-#   OK\t<解決値>[\tFALLBACK:...][\tVACANT:...][\tVACANT_REASON:...]
+#   OK\t<解決値>[\tVACANT:...][\tVACANT_REASON:...]
 #        [\tVACANT_UNKNOWN:...][\tADVISORY:...][\tUNKNOWN_EXTRA:...]
 resolve_local_profile() {
   local path="$1"
@@ -829,11 +829,14 @@ else
   # BOOTSTRAP_ENABLE_LOCAL_PROFILE=0を明示したときだけ、Vault外の固定パスを
   # 必読リストへ追加しない旧来の挙動（P1導入前）に戻る）。
   #
-  # 必読掲載条件（§4a・U-8裁定 2026-09-01）: 「通常ファイル→preflight→浅い
-  # 走査→分類別parser→fail区分のvalidator非違反→UNKNOWN_EXTRA無し」の**全部**
-  # が成功したときだけ全文Readを指示する。1つでも欠ければ「利用不可」の
-  # 短い注記だけを list に載せ、全文は読ませない（AI側は最小能力として振る舞う。
-  # 機械側の解決可否とは独立＝§4a表の「機械は既知キー部分が有効でもAIは除外」）。
+  # 必読掲載条件（§4a・U-8裁定 2026-09-01→FR-10〈要件v1.2.1〉で全文Read指示
+  # 自体を撤去）: 「通常ファイル→preflight→浅い走査→分類別parser→fail区分の
+  # validator非違反→UNKNOWN_EXTRA無し」の**全部**が成功したかどうかは、もう
+  # listへの全文Read指示では表さない。代わりに🧭モード行の末尾セグメント
+  # （下部のTEAM_MODE_LINE組み立て参照）へ①成否②schema_version③machine_role
+  # ④照会コマンドを織り込む。1つでも欠ければ「利用不可（区分）」の短い注記を
+  # 同じセグメントに出す（AI側は最小能力として振る舞う。機械側の解決可否とは
+  # 独立＝§4a表の「機械は既知キー部分が有効でもAIは除外」）。
   LOCAL_PROFILE_WARNING=""
   # 3モード体制（§4.3(c)）: profile_kindは現行ではこのブロックの中でしか
   # 代入されない。TEAM_MODE:の取り出しはブロックの外でも動く必要があるので、
@@ -854,29 +857,21 @@ else
     printf '%s' "$profile_status" | grep -q 'UNKNOWN_EXTRA:' && profile_has_unknown_extra=1
 
     if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
-      profile_lines=$(wc -l < "$AIENV_LOCAL_PROFILE_PATH" | tr -d ' ')
-      list="$list
-  - $AIENV_LOCAL_PROFILE_PATH  （全${profile_lines}行：Readで全文を読むこと。ローカル実体プロファイル＝機ごとのローカル通常ファイル。推奨経路はrepoのconfig/profile.md.sampleを手でコピー）"
-      present_count=$((present_count + 1))
-    elif [ "$profile_kind" = "MINIMAL" ]; then
-      profile_reason_code="${profile_rest%%$'\t'*}"
-      case "$profile_reason_code" in
-        T1)
-          list="$list
-  - $AIENV_LOCAL_PROFILE_PATH  （未作成。installerでサンプルから雛形を作成してください）"
-          ;;
-        SYMLINK)
-          list="$list
-  - $AIENV_LOCAL_PROFILE_PATH  （symlinkのため実体として受理しません。通常ファイルとして作り直してください）"
-          ;;
-        *)
-          list="$list
-  - $AIENV_LOCAL_PROFILE_PATH  （プロファイル利用不可のため全文はReadさせません。詳細は下記【ローカル実体プロファイル】を参照）"
-          ;;
-      esac
+      # FR-10（要件v1.2.1）: 実体プロファイルは必読リストから外した（U-8の
+      # 全文Read指示はここで打ち切り、present_countも増やさない）。解決の
+      # 成否・schema_version・machine_role・照会コマンドは🧭モード行の末尾
+      # セグメントへ織り込む（FR-11・下部のTEAM_MODE_LINE組み立て参照）。
+      :
     else
-      list="$list
-  - $AIENV_LOCAL_PROFILE_PATH  （プロファイル利用不可のため全文はReadさせません。詳細は下記【ローカル実体プロファイル】を参照）"
+      # FR-10差し戻し（検証1巡目MINOR-4・2026-09-17）: 失敗経路（不在T1・
+      # symlink・fail区分のvalidator違反・UNKNOWN_EXTRA）でも必読リストへは
+      # 一切追加しない（OK経路だけでなく全経路で外す）。失敗の情報は🧭
+      # モード行の「利用不可（<区分>）」セグメント（FR-12・下部の
+      # TEAM_MODE_LINE組み立て参照）へ一本化する。区分語（T1/SYMLINK/T10等
+      # のprofile_reason_codeまたはUNKNOWN_EXTRA）はそのセグメント側で
+      # 既に失敗種別ごとに出し分けているため、ここでの掲載は不要。
+      # present_countはこの分岐ではもともと加算していないため整合済み。
+      :
     fi
 
     if [ "$profile_kind" = "MINIMAL" ]; then
@@ -898,8 +893,8 @@ else
       # ワーカー起動時に何をすべきかが伝わらない）。
       unknown_extra="${profile_status#*UNKNOWN_EXTRA:}"
       LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイルに未知のキーがあります（${unknown_extra}）。機械側（resolver/installer）は既知キー部分のみ有効ですが、**プロファイル利用不可＝最小能力**としてAI向けには必読から除外します（U-8裁定・秘匿優先。まだこのマシンのコードが追随していない新しいキーの可能性があります）。配役の状態が確認できない以上、**ワーカー起動は本人確認へ倒してください**（Preferences/core-workflow.md §7 職種が空席のとき）。"
-    elif printf '%s' "$profile_status" | grep -q -E '(FALLBACK|VACANT|VACANT_REASON|VACANT_UNKNOWN|ADVISORY):'; then
-      # 4.1-f: 配役の値そのものは再掲しないが、縮退・fallback・未確定の
+    elif printf '%s' "$profile_status" | grep -q -E '(VACANT|VACANT_REASON|VACANT_UNKNOWN|ADVISORY):'; then
+      # 4.1-f: 配役の値そのものは再掲しないが、縮退・未確定の
       # 職種名と条件番号はDIRECTIVEへ必ず注入する（静かな失敗を防ぐ）。
       casting_note="$(printf '%s' "$profile_status" | sed -E 's/^OK\t//')"
       LOCAL_PROFILE_WARNING="ℹ️ 配役表の状態（職種名と条件番号のみ・値は含みません）: ${casting_note}。詳細はPreferences/core-workflow.md §7（職種が空席のとき）を参照してください。"
@@ -923,22 +918,10 @@ ${leader_settings_drift_warning}"
       fi
     fi
 
-    # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§4(b)・FR-19②）:
-    # 配役表の状態行の直後に「候補の1行」を足す。⚠️ 出すのは職種名と定義名
-    # だけ（provider/model/execution/effortは出さない＝配役の値を再掲しない
-    # 原則。定義名だけはD-10によりこの原則の対象外）。`list-roles`を1回だけ
-    # 呼ぶ（`resolve`のOK行には載せない＝FR-18。外部プロセスは旧分類呼び出し
-    # が1つ減った分と相殺され差し引き0＝§11.3）。role.表の職種のみが対象
-    # （fallback.表は出さない）。
-    if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
-      candidates_line="$(python3 "$PROFILE_RESOLVE_LIB" list-roles "$AIENV_LOCAL_PROFILE_PATH" 2>/dev/null \
-        | awk -F'\t' '$1=="role" && $4!="" {if(!( $2 in a)) order[++n]=$2; a[$2]=(a[$2]==""?$4:a[$2]","$4)} \
-                      END{for(i=1;i<=n;i++) printf "%s%s=%s", (i>1?" / ":""), order[i], a[order[i]]}')"
-      if [ -n "$candidates_line" ]; then
-        LOCAL_PROFILE_WARNING="${LOCAL_PROFILE_WARNING:+$LOCAL_PROFILE_WARNING
-}ℹ️ 職種ごとのモデル候補（定義名のみ）: ${candidates_line}。⚠️ spawn のたびに候補から定義名を1つ選ぶこと（Preferences/core-workflow.md §1）。"
-      fi
-    fi
+    # FR-11（要件v1.2.1）: 職種ごとの候補一覧（定義名）の注入は撤去した。
+    # spawn 直前の照会は新設の候補一覧コマンド（claude/hooks/lib/
+    # role_candidates.py・担当C実装）へ一本化し、SessionStart注入には
+    # 出さない（NFR-5）。呼び出し例は🧭モード行の末尾セグメントに含める。
   fi
 
   # 3モード体制（3モード体制-設計-2026-09-06.md §4.3(c)）: OK行の
@@ -980,6 +963,34 @@ ${leader_settings_drift_warning}"
   # 明示した状態のため。§7.2 S5）。
   MACHINE_ROLE_HOLD_LINE=""
   [ "$machine_role" = "unknown" ] && MACHINE_ROLE_HOLD_LINE='⚠️ 配役表の machine_role が未確定です（この機がメイン機かサブ機かを本人が宣言していません）。機役割に依存する判断（Preferences の編集・公開スナップショットの生成・git の立場）は本人へ確認してから行う。既定値を発明しない。'
+
+  # FR-11・FR-12（要件v1.2.1・タスク2）: 実体プロファイルを必読リストから
+  # 外した代わりに、既存の🧭モード行の末尾へ①解決の成否②schema_version
+  # ③machine_role④照会コマンドの呼び出し例を1セグメントとして織り込む
+  # （行数を増やさない＝NFR-1。新しい外部プロセスは起こさない＝値は既に
+  # 取得済みのresolve OK行のフィールドから取り出すだけ）。
+  # ⚠️ BOOTSTRAP_ENABLE_LOCAL_PROFILE=0（解決そのものを行わないテスト専用
+  # 経路）ではprofile_kindが空文字のまま＝セグメントを付けない（解決を
+  # 試みていないので成否を語れない。既存の4本の固定文面だけを出す）。
+  if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
+    if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
+      sv_tab=$'\t'
+      sv_rest="${profile_status#*schema_version=}"
+      schema_version_value="${sv_rest%%"$sv_tab"*}"
+      TEAM_MODE_LINE="${TEAM_MODE_LINE}｜配役表＝OK schema_version=${schema_version_value} machine_role=${machine_role} 照会＝python3 ~/work/takumi009-ai-env/claude/hooks/lib/role_candidates.py [--role <職種>]"
+    else
+      # FR-12: 不在・symlink・fail区分のvalidator違反はprofile_reason_code
+      # （T1/SYMLINK/T5/T6/…）、UNKNOWN_EXTRAは専用コード名を区分として出す
+      # （値そのものは再掲しない＝OV-10・秘匿優先）。
+      profile_unresolved_code=""
+      if [ "$profile_kind" = "MINIMAL" ]; then
+        profile_unresolved_code="$profile_reason_code"
+      elif [ "$profile_has_unknown_extra" = "1" ]; then
+        profile_unresolved_code="UNKNOWN_EXTRA"
+      fi
+      TEAM_MODE_LINE="${TEAM_MODE_LINE}｜配役表＝利用不可（${profile_unresolved_code}）＝最小能力として振る舞う・ワーカー起動は本人確認へ倒す"
+    fi
+  fi
 
   # 外部脳ヘルス行（fail-open: 失敗してもブートストラップ本文は必ず出す）。
   HEALTH_LINES="$(compute_health_lines 2>/dev/null)" || HEALTH_LINES=""

@@ -7,14 +7,10 @@
 # （test-core-docs-placeholder-schema.sh はコア文書のプレースホルダ検査が
 # 主題で、こちらとは主題が異なる）。
 #
-# ⚠️ このスイートは Vault（~/Data/obsidian）・vault-public/・本人のローカル
-# 実体（~/.config/takumi009-ai-env/profile.md）にも依存する項目を含む。
-# これらは worker-role-prompts.md の権限表新設（W5）・本人による実体更新
-# （§9.2）が終わるまでは赤が正常（設計の段階分割どおり）。該当項目には
-# 理由をコメントで明記する。⚠️ 2026-09-08 本人裁定A案で、role.verifier/
-# fallback.verifierのFR-21確定値検査・退役キー検査はVault正本／公開
-# スナップショットのprofile-sample.md読取をやめ、repo管理下の
-# config/profile.md.sampleへ一本化した（詳細＝セクション5・6のコメント）。
+# ⚠️ 要件書 v1.4〜v1.5.1（FR-4・FR-6）により、このスイートは repo の外を
+# 読まない（Vault・本人のローカル実体・private repo のいずれにも依存しない）。
+# サンプルへの検査は tests/test-config-samples.sh へ一本化した（FR-8・
+# 詳細＝セクション5のコメント）。
 #
 # 実行方法: bash tests/test-agent-definitions.sh
 
@@ -23,9 +19,6 @@ set -uo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 AGENTS_DIR="$REPO_ROOT/claude/agents"
-BOOTSTRAP_SCRIPT="$REPO_ROOT/claude/hooks/bootstrap-vault.sh"
-PROFILE_LIB="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
-BASE_COMMIT="3954355d2ceea7abd29633d822e51212cb4aa2bc"
 
 PASS=0
 FAIL=0
@@ -60,26 +53,22 @@ assert_contains_file() {
   fi
 }
 
-echo "=== model廃止 AC-1: 8職種集合・frontmatter model不在・基準差分 ==="
-if python3 - "$REPO_ROOT" "$BASE_COMMIT" <<'PYMODEL'
+echo "=== model廃止 AC-1: 8職種集合・frontmatter model不在 ==="
+if python3 - "$REPO_ROOT" <<'PYMODEL'
 from pathlib import Path
-import re, subprocess, sys
-r=Path(sys.argv[1]); base=sys.argv[2]
+import re, sys
+r=Path(sys.argv[1])
 roles=set('adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier'.split())
 assert {p.stem for p in (r/'claude/agents').glob('*.md')} == roles
 for role in sorted(roles):
     rel=f'claude/agents/{role}.md'
-    old=subprocess.check_output(['git','-C',str(r),'show',f'{base}:{rel}'])
-    parts=old.split(b'---',2); assert len(parts)==3 and not parts[0].strip()
-    parts[1]=re.sub(rb'^[ \t]*model[ \t]*:.*\n',b'',parts[1],flags=re.M)
     new=(r/rel).read_bytes()
-    assert new==b'---'.join(parts),role
     assert not re.search(rb'^[ \t]*model[ \t]*:',new.split(b'---',2)[1],re.M)
 PYMODEL
 then
-  pass "8職種はmodel行だけ削除"
+  pass "8職種集合・frontmatter model不在"
 else
-  fail_case "8職種はmodel行だけ削除"
+  fail_case "8職種集合・frontmatter model不在"
 fi
 
 echo "=== 1. AC-12①: claude/agents/verifier.md が在り、tester.md が無い ==="
@@ -105,54 +94,6 @@ echo "=== 2. AC-12②: verifier.md の tools: に SendMessage・Edit・Write・B
     done
     assert_true "tools: に ${t} をカンマ区切りトークンとして完全一致で含む" "$found"
   done
-}
-
-echo "=== 3. AC-12③: worker-role-prompts.md（Vault）に権限表がちょうど1つあり、行の主語が8職種を過不足なく覆う ==="
-{
-  # ⚠️ Vault側（W5）の権限表新設が済むまでは赤が正常。
-  WRP="$HOME/Data/obsidian/Preferences/worker-role-prompts.md"
-  if [ -f "$WRP" ]; then
-    # 見出し「## 職種ごとの権限表」自体がちょうど1回だけ現れることを見る
-    # （§7.5「（新設）権限表」節の見出し文言。単に役職名がどこかの表の行に
-    # 現れるだけでは「表がちょうど1つ」を証明できない＝7ロール一覧など
-    # 他の表と取り違えないため、見出しの唯一性を先に固定する）。
-    heading_count="$(grep -c '^## 職種ごとの権限表' "$WRP" || true)"
-    assert_eq "権限表の見出しがちょうど1つ" "1" "$heading_count"
-
-    if [ "$heading_count" = "1" ]; then
-      # 見出しから次の見出し(## )の手前まで、または末尾までを表本体として
-      # 切り出す（bash 3.2互換・配列を使わずawkで完結させる）。
-      table_block="$(awk '/^## 職種ごとの権限表/{flag=1; next} /^## /{if(flag){exit}} flag' "$WRP")"
-      # ⚠️ 見出しがちょうど1つでも、節内に無関係な表を追加で足すと
-      # （役職行を含まない第2表など）role行のカウントだけでは検出できず
-      # 「表がちょうど1つ」を証明したことにならない（検証職・第3巡MAJOR
-      # 指摘1の反映。`.verify/w3-false-positive-reproduction.log`で再現）。
-      # 節内の`|`始まりの連続行を1ブロックとして数え、ブロック数が
-      # ちょうど1であることを先に検査してから、その1表だけを役職検査の
-      # 対象にする。
-      table_count="$(printf '%s\n' "$table_block" | awk '
-        /^\|/ { if (!intbl) { tbl++ }; intbl=1; next }
-        { intbl=0 }
-        END { print tbl+0 }
-      ')"
-      assert_eq "権限表の節内にMarkdown表ブロックがちょうど1つ" "1" "$table_count"
-      if [ "$table_count" = "1" ]; then
-        table_rows="$(printf '%s\n' "$table_block" | grep -E '^\|')"
-        all_ok=1
-        for r in implementer verifier requirements-analyst system-designer adoption-critic researcher operator vault-scribe; do
-          n="$(printf '%s\n' "$table_rows" | grep -cE "^\| \`?${r}\`? ")"
-          [ "$n" = "1" ] || all_ok=0
-        done
-        # 8職種**以外**の主語を持つ表の行が紛れ込んでいないこと（過不足なく）。
-        other_role_rows="$(printf '%s\n' "$table_rows" | grep -E '^\| `?[a-z][a-z0-9_-]*`? ' \
-          | grep -vE '^\| `?(implementer|verifier|requirements-analyst|system-designer|adoption-critic|researcher|operator|vault-scribe)`? ' || true)"
-        assert_true "権限表の行の主語が8職種を過不足なく覆う" "$all_ok"
-        assert_eq "権限表に8職種以外の主語の行が無い" "" "$other_role_rows"
-      fi
-    fi
-  else
-    fail_case "worker-role-prompts.mdが見つからない（Vaultに依存する検査。W5未反映のため赤が正常）"
-  fi
 }
 
 echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）のagents/*.mdにsandboxの値が書かれ、§5.2の権限表の値と一致する ==="
@@ -189,119 +130,28 @@ echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）
 MCP_EXEC_PAT="execution=external-"
 MCP_EXEC_PAT="${MCP_EXEC_PAT}mcp"
 
-echo "=== 5. AC-11: 退役キー(role|fallback).(primary-reviewer|tester): がclaude/hooks/・claude/agents/で0件。CORE_ROLES_WITHOUT_REPO_AGENT_FILEにprimary-reviewerを含まない ==="
+echo "=== 5. AC-11: 退役キーrole.(primary-reviewer|tester): がclaude/hooks/・claude/agents/で0件。CORE_ROLES_WITHOUT_REPO_AGENT_FILEにprimary-reviewerを含まない ==="
 {
-  hits="$(grep -rEn '^(role|fallback)\.(primary-reviewer|tester):' "$REPO_ROOT/claude/hooks" "$REPO_ROOT/claude/agents" 2>/dev/null || true)"
+  hits="$(grep -rEn '^role\.(primary-reviewer|tester):' "$REPO_ROOT/claude/hooks" "$REPO_ROOT/claude/agents" 2>/dev/null || true)"
   assert_eq "claude/hooks・claude/agentsに退役キーが0件" "" "$hits"
 
-  # ⚠️ docs/core-split（profile-resolve-contract-2026-09-01.md）は private
-  # repoへのsymlinkでこのworktreeには含まれない（設計§3.1a注記）。存在すれば
-  # 絶対パスで直接見る（無ければスキップし理由を明記＝存在しないファイルを
-  # 検査対象外にするだけで、無いことを合格扱いにはしない）。
   hits_mcp="$(grep -rn "$MCP_EXEC_PAT" "$REPO_ROOT/claude/hooks" "$REPO_ROOT/claude/agents" 2>/dev/null || true)"
   assert_eq "claude/hooks・claude/agentsに廃止したMCP経路のexecution値が0件" "" "$hits_mcp"
-  CONTRACT_DOC="$HOME/work/takumi009-ai-env-private/docs/core-split/profile-resolve-contract-2026-09-01.md"
-  if [ -f "$CONTRACT_DOC" ]; then
-    contract_hits="$(grep -n "$MCP_EXEC_PAT" "$CONTRACT_DOC" || true)"
-    assert_eq "profile-resolve-contract-2026-09-01.mdに廃止したMCP経路のexecution値が0件" "" "$contract_hits"
-  else
-    fail_case "profile-resolve-contract-2026-09-01.mdが見つからない"
-  fi
 
   core_manifest="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c 'import profile_resolve as pr; print("primary-reviewer" in pr.CORE_ROLES_WITHOUT_REPO_AGENT_FILE)')"
   assert_eq "CORE_ROLES_WITHOUT_REPO_AGENT_FILEにprimary-reviewerを含まない" "False" "$core_manifest"
 
-  # ⚠️ 2026-09-08 本人裁定A案（設定ファイルsample配布）: Vault正本
-  # （~/Data/obsidian/Preferences/profile-sample.md）・公開スナップショット
-  # （vault-public/Preferences/profile-sample.md）は「正本はrepoの
-  # config/*.sample」という案内ノートへ縮める前提になり、schema本体の
-  # ```yamlブロックを持たなくなる（vault-scribeの別担当）。したがって
-  # この2ファイルを読むassertは削除し、repo管理下で実際にschema本体を
-  # 持つ`config/profile.md.sample`を読む検査へ一本化した（そちらは
-  # 本ファイルの担当範囲＝公開repo）。
-  # ⚠️ 以下2件は本人ローカル実体に依存する検査。本人の§9.2実体更新
-  # （schema 4→6）が済むまでは赤が正常。
-  # ⚠️ 廃止execution値(MCP_EXEC_PAT)の走査は当初claude/hooks・claude/agents・
-  # tests/・契約書だけで、この実体（config/profile.md.sample・
-  # メイン機ローカル実体）を通っていなかった（検証職・第3巡MAJOR指摘3の
-  # 反映）。それぞれに退役キー検査と同じifブロック内でMCP_EXEC_PAT
-  # 検査も追加する。
-  CONFIG_SAMPLE="$REPO_ROOT/config/profile.md.sample"
-  if [ -f "$CONFIG_SAMPLE" ]; then
-    c_hits="$(grep -En '^(role|fallback)\.(primary-reviewer|tester):' "$CONFIG_SAMPLE" || true)"
-    assert_eq "config/profile.md.sampleに退役キーが0件" "" "$c_hits"
-    c_mcp_hits="$(grep -n "$MCP_EXEC_PAT" "$CONFIG_SAMPLE" || true)"
-    assert_eq "config/profile.md.sampleに廃止したMCP経路のexecution値が0件" "" "$c_mcp_hits"
-  else
-    fail_case "config/profile.md.sampleが見つからない"
-  fi
-
-  LOCAL_ENTITY="$HOME/.config/takumi009-ai-env/profile.md"
-  if [ -f "$LOCAL_ENTITY" ]; then
-    l_hits="$(grep -En '^(role|fallback)\.(primary-reviewer|tester):' "$LOCAL_ENTITY" || true)"
-    assert_eq "メイン機のローカル実体に退役キーが0件（本人の§9.2実体更新後に緑化想定）" "" "$l_hits"
-    l_mcp_hits="$(grep -n "$MCP_EXEC_PAT" "$LOCAL_ENTITY" || true)"
-    assert_eq "メイン機のローカル実体に廃止したMCP経路のexecution値が0件" "" "$l_mcp_hits"
-  else
-    fail_case "メイン機のローカル実体が見つからない"
-  fi
+  # ⚠️ 2026-09-08 本人裁定A案: Vault正本・公開スナップショットは案内ノート化
+  # され機械契約の対象外（schema本体を持たない）。要件書 FR-8 により、
+  # サンプルへの退役キー・MCP値検査は tests/test-config-samples.sh
+  # （AC-1c・AC-1）へ一本化し、ここでの重複検査は撤去した。要件書 FR-4 に
+  # より、ローカル実体（`~/.config/takumi009-ai-env/*`）はテストから一切
+  # 読まない（値の一致・形だけの検査・skip の分岐のいずれも置かない）。
+  # 実体の健全性はセッション起動時の resolve（SessionStart）が担う。
 }
 
-echo "=== 6. AC-11追加分: config/profile.md.sample・メイン機ローカル実体のrole.verifier/fallback.verifierがFR-21の確定値と一致する ==="
+echo "=== 6. 廃止したMCP経路のexecution値がtests/内に1件も無い ==="
 {
-  # role.verifier/fallback.verifierの属性をFR-21の確定値と突合する
-  # （Codex一次レビュー指摘・MAJOR対応（1巡目）: 当初はVault正本しか見ておらず、
-  # 公開スナップショット・メイン機ローカル実体が対象外だった。また
-  # fallback.verifierに`execution`を明記していないこと＝実効値が既定の
-  # `subagent`になることも見ていなかった。
-  # （2巡目MAJOR対応）: 部分文字列一致だと`provider=external-invalid`や
-  # `model=codex-review-default-old`のような誤値・接尾辞付き値でも合格して
-  # しまい、重複行があっても連結結果に含まれれば検出できなかった。対象行が
-  # ちょうど1行であることを先に確認し、空白区切りのトークンをexact matchで
-  # 比較する（値の途中一致を許さない）。
-  check_verifier_fr21() {
-    local label="$1" f="$2"
-    if [ ! -f "$f" ]; then
-      fail_case "${label}: ファイルが見つからない"
-      return
-    fi
-    local role_count fb_count role_line fb_line
-    role_count="$(grep -cE '^role\.verifier:' "$f" || true)"
-    fb_count="$(grep -cE '^fallback\.verifier:' "$f" || true)"
-    assert_eq "${label}: role.verifier行はちょうど1行" "1" "$role_count"
-    assert_eq "${label}: fallback.verifier行はちょうど1行" "1" "$fb_count"
-    [ "$role_count" != "1" ] || [ "$fb_count" != "1" ] && return
-    role_line="$(grep -E '^role\.verifier:' "$f")"
-    fb_line="$(grep -E '^fallback\.verifier:' "$f")"
-    # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§12.2・FR-21）:
-    # provider=/execution=/effort=は定義ファイル側の属性へ移り、role/fallback
-    # 行が持てる属性はmodel（定義名のカンマ列挙）だけになった
-    # （ROLE_ATTR_NAMES={"model"}）。role.verifierの確定値は実機の実値
-    # （設定ファイルsample配布・2026-09-08）に合わせた定義名
-    # `codex-review-default`で行そのものを完全一致させる（`codex-high`は
-    # Vault旧サンプルの例示名であり実値ではなかった＝A案でconfig/
-    # profile.md.sampleへ読み元を付け替えるのに合わせて訂正。`key:`と値の
-    # 間の桁揃え目的の連続空白は正規化してから比較する＝サンプルの実書式に
-    # 合わせる）。
-    role_line_norm="$(printf '%s' "$role_line" | sed -E 's/^role\.verifier:[[:space:]]+/role.verifier: /')"
-    assert_eq "${label}: role.verifierがconfigured model=codex-review-default（行完全一致）" \
-      "role.verifier: configured model=codex-review-default" "$role_line_norm"
-    # fallback.verifierの確定的な定義名は本人裁定待ち（リーダー指示・未確定）
-    # のため固定しない。「configured・定義名ちょうど1件（カンマ無し＝候補は
-    # 1件だけ）」という構造だけを見る。⚠️ executionの明記チェックは、新文法で
-    # 行にexecution属性を書くこと自体が構文エラーになった（parse_v2の
-    # 「許可されない属性です」）ため、意味を失い削除した。
-    # ⚠️ Vault正本の実体行は末尾にコメント（`# 候補は1件だけ…`）を持つため、
-    # 行末アンカーの手前で任意の空白+コメントを許容する（行完全一致にしない）。
-    assert_true "${label}: fallback.verifierがconfigured・定義名ちょうど1件（カンマ無し）" \
-      "$(printf '%s' "$fb_line" | grep -qE '^fallback\.verifier:[[:space:]]+configured model=[a-z0-9][a-z0-9-]*([[:space:]]+#.*)?$' && echo 1 || echo 0)"
-  }
-  # ⚠️ 2026-09-08 本人裁定A案: Vault正本・公開スナップショットは案内ノート化
-  # されschema本体を持たなくなる前提のため、それらを読むcheck_verifier_fr21
-  # 呼び出しは削除し、repo管理下でschema本体を持つconfig/profile.md.sample
-  # （公開repo・本ファイルの担当範囲）への1本化へ差し替えた。
-  check_verifier_fr21 "config/profile.md.sample" "$REPO_ROOT/config/profile.md.sample"
-  check_verifier_fr21 "メイン機ローカル実体" "$HOME/.config/takumi009-ai-env/profile.md"
 
   # 廃止したMCP経路のexecution値がtests/内に1件も無いこと（意図的な陰性
   # fixtureが無い＝要件AC-11の走査対象。Codex一次レビュー指摘・MAJOR対応）。
@@ -356,63 +206,211 @@ echo "=== 9. agents/verifier.md の出力形式に、出力先ファイルの先
   assert_eq "verifier.md: 件数:/打ち切り可否:/--- の3行が連続してこの順序で存在する" "FOUND" "$three_line_block"
 }
 
-echo "=== 10. §10.3-10: 開幕1行の文面がcore-conduct.md（正本・Vault）とbootstrap-vault.sh（複製）で一致する ==="
+echo "=== 10. FM-G3(設計v1.1.3 §5・§7): 素材claude/agents/*.mdにeffort:行が0件 ==="
 {
-  # ⚠️ Vault側（W5・core-conduct.md §1改訂）が済むまでは赤が正常。
-  CORE_CONDUCT="$HOME/Data/obsidian/Preferences/core-conduct.md"
-  impl_lines="$(BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY=1 bash "$BOOTSTRAP_SCRIPT" </dev/null)"
-  # ⚠️ 抽出そのものが失敗・空になった場合に「比較対象0件だから全部見つかった
-  # 扱い」という偽陽性を出さないよう、まず4行ちょうど取れていることを先に
-  # 検査する（Codex一次レビュー指摘・MAJOR対応: 当初はloop本体が1回も
-  # 回らなくてもall_present=1のまま素通りしていた）。
-  impl_line_count="$(printf '%s\n' "$impl_lines" | grep -c . || true)"
-  assert_eq "BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLYの出力がちょうど4行" "4" "$impl_line_count"
-  if [ -f "$CORE_CONDUCT" ] && [ "$impl_line_count" = "4" ]; then
-    # ⚠️ `grep -qF`による「正本のどこかに部分文字列として含まれるか」だけの
-    # 判定だと、正本側の当該箇条書き行に末尾差分（誤字・追記等）があっても、
-    # 実装側の文面がその行の先頭部分一致として拾われ「見つかった」扱いに
-    # なってしまい、正本側の改変を見逃す（検証職・第3巡MAJOR指摘4の反映）。
-    # 正本の箇条書き（`  - <label>: 🧭...`）からラベル部分を除去して本文
-    # だけを4行抽出し、件数・順序を含めて実装側の4行と完全一致させる。
-    core_lines="$(sed -n 's/^  - [^:]*: \(🧭.*\)$/\1/p' "$CORE_CONDUCT")"
-    core_line_count="$(printf '%s\n' "$core_lines" | grep -c . || true)"
-    assert_eq "core-conduct.md正本の箇条書き抽出がちょうど4行" "4" "$core_line_count"
-    assert_eq "実装側の4本(3モード+未確定)がcore-conduct.md正本の4本と件数・順序込みで完全一致する（W5反映後に緑化想定）" "$core_lines" "$impl_lines"
-  elif [ ! -f "$CORE_CONDUCT" ]; then
-    fail_case "core-conduct.mdが見つからない（Vault側の§7.2改訂がまだ反映されていない可能性。W5完了後に緑化想定）"
+  # D-4でinstallerのeffort:生成を退役し、配置先職種定義はsymlinkで素材を
+  # そのまま指す（素材と配置先が同一実体・sync_managed_symlink直呼び）。
+  # ラッパー経路ではfrontmatterのeffort:は実行時の値にならない（設計§7）ため、
+  # 素材へ書くと配置先でもそのまま出て誤解を招く。素材は「effort行を持たない」
+  # ことを恒久条件として固定する（frontmatterブロック内の`^effort:`行だけを
+  # 見る。本文中に偶然`effort:`という文字列が出てもfrontmatter外なら対象外）。
+  effort_hits="$(python3 - "$AGENTS_DIR" <<'PYEFFORT'
+import sys
+from pathlib import Path
+
+def frontmatter_block(b: bytes):
+    if not b.startswith(b"---\n"):
+        return None
+    idx = 4
+    while True:
+        nl = b.find(b"\n", idx)
+        if nl == -1:
+            return None
+        if b[idx:nl] == b"---":
+            return b[4:idx]
+        idx = nl + 1
+
+d = Path(sys.argv[1])
+hits = []
+for f in sorted(d.glob("*.md")):
+    block = frontmatter_block(f.read_bytes())
+    if block is None:
+        continue
+    for line in block.split(b"\n"):
+        if line.startswith(b"effort:"):
+            hits.append(f.name)
+for name in hits:
+    print(name)
+PYEFFORT
+)"
+  assert_eq "claude/agents/*.md のfrontmatterにeffort:行が0件" "" "$effort_hits"
+}
+
+echo "=== 11. 新設②(設計-v1.1.1.md §7・D-6・要件AC-11b②): agents_json_matches_source_and_has_no_effort（8職種） ==="
+{
+  AGENT_DEF="$REPO_ROOT/claude/hooks/lib/agent_def.py"
+  result="$(python3 - "$AGENT_DEF" "$AGENTS_DIR" <<'PYCHECK'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+agent_def, agents_dir = sys.argv[1], sys.argv[2]
+roles = "adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier".split()
+
+
+def split_frontmatter(raw: bytes):
+    assert raw.startswith(b"---\n")
+    idx = 4
+    while True:
+        nl = raw.find(b"\n", idx)
+        assert nl != -1
+        if raw[idx:nl] == b"---":
+            fm = raw[4:idx].decode("utf-8")
+            body = raw[nl + 1:].decode("utf-8")
+            if body.startswith("\n"):
+                body = body[1:]
+            return fm, body
+        idx = nl + 1
+
+
+def fields_of(fm_text: str):
+    out = {}
+    for line in fm_text.split("\n"):
+        if not line or line[0] in (" ", "\t") or ":" not in line:
+            continue
+        k, _, v = line.partition(":")
+        out[k.strip()] = v.strip()
+    return out
+
+
+failures = []
+for role in roles:
+    src = Path(agents_dir) / f"{role}.md"
+    raw = src.read_bytes()
+    fm_text, body = split_frontmatter(raw)
+    fields = fields_of(fm_text)
+    expected_desc = fields["description"]
+    expected_tools = [t.strip() for t in fields["tools"].split(",") if t.strip()]
+    expected_prompt = body.rstrip("\n")
+
+    out = subprocess.run(
+        ["python3", agent_def, "agents-json", "--dir", agents_dir, "--role", role],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    obj = json.loads(out)
+    if set(obj.keys()) != {role}:
+        failures.append(f"{role}: top-level key != {{role}} (got {sorted(obj.keys())})")
+        continue
+    val = obj[role]
+    if set(val.keys()) != {"description", "tools", "prompt"}:
+        failures.append(f"{role}: value keys != description/tools/prompt (got {sorted(val.keys())})")
+        continue
+    if val["description"] != expected_desc:
+        failures.append(f"{role}: description mismatch")
+    if val["tools"] != expected_tools:
+        failures.append(f"{role}: tools mismatch (got {val['tools']} want {expected_tools})")
+    if val["prompt"] != expected_prompt:
+        failures.append(f"{role}: prompt mismatch (len got={len(val['prompt'])} want={len(expected_prompt)})")
+    if "effort" in val or "color" in val or "name" in val:
+        failures.append(f"{role}: effort/color/name leaked into agents-json output")
+
+    tools_out = subprocess.run(
+        ["python3", agent_def, "allowed-tools", "--dir", agents_dir, "--role", role],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    if tools_out != ",".join(expected_tools):
+        failures.append(f"{role}: allowed-tools mismatch (got [{tools_out}] want [{','.join(expected_tools)}])")
+
+if failures:
+    print("FAIL")
+    for f in failures:
+        print(f"  - {f}")
+else:
+    print("OK")
+PYCHECK
+)"
+  if [ "$(printf '%s\n' "$result" | head -1)" = "OK" ]; then
+    pass "agents_json_matches_source_and_has_no_effort: 8職種すべてで一致・effort/color/name無し"
+  else
+    fail_case "agents_json_matches_source_and_has_no_effort ($(printf '%s' "$result" | tr '\n' ' '))"
   fi
 }
 
-echo "=== model廃止 AC-8: 契約・README・規範・公開コピーの同期 ==="
-if python3 - "$REPO_ROOT" "$HOME/work/takumi009-ai-env-private/docs/core-split" "$HOME/Data/obsidian" <<'PYDOC'
-from pathlib import Path
-import sys
-r,docs,vault=map(Path,sys.argv[1:])
-names=['core-workflow.md','worker-role-prompts.md','core-conduct.md']
-texts={}
-for name in names:
-    original=(vault/'Preferences'/name).read_bytes()
-    assert original==(r/'vault-public/Preferences'/name).read_bytes(),name
-    texts[name]=original.decode()
-contract=(docs/'profile-resolve-contract-2026-09-01.md').read_text()
-readme=(r/'README.md').read_text()
-for name,text in list(texts.items())+[('contract',contract),('README',readme),
-        ('bootstrap',(r/'claude/hooks/bootstrap-vault.sh').read_text())]:
-    for forbidden in ('MODEL_MISMATCH','既定 model:','model パラメータは**渡さない**','model 引数は渡さない'):
-        assert forbidden not in text,(name,forbidden)
-for name in ('core-workflow.md','worker-role-prompts.md'):
-    for required in ('resolve-candidate','AGENT_MODEL','model'): assert required in texts[name],(name,required)
-assert 'SUBAGENT_PROVIDER_UNSUPPORTED' in contract and 'AGENT_MODEL_UNSUPPORTED' in contract
-assert 'AGENT_MODEL' in contract and '--agents-dir' in contract
-english,japanese=readme.split('## 日本語',1)
-for text in (english,japanese):
-    for required in ('resolve-candidate','AGENT_MODEL','Agent','model'): assert required in text,required
-PYDOC
-then
-  pass "AC-8 文書同期"
-else
-  fail_case "AC-8 文書同期（Vault正本更新・export完了後に緑化）"
-fi
+echo "=== 12. 検証1巡目 I1-m6 対応: agent_def.py の --role 検査（陰性ケース） ==="
+{
+  AGENT_DEF="$REPO_ROOT/claude/hooks/lib/agent_def.py"
+  I1M6_WORK="$(mktemp -d)"
+
+  # --role が ^[a-z][a-z0-9-]*$ に一致しない（`../`混入・大文字・空文字・
+  # 空白混入）ときは非0で失敗する（実在のディレクトリ・実在の素材に対して
+  # 検査する＝ファイル名連結より前に弾かれることを見る）。
+  for bad_role in '../implementer' 'Implementer' '' 'imple menter' 'implementer/../x'; do
+    if python3 "$AGENT_DEF" agents-json --dir "$AGENTS_DIR" --role "$bad_role" >/dev/null 2>"$I1M6_WORK/role-invalid.err"; then
+      fail_case "role_invalid(agents-json,role=[$bad_role]): 不正な--roleは非0で失敗するはずが成功した"
+    else
+      grep -q 'ROLE_INVALID' "$I1M6_WORK/role-invalid.err" \
+        && pass "role_invalid(agents-json,role=[$bad_role]): 不正な--roleは非0・ROLE_INVALIDで失敗" \
+        || fail_case "role_invalid(agents-json,role=[$bad_role]): 失敗はしたが理由がROLE_INVALIDでない (stderr=[$(cat "$I1M6_WORK/role-invalid.err")])"
+    fi
+  done
+  if python3 "$AGENT_DEF" allowed-tools --dir "$AGENTS_DIR" --role '../implementer' >/dev/null 2>"$I1M6_WORK/role-invalid-at.err"; then
+    fail_case "role_invalid(allowed-tools): 不正な--roleは非0で失敗するはずが成功した"
+  else
+    grep -q 'ROLE_INVALID' "$I1M6_WORK/role-invalid-at.err" \
+      && pass "role_invalid(allowed-tools): 不正な--roleは非0・ROLE_INVALIDで失敗" \
+      || fail_case "role_invalid(allowed-tools): 失敗はしたが理由がROLE_INVALIDでない"
+  fi
+
+  # frontmatterのnameが--roleと食い違う素材（ファイル名とnameが不一致）は
+  # 非0で失敗する（AC-11b②の抜け穴＝ファイル名との一致だけでは検出できな
+  # かった食い違いを塞げていることを見る）。
+  IMPOSTOR_DIR="$I1M6_WORK/agents-impostor"
+  mkdir -p "$IMPOSTOR_DIR"
+  cat > "$IMPOSTOR_DIR/impostor.md" <<'EOF'
+---
+name: someone-else
+description: test fixture with mismatched name
+tools: Read
+---
+body text
+EOF
+  if python3 "$AGENT_DEF" agents-json --dir "$IMPOSTOR_DIR" --role impostor >/dev/null 2>"$I1M6_WORK/name-mismatch.err"; then
+    fail_case "role_name_mismatch: frontmatterのnameと--roleが食い違う素材は非0で失敗するはずが成功した"
+  else
+    grep -q 'ROLE_NAME_MISMATCH' "$I1M6_WORK/name-mismatch.err" \
+      && pass "role_name_mismatch: frontmatterのnameと--roleが食い違う素材は非0・ROLE_NAME_MISMATCHで失敗" \
+      || fail_case "role_name_mismatch: 失敗はしたが理由がROLE_NAME_MISMATCHでない (stderr=[$(cat "$I1M6_WORK/name-mismatch.err")])"
+  fi
+
+  # nameフィールド自体が無い素材も同様に非0で失敗する（"名前が在るなら一致"
+  # ではなく、8職種の実素材が全てnameを持つ前提＝欠落も不一致として扱う）。
+  NONAME_DIR="$I1M6_WORK/agents-noname"
+  mkdir -p "$NONAME_DIR"
+  cat > "$NONAME_DIR/noname.md" <<'EOF'
+---
+description: test fixture without name field
+tools: Read
+---
+body text
+EOF
+  if python3 "$AGENT_DEF" agents-json --dir "$NONAME_DIR" --role noname >/dev/null 2>"$I1M6_WORK/name-missing.err"; then
+    fail_case "role_name_missing: nameフィールドが無い素材は非0で失敗するはずが成功した"
+  else
+    grep -q 'ROLE_NAME_MISMATCH' "$I1M6_WORK/name-missing.err" \
+      && pass "role_name_missing: nameフィールドが無い素材は非0・ROLE_NAME_MISMATCHで失敗" \
+      || fail_case "role_name_missing: 失敗はしたが理由がROLE_NAME_MISMATCHでない (stderr=[$(cat "$I1M6_WORK/name-missing.err")])"
+  fi
+
+  # 8職種の実素材（正常系）は引き続き成功する（回帰防止＝新設検査が正常系を壊さない）。
+  if python3 "$AGENT_DEF" agents-json --dir "$AGENTS_DIR" --role implementer >/dev/null 2>"$I1M6_WORK/normal.err"; then
+    pass "role_normal_still_succeeds: 実素材のimplementerは新設検査後も成功する"
+  else
+    fail_case "role_normal_still_succeeds: 実素材のimplementerが新設検査で失敗した (stderr=[$(cat "$I1M6_WORK/normal.err")])"
+  fi
+
+  rm -rf "$I1M6_WORK"
+}
 
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="

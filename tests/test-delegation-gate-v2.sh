@@ -13,10 +13,11 @@
 # cwd）。判定: exit 0 かつ標準出力が空なら通過／permissionDecision: "deny"
 # を含めば deny（フックは deny の場合も含め常に exit 0 を返す契約）。
 #
-# 判定順序（現物）＝1→2→2.5→3→4→4b→5。各 fixture は「狙った判定より前の
-# 条件がすべて偽」であることを保証する（設計§4）。PA-19〜PA-22 に共通の
-# 前提 a〜g（PA-18 は対象外＝a〜e＋「対象が許可パスの中」＋g）を、フィクス
-# チャ自身の構成から実際に確認するヘルパーを用意する。
+# 判定順序（現物）＝1→2→2.5→3→4→4m→5（設計v1.2 §3.3・FR-38で旧4bは撤去）。
+# 各 fixture は「狙った判定より前の条件がすべて偽」であることを保証する
+# （設計§4）。PA-19〜PA-22 に共通の前提 a〜g（PA-18 は対象外＝a〜e＋「対象が
+# 許可パスの中」＋g）を、フィクスチャ自身の構成から実際に確認するヘルパーを
+# 用意する。
 #
 # 実行方法: bash tests/test-delegation-gate-v2.sh
 
@@ -283,7 +284,7 @@ echo "=== 7. PA-19: 判定4（自チームにリーダー以外のメンバー�
   rm -rf "$WORK"
 }
 
-echo "=== 8. PA-20: 判定4b（TMUXあり＋他チームにリーダー以外の稼働メンバー＋自チームconfigは無い）→ 通過（共通前提a〜g・判定4が偽であることまで満たす） ==="
+echo "=== 8. PA-20→FM-2回帰(FR-38): 旧判定4bは撤去済み。TMUXあり＋他チームにリーダー以外の稼働メンバー＋自チームconfigは無い＋委任マーカーも無い → deny（AC-9後半：他セッションのconfigだけでは常時通過しない） ==="
 {
   WORK="$(mktemp -d)"
   HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
@@ -294,6 +295,8 @@ echo "=== 8. PA-20: 判定4b（TMUXあり＋他チームにリーダー以外の
   write_team_config_with_worker "$TEAMS_D/session-OTHERTEAM/config.json"
   # 自チームのconfig（$TEAMS_D/session-${SID:0:8}/config.json）は意図的に作らない
   # ＝判定4「自チームにリーダー以外のメンバーが存在」が偽であることを保証する。
+  # このセッションの委任マーカー（claude-delegated-ok-<sid>）も置かない
+  # ＝判定4m「このセッションで委任実績あり」も偽であることを保証する。
 
   assert_precond_a "$SID"
   assert_precond_b "$fpath"
@@ -303,12 +306,86 @@ echo "=== 8. PA-20: 判定4b（TMUXあり＋他チームにリーダー以外の
   assert_precond_f "$fpath" "$HOME_D"
   assert_true "前提(PA-20固有): 自チームのconfigが存在しない（判定4が偽）" \
     "$([[ ! -f "$TEAMS_D/session-${SID:0:8}/config.json" ]] && echo 1 || echo 0)"
-  # 前提g: マーカーは一切置かない
+  assert_true "前提(PA-20固有): このセッションの委任マーカーが存在しない（判定4mが偽）" \
+    "$([[ ! -f "$MARK_D/claude-delegated-ok-$SID" ]] && echo 1 || echo 0)"
+  # 前提g: 直接作業宣言マーカーは一切置かない
 
   json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json" "1"
-  assert_pass "PA-20: TMUX下で他チームに委任実績があれば通過（再開セッション対策）"
+  assert_deny "PA-20(FM-2修正後): TMUX下でも他チームのconfigだけでは常時通過しない（旧4bの偽陽性が解消済み）"
   rm -rf "$WORK"
+}
+
+echo "=== 8b. D2-M1(AC-9前半・FR-25): 判定4m（自チームconfigに非リーダー0件・このセッションの委任マーカーあり＝agent-model-guard.shのPASSを模す）→ 通過 ==="
+{
+  WORK="$(mktemp -d)"
+  HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
+  mkdir -p "$HOME_D" "$TEAMS_D" "$MARK_D"
+  SID="sess-d2m1-0000000"
+  AID=""; ATYPE=""
+  fpath="$WORK/project/file.md"
+  # 自チームconfigは作らない（非リーダーのメンバー0件＝判定4が偽）。
+  touch "$MARK_D/claude-delegated-ok-$SID"
+
+  assert_precond_a "$SID"
+  assert_precond_b "$fpath"
+  assert_precond_c "$AID" "$ATYPE"
+  assert_precond_d "$SID" "$TEAMS_D"
+  assert_precond_e "$fpath" "$HOME_D/Data/obsidian"
+  assert_precond_f "$fpath" "$HOME_D"
+  assert_true "前提(D2-M1固有): 自チームのconfigが存在しない（判定4が偽）" \
+    "$([[ ! -f "$TEAMS_D/session-${SID:0:8}/config.json" ]] && echo 1 || echo 0)"
+
+  json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
+  run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
+  assert_pass "D2-M1: 名前無しsubagentだけの委任実績（4mマーカー）で通過"
+  rm -rf "$WORK"
+}
+
+echo "=== 8c. D2-M2(AC-9後半・FR-38・FM-7): 他セッションのconfigにだけ非リーダーのメンバーがいる（自セッションのAgent起動なし）→ deny ==="
+{
+  WORK="$(mktemp -d)"
+  HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
+  mkdir -p "$HOME_D" "$MARK_D"
+  SID="sess-d2m2-0000000"
+  AID=""; ATYPE=""
+  fpath="$WORK/project/file.md"
+  write_team_config_with_worker "$TEAMS_D/session-OTHERTEAM2/config.json"
+  # 自チームconfigは作らない・自セッションの委任マーカー（claude-delegated-
+  # ok-<sid>）も置かない＝「自セッションのAgent起動なし」を保証する。
+
+  assert_precond_a "$SID"
+  assert_precond_b "$fpath"
+  assert_precond_c "$AID" "$ATYPE"
+  assert_precond_d "$SID" "$TEAMS_D"
+  assert_precond_e "$fpath" "$HOME_D/Data/obsidian"
+  assert_precond_f "$fpath" "$HOME_D"
+  assert_true "前提(D2-M2固有): このセッションの委任マーカーが存在しない" \
+    "$([[ ! -f "$MARK_D/claude-delegated-ok-$SID" ]] && echo 1 || echo 0)"
+
+  json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
+  run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
+  assert_deny "D2-M2: 他セッションのconfigだけでは通過しない（自セッションの実績が無ければdeny）"
+  rm -rf "$WORK"
+}
+
+echo "=== 8d. D2-M3(AC-9・FR-27・FM-5): 4mマーカー・他セッションconfigのいずれでもVault6フォルダはdenyのまま（委任実績では絶対に開かない） ==="
+{
+  for variant in delegated_marker other_session_config; do
+    WORK="$(mktemp -d)"
+    HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
+    mkdir -p "$HOME_D" "$TEAMS_D" "$MARK_D"
+    SID="sess-d2m3-${variant:0:8}"
+    fpath="$HOME_D/Data/obsidian/Knowledge/note.md"
+    case "$variant" in
+      delegated_marker) touch "$MARK_D/claude-delegated-ok-$SID" ;;
+      other_session_config) write_team_config_with_worker "$TEAMS_D/session-OTHERTEAM3/config.json" ;;
+    esac
+    json="$(make_input "$SID" "" "" "$fpath" "$WORK")"
+    run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
+    assert_deny "D2-M3(${variant}): 委任実績があってもVault6フォルダはdeny（vault-scribeへ）" "vault-scribe"
+    rm -rf "$WORK"
+  done
 }
 
 echo "=== 9. PA-21: 判定5（汎用マーカーあり）→ 通過（共通前提a〜g） ==="
@@ -443,6 +520,69 @@ echo "=== 13. FX-G9（FR-31）: 実効モードsolo相当・汎用マーカー�
   json="$(make_input "$SID" "" "" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
   assert_deny "FX-G9: solo相当・汎用マーカーのみではVault対象はdenyのまま" "vault-scribe"
+  rm -rf "$WORK"
+}
+
+echo "=== 14. I1-M3(検証1巡目・I1-B1回帰防止): symlink経由の起動でもrule 2.5(Vault AI向け6フォルダ)がrepoパス直叩きと同じ結果でdenyされる（既存ケースは1行も変えず追加のみ） ==="
+{
+  WORK="$(mktemp -d)"
+  HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
+  mkdir -p "$HOME_D" "$TEAMS_D" "$MARK_D"
+  SID="sess-i1m3-0000000"
+  fpath="$HOME_D/Data/obsidian/Knowledge/note.md"
+  json="$(make_input "$SID" "" "" "$fpath" "$WORK")"
+
+  # installerは本フックを $HOME/.claude/hooks/delegation-gate-v2.sh
+  # （repoへのsymlink）として配置し、$HOME/.claude/hooks/lib/ は作らない。
+  # その実経路を一時ディレクトリで再現する（symlinkのみを置き、隣にlib/を
+  # 作らない）。
+  LINK_DIR="$WORK/linked-hooks"
+  mkdir -p "$LINK_DIR"
+  ln -s "$HOOK" "$LINK_DIR/delegation-gate-v2.sh"
+
+  run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
+  DIRECT_RC="$GATE_RC"; DIRECT_OUT="$GATE_OUT"
+
+  LINK_OUT="$(printf '%s' "$json" | HOME="$HOME_D" GATE_TEAMS_DIR="$TEAMS_D" GATE_MARKER_DIR="$MARK_D" env -u TMUX bash "$LINK_DIR/delegation-gate-v2.sh" 2>&1)"
+  LINK_RC=$?
+
+  if [[ "$DIRECT_RC" -eq 0 ]] && [[ "$LINK_RC" -eq 0 ]] \
+     && printf '%s' "$DIRECT_OUT" | grep -q '"permissionDecision": "deny"' \
+     && printf '%s' "$LINK_OUT" | grep -q '"permissionDecision": "deny"' \
+     && printf '%s' "$LINK_OUT" | grep -qF "vault-scribe"; then
+    pass "I1-M3: symlink経由でもVault AI向け6フォルダのdenyがrepoパス直叩きと一致（guard_common.sh解決の回帰防止）"
+  else
+    fail_case "I1-M3: symlink経由のVault denyがrepoパス直叩きと不一致 (direct_rc=$DIRECT_RC direct_out=[$DIRECT_OUT] link_rc=$LINK_RC link_out=[$LINK_OUT])"
+  fi
+  rm -rf "$WORK"
+}
+
+echo "=== 15. I2-m5(検証2巡目): source失敗時のfail-close分岐そのものに恒久テストを足す（lib/を持たない実体ディレクトリへフックをコピーして起動・既存ケースは1行も変えず追加のみ） ==="
+{
+  # I2-M2でenv上書き口（GUARD_COMMON_LIB）を撤去したため、source失敗を
+  # 再現する手段は「lib/を持たない場所へフック本体だけをコピーして実行する」
+  # 方式に一本化する（symlinkだと自身の実体を辿ってlib/を見つけてしまい
+  # source失敗を再現できない＝コピーでなければならない）。
+  WORK="$(mktemp -d)"
+  HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
+  mkdir -p "$HOME_D" "$TEAMS_D" "$MARK_D"
+  NOLIB_DIR="$WORK/nolib-delegation-gate"
+  mkdir -p "$NOLIB_DIR"
+  cp "$HOOK" "$NOLIB_DIR/delegation-gate-v2.sh"
+
+  SID="sess-i2m5-0000000"
+  fpath="$WORK/project/file.md"
+  json="$(make_input "$SID" "" "" "$fpath" "$WORK")"
+  NOLIB_OUT="$(printf '%s' "$json" | HOME="$HOME_D" GATE_TEAMS_DIR="$TEAMS_D" GATE_MARKER_DIR="$MARK_D" env -u TMUX bash "$NOLIB_DIR/delegation-gate-v2.sh" 2>&1)"
+  NOLIB_RC=$?
+
+  if [[ "$NOLIB_RC" -eq 0 ]] \
+     && printf '%s' "$NOLIB_OUT" | grep -q '"permissionDecision": "deny"' \
+     && printf '%s' "$NOLIB_OUT" | grep -qF "GUARD_COMMON_UNREADABLE"; then
+    pass "I2-m5: delegation-gate-v2.shはlib/が無いとfail-close（deny・GUARD_COMMON_UNREADABLE・exit 0）で素通ししない"
+  else
+    fail_case "I2-m5: delegation-gate-v2.shのfail-closeが働かない (rc=$NOLIB_RC out=[$NOLIB_OUT])"
+  fi
   rm -rf "$WORK"
 }
 

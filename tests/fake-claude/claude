@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# 偽 claude シム（tests/test-claude-exec.sh 専用。設計-v1.1.1.md §9.1末尾の
+# 仕様＝引数列・子環境のキー集合・cwd・標準入力の先頭数十バイトを
+# AIENV_CLAUDE_STUB_LOG へ JSON Lines で記録し、ケースごとのJSONを標準出力
+# へ返す。CLAUDE_CODE_WRAPPER_BIN で本物の claude の代わりに差し替える）。
+#
+# 制御用環境変数（すべて AIENV_CLAUDE_STUB_ プレフィックス＝3プレフィックス
+# 除去の対象外なので子にもそのまま渡る）:
+#   AIENV_CLAUDE_STUB_LOG            記録先（JSON Lines）。未指定なら記録しない
+#   AIENV_CLAUDE_STUB_RESPONSE_FILE  標準出力へ返すJSONファイルのパス
+#   AIENV_CLAUDE_STUB_EXIT_CODE      exit code（既定0）
+#   AIENV_CLAUDE_STUB_SLEEP_SECS     応答前にこの秒数だけ待つ（timeoutテスト用。
+#                                    SIGTERM で即座に中断できるよう `wait` で待つ）
+#   AIENV_CLAUDE_STUB_STDERR         標準エラーへこの文字列を1行出す
+#                                    （stderr_does_not_change_classテスト用）
+
+set -u
+
+if [ -n "${AIENV_CLAUDE_STUB_LOG:-}" ]; then
+  python3 -c '
+import json, os, sys
+log_path = sys.argv[1]
+argv = sys.argv[2:]
+env_keys = sorted(os.environ.keys())
+cwd = os.getcwd()
+stdin_data = sys.stdin.buffer.read(200)
+stdin_head = stdin_data.decode("utf-8", errors="replace")
+line = json.dumps({"argv": argv, "env_keys": env_keys, "cwd": cwd, "stdin_head": stdin_head})
+with open(log_path, "a", encoding="utf-8") as f:
+    f.write(line + "\n")
+' "$AIENV_CLAUDE_STUB_LOG" "$@"
+else
+  cat > /dev/null
+fi
+
+if [ -n "${AIENV_CLAUDE_STUB_STDERR:-}" ]; then
+  printf '%s\n' "$AIENV_CLAUDE_STUB_STDERR" >&2
+fi
+
+if [ -n "${AIENV_CLAUDE_STUB_SLEEP_SECS:-}" ]; then
+  trap 'kill "$SLEEP_PID" 2>/dev/null; exit 143' TERM
+  sleep "$AIENV_CLAUDE_STUB_SLEEP_SECS" &
+  SLEEP_PID=$!
+  wait "$SLEEP_PID"
+fi
+
+if [ -n "${AIENV_CLAUDE_STUB_RESPONSE_FILE:-}" ] && [ -f "${AIENV_CLAUDE_STUB_RESPONSE_FILE}" ]; then
+  cat "$AIENV_CLAUDE_STUB_RESPONSE_FILE"
+else
+  printf '%s' '{"is_error":false,"subtype":"success","session_id":"stub-default-sid","result":"OK"}'
+fi
+
+exit "${AIENV_CLAUDE_STUB_EXIT_CODE:-0}"

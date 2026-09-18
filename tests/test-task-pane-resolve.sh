@@ -505,7 +505,11 @@ else
   fail_case "test-bootstrap-vault.shの名称変更の伝播"
 fi
 
-# ⑥tests/test-check-drift.shのフック列挙2か所＋固定件数3か所が14であること。
+# ⑥tests/test-check-drift.shのフック列挙2か所＋固定件数3か所が16であること
+# （effort-per-role v2投入時にSYMLINKS配列からagentsが外れ「15件」になっていたが、
+# D-4（installerのeffort:生成を退役しsymlink配置へ復帰・2026-09-18）でagentsが
+# SYMLINKS配列へ戻り、固定項目15件+1(そのテストのfixtureが動的に足していた
+# agentロール1件)＝16件へ増える）。
 TEST_CHECK_DRIFT="$REPO_ROOT/tests/test-check-drift.sh"
 hits="$(grep -cF 'task-pane-resolve.sh' "$TEST_CHECK_DRIFT" 2>/dev/null || true)"
 if [ "${hits:-0}" -ge 2 ]; then
@@ -513,17 +517,17 @@ if [ "${hits:-0}" -ge 2 ]; then
 else
   fail_case "test-check-drift.shのフック列挙にtask-pane-resolve.shが足りない (hits=$hits)"
 fi
-if grep -qF 'symlink総数: 14件 / drift: 0件' "$TEST_CHECK_DRIFT" \
-   && grep -qF 'symlink総数: 14件 / drift: 14件' "$TEST_CHECK_DRIFT" \
-   && grep -qF 'symlink総数: 14件 / drift: 1件' "$TEST_CHECK_DRIFT"; then
-  pass "test-check-drift.shの固定件数3か所が14件に更新されている（期待文字列の一致）"
+if grep -qF 'symlink総数: 16件 / drift: 0件' "$TEST_CHECK_DRIFT" \
+   && grep -qF 'symlink総数: 16件 / drift: 16件' "$TEST_CHECK_DRIFT" \
+   && grep -qF 'symlink総数: 16件 / drift: 1件' "$TEST_CHECK_DRIFT"; then
+  pass "test-check-drift.shの固定件数3か所が16件に更新されている（期待文字列の一致）"
 else
   fail_case "test-check-drift.shの固定件数3か所のいずれかが期待文字列と一致しない"
 fi
-if grep -qF 'symlink総数: 13件' "$TEST_CHECK_DRIFT"; then
-  fail_case "test-check-drift.shに旧件数（13件）が残っていない"
+if grep -qF 'symlink総数: 15件' "$TEST_CHECK_DRIFT"; then
+  fail_case "test-check-drift.shに旧件数（15件）が残っていない"
 else
-  pass "test-check-drift.shに旧件数（13件）が残っていない"
+  pass "test-check-drift.shに旧件数（15件）が残っていない"
 fi
 
 # ⑦tests/test-install-main.shのアサーション。

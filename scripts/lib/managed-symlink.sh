@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
 # scripts/lib/managed-symlink.sh
 #
-# install-main.sh の link() と update-sub.sh の claude/agents/*.md 直接配置
-# （2c.）が共有する「destが既存の通常ファイルなら安全に退避してからsymlink化
-# する」処理を1箇所に集約する（検証4巡目 BLOCKING-1対応・2026-09-14）。
+# install-main.sh・update-sub.shが共有する「管理配置先のsymlink同期」を
+# 1箇所に集約する（検証4巡目 BLOCKING-1対応・2026-09-14）。
+#
+# ⚠️ 2026-09-17〜 effort-per-role v2（設計-v1.2.md §2）は本ファイルへ職種
+# 定義の生成実ファイル方式（frontmatterへeffort値を都度書き込む生成・判定
+# 関数群）を追加したが、案件③ B-1 D-4（設計-v1.1.3.md §5 手順2）で退役し、
+# symlink方式（本ファイルの sync_managed_symlink）へ戻した。B-1のラッパーが
+# effortの実行値を--effortで子へ渡すため、職種定義ファイル側にeffort:行を
+# 持たせる必要が無くなったため。
+#
+# --- sync_managed_symlink ---
+#
+# install-main.sh の link() と update-sub.sh の claude/agents/*.md直接
+# 配置（2c.）が共有していた「destが既存の通常ファイルなら安全に退避してから
+# symlink化する」処理。
 #
 # 経緯: 検証3巡目 BLOCKING-1で、install-main.sh の backup_once() に
 # --additional-on-diff というオプトイン引数を追加し、link() だけがこれを
@@ -28,14 +40,20 @@
 #   出す（scripts/lib/pid-lock.sh の log_prefix引数と同じ流儀。呼び出し元
 #   スクリプトのlog()に依存せず、この関数単体で完結させるため）。
 #
-#   cp失敗はreturn 1で伝える。呼び出し元のset -eに委ねる方針
-#   （install-main.sh backup_once()の既存方針＝2026-09-01工程横断レビュー
-#   指摘・MAJOR対応の踏襲。「cmd || fail ...」の左辺で呼ぶとbash仕様上
-#   set -eが関数本体全体で無効化されるため、あえて`||`で包まず素の
-#   呼び出しのままにする）。
-sync_managed_symlink() {
-  local src="$1" dest="$2" log_prefix="$3"
-  mkdir -p "$(dirname "$dest")"
+#   cp失敗はreturn 1で伝える。呼び出し元は`if ! _backup_managed_dest ...; then
+#   return 1; fi`のように明示的に非0を検査する（2026-09-17検証1巡目差し戻し
+#   MINOR-10対応: 「cmd || fail ...」の左辺で呼ぶとbash仕様上set -eが関数
+#   本体全体で無効化される、という一般的な注意は正しいが、
+#   _backup_managed_dest()自身の内部（cp・cmp）はすべて明示的にreturn 1する
+#   実装であり、呼び出し元を`||`で包んでも実害は無い。ただし規約として
+#   紛らわしいため呼び出し側は素の`||`を避け、if文で明示する）。
+
+# _backup_managed_dest <dest> <log_prefix>
+# destが既存の通常ファイル（symlinkではない）の場合、.pre-aienv.bakへ退避
+# する（無ければ新規作成／既存と内容が違えばタイムスタンプ付き追加保存）。
+# sync_managed_symlink() が使う退避規則の実体。
+_backup_managed_dest() {
+  local dest="$1" log_prefix="$2"
   if [ -e "$dest" ] && [ ! -L "$dest" ]; then
     if [ ! -e "$dest.pre-aienv.bak" ]; then
       if ! cp "$dest" "$dest.pre-aienv.bak"; then
@@ -56,6 +74,14 @@ sync_managed_symlink() {
       fi
       echo "[$log_prefix] backed up (既存の.pre-aienv.bakと内容が異なる通常ファイルのため追加保存): $dest -> $extra_bak"
     fi
+  fi
+}
+
+sync_managed_symlink() {
+  local src="$1" dest="$2" log_prefix="$3"
+  mkdir -p "$(dirname "$dest")"
+  if ! _backup_managed_dest "$dest" "$log_prefix"; then
+    return 1
   fi
   ln -sfn "$src" "$dest"
   echo "[$log_prefix] linked: $dest -> $src"

@@ -1,10 +1,11 @@
 ---
 date: 2026-09-01
-updated: 2026-09-01
+updated: 2026-09-16
 tags: [preference, agent-teams, cross-session, messaging]
 project: meta
 related:
   - "[[Knowledge/cross-session-messaging-notes]]"
+  - "[[Preferences/session-handoff]]"
 aliases:
   - "セッション間メッセージ運用"
   - "SendMessage運用"

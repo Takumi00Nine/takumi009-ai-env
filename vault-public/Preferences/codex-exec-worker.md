@@ -1,6 +1,6 @@
 ---
 date: 2026-09-03
-updated: 2026-09-06
+updated: 2026-09-16
 tags: [preference, codex, delegation, worker, exec]
 project: meta
 related:
@@ -12,13 +12,13 @@ related:
 aliases:
   - "Codex実装ワーカー起動手順"
   - "codex execで直接起動"
-  - "Sonnetラッパー不要"
+  - "ラッパーワーカー不要"
 ---
 # Codex を実装ワーカーとして直接起動する手順（`codex exec` 背景実行）
 
 **2026-09-06 以降、Codex 呼び出しの唯一経路**（MCP 廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]）。一次レビュー委任は `~/work/takumi009-ai-env/scripts/codex-exec.sh` ラッパー経由（正本＝[[Preferences/codex-review-protocol]]）、本ノートの生 `codex exec` の型は実装ワーカー起動用に残す。
 
-用途＝実装を Codex に任せるとき、リーダーが**Sonnet 等のラッパーワーカーを挟まず** Codex を直接ワーカーとして起動する手順。既定の実装担当は引き続き Claude の implementer（[[Preferences/coding-delegation]]）。Codex に振るのは implementer が空席・上限、本人指定、Codex 枠の余剰のいずれか（[[Decisions/2026-07-23-codex-delegation-reopened]]）。
+用途＝実装を Codex に任せるとき、リーダーが**implementer 等のラッパーワーカーを挟まず** Codex を直接ワーカーとして起動する手順。既定の実装担当は引き続き Claude の implementer（[[Preferences/coding-delegation]]）。Codex に振るのは implementer が空席・上限、本人指定、Codex 枠の余剰のいずれか（[[Decisions/2026-07-23-codex-delegation-reopened]]）。
 
 経路は **`codex exec` を Bash の `run_in_background: true` で起動**する。終了時にリーダーへ完了通知が届き、チームメイトの idle 通知と同じ受け取り方になる。
 

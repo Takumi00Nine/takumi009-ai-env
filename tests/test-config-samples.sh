@@ -67,6 +67,11 @@ echo "=== AC-1: resolve が OK・TEAM_MODE:full・MACHINE_ROLE:main を含み MO
   assert_contains "AC-1: TEAM_MODE:full" "$out" "TEAM_MODE:full"
   assert_contains "AC-1: MACHINE_ROLE:main" "$out" "MACHINE_ROLE:main"
   assert_not_contains "AC-1: MODEL_MISMATCHを含まない" "$out" "MODEL_MISMATCH"
+  # 要件書 AC-1（形の不変条件の追加分）: 未定義参照が出ていない。
+  # ⚠️ VACANT_REASON: の非包含は v1.5 で撤去した（要件書 FR-7）。未対応経路の
+  # 候補を configured に書くと保留にしたいが、resolve は rc=0 のまま
+  # VACANT_REASON: を1件出すため、この判定と両立できない。
+  assert_not_contains "AC-1: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
 }
 
 echo "=== AC-1b: --bedrock-env を渡しても壊れない ==="
@@ -76,51 +81,68 @@ echo "=== AC-1b: --bedrock-env を渡しても壊れない ==="
   assert_starts_with "AC-1b: OKで始まる" "$out" "OK"
 }
 
-echo "=== AC-2: resolve-candidate が各職種の候補で exit0（configured な role.* 全9行＋4定義） ==="
+echo "=== AC-1c: 配役表の職種名が職種定義ファイルの集合に収まる（要件書 AC-3・FR-3） ==="
+{
+  # `leader`/`navi`/`ja-doc` は職種定義ファイルを持たない spawn 対象外の3職種
+  # （resolver の CORE_ROLES_WITHOUT_REPO_AGENT_FILE と同じ集合）。片方向
+  # （配役表→マニフェスト）だけを見るので、行を書かない職種があっても通る。
+  manifest="$( (ls "$AGENTS_DIR" | sed 's/\.md$//'; printf 'leader\nnavi\nja-doc\n') | sort -u )"
+  used="$(grep -oE '^role\.[a-z-]+' "$PROFILE_SAMPLE" | sed 's/^role\.//' | sort -u)"
+  used_not_in_manifest="$(comm -23 <(printf '%s\n' "$used") <(printf '%s\n' "$manifest"))"
+  assert_eq "AC-1c: 配役表の職種名がマニフェストに収まる" "" "$used_not_in_manifest"
+  # 要件書 AC-3 の2行目（空虚な真の禁止）。この節に assert_true は無いため
+  # 既存の fail_case を直接使う（AC-2 側のガードと同じ扱い＝新しい
+  # ヘルパを増やさない・NFR-1）。
+  if [ -z "$used" ]; then
+    fail_case "AC-1c: 配役表に role. 行が1件も無い（空虚な真の禁止）"
+  fi
+}
+
+echo "=== AC-2: 経路（provider×execution）ごとの代表1件が起動でき、未対応の経路は保留になる（要件書 FR-7・AC-2） ==="
 {
   check_candidate() {
-    local role="$1" def="$2"
+    local role="$1" def="$2" route="$3"
     local out rc=0
     out="$(AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" python3 "$LIB" resolve-candidate "$PROFILE_SAMPLE" --role "$role" --model-def "$def" --agents-dir "$AGENTS_DIR" 2>&1)" || rc=$?
-    assert_eq "AC-2: role=$role def=$def exit0" "0" "$rc"
-    assert_starts_with "AC-2: role=$role def=$def OKで始まる" "$out" "OK"
-    assert_contains "AC-2: role=$role def=$def 定義名が現れる" "$out" "$def"
+    case "$out" in
+      OK*)
+        assert_eq "AC-2: route=$route role=$role def=$def exit0" "0" "$rc"
+        assert_contains "AC-2: route=$route role=$role def=$def 定義名が現れる" "$out" "$def"
+        ;;
+      *SUBAGENT_PROVIDER_UNSUPPORTED*)
+        # 要件書 FR-7: この機体で未対応の経路は赤にせず保留にする。
+        echo "  hold - この機体で未対応の経路（${route}）"
+        pass "AC-2: route=$route role=$role def=$def この機体で未対応のため保留"
+        ;;
+      *)
+        fail_case "AC-2: route=$route role=$role def=$def exit0 (expected=[0] actual=[$rc] out=[$out])"
+        ;;
+    esac
   }
-  # profile.md.sampleのconfigured role行は9件（leader/requirements-analyst/
-  # system-designer/adoption-critic/implementer/researcher/operator/
-  # vault-scribe/verifier）。navi・ja-docはunknownなので対象外。全9件を通す
-  # （2026-09-08 Codexレビュー指摘・MAJOR対応・1巡目: 代表5件だけでは
-  # 職種ごとの候補所属判定を固定できない）。
-  check_candidate leader fable-high
-  check_candidate requirements-analyst opus-high
-  check_candidate system-designer opus-high
-  check_candidate adoption-critic opus-high
-  check_candidate implementer sonnet-high
-  check_candidate researcher sonnet-high
-  check_candidate operator sonnet-high
-  check_candidate vault-scribe sonnet-high
-  check_candidate verifier codex-review-default
-
-  # fallback.verifier（opus-high・候補ちょうど1件）は--model-defで直接指定
-  # できない（D-5＝fallbackの定義名を直接指定させない）ので、role.verifierの
-  # 候補を一時的にunavailableにした変異コピーでfallback発火を実際に通す
-  # （2026-09-08 Codexレビュー指摘・MAJOR対応・1巡目）。
-  mutant_fb="$WORK/profile-fallback-check.md.sample"
-  sed 's/^role.verifier:             configured model=codex-review-default$/role.verifier:             unavailable model=codex-review-default/' \
-    "$PROFILE_SAMPLE" > "$mutant_fb"
-  grep -q '^role.verifier:             unavailable model=codex-review-default$' "$mutant_fb" \
-    || fail_case "AC-2: 前提（role.verifierをunavailableへ書き換え済み）"
-  fb_out="$(AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" python3 "$LIB" resolve-candidate "$mutant_fb" --role verifier --model-def codex-review-default --agents-dir "$AGENTS_DIR" 2>&1)"; fb_rc=$?
-  assert_eq "AC-2: fallback.verifier発火時にexit0" "0" "$fb_rc"
-  fb_def="$(printf '%s' "$fb_out" | sed -n '1p' | awk -F'\t' '{print $2}')"
-  assert_eq "AC-2: fallback.verifierの定義名がopus-high" "opus-high" "$fb_def"
+  # 要件書 AC-2・FR-7: 起動可能性は provider×execution の経路ごとに代表1件だけ
+  # 見る。list-roles の configured 行を経路（provider/execution）でまとめ、
+  # 経路ごと最初の1組だけを resolve-candidate に通す（テストに literal で
+  # 列挙しない）。同じ経路の残りの候補・どこからも参照されていない定義は
+  # 個別に検査しない。組が0件のときは検査が空回りしたものとして失敗させる
+  # （空虚な真の禁止）。
+  routes_reps="$(AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" python3 "$LIB" list-roles "$PROFILE_SAMPLE" \
+    | awk -F'\t' '$2=="configured" && !seen[$4"/"$6]++ {print $1"\t"$3"\t"$4"/"$6}')"
+  routes_count=0
+  while IFS=$'\t' read -r role def route; do
+    [ -n "$role" ] || continue
+    check_candidate "$role" "$def" "$route"
+    routes_count=$((routes_count + 1))
+  done <<< "$routes_reps"
+  if [ "$routes_count" -lt 1 ]; then
+    fail_case "AC-2: サンプルから経路が1件も生成されなかった（空虚な真の禁止）"
+  fi
 }
 
 echo "=== AC-3: --print-bedrock-env-json が認証情報キーを1つも出さず正常終了 ==="
 {
   # 2026-09-08 検証職(Codex)1巡目指摘・リーダー裁定でAC-3の定義を確定:
   # --print-bedrock-env-jsonは動的Bedrock許可キーの算出のためAIENV_LOCAL_
-  # PROFILE_PATH（compute_allowed_bedrock_env_keys()がrole.*/fallback.*の
+  # PROFILE_PATH（compute_allowed_bedrock_env_keys()がrole.*の
   # 候補を読む）・AIENV_MODEL_DEFS_FILE（同候補の解決に使う）も読む
   # （scripts/install-main.sh の compute_allowed_bedrock_env_keys()参照）。
   # AC-3は「AIENV_BEDROCK_ENV_FILE単体」ではなく「AIENV_BEDROCK_ENV_FILE＋
@@ -215,7 +237,7 @@ for s in pr.FORBIDDEN_KEY_SUBSTRINGS:
 echo "=== 変異確認: schema_version を5に書き換えた一時コピーでAC-1が赤になる ==="
 {
   mutant="$WORK/profile-schema5.md.sample"
-  sed 's/^schema_version: 6$/schema_version: 5/' "$PROFILE_SAMPLE" > "$mutant"
+  sed 's/^schema_version: 7$/schema_version: 5/' "$PROFILE_SAMPLE" > "$mutant"
   grep -q '^schema_version: 5$' "$mutant" || fail_case "変異確認: 前提（schema_versionを5へ書き換え済み）"
   out="$(AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" python3 "$LIB" resolve "$mutant" --agents-dir "$AGENTS_DIR")"; rc=$?
   if [ "$rc" -ne 0 ] && [[ "$out" != OK* ]]; then

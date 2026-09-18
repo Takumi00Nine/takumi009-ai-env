@@ -105,6 +105,8 @@ EOF
   echo '#!/bin/bash' > "$repo/claude/hooks/check-sub-update.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/context-size-warn.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/agent-model-guard.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/inprocess-gate.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/vault-write-gate.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/usage-inject.sh"
   chmod +x "$repo"/claude/hooks/*.sh
   echo '# agent' > "$repo/claude/agents/sample-agent.md"
@@ -211,6 +213,8 @@ with open(sys.argv[2], 'w') as f:
   ln -s "$repo/claude/hooks/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
   ln -s "$repo/claude/hooks/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"
   ln -s "$repo/claude/hooks/agent-model-guard.sh" "$home/.claude/hooks/agent-model-guard.sh"
+  ln -s "$repo/claude/hooks/inprocess-gate.sh" "$home/.claude/hooks/inprocess-gate.sh"
+  ln -s "$repo/claude/hooks/vault-write-gate.sh" "$home/.claude/hooks/vault-write-gate.sh"
   ln -s "$repo/claude/hooks/usage-inject.sh" "$home/.claude/hooks/usage-inject.sh"
   ln -s "$repo/claude/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/codex/AGENTS.md" "$home/.codex/AGENTS.md"
@@ -378,7 +382,7 @@ write_v2_profile() {
   done
   {
     echo "---"
-    echo "schema_version: 6"
+    echo "schema_version: 7"
     echo "profile_slug: test"
     echo "team_mode: configured value=full"
     echo "no_read_paths: unavailable"
@@ -389,7 +393,6 @@ write_v2_profile() {
     if [ "$has_machine_role" = "0" ]; then
       echo "machine_role: configured value=main"
     fi
-    echo "excluded_models: configured value=none"
     echo "reviewer: configured value=codex-mcp"
     echo "---"
   } > "$dest"
@@ -406,7 +409,7 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "symlink drift 0件" "$out" "symlink総数: 14件 / drift: 0件"
+  assert_contains "symlink drift 0件" "$out" "symlink総数: 16件 / drift: 0件"
   assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
   assert_contains "config.toml一致" "$out" "TOML三分類で一致しています"
   assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
@@ -443,7 +446,7 @@ echo "=== 2. ①symlinkが無い（未インストール）を検知する ==="
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "MISSING検知" "$out" "[MISSING]"
-  assert_contains "14件全部drift" "$out" "symlink総数: 14件 / drift: 14件"
+  assert_contains "16件全部drift" "$out" "symlink総数: 16件 / drift: 16件"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -489,7 +492,7 @@ echo "=== DR-01. Agent model guardのリンク先一致を保ったまま実行b
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "非実行を汎用コードで検知" "$out" "[NOT-EXECUTABLE]"
-  assert_contains "非実行だけdrift増分1" "$out" "symlink総数: 14件 / drift: 1件"
+  assert_contains "非実行だけdrift増分1" "$out" "symlink総数: 16件 / drift: 1件"
 
   chmod +x "$REPO/claude/hooks/agent-model-guard.sh"
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -3074,18 +3077,18 @@ echo "=== 70b. ⑧ advisory T4-PRIME（実体の版がコードの期待版よ�
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  # EXPECTED_SCHEMA_VERSION(=6・2026-09-08 モデル定義ファイルと候補指定対応で
-  # 5→6へ引き上げ済み)より新しいschema_versionを書くとT4-PRIME（このマシンの
-  # コードが古い可能性）が発生する（profile_resolve.py reconcile_schema_version()
-  # のdeclared>EXPECTED分岐。declared>EXPECTED分岐は固定キーの過不足を検査
-  # しないため、no_read_paths・machine_roleを書かなくてもT5にはならない）。
+  # EXPECTED_SCHEMA_VERSION(=7・2026-09-16 配役表の代替配役層・禁止モデル層
+  # 撤去で6→7へ引き上げ済み)より新しいschema_versionを書くとT4-PRIME（この
+  # マシンのコードが古い可能性）が発生する（profile_resolve.py
+  # reconcile_schema_version()のdeclared>EXPECTED分岐。declared>EXPECTED
+  # 分岐は固定キーの過不足を検査しないため、no_read_paths・machine_roleを
+  # 書かなくてもT5にはならない）。
   mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
   cat > "$HOME_DIR/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 7
+schema_version: 8
 profile_slug: test
 role.leader: configured model=sonnet-high
-excluded_models: configured value=none
 team_mode: configured value=full
 ---
 EOF
@@ -3601,6 +3604,48 @@ EOF
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_not_contains "確定前は退避物が残っていてもREVIVABLEを出さない（意図的な残置）" "$out" "[USAGE-FETCH-REVIVABLE]"
   rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== FAILSOFT-UNKNOWN-CODE: AC-19(NFR-3)。未知の失敗コード(BOGUS_CODE)でも異常終了せず[MODEL-VALUE-UNAVAILABLE]のdrift項目として報告し、--jsonモードでrc=1・『原因不明。コード:』で終わる（AIENV_FAILSOFT_STUB未設定時はskip） ==="
+{
+  if [ -z "${AIENV_FAILSOFT_STUB:-}" ] || [ ! -f "$AIENV_FAILSOFT_STUB" ]; then
+    echo "  skip - AIENV_FAILSOFT_STUBが未設定/存在しないためFAILSOFT-UNKNOWN-CODEをskipします"
+  else
+    REPO="$(mktemp -d)"
+    HOME_DIR="$(mktemp -d)"
+    make_fake_repo "$REPO"
+    install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
+    write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
+      "configured model=fable-1m-high"
+
+    rc=0
+    # ⚠️ check-drift.shは--json未指定時は常に0を返す設計（tests/test-
+    # check-drift.sh「10. exit codeは常に0」の既存契約）。drift検出を非0
+    # 終了として観測できるのは--jsonモード（drift_excluding_item4>0で
+    # exit 1）だけなので、AC-19のrc確認は--jsonモードで行う（2026-09-16
+    # 実測発見）。
+    # ⚠️ check-drift.sh自身の直接resolve()呼びはPROFILE_RESOLVE_LIB、
+    # install-main.sh --print-leader-runtimeへの委譲先（resolve-leader）は
+    # 別名のAIENV_PROFILE_RESOLVE_LIBで解決する（install-main.sh:156）——
+    # 子プロセスへは環境変数として引き継がれるが変数名が違うため、両方を
+    # スタブへ向けないとBOGUS_CODE経路に入らない（tests/test-update-sub.shの
+    # FAILSOFT-UNKNOWN-CODEと同じ実測知見・2026-09-16）。
+    # ⚠️ AIENV_MODEL_DEFS_FILEもケース内でHOME配下の実体へ明示する（検証
+    # 1巡目MAJOR-2対応。write_v2_profile()が$HOME_DIR配下に書いた実体を
+    # 読ませ、外側の環境が持つ別のmodels.confへ流れないようにする）。
+    out="$(PROFILE_RESOLVE_LIB="$AIENV_FAILSOFT_STUB" AIENV_PROFILE_RESOLVE_LIB="$AIENV_FAILSOFT_STUB" \
+      AIENV_REAL_LIB="$REPO/claude/hooks/lib/profile_resolve.py" \
+      AIENV_MODEL_DEFS_FILE="$HOME_DIR/.config/takumi009-ai-env/models.conf" \
+      run_check_json "$REPO" "$HOME_DIR")" || rc=$?
+    json="$(last_line "$out")"
+
+    assert_eq_num "FAILSOFT-UNKNOWN-CODE: --jsonはexit 1（drift_excluding_item4>0・異常終了しない）" "$rc" "1"
+    assert_eq_num "FAILSOFT-UNKNOWN-CODE: drift_excluding_item4>0" "$([ "$(json_field "$json" drift_excluding_item4)" -gt 0 ] && echo 1 || echo 0)" "1"
+    assert_contains "FAILSOFT-UNKNOWN-CODE: MODEL-VALUE-UNAVAILABLEのdrift項目が出る" "$out" "[MODEL-VALUE-UNAVAILABLE]"
+    assert_contains "FAILSOFT-UNKNOWN-CODE: 『原因不明。コード:』を含む（未知コードは汎用文言に落ちる）" "$out" "原因不明。コード:"
+
+    rm -rf "$REPO" "$HOME_DIR"
+  fi
 }
 
 echo

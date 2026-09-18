@@ -95,7 +95,7 @@ assert_agents_line() {
 
 # write_models_conf_at <dir> — モデル定義ファイル（models.conf）を
 # <dir>/models.conf へ書く（モデル定義ファイルと候補指定-設計-2026-09-08.md
-# §2.3・§2.4）。schema 6のrole/fallback行は`model=<定義名>[,...]`で定義名を
+# §2.3・§2.4）。schema 7のrole行は`model=<定義名>[,...]`で定義名を
 # 参照するだけになったため、role.leaderの解決を伴うテストは全てこの定義
 # ファイルを必要とする（無いとT7で解決不能になり、テストの主眼と無関係な
 # 理由で失敗する）。本ファイルの多くのテストで共通に使う最小の定義セット
@@ -159,12 +159,11 @@ make_fake_home() {
   write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: configured model=sonnet-high
 ---
 EOF
@@ -184,12 +183,11 @@ write_profile_with_unknown_leader() {
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: unknown
 ---
 EOF
@@ -512,14 +510,13 @@ EOF
   fi
   cat > "$dest" <<EOF
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 role.leader: configured model=sonnet-high
 role.researcher: configured model=bedrock-${alias}
-excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
@@ -532,7 +529,7 @@ echo "=== 10. Bedrock最小セット: envファイルの値がsettings.jsonのen
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   # 2026-09-01 §4.2-d: ANTHROPIC_DEFAULT_OPUS_MODELは固定許可から動的許可へ
-  # 変わった（プロファイルのrole.*/fallback.*が実際にprovider=bedrock
+  # 変わった（プロファイルのrole.*が実際にprovider=bedrock
   # model=opusを使っているときだけ許可）。ここでは role.researcher を
   # provider=bedrock model=opus に配役し、動的に許可されることを確認する。
   write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus"
@@ -562,7 +559,7 @@ EOF
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 10b. Bedrock最小セット: role.*/fallback.*がprovider=bedrockでその別名を使っていなければANTHROPIC_DEFAULT_*_MODELは許可されない（2026-09-01 §4.2-d改訂・名前だけ許可リストに合う任意キーへ秘密値を入れる穴を塞ぐ回帰確認） ==="
+echo "=== 10b. Bedrock最小セット: role.*がprovider=bedrockでその別名を使っていなければANTHROPIC_DEFAULT_*_MODELは許可されない（2026-09-01 §4.2-d改訂・名前だけ許可リストに合う任意キーへ秘密値を入れる穴を塞ぐ回帰確認） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -1122,13 +1119,12 @@ echo "=== 18. --print-leader-runtime: effort指定時はJSONに含める ==="
   write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 role.leader: configured model=opus-high
-excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
@@ -1146,13 +1142,12 @@ echo "=== 19. --print-leader-runtime: role.leaderがunknownなら失敗時stdout
   write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 role.leader: unknown
-excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
@@ -1218,28 +1213,28 @@ echo "=== 22. --print-leader-runtime: symlinkのプロファイルはPROFILE_UNR
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 23. --print-leader-runtime: 実効リーダーがfallback採用のときfallbackのmodel/effortが返る ==="
+echo "=== 23. --print-leader-runtime: role.leaderが2件の候補を持つ行でも先頭候補のmodel/effortが返る（代替は同一行の候補列挙で表す） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
   write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
-  # 本命はunavailable（定義名は残すのが契約）、fallbackがconfigured。
+  # 先頭候補（opus-medium）だけが解決・評価される（§3.5-L。2件目
+  # （bedrock-opus）はsettings.jsonの値に影響しない＝RV-2。代替配役の
+  # 別行は撤去済みで、代替は同じ行の候補列挙で表す＝FR-1）。
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-role.leader: unavailable model=bedrock-opus
-fallback.leader: configured model=opus-medium
-excluded_models: configured value=none
+role.leader: configured model=opus-medium,bedrock-opus
 reviewer: configured value=codex-mcp
 ---
 EOF
 
   out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime)"
-  assert_eq "fallbackのmodel/effortが返る" '{"model": "claude-opus-5", "effort": "medium"}' "$out"
+  assert_eq "先頭候補のmodel/effortが返る" '{"model": "claude-opus-5", "effort": "medium"}' "$out"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1259,6 +1254,11 @@ echo "=== 24. --check-profile: OKなプロファイルでprovider/modelグルー
     "$(echo "$out" | grep -q 'bedrock/opus:' && echo 1 || echo 0)"
   assert_true "role.researcherがそのグループの下に出る" \
     "$(echo "$out" | grep -q 'role.researcher(configured)' && echo 1 || echo 0)"
+  # AC-12追加: 配役一覧の表示awk（scripts/install-main.sh:1071-1090・第4の
+  # 列位置消費者）の列ずらし直し忘れを検出する。直し忘れるとrc=0のまま
+  # 一覧だけが空になり、1行目のrcだけでは検出できない（§9.3）。
+  assert_true "配役一覧にrole.leader(configured)[が出る（一覧が空でない）" \
+    "$(echo "$out" | grep -q 'role\.leader(configured)\[' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
@@ -1271,7 +1271,7 @@ echo "=== 25. --check-profile --print-schema-version: 値なし・schema_version
   rc=0
   out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile --print-schema-version 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
-  assert_eq "schema_versionの値だけを1行返す" "6" "$out"
+  assert_eq "schema_versionの値だけを1行返す" "7" "$out"
 
   rm -rf "$FAKE_HOME"
 }
@@ -1310,12 +1310,11 @@ echo "=== 27. §3.9対話: role.leader未確定・--non-interactiveなら非0終
   # make_fake_home()の既定プロファイル（role.leader確定済み）を上書きする。
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: unknown
 ---
 EOF
@@ -1347,12 +1346,11 @@ echo "=== 28. §3.9対話: role.leader未確定・非TTY実行（--non-interacti
   # make_fake_home()の既定プロファイル（role.leader確定済み）を上書きする。
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: unknown
 ---
 EOF
@@ -1519,13 +1517,12 @@ echo "=== 35. §3.9対話: role.leader行が欠落している実体には挿入
   mkdir -p "$(dirname "$PROFILE_PATH")"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 role.researcher: configured model=sonnet-high
-excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
@@ -1553,11 +1550,10 @@ echo "=== 36. §3.9対話: role.leaderが2行ある実体は非0終了する（�
   mkdir -p "$(dirname "$PROFILE_PATH")"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 role.leader: unknown
 role.leader: configured model=opus-high
-excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
@@ -1658,12 +1654,11 @@ echo "=== 39. §3.9優先順位表 行2: 未確定+AIENV_LEADER_ROLE有(任意re
   mkdir -p "$(dirname "$PROFILE_PATH")"
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: unknown
 reviewer: configured value=codex-mcp
 ---
@@ -1712,13 +1707,12 @@ echo "=== 41. §3.9優先順位表 行9: configured+AIENV_LEADER_ROLE無+reconfi
   # Enterのみが有効な組み合わせになるようeffort=mediumを持つ実体を使う）。
   cat > "$PROFILE_PATH" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
 role.leader: configured model=opus-medium
-excluded_models: configured value=none
 reviewer: configured value=codex-mcp
 ---
 EOF
@@ -1852,12 +1846,11 @@ echo "=== 43d. 設計書S7×S8: settings.json配置先の親ディレクトリ�
   write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: configured model=sonnet-high
 ---
 EOF
@@ -2158,6 +2151,25 @@ echo "=== 49. generate_settings_json()等（意図的に毎回内容が変わる
     [ -e "$f" ] && extra_count=$((extra_count + 1))
   done
   assert_eq "settings.jsonの追加backup(.pre-aienv.bak.<timestamp>)は1件も作られない" "0" "$extra_count"
+
+  rm -rf "$FAKE_HOME" "$TMP_REPO"
+}
+
+echo "=== 55. MINOR-1(検証1巡目対応・差し戻し): 共有lib（scripts/lib/managed-symlink.sh）を削ったfixtureでinstall-main.shが非0で終わる（update-sub.sh側の既存3段ガードと同型。従来はbareなsourceのみで、lib欠落・構文破損時にrc=127〈関数未定義〉のまま後段の\`|| warn\`に飲み込まれ得た） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  TMP_REPO="$(mktemp -d)"
+  cp -R "$REPO_ROOT/." "$TMP_REPO/"
+  rm -f "$TMP_REPO/scripts/lib/managed-symlink.sh"
+
+  rc=0
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+
+  assert_true "共有lib欠落で非0終了する（rc=0に丸め込まれない）" \
+    "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "共有ライブラリが読み取れない旨の明示的なFAILが出る" \
+    "$(echo "$out" | grep -q "共有ライブラリが読み取れません" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }

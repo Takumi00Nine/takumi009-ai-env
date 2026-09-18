@@ -43,7 +43,7 @@ fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 # 指定対応（同設計§3.8・D-13）: 旧v1側の正本（bootstrap-vault.shが持って
 # いた既知キー配列本体と、それを単独出力する専用フック）を撤去した
 # ため、能力軸キー集合はprofile_resolve.pyのCAPABILITY_KEYS（known-keysの
-# FIXEDからschema_version/profile_slug/excluded_modelsを除いたもの）だけを
+# FIXEDからschema_version/profile_slugを除いたもの）だけを
 # 唯一の正本として実行時ソースで取得する（ハードコード再列挙しない）。
 # ⚠️ 旧v1/v2の突合テスト（旧section 8）は突合相手が消えたため削除した。
 BOOTSTRAP_VAULT_SH="$REPO_ROOT/claude/hooks/bootstrap-vault.sh"
@@ -56,7 +56,7 @@ if [ -f "$PROFILE_RESOLVE_PY_FOR_KEYS" ]; then
     IFS=',' read -r -a _fixed_keys <<< "$_fixed_line"
     for _k in "${_fixed_keys[@]}"; do
       case "$_k" in
-        schema_version|profile_slug|excluded_models) continue ;;
+        schema_version|profile_slug) continue ;;
       esac
       KNOWN_KEYS+=("$_k")
     done
@@ -370,20 +370,20 @@ else:
 
     # ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 下のサンプルとの
     # 突合は「両者が互いに一致するか」しか見ておらず、両方が同じ誤った
-    # 6キー集合へ同時に変わっても通ってしまう（要件AC-1が求める「期待6キー」
+    # 5キー集合へ同時に変わっても通ってしまう（要件AC-1が求める「期待5キー」
     # ではなく「現物同士の一致」しか検査していなかった）。known-keysのFIXED
     # 集合を、配役表-能力軸整理-要件-2026-09-07.md §7.2 AC-1が定めるリテラル
-    # 6キーと直接比較する検査を独立して追加する。
+    # 5キーと直接比較する検査を独立して追加する。
     expected_fixed_literal = {
         'schema_version', 'profile_slug', 'team_mode',
-        'no_read_paths', 'machine_role', 'excluded_models',
+        'no_read_paths', 'machine_role',
     }
     if fixed_keys == expected_fixed_literal:
-        results.append(('PASS', 'AC-1: known-keysのFIXED集合が要件の期待6キー(リテラル集合)と完全一致する'))
+        results.append(('PASS', 'AC-1: known-keysのFIXED集合が要件の期待5キー(リテラル集合)と完全一致する'))
     else:
         only_expected = sorted(expected_fixed_literal - fixed_keys)
         only_actual = sorted(fixed_keys - expected_fixed_literal)
-        results.append(('FAIL', f'AC-1: known-keysのFIXED集合が期待6キーと不一致（期待のみ: {only_expected} / 実際のみ: {only_actual}）'))
+        results.append(('FAIL', f'AC-1: known-keysのFIXED集合が期待5キーと不一致（期待のみ: {only_expected} / 実際のみ: {only_actual}）'))
 
     # サンプルブロックの先頭階層キー（コメント行・空行・"---"区切り行を除く）を抽出。
     sample_keys = set()
@@ -411,12 +411,12 @@ else:
         results.append(('FAIL', f'固定キー集合が不一致（サンプルのみ: {sorted(only_sample)} / コードのみ: {sorted(only_code)}）'))
 
     used_prefixes = {p for p in prefixes if any(k.startswith(p) for k in sample_keys)}
-    if prefixes == {'role.', 'fallback.'}:
-        results.append(('PASS', 'known-keysの動的プレフィックスがrole./fallback.の2種で固定されている'))
+    if prefixes == {'role.'}:
+        results.append(('PASS', 'known-keysの動的プレフィックスがrole.の1種で固定されている'))
     else:
-        results.append(('FAIL', f'known-keysの動的プレフィックスがrole./fallback.の2種ではない（実際: {sorted(prefixes)}）'))
+        results.append(('FAIL', f'known-keysの動的プレフィックスがrole.の1種ではない（実際: {sorted(prefixes)}）'))
     if used_prefixes == prefixes:
-        results.append(('PASS', 'サンプルが動的プレフィックス2種の両方を実際に使用している'))
+        results.append(('PASS', 'サンプルが動的プレフィックスを実際に使用している'))
     else:
         results.append(('FAIL', f'サンプルで使われていない動的プレフィックスがある（未使用: {sorted(prefixes - used_prefixes)}）'))
 
@@ -460,11 +460,10 @@ PYEOF
 # だったbootstrap-vault.shの既知キー配列本体（v1側の第2正本）が撤去され、
 # 能力軸の正本はprofile_resolve.pyのCAPABILITY_KEYS側だけになったため。
 
-echo "=== 9. AC-14: core-workflow.md §7の統合行がVault正本・公開スナップショットの両方にあり、旧2行と{{reviewer}}が現れない ==="
+echo "=== 9. AC-14: core-workflow.md §7の統合行が公開スナップショットにあり、旧2行と{{reviewer}}が現れない ==="
 {
   NEW_LINE='**検証職が空席** → リーダー職が受入条件と1対1の最小検証を行い「独立検証なし・リーダー検証のみ」を成果物と報告に明記する'
-  for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/core-workflow.md" \
-                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
+  for label_path in "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
     label="${label_path%%:*}"; f="${label_path#*:}"
     if [ ! -f "$f" ]; then
       fail_case "AC-14(${label}): core-workflow.mdが見つからない"
@@ -552,7 +551,7 @@ echo "=== 10. AC-5: 廃止した能力軸・マーカー・別名トークンが
   fi
 }
 
-echo "=== 11. AC-2/AC-8: known-keysの3行目がSCHEMA_VERSION:6に完全一致する（モデル定義ファイルと候補指定-要件-2026-09-08.md §7.2 AC-8。旧・配役表-能力軸整理-要件-2026-09-07.md §7.2 AC-2のSCHEMA_VERSION:5から2026-09-08に6へ引き上げ） ==="
+echo "=== 11. AC-2/AC-8: known-keysの3行目がSCHEMA_VERSION:7に完全一致する（代替配役の層と禁止モデル列挙の層の撤去-要件-2026-09-16.mdで期待版を6から7へ引き上げ） ==="
 {
   PROFILE_RESOLVE_PY_AC2="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
   if [ ! -f "$PROFILE_RESOLVE_PY_AC2" ]; then
@@ -560,23 +559,21 @@ echo "=== 11. AC-2/AC-8: known-keysの3行目がSCHEMA_VERSION:6に完全一致�
   else
     kk_ac2="$(python3 "$PROFILE_RESOLVE_PY_AC2" known-keys)"
     line3="$(printf '%s\n' "$kk_ac2" | sed -n '3p')"
-    if [ "$line3" = "SCHEMA_VERSION:6" ]; then
-      pass "known-keysの3行目がSCHEMA_VERSION:6に完全一致する"
+    if [ "$line3" = "SCHEMA_VERSION:7" ]; then
+      pass "known-keysの3行目がSCHEMA_VERSION:7に完全一致する"
     else
-      fail_case "known-keysの3行目がSCHEMA_VERSION:6に完全一致しない（実際: ${line3}）"
+      fail_case "known-keysの3行目がSCHEMA_VERSION:7に完全一致しない（実際: ${line3}）"
     fi
   fi
 }
 
-echo "=== 12. AC-7: プレースホルダ{{廃止5キー}}がVault正本・公開スナップショットの両方に0件（core-conduct.md・core-workflow.md。⚠️ 段階2〈vault-scribeによるVault正本改訂＋公開スナップショット再生成〉が終わるまでは公開スナップショット側が赤で正常＝設計書§9.1） ==="
+echo "=== 12. AC-7: プレースホルダ{{廃止5キー}}が公開スナップショットに0件（core-conduct.md・core-workflow.md） ==="
 {
   # ⚠️ 廃止キー名をソースへ直接書かない（本ファイル自身がAC-5の0件検査
   # 対象＝tests/配下のため、自分自身が引っかからないよう実行時に組み立てる）。
   _u12='_'
   RETIRED_PLACEHOLDER_PAT="\\{\\{(inventory${_u12}source|vault${_u12}write|ui\\.user${_u12}call|git${_u12}role|web${_u12}verification)\\}\\}"
-  for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/core-conduct.md" \
-                     "Vault正本:$HOME/Data/obsidian/Preferences/core-workflow.md" \
-                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-conduct.md" \
+  for label_path in "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-conduct.md" \
                      "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
     label="${label_path%%:*}"; f="${label_path#*:}"
     fname="$(basename "$f")"
@@ -594,7 +591,7 @@ echo "=== 12. AC-7: プレースホルダ{{廃止5キー}}がVault正本・公�
   done
 }
 
-echo "=== 13. AC-10: core-workflow.md §5について、廃止済みgit上の立場プレースホルダが0件・machine_roleが1件以上（Vault正本・公開スナップショットの両方。⚠️ 段階2が終わるまでは公開スナップショット側が赤で正常） ==="
+echo "=== 13. AC-10: core-workflow.md §5について、廃止済みgit上の立場プレースホルダが0件・machine_roleが1件以上（公開スナップショット） ==="
 {
   # ⚠️ Codex一次レビュー指摘（MAJOR-5・2026-09-07）対応: 従来はファイル全体を
   # 検索しており、machine_roleが§5以外の別節に残っているだけでも通ってしまう
@@ -602,8 +599,7 @@ echo "=== 13. AC-10: core-workflow.md §5について、廃止済みgit上の立
   # 次の`## `見出しの直前までを抽出してから検査する。
   _u13='_'
   legacy_placeholder_13="{{git${_u13}role}}"
-  for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/core-workflow.md" \
-                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
+  for label_path in "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
     label="${label_path%%:*}"; f="${label_path#*:}"
     if [ ! -f "$f" ]; then
       fail_case "AC-10(${label}): core-workflow.mdが見つからない"
@@ -631,11 +627,10 @@ echo "=== 13. AC-10: core-workflow.md §5について、廃止済みgit上の立
   done
 }
 
-echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃止済みの旧マーカー語が0件・machine_roleが1件以上（Vault正本・公開スナップショットの両方。⚠️ 段階2が終わるまでは公開スナップショット側が赤で正常） ==="
+echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃止済みの旧マーカー語が0件・machine_roleが1件以上（公開スナップショット） ==="
 {
   for name in "vault-operation.md" "core-workflow.md"; do
-    for label_path in "Vault正本:$HOME/Data/obsidian/Preferences/${name}" \
-                       "公開スナップショット:$REPO_ROOT/vault-public/Preferences/${name}"; do
+    for label_path in "公開スナップショット:$REPO_ROOT/vault-public/Preferences/${name}"; do
       label="${label_path%%:*}"; f="${label_path#*:}"
       if [ ! -f "$f" ]; then
         fail_case "AC-12①(${label}:${name}): ファイルが見つからない"
@@ -661,7 +656,7 @@ echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃�
   done
 }
 
-echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC-14: repoに旧記法(role|fallback)\.[a-z-]+:.*provider=が0件（Codexレビュー指摘・BLOCKING-1対応・1巡目） ==="
+echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC-14: repoに旧記法role\.[a-z-]+:.*provider=が0件（Codexレビュー指摘・BLOCKING-1対応・1巡目） ==="
 {
   # ⚠️ 探索語は要件§7.1のとおり縦棒をエスケープせずに書く（実測で一致を
   # 確認済み）。repo 0件を判定する前に、この式が「わざと書いた1行」に
@@ -673,12 +668,12 @@ echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC
   # 具体的な完成文字列を本コメント自身にも書かない——下の printf の断片
   # 組み立てが実際に生成する1行がその文字列そのものであり、コメントへ
   # 重ねて書くと本ファイル自身がAC-14のrepo検索に一致してしまうため）。
-  AC14_PATTERN='(role|fallback)\.[a-z-]+:.*provider='
+  AC14_PATTERN='role\.[a-z-]+:.*provider='
   POS_FIXTURE="$(mktemp)"
   # ⚠️ 完成文字列をソースへ直書きすると、本ファイル自身がAC-14のrepo検索に
   # 一致してしまう（自己言及の罠）。断片を変数へ分けてから展開する。
   legacy_attr_frag="provider="
-  printf '    "role.verifier: configured %sexternal model=codex-review-default"\n' "$legacy_attr_frag" > "$POS_FIXTURE"
+  printf '    "role.verifier: configured %sexternal model=gpt-5.6-sol"\n' "$legacy_attr_frag" > "$POS_FIXTURE"
   rc_pos=0
   pos_hit="$(grep -nE "$AC14_PATTERN" "$POS_FIXTURE" 2>&1)" || rc_pos=$?
   if [ "$rc_pos" -eq 0 ] && [ -n "$pos_hit" ]; then
@@ -698,36 +693,17 @@ echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC
 
 # ⚠️ 2026-09-08 検証職(Codex)1巡目指摘・リーダー裁定（MAJOR-2）: 本人裁定
 # A案（設定ファイルsample配布）で「Vaultの*-sample.mdは正本をrepoの
-# config/*.sampleへ縮める案内ノート」という方針が確定し、vault-scribeが
-# Preferences/model-definitions-sample.mdを既に案内ノート化した（schema
-# 本体の```confコードブロックが無く「正本はrepoのconfig/models.conf.sample」
-# という参照だけを持つ）。旧セクション16（Vault正本・公開スナップショットの
-# model=XXXX雛形トークン規約とexecution=external-cliの例を検査していた
-# AC-15由来のテスト）は、この改稿によって前提（Vaultにschema本体がある）が
-# 崩れ実際に赤化した（Vault正本はファイルが変わり検査対象の行が無い・
-# 公開スナップショットは締めのexport-public-vault.sh再生成待ちで一時的に
-# 旧内容のまま）。Vaultの案内ノートは機械契約の対象外とし、Vault依存を
-# 全て撤去したうえで、repo管理下のconfig/models.conf.sample自体を対象に
+# config/*.sampleへ縮める案内ノート」という方針が確定し、Vault依存を全て
+# 撤去したうえで、repo管理下のconfig/models.conf.sample自体を対象に検査する
+# 形へ置き換えた。定義の件数は 4→28→35→34→33 と何度も動いた
+# （経緯の詳細＝要件書archive §2）。件数・全定義の期待値表を検査対象に
+# すると、定義を足す・消すたびにテストを書き換える必要が生じ、設定ファイルの
+# 柔軟性を損なう（本人指摘 2026-09-16）。要件書 FR-2 により、検査するのは
 # 「XXXX雛形トークンが無い（実値規約）」「resolverの定義パーサ
-# （load_model_defs()）で4定義が読める」の2点を検査する形へ置き換えた。
-# ⚠️ 公開スナップショット（vault-public/）を読むassertも置かない
-# （締めのexport-public-vault.sh再生成後に初めて内容が揃うため）。
-# 2026-09-10 モデル定義ファイル網羅化（本人方針: 今の環境で使えないBedrock・
-# ローカルLLMも含め経路を網羅的に定義しておき、使うかどうかは配役表
-# profile.md側で決める）でconfig/models.conf.sampleの有効な定義が4件から
-# 28件へ増え、続く2巡目（本人裁定）でexternalをモデル×effortで揃えた
-# （codex-<model>-<effort>命名。astra/sol/terra/luna×high/medium/lowの
-# 12定義へ統一。effort省略名codex-sol等は廃止）ことで28件→35件になった。
-# さらに検証職(Codex)1巡目レビューのMAJOR-1対応（本人裁定 2026-09-10:
-# xhighは運用方針で原則使わない=Decisions/2026-08-07-avoid-xhigh-effortに
-# 反するため[opus-xhigh]をコメントアウトへ格下げ）で35件→34件になった。
-# 同レビューのMAJOR-3指摘（定義名と件数だけでは値の誤りを検知できない）に
-# 対応し、名前だけの集合比較から
-# name/provider/model/execution/effortの完全なタプル比較へ強化した
-# （既存4定義=fable-high/opus-high/sonnet-high/codex-review-defaultの
-# 値回帰も、この完全一致比較に含めて恒久的に検知する。profile.md.sampleは
-# 編集不要）。
-echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実値規約（XXXX無し）を満たし、resolverの定義パーサで34定義が値まで一致して読める ==="
+# （load_model_defs()）が例外なく読める（1件以上）」の2点のみへ縮小した。
+# ⚠️ 公開スナップショット（vault-public/）を読む assert は置かない
+# （export のタイミングに依存する＝要件書 §7.4 と同型の脆さ）。
+echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実値規約（XXXX無し）を満たし、resolverの定義パーサで例外なく読める（要件書 AC-4） ==="
 {
   MODELS_SAMPLE_D16="$REPO_ROOT/config/models.conf.sample"
   if [ ! -f "$MODELS_SAMPLE_D16" ]; then
@@ -742,11 +718,11 @@ echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実�
 
     # `x="$(cmd)"`単独（`||`無し）はset -e下でcmdが非0を返すと即座にスクリプト
     # 全体を終了させてしまう（本ファイル・他スイートの既存の流儀と同じ注意）。
-    # 必ず`|| defs_tuples="ERROR:..."`でガードする。
-    # name/provider/model/execution/effortをタブ区切り1行1定義（名前順）で
-    # 出す。effort未指定は空文字（execution既定subagentは検証済みの確定値）。
-    defs_tuples=""
-    defs_tuples="$(python3 -c "
+    # 必ず`|| defs_count="ERROR:..."`でガードする。要件書 FR-2 により、定義の
+    # 件数と全定義の期待値表は撤去し、「例外なく読める」「1件以上」だけを見る
+    # （空虚な真の禁止・値の増減はここで赤にならない）。
+    defs_count=""
+    defs_count="$(python3 -c "
 import sys
 sys.path.insert(0, '$REPO_ROOT/claude/hooks/lib')
 import profile_resolve as pr
@@ -755,65 +731,17 @@ try:
 except Exception as e:
     print('ERROR:' + type(e).__name__ + ':' + str(e))
     sys.exit(1)
-for name in sorted(defs.keys()):
-    d = defs[name]
-    parts = [name, d.provider, d.model, d.execution]
-    if d.effort:
-        parts.append(d.effort)
-    print('\t'.join(parts))
+print(len(defs))
 " 2>&1)" || true
-    case "$defs_tuples" in
+    case "$defs_count" in
       ERROR:*)
-        fail_case "resolverの定義パーサがconfig/models.conf.sampleを読めない: ${defs_tuples}"
+        fail_case "resolverの定義パーサがconfig/models.conf.sampleを読めない: ${defs_count}"
         ;;
       *)
-        def_count="$(printf '%s\n' "$defs_tuples" | grep -c . || true)"
-        if [ "$def_count" = "34" ]; then
-          pass "resolverの定義パーサで読める定義数がちょうど34"
+        if [ "${defs_count:-0}" -ge 1 ] 2>/dev/null; then
+          pass "resolverの定義パーサで1件以上の定義が例外なく読める（要件書 AC-4・件数=${defs_count}・表示のみで判定に使わない）"
         else
-          fail_case "resolverの定義パーサで読める定義数が34でない（実際: ${def_count}件）"
-        fi
-        expected_tuples_d16="$(cat <<'EXPECTED_D16'
-bedrock-fable	bedrock	fable	subagent
-bedrock-haiku	bedrock	haiku	subagent
-bedrock-opus	bedrock	opus	subagent
-bedrock-sonnet	bedrock	sonnet	subagent
-codex-astra-high	external	gpt-6-astra	external-cli	high
-codex-astra-low	external	gpt-6-astra	external-cli	low
-codex-astra-medium	external	gpt-6-astra	external-cli	medium
-codex-gpt-5-5-legacy	external	gpt-5.5	external-cli	high
-codex-luna-high	external	gpt-5.6-luna	external-cli	high
-codex-luna-low	external	gpt-5.6-luna	external-cli	low
-codex-luna-medium	external	gpt-5.6-luna	external-cli	medium
-codex-review-default	external	default	external-cli	high
-codex-sol-high	external	gpt-5.6-sol	external-cli	high
-codex-sol-low	external	gpt-5.6-sol	external-cli	low
-codex-sol-medium	external	gpt-5.6-sol	external-cli	medium
-codex-terra-high	external	gpt-5.6-terra	external-cli	high
-codex-terra-low	external	gpt-5.6-terra	external-cli	low
-codex-terra-medium	external	gpt-5.6-terra	external-cli	medium
-fable-5-legacy	anthropic-api	claude-fable-5	subagent	high
-fable-high	anthropic-api	claude-fable-5-1	subagent	high
-fable-max	anthropic-api	claude-fable-5-1	subagent	max
-haiku	anthropic-api	claude-haiku-4-5-20251001	subagent
-mantle-fable	bedrock-mantle	anthropic.claude-fable-5-1	subagent
-mantle-haiku	bedrock-mantle	anthropic.claude-haiku-4-5	subagent
-mantle-opus	bedrock-mantle	anthropic.claude-opus-5	subagent
-mantle-sonnet	bedrock-mantle	anthropic.claude-sonnet-5	subagent
-opus-4-6-legacy	anthropic-api	claude-opus-4-6	subagent	high
-opus-4-7-legacy	anthropic-api	claude-opus-4-7	subagent	high
-opus-4-8-legacy	anthropic-api	claude-opus-4-8	subagent	high
-opus-high	anthropic-api	claude-opus-5	subagent	high
-opus-low	anthropic-api	claude-opus-5	subagent	low
-sonnet-4-6-legacy	anthropic-api	claude-sonnet-4-6	subagent	high
-sonnet-high	anthropic-api	claude-sonnet-5	subagent	high
-sonnet-low	anthropic-api	claude-sonnet-5	subagent	low
-EXPECTED_D16
-)"
-        if [ "$defs_tuples" = "$expected_tuples_d16" ]; then
-          pass "34定義のname/provider/model/execution/effortが現行の期待値と完全一致"
-        else
-          fail_case "定義の値が想定と異なる（差分は下記diffで確認）: $(diff <(printf '%s\n' "$expected_tuples_d16") <(printf '%s\n' "$defs_tuples") | tr '\n' ' ')"
+          fail_case "resolverの定義パーサで定義が1件も読めない（実際: ${defs_count}）"
         fi
         ;;
     esac

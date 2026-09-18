@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-08
+updated: 2026-09-16
 tags: [preference, codex, review, delegation, protocol]
 project: meta
 related:
@@ -94,9 +94,9 @@ per-deliverable の Codex 一次レビュー（コード/行レベル）とは**
 ## 環境と実行可否
 - **検証の起動はリーダー**（`codex exec` はローカル Bash 実行のため MCP 特有の接続設定は不要＝2026-09-06 MCP 廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]）。詳細＝[[Preferences/codex-exec-worker]]。
 - **注意**: `~/.claude/agents/*.md` のツール変更は**既存セッションのチームメイトに反映されない**（spawn 時点で固定）。ルール改定直後はフォールバックが要ることがある。
-- **フォールバック**: リーダーが Codex を使えない場合（配役表 `role.verifier` が `unavailable`・起動失敗等）は `fallback.verifier` へ落とす（下記「Codex 使用上限時」節）。反映は作成元ロールへ差し戻す（軽微でもリーダーは直接修正しない＝[[Decisions/2026-08-14-deliverable-revision-by-creator]]）。
+- **代替レビュアー**: リーダーが Codex を使えない場合（配役表 `role.verifier` が `unavailable`・起動失敗等）は同じ行の別候補（`opus-high`）を選び直す（下記「Codex 使用上限時」節）。反映は作成元ロールへ差し戻す（軽微でもリーダーは直接修正しない＝[[Decisions/2026-08-14-deliverable-revision-by-creator]]）。
 - **Web 調査は `codex exec --search` で可**（MCP 経由の web_search は2026-09-06実測で不可だったが、同日に呼び出し経路を exec へ一本化＝[[Decisions/2026-09-06-codex-mcp-retire]]。MCP 不可の実測詳細は [[Knowledge/codex-mcp]] 2026-09-06 節に残す）。**依頼文には `--search` を付けるか、Web 裏取りが要るレビューでは依頼側（リーダー・作成者）が一次情報の URL・要旨を添える**（生のネットワーク到達性は本機の `network_access=true` で確認済み）。「Codex はネット不可」を委任回避の理由にしない点は従来どおり（サブ機の誤認事例 2026-09-01。Knowledge はサブへ配布されないため本ノートが正本の届け先）。
-- **Codex 使用上限時＝Claude Opus 5 を代替レビュアーに（2026-08-07 本人決定＝[[Decisions/2026-08-07-opus5-fallback-reviewer]]）**: 上限エラーで回復待ちが出荷を止めるなら、リーダーが Opus 5（**`claude-opus-5` 明示・エイリアス「opus」禁止＝4.8 に落ちる**）を単発起動して同一の観点・出力形式でレビューする。effort＝**通常 medium**・締めの全体構成レビューのみ xhigh（本人指定）。独立性低下（Claude 系同士）は許容・後戻りコスト高案件は Codex 回復後に事後クロス可。
+- **検証職の候補が使えないとき（上限・起動失敗）**: 回復待ちが出荷を止めるなら、配役表 `role.verifier` の別候補をリーダーが選び直し、同一の観点・出力形式でレビューする（起動は `resolve-candidate` の `AGENT_MODEL` を明示＝エイリアス直書きはしない）。effort は候補定義のもの。同系統になる独立性低下は許容・後戻りコスト高案件は回復後に事後クロス可（経緯＝[[Decisions/2026-08-07-opus5-fallback-reviewer]]）。
 - Codex を実装ワーカーとして起動する手順（exec 背景実行・レビュー手順は本ノートのまま）＝[[Preferences/codex-exec-worker]]。
 
 ## その他

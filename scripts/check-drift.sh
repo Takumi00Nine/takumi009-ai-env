@@ -2,7 +2,7 @@
 # ポータブル化されたAI環境の「ズレ」を検知する手動実行ツール（Phase 1.5）。
 #
 # チェック項目:
-#   ① symlink（install-main.sh の link() 呼び出しと同じ集合＋claude/agents/*.md）が
+#   ① symlink（install-main.sh の link() 呼び出しと同じ集合）が
 #      repo の実体を指しているか。加えて①-2として、生成物 ~/.claude/settings.json
 #      （2026-08-21よりsymlinkではなく生成物。詳細は下記①-2セクション本体の
 #      コメント参照）がrepoテンプレとプレースホルダ展開込みで一致しているか
@@ -251,10 +251,17 @@ SYMLINKS=(
   # このSYMLINKS一覧にも同時に漏れていたため、あわせて追加する。
   "$HOME/.claude/hooks/context-size-warn.sh|$DIR/claude/hooks/context-size-warn.sh"
   "$HOME/.claude/hooks/agent-model-guard.sh|$DIR/claude/hooks/agent-model-guard.sh"
+  # ラッパー起動-設計-v1.1.1.md §4・§2.5・D-3・裁定A（2026-09-17追加）:
+  # in-process起動の境界フックと、子専用のVault保護柵フック。
+  "$HOME/.claude/hooks/inprocess-gate.sh|$DIR/claude/hooks/inprocess-gate.sh"
+  "$HOME/.claude/hooks/vault-write-gate.sh|$DIR/claude/hooks/vault-write-gate.sh"
   "$HOME/.claude/hooks/usage-inject.sh|$DIR/claude/hooks/usage-inject.sh"
   "$HOME/.codex/AGENTS.md|$DIR/codex/AGENTS.md"
   "$HOME/.codex/hooks.json|$DIR/codex/hooks.json"
 )
+# 案件③ B-1 D-4（設計-v1.1.3.md §5 手順3）: 配置先職種定義（claude/agents/*.md）
+# はeffort-per-role v2の生成実ファイル方式を退役し、他の管理symlinkと同じ
+# この一覧へ戻す（symlink総数Nはロール数ぶん増える）。
 if [ -d "$DIR/claude/agents" ]; then
   for f in "$DIR"/claude/agents/*.md; do
     [ -e "$f" ] || continue
@@ -359,8 +366,8 @@ leader_runtime_error_message() {
     LEADER_UNCONFIGURED)
       msg="リーダー配役が未確定です（unknown・not_adopted・行なしのいずれか）"
       ;;
-    LEADER_UNAVAILABLE_NO_FALLBACK)
-      msg="リーダーの本命・fallbackの双方が使用不可です"
+    LEADER_UNAVAILABLE)
+      msg="リーダー候補が使用不可です"
       ;;
     LEADER_CANDIDATE_INVALID:*)
       msg="リーダー候補の検証に失敗しました（条件番号: ${code#LEADER_CANDIDATE_INVALID:}）"
@@ -475,7 +482,7 @@ def is_clean_str(s):
 KNOWN_CODE_RE = re.compile(
     r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|"
     r"PROFILE_RESOLVER_MISSING|PROFILE_RESOLVER_ERROR|LEADER_UNCONFIGURED|"
-    r"LEADER_UNAVAILABLE_NO_FALLBACK|"
+    r"LEADER_UNAVAILABLE|"
     r"PROFILE_INVALID:[A-Za-z0-9_-]+|LEADER_CANDIDATE_INVALID:[A-Za-z0-9_-]+)$"
 )
 

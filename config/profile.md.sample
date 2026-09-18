@@ -1,9 +1,9 @@
 ---
-# プロファイル実体の雛形（schema 6・値はメイン機の実値）。~/.config/takumi009-ai-env/profile.md へ
+# プロファイル実体の雛形（schema 7・値はメイン機の実値）。~/.config/takumi009-ai-env/profile.md へ
 # コピーして使う（サブ機は machine_role を value=sub に・必要なら role.leader を変更）。
 # 書式・状態値・各キーの意味は Vault の Preferences/profile-sample.md と README「導入手順」を参照。
 # ⚠️ 認証情報（AWS キー・トークン等）は書かない（毎セッション AI が読む）。
-schema_version: 6
+schema_version: 7
 profile_slug: authoring
 role.leader:               configured model=fable-high
 role.navi:                 unknown
@@ -14,10 +14,8 @@ role.implementer:          configured model=sonnet-high,codex-sol-medium
 role.researcher:           configured model=sonnet-high
 role.operator:             configured model=sonnet-high
 role.vault-scribe:         configured model=sonnet-high
-role.verifier:             configured model=codex-review-default
+role.verifier:             configured model=opus-high,codex-sol-high
 role.ja-doc:               unknown
-fallback.verifier: configured model=opus-high
-excluded_models: configured value=none
 team_mode:        configured value=full
 no_read_paths:    configured value=~/work/old
 machine_role:     configured value=main

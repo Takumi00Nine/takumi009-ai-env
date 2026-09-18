@@ -71,7 +71,7 @@ EOF
 
 # write_models_conf_at <dir> — モデル定義ファイル（models.conf）を<dir>/
 # models.conf へ書く（モデル定義ファイルと候補指定-設計-2026-09-08.md
-# §2.3・§2.4）。schema 6のrole/fallback行は`model=<定義名>[,...]`で定義名を
+# §2.3・§2.4）。schema 7のrole行は`model=<定義名>[,...]`で定義名を
 # 参照するだけになったため、role.leaderの解決を伴うテストは全てこの定義
 # ファイルを必要とする（無いとT7で解決不能になる）。
 write_models_conf_at() {
@@ -97,12 +97,11 @@ make_fake_home() {
   write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-with-dotfiles-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-excluded_models: configured value=none
 role.leader: configured model=sonnet-high
 ---
 EOF

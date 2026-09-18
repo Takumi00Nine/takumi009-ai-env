@@ -1,11 +1,12 @@
 ---
 date: 2026-06-21
-updated: 2026-09-16
+updated: 2026-09-17
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 related:
   - "[[Knowledge/core-rules-compression-archive]]"
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
+  - "[[Decisions/2026-09-17-effort-per-role-v2]]"
 aliases:
   - "外部脳運用チートシート"
   - "public執筆の掟"
@@ -29,7 +30,7 @@ aliases:
 - **Projects の frontmatter**: `status:` は4値のみ＝`active`/`paused`/`completed`/`closed`。**状態が動いたら `next:`（15文字以内）も更新**（cmux Dock「Project」枠の表示元。「Project の N 番」解決＝`~/work/takumi009-ai-env/cmux/cmux-next-model.sh --list`）。
 - **Tasks 節**（任意）: `## Tasks` → `### <版名>` → `- [ ]`/`- [/]`（進行中）/`- [x]`。cmux Dock「Task」枠の表示元。「Task の N 番」解決＝`~/work/takumi009-ai-env/cmux/cmux-task-model.sh --list`（番号はその瞬間の表示順・展開中の版の子行だけ）。工程の節目にリーダーが記録職へ更新を依頼する（[[Decisions/2026-09-09-cmux-session-todo-operation]]）。`next:` が無いノートは先頭未完タスクを Project 枠が導出表示する（書き戻しなし）。
 ## 書き方の鉄則
-- 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず `vault-scribe`（常駐チームメイト・subagent_type も `vault-scribe`）へ委任**＝リーダーが内容を確定して渡し、vault-scribe が掟に従い執筆（[[Decisions/2026-08-10-vault-scribe]]）。**リーダー直筆は禁止**（[[Decisions/2026-08-12-vault-scribe-mandatory]]・delegation-gate-v2 が deny・vault-scribe 不在なら起動してから振る）。⚠️ **単独モードだけは例外**＝リーダーが案件の締めに直筆する（Vault 専用の直接作業宣言マーカーで gate を通す＝[[Decisions/2026-09-07-solo-leader-writes-vault]]）。**vault-scribe 専任の対象は AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）のみ**＝人間向け領域（Blogs/・Explorations/ ほか）はリーダー・ワーカー・スクリプトが直接書き込み可（[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]）。他ワーカーは6フォルダへの記録候補を「Vault記録候補:」で申告。
+- 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず記録職 `vault-scribe`（`subagent_type: vault-scribe`・起動形態は問わない＝既定は名前無し subagent）へ委任**＝リーダーが内容を確定して渡し、vault-scribe が掟に従い執筆（[[Decisions/2026-08-10-vault-scribe]]）。**リーダー直筆は禁止**（[[Decisions/2026-08-12-vault-scribe-mandatory]]・delegation-gate-v2 が deny・vault-scribe 不在なら起動してから振る）。⚠️ **単独モードだけは例外**＝リーダーが案件の締めに直筆する（Vault 専用の直接作業宣言マーカーで gate を通す＝[[Decisions/2026-09-07-solo-leader-writes-vault]]）。**vault-scribe 専任の対象は AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）のみ**＝人間向け領域（Blogs/・Explorations/ ほか）はリーダー・ワーカー・スクリプトが直接書き込み可（[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]）。他ワーカーは6フォルダへの記録候補を「Vault記録候補:」で申告。
 - 長くなったら分割（目安8,000字・Decisions は対象外）＝詳細を別ノートへ分離し相互リンク。
 - フロントマター必須（date/tags/project）・本文編集で `updated` 更新。wiki link はフォルダ付き `[[Folder/note]]`・関連ノートは**相互に**リンク。
 - aliases 必須（README 除く）＝想起フックの検索キー。実際に打ちそうな語1〜5個・汎用語禁止・迷ったら付けない。外部情報系は `review_by:`（任意）。

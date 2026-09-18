@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-16
+updated: 2026-09-17
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -14,6 +14,7 @@ related:
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
   - "[[Decisions/2026-09-08-model-definitions-file]]"
   - "[[Decisions/2026-09-09-cmux-session-todo-operation]]"
+  - "[[Decisions/2026-09-17-effort-per-role-v2]]"
 aliases:
   - "配役表サンプル"
   - "プロファイルサンプル"
@@ -21,23 +22,23 @@ aliases:
   - "サブ機の更新手順"
   - "update-subが拒否"
 ---
-# プロファイルサンプル（v6・職種ファースト配役表）
+# プロファイルサンプル（v7・職種ファースト配役表）
 
 ## この案の要点
 - **v6 schema**は role 行から `provider`／`execution`／`effort` の属性を撤去し、モデル定義ファイル（[[Preferences/model-definitions-sample]]）の定義名を `model=<定義名>[,<定義名>…]` で参照する形へ変えた（[[Decisions/2026-09-08-model-definitions-file]]）。
+- **v7 schema**は代替配役の行（`fallback` 接頭辞）と禁止モデル列挙の固定キーを撤去した（2026-09-16）。本命が使えないときの選び直しはリーダーが同じ行の候補から行い、禁止は「候補に書かない」で表す（[[Decisions/2026-09-08-model-definitions-file]] の規則5・6・9 は撤回）。
 - **v4 schema**（基本形＝配役表解凍-設計-2026-09-01.md §3.2 が正本。v3 は P3 段階4 で `no_read_paths` を追加、v4 は 3モード体制で `team_mode` を追加・能力軸 `reviewer` を廃止・`execution` の enum を `external-cli`／`external-api` に改めた＝[[Decisions/2026-09-07-three-team-mode-rollout]]）。旧版の能力軸7キーだけの形式（`schema_version`が無い/`1`の実体）は現行実装（`resolve_local_profile()`）へ委譲され続ける（§3.5）。v5 は能力軸を `team_mode`・`no_read_paths`・`machine_role` の3キーへ整理し、`machine_role` を新設した（[[Decisions/2026-09-07-profile-axes-consolidation]]）。
-- 配役は**職種を第一階層にしたインライン形式**（`role.<職種>: <状態> model=<定義名>[,<定義名>…]`）。`fallback.<職種>`は同じ書式で本命が使えないときの代替（候補は1件だけ）。
+- 配役は**職種を第一階層にしたインライン形式**（`role.<職種>: <状態> model=<定義名>[,<定義名>…]`）。代替は同じ行の2件目以降の候補で表す（機構は選ばない）。
 - **正本は repo の設定サンプル**（2026-09-08 本人決定）: `takumi009-ai-env` の `config/profile.md.sample`／`config/models.conf.sample`／`config/bedrock.env.sample`（実ファイル・値はメイン機の実値）が正本。本人が `~/.config/takumi009-ai-env/` へコピーして使う（`mkdir -p ~/.config/takumi009-ai-env && cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md` の要領。models.conf も同様・bedrock.env は Bedrock 機だけ）。サブ機はコピー後に `machine_role`（と必要なら `role.leader`）だけ書き換える。installer は実体が無いときだけ `config/profile.md.sample` を雛形としてコピーする（既存は壊さない）。symlink・同期処理は無い。
 - 各キー・各状態のとりうる値は**本ノートの「書式ととりうる値」節に書く**（2026-09-16 本人指示＝サンプルと実体から説明コメントを除去して起動注入を軽量化。deprecated 2026-09-16＝旧「コメントに書く」2026-08-30 方針）。本文中で説明しない値は書かない。
 - `role.leader`はサンプル（メイン機の実値）では確定値のまま配布する。未確定・サブ機で変える場合は**installerの対話（U-1・設計§3.9）が実体側で確定させる**（2026-09-08 本人決定でサンプル＝雛形の unknown 前提は解消）。
 - 能力軸3キー（`team_mode`／`no_read_paths`／`machine_role`）。キー名・書式（`configured value=...`）は A-1 から変更していない（§3.2 の④）。`no_read_paths` は P3 段階4（schema_version 3）で追加。`vault_scope` は 2026-09-07 に撤去（[[Decisions/2026-09-07-retire-vault-scope-axis]]・schema は 4 のまま）。`inventory_source`／`vault_write`／`ui.user_call`／`git_role`／`web_verification` は 2026-09-07 に撤去・`machine_role` を新設（[[Decisions/2026-09-07-profile-axes-consolidation]]・schema 5）。
-- `effort` は effort 対応モデル（Fable／Opus／Sonnet）の定義に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通・[[Preferences/model-definitions-sample]]）。Haiku 4.5 は effort 非対応のため書かない（`haiku` 定義）。定義ファイルのサンプルにある `effort=high` は一例で、機体ごとに選び直してよい。
+- `effort` は effort 対応モデル（Fable／Opus／Sonnet）の定義に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通・[[Preferences/model-definitions-sample]]）。Haiku 4.5 は effort 非対応のため書かない（`haiku` 定義）。定義ファイルのサンプルにある `effort=high` は一例で、機体ごとに選び直してよい。ワーカー行の候補の `effort` は installer が職種定義へ生成して届ける（[[Preferences/model-definitions-sample]]）。配役表を編集したら installer（メイン機 `install-main.sh`／サブ機 `update-sub.sh`）を再実行する＝流していない状態は `check-drift.sh` が DRIFT で報告する。
 
 ## 書式ととりうる値（サンプルの説明コメントの移設先・2026-09-16）
 - 行の書式＝`<キー>: <状態> [属性=値 ...]`。状態は先頭に1語。属性は `名前=値` をスペース区切り（値にスペース・日本語は使わない）。行頭 `#` と、値の後ろの「スペース+#」以降は無視。⚠️ 認証情報は書かない（毎セッション AI が読む・Bedrock のピン留めは bedrock.env）。
 - `schema_version`＝この実体が追随しているスキーマ版（職種の行を足しても上げない。固定キー・文法・必須属性・enum が変わったときだけ）。`profile_slug`＝能力クラスの表示ラベル（`^[a-z0-9][a-z0-9-]*$`・判定には使わない）。
-- `role.<職種>` / `fallback.<職種>`＝状態は `configured`（使う・`model=` で起動）／`unavailable`（使いたいが今は動かせない・何を使いたかったか残すため `model=` は書く）／`not_adopted`（このマシンでは使わない・属性なし）／`unknown`（未確定・属性なし＝保留して本人に確認）。行を書かない職種は `unknown` 扱い。`model=` はモデル定義ファイルの定義名をカンマ区切りで1つ以上（並び順に優先度は無い）。`fallback` は `configured` のものだけ採用・候補は1件だけ。
-- `excluded_models`＝`configured value=<provider>/<model>,…`（禁止なしは `value=none`・`[1m]` は判定で無視）／`unavailable`（判定できない）／`unknown`。
+- `role.<職種>`＝状態は `configured`（使う・`model=` で起動）／`unavailable`（使いたいが今は動かせない・何を使いたかったか残すため `model=` は書く）／`not_adopted`（このマシンでは使わない・属性なし）／`unknown`（未確定・属性なし＝保留して本人に確認）。行を書かない職種は `unknown` 扱い。`model=` はモデル定義ファイルの定義名をカンマ区切りで1つ以上（並び順に優先度は無い）。
 - 能力軸3キー＝`team_mode`（`configured value=solo|lean|full`）／`no_read_paths`（`configured value=~/… ` カンマ区切り・無ければ `unavailable`）／`machine_role`（`configured value=main|sub`＝機役割の唯一の正本）。各キー共通で `unavailable`／`unknown` も可。
 - installer は実体が無いときだけサンプルを雛形としてコピーする（既にある実体は上書きしない）。実体は machine ごとのローカルファイル・repo 管理外。
 
@@ -53,8 +54,6 @@ aliases:
 |---|---|---|
 | `role.leader` | メイン機の実値（サンプルはメイン機の実運用値） | メイン機はそのまま使う。未確定・サブ機で変える場合は `scripts/install-main.sh`／`scripts/install-sub.sh`実行時の対話（設計§3.9）で確定させる |
 | `role.*`（leader以外） | `configured model=<定義名>[,<定義名>…]` | 自分のセッションで実際に起動する職種だけ`configured`にし、モデル定義ファイル（[[Preferences/model-definitions-sample]]）の定義名をカンマ区切りで1つ以上書く。使わない職種は`not_adopted`、判断保留は`unknown`のまま残す |
-| `fallback.*` | `configured model=<定義名>` | 本命(`role.*`)が使えないときに使う職種にだけ、定義名を**1件だけ**書く。不要なら行ごと削ってよい |
-| `excluded_models` | `value=none` | このマシンで使ってはいけないモデル族があれば`<provider>/<model>`のカンマ区切りへ書き換える。無ければ`none`のまま |
 | `team_mode` | `value=full` | このマシンの枠に合う既定体制を選ぶ（メイン機＝`full`・サブ機＝`lean` が目安）。迷ったら本人に確認する |
 | `no_read_paths` | `value=~/work/old` | 読まない・検索しないパスが実在するかを確認し、無ければ`unavailable`にする |
 | `machine_role` | `configured value=main`（サンプルはメイン機の実値） | サンプルはメイン機の値のまま。**サブ機はコピー後に `configured value=sub` へ書き換える**（機構は推測しない） |

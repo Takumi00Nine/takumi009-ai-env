@@ -1,6 +1,6 @@
 ---
 date: 2026-09-09
-updated: 2026-09-10
+updated: 2026-09-16
 tags: [preference, model, catalog, claude, codex, routing, quota, bedrock, vllm]
 project: meta
 related:
@@ -69,6 +69,11 @@ aliases:
 - **上流工程（要件定義・設計・採否判定）**＝Claude の Opus 5／Fable 5.1（判断の質が重要・枠消費は許容）。ローカル LLM は不向き（性能が下位）。
 - **量産・定型（分類・抽出・軽い実装の反復）**＝ローカル LLM か Claude Haiku 4.5。サブスク枠を温存できる。
 - **サブスク枠が枯渇している状況**＝まずローカル LLM（費用ゼロに近い）→ 次に Bedrock（従量課金だが確実に動く）→ サブスクの `/limit-reset`（Claude）やチケット（Codex）は温存策であって代替経路ではない。
+
+## ④選ぶときの目安（職種→モデル固定ではない）
+- 上流工程（要件定義・設計・採用判定）は思考の深い定義（例: opus-high）が向く（経緯＝[[Decisions/2026-07-25-opus5-upstream-roles]]）。
+- デザイン系案件の上流工程は codex-astra 系が向く（経緯＝[[Decisions/2026-09-05-astra-for-design-upstream-only]]）。
+- 検証は作成者と別系統が推奨（経緯＝[[Decisions/2026-09-10-verifier-lineage-recommended]]）。
 
 ## 出典・確認日
 - Codex on Amazon Bedrock（対応モデル・認証方式・WebSearch 非対応）＝ https://learn.chatgpt.com/docs/amazon-bedrock （2026-09-09 取得）／AWS 公式ブログ https://aws.amazon.com/blogs/aws/get-started-with-openai-gpt-5-5-gpt-5-4-models-and-codex-on-amazon-bedrock/ （2026-09-09 取得・従量課金の記述）／PR openai/codex#18744（`amazon-bedrock` provider 実装）。

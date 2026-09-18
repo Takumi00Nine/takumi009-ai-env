@@ -9,6 +9,7 @@
       "Edit(~/Data/**)",
       "Read(~/.config/takumi009-ai-env/profile.md)",
       "Bash(~/work/takumi009-ai-env/scripts/codex-exec.sh:*)",
+      "Bash(python3 ~/work/takumi009-ai-env/claude/hooks/lib/role_candidates.py:*)",
       "Skill(schedule)",
       "Skill(update-config)",
       "Skill(claude-api)"
@@ -233,6 +234,12 @@
       {
         "matcher": "^Agent$",
         "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/inprocess-gate.sh",
+            "timeout": 35,
+            "statusMessage": "in-process起動の境界を確認中"
+          },
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/agent-model-guard.sh",

@@ -136,6 +136,39 @@ EOF
   git -C "$src" push -q origin HEAD:main
 }
 
+# make_origin_from_baseline <bare> <src> <baseline_dir> — AC-15b専用。
+# make_origin()と同じ最小構成だが、コピー元を<baseline_dir>（撤去前の
+# コード。AIENV_BASELINE_DIRが指す既存worktree）にする（r4-3対応: run_update()
+# はDIR配下からPROFILE_RESOLVE_LIB・AIENV_AGENTS_DIRを既定値で解決するため、
+# DIR（=cloneした$src配下）自体が撤去後コードのままだと旧コードでの解決を
+# 証明できない）。settings.json/install-main.shは足さない（AC-15bはstep 0の
+# machine_role解決だけを見る＝leader-runtime委譲は対象外）。
+make_origin_from_baseline() {
+  local bare="$1" src="$2" baseline="$3"
+  git init -q --bare "$bare"
+  mkdir -p "$src/codex" "$src/vault-public/Preferences" "$src/scripts/lib" "$src/claude/hooks/lib"
+  cat > "$src/codex/config.toml" <<'EOF'
+service_tier = "default"
+[mcp_servers.obsidian]
+args = ["__AIENV_HOME__/Data/obsidian"]
+EOF
+  echo "# 初期方針" > "$src/vault-public/Preferences/rule1.md"
+  cp "$baseline/scripts/lib/pid-lock.sh" "$src/scripts/lib/pid-lock.sh"
+  cp "$baseline/scripts/lib/managed-symlink.sh" "$src/scripts/lib/managed-symlink.sh"
+  cp "$baseline/claude/hooks/lib/profile_resolve.py" "$src/claude/hooks/lib/profile_resolve.py"
+  cp "$baseline/claude/hooks/agent-model-guard.sh" "$src/claude/hooks/agent-model-guard.sh"
+  chmod +x "$src/claude/hooks/agent-model-guard.sh"
+  cp "$baseline/claude/hooks/task-pane-resolve.sh" "$src/claude/hooks/task-pane-resolve.sh"
+  chmod +x "$src/claude/hooks/task-pane-resolve.sh"
+  git -C "$src" init -q
+  git -C "$src" config user.name test
+  git -C "$src" config user.email test@example.invalid
+  git -C "$src" remote add origin "$bare"
+  git -C "$src" add -A
+  git -C "$src" commit -q -m init
+  git -C "$src" push -q origin HEAD:main
+}
+
 # claude/settings.json テンプレ＋実物の scripts/install-main.sh を SRC へ足す
 # （settings.json再生成テスト用。§9.0 A-0-1）。実物のinstall-main.shを使う理由は
 # tests/test-check-drift.shと同じ＝--print-leader-runtime（2026-09-01 配役表
@@ -197,20 +230,20 @@ make_sub_clone() {
   git -C "$sub" config user.email test@example.invalid
 }
 
-# $home配下にschema 6・machine_role: subの実体プロファイルを置く
+# $home配下にschema 7・machine_role: subの実体プロファイルを置く
 # （配役表-能力軸整理-設計-2026-09-07.md §10.2a。2026-09-08 モデル定義
-# ファイルと候補指定対応でschema 5→6・role.leaderをmodel=<定義名>へ）。
+# ファイルと候補指定対応でschema 5→6・role.leaderをmodel=<定義名>へ。
+# 2026-09-16 代替配役層・禁止モデル層の撤去でschema 6→7）。
 make_sub_profile() {
   local home="$1"
   mkdir -p "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 6
+schema_version: 7
 profile_slug: test-update-sub-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
-excluded_models: configured value=none
 role.leader: configured model=sonnet-high
 ---
 EOF
@@ -290,14 +323,15 @@ EOF
 }
 
 # write_v2_profile <dest> <leader-line> [extra-lines...] — 最小のv2プロファイル
-# を書く（schema_version・能力軸3キー・excluded_modelsは固定キー検査
-# （V7/V8-b）を通すための最小セット。role.leaderの行は必須引数、それ以外の
+# を書く（schema_version・能力軸3キーは固定キー検査（V7/V8-b）を通すための
+# 最小セット。role.leaderの行は必須引数、それ以外の
 # 職種行は可変長の追加引数で渡す。tests/test-check-drift.shの同名関数・
 # tests/test-install-main.shのwrite_v2_profile_with_bedrock_role()と
 # 同じ最小セット・様式に揃える）。⚠️ machine_role: subを固定で含める
 # （update-sub.shのstep 0ゲートを通すため。マーカー撤去後は実体プロファイル
 # 自身がこの役目を負う）。2026-09-08 モデル定義ファイルと候補指定対応:
-# schema_versionを6へ・role.leaderの属性をmodel=<定義名>だけへ。定義の実体は
+# schema_versionを6へ・role.leaderの属性をmodel=<定義名>だけへ（2026-09-16
+# 代替配役層・禁止モデル層の撤去でschema 6→7）。定義の実体は
 # write_model_defs()が同じディレクトリのmodels.confへ書く
 # （model_defs_path()の既定パスをそのまま使う）。
 write_v2_profile() {
@@ -306,13 +340,12 @@ write_v2_profile() {
   mkdir -p "$(dirname "$dest")"
   {
     echo "---"
-    echo "schema_version: 6"
+    echo "schema_version: 7"
     echo "profile_slug: test"
     echo "role.leader: ${leader_line}"
     for extra in "$@"; do
       printf '%s\n' "$extra"
     done
-    echo "excluded_models: configured value=none"
     echo "reviewer: configured value=codex-mcp"
     echo "team_mode: configured value=full"
     echo "no_read_paths: unavailable"
@@ -879,8 +912,8 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=us.anthropic.claude-opus-4-8
 EOF
   chmod 644 "$ENV_FILE"
   # 2026-09-01 §4.2-d改訂（担当Bコミット36745b2/fe06258）: ANTHROPIC_DEFAULT_
-  # OPUS_MODELは固定許可から動的許可へ変わった（プロファイルのrole.*/
-  # fallback.*が実際にprovider=bedrock model=opusを使っているときだけ許可）。
+  # OPUS_MODELは固定許可から動的許可へ変わった（プロファイルのrole.*が
+  # 実際にprovider=bedrock model=opusを使っているときだけ許可）。
   # v2プロファイルでresearcherをそう配役し、動的に許可されることを確認する
   # （リーダー実査指摘・結合確認対応: tests/test-install-main.shの
   # write_v2_profile_with_bedrock_role()と同じ様式）。
@@ -1388,7 +1421,7 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-8'
   printf '%s\n' "$ENV_CONTENT" > "$FAKE_HOME_INSTALLER/.config/takumi009-ai-env/bedrock.env"
   # 2026-09-01 §4.2-d改訂（担当Bコミット36745b2/fe06258）: Bedrockモデルpin
   # キー（ANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODEL）は固定許可から動的許可へ
-  # 変わった（プロファイルのrole.*/fallback.*が実際にprovider=bedrockで
+  # 変わった（プロファイルのrole.*が実際にprovider=bedrockで
   # その別名を使っているときだけ許可）。installer/updater双方に、
   # opus/sonnet/haikuの3別名すべてを配役したv2プロファイルを事前に置く
   # （リーダー実査指摘・結合確認対応）。role.leaderはAIENV_LEADER_ROLEと
@@ -1699,7 +1732,7 @@ EOF
   rm -rf "$WORK"
 }
 
-echo "=== 26. 4d. claude/agents/*.md のsymlink化: 新規追加されたロール定義（例: vault-scribe.md）で、サブ機に既に実ファイルが置かれている場合は退避してからsymlink化する（本人指示・2026-09-03最優先・受入条件6） ==="
+echo "=== 26. 2c. claude/agents/*.md のsymlink化: 新規追加されたロール定義（例: vault-scribe.md）で、サブ機に既に実ファイルが置かれている場合は退避してからsymlink化する（本人指示・2026-09-03最優先・受入条件6） ==="
 {
   WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
@@ -1735,7 +1768,7 @@ echo "=== 26. 4d. claude/agents/*.md のsymlink化: 新規追加されたロー�
   rm -rf "$WORK"
 }
 
-echo "=== 26b. 4d.: 既に正しいsymlinkが張られているロールは何もしない（no-op・退避ファイルを作らない） ==="
+echo "=== 26b. 2c.: 既に正しいsymlinkが張られているロールは何もしない（no-op・退避ファイルを作らない） ==="
 {
   WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
@@ -1848,7 +1881,7 @@ echo "=== 26d. 4d.: aienv管理下でないdangling symlink（\$AGENTS_SRC_DIR�
   rm -rf "$WORK"
 }
 
-echo "=== 26e. 4d.: 古いrepoパス・別ファイルを指す誤ったsymlinkは現在のrepoパスへ張り直す（no-opではなく修復する） ==="
+echo "=== 26e. 2c.: 古いrepoパス・別ファイルを指す誤ったsymlinkは現在のrepoパスへ張り直す（no-opではなく修復する） ==="
 {
   WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
@@ -1969,7 +2002,7 @@ echo "=== 26g. 4d.: claude/agents/ ディレクトリ自体が無い（checkout�
   rm -rf "$WORK"
 }
 
-echo "=== 26h. 2c.（旧4d）はHEADが不変でも実行される（本人実査・2026-09-03緊急対応の回帰テスト: 当初4d.は4.配下〈HEAD変化時のみ〉に置いており、サブ機の2回目以降の実行がHEAD不変で3.の早期終了に入るとagentsのsymlink化に一切到達しない実バグがあった。SUBを最初からrepoの最新HEADでclone〈＝pullで進む差分が無い〉した状態でも、まだsymlink化されていない実ファイルが正しくsymlink化されることを確認する） ==="
+echo "=== 26h. 4d.はHEADが不変でも実行される（本人実査・2026-09-03緊急対応の回帰テスト: 当初4d.は4.配下〈HEAD変化時のみ〉に置いており、サブ機の2回目以降の実行がHEAD不変で3.の早期終了に入るとagentsのsymlink化に一切到達しない実バグがあった。SUBを最初からrepoの最新HEADでclone〈＝pullで進む差分が無い〉した状態でも、まだsymlink化されていない実ファイルが正しくsymlink化されることを確認する） ==="
 {
   WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
@@ -3029,12 +3062,25 @@ echo "=== 45. 旧版サブ機を更新すると新しいusage-injectフックが
   cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
   cp "$REPO_ROOT/scripts/check-drift.sh" "$SRC/scripts/check-drift.sh"
   cp "$REPO_ROOT/scripts/install-main.sh" "$SRC/scripts/install-main.sh"
-  mkdir -p "$SRC/scripts/lib" "$SRC/claude/hooks"
+  mkdir -p "$SRC/scripts/lib" "$SRC/claude/hooks/lib"
   cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
+  # 2026-09-16 配役表の代替配役層・禁止モデル層撤去でlist-rolesの列数が
+  # 8→7へ変わった。install-main.shを現行へ上げるなら同じ列契約を持つ
+  # profile_resolve.pyも一緒に上げないと、旧resolver（c5d465d時点・8列）を
+  # 新install-main.sh（7列読み）が誤読しrole.leaderがunknownへ丸まる
+  # （実測発見・2026-09-16）。
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$SRC/claude/hooks/lib/profile_resolve.py"
   cp "$REPO_ROOT/claude/hooks/agent-model-guard.sh" "$SRC/claude/hooks/agent-model-guard.sh"
   chmod +x "$SRC/claude/hooks/agent-model-guard.sh"
   cp "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" "$SRC/claude/hooks/task-pane-resolve.sh"
   chmod +x "$SRC/claude/hooks/task-pane-resolve.sh"
+  # ラッパー起動-設計-v1.1.1.md §4・§2.5・D-3・裁定A（2026-09-17追加）: test 45と
+  # 同じ理由（main追随後のSYMLINKS一覧拡張）でinprocess-gate.sh・
+  # vault-write-gate.shも併せて持たせる。
+  cp "$REPO_ROOT/claude/hooks/inprocess-gate.sh" "$SRC/claude/hooks/inprocess-gate.sh"
+  chmod +x "$SRC/claude/hooks/inprocess-gate.sh"
+  cp "$REPO_ROOT/claude/hooks/vault-write-gate.sh" "$SRC/claude/hooks/vault-write-gate.sh"
+  chmod +x "$SRC/claude/hooks/vault-write-gate.sh"
   # cmux-session-todo v3（供給側・§28.2）: install-main.shのchmod一覧に
   # cmux/配下の3本を足した（担当J）ため、このコミットにもcmux/一式を
   # 併せて持たせないと、この古いコミット上でinstall-main.shのchmodが
@@ -3048,8 +3094,9 @@ echo "=== 45. 旧版サブ機を更新すると新しいusage-injectフックが
   cp "$REPO_ROOT/cmux/lib-cmux-workspace.sh" "$SRC/cmux/lib-cmux-workspace.sh"
   chmod +x "$SRC/cmux/cmux-task-model.sh" "$SRC/cmux/cmux-next-model.sh" "$SRC/cmux/cmux-task-declare.sh"
   git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/install-main.sh \
-    scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh \
-    claude/hooks/task-pane-resolve.sh cmux
+    scripts/lib/managed-symlink.sh claude/hooks/lib/profile_resolve.py \
+    claude/hooks/agent-model-guard.sh claude/hooks/task-pane-resolve.sh \
+    claude/hooks/inprocess-gate.sh claude/hooks/vault-write-gate.sh cmux
   git -C "$SRC" commit -q -m "fixture: place hooks after sub update"
   git -C "$SRC" push -q origin HEAD:main
 
@@ -3127,12 +3174,22 @@ PY
   cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
   cp "$REPO_ROOT/scripts/check-drift.sh" "$SRC/scripts/check-drift.sh"
   cp "$REPO_ROOT/scripts/install-main.sh" "$SRC/scripts/install-main.sh"
-  mkdir -p "$SRC/scripts/lib" "$SRC/claude/hooks"
+  mkdir -p "$SRC/scripts/lib" "$SRC/claude/hooks/lib"
   cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
+  # test 45と同じ理由（list-rolesの列数8→7）でprofile_resolve.pyも併せて
+  # 現行へ上げる（2026-09-16実測発見）。
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$SRC/claude/hooks/lib/profile_resolve.py"
   cp "$REPO_ROOT/claude/hooks/agent-model-guard.sh" "$SRC/claude/hooks/agent-model-guard.sh"
   chmod +x "$SRC/claude/hooks/agent-model-guard.sh"
   cp "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" "$SRC/claude/hooks/task-pane-resolve.sh"
   chmod +x "$SRC/claude/hooks/task-pane-resolve.sh"
+  # ラッパー起動-設計-v1.1.1.md §4・§2.5・D-3・裁定A（2026-09-17追加）: test 45と
+  # 同じ理由（main追随後のSYMLINKS一覧拡張）でinprocess-gate.sh・
+  # vault-write-gate.shも併せて持たせる。
+  cp "$REPO_ROOT/claude/hooks/inprocess-gate.sh" "$SRC/claude/hooks/inprocess-gate.sh"
+  chmod +x "$SRC/claude/hooks/inprocess-gate.sh"
+  cp "$REPO_ROOT/claude/hooks/vault-write-gate.sh" "$SRC/claude/hooks/vault-write-gate.sh"
+  chmod +x "$SRC/claude/hooks/vault-write-gate.sh"
   # cmux-session-todo v3（供給側・§28.2）: test 45と同じ理由でcmux/一式も
   # 併せて持たせる（担当Jがinstall-main.shのchmod一覧へ3本足したため）。
   mkdir -p "$SRC/cmux"
@@ -3144,8 +3201,9 @@ PY
   cp "$REPO_ROOT/cmux/lib-cmux-workspace.sh" "$SRC/cmux/lib-cmux-workspace.sh"
   chmod +x "$SRC/cmux/cmux-task-model.sh" "$SRC/cmux/cmux-next-model.sh" "$SRC/cmux/cmux-task-declare.sh"
   git -C "$SRC" add scripts/update-sub.sh scripts/check-drift.sh scripts/install-main.sh \
-    scripts/lib/managed-symlink.sh claude/hooks/agent-model-guard.sh \
-    claude/hooks/task-pane-resolve.sh cmux
+    scripts/lib/managed-symlink.sh claude/hooks/lib/profile_resolve.py \
+    claude/hooks/agent-model-guard.sh claude/hooks/task-pane-resolve.sh \
+    claude/hooks/inprocess-gate.sh claude/hooks/vault-write-gate.sh cmux
   if ! git -C "$SRC" diff --cached --quiet; then
     git -C "$SRC" commit -q -m "fixture: reconcile actual symlink state"
   fi
@@ -3274,9 +3332,16 @@ echo "=== 48. 判定器（check-drift.sh）自体が欠落している場合、�
   git -C "$SRC" remote set-url origin "$BARE"
   cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
   cp "$REPO_ROOT/scripts/install-main.sh" "$SRC/scripts/install-main.sh"
-  mkdir -p "$SRC/scripts/lib"
+  mkdir -p "$SRC/scripts/lib" "$SRC/claude/hooks/lib"
   cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
-  git -C "$SRC" add scripts/update-sub.sh scripts/install-main.sh scripts/lib/managed-symlink.sh
+  # 2026-09-16 配役表の代替配役層・禁止モデル層撤去でlist-rolesの列数が
+  # 8→7へ変わった。install-main.shを現行へ上げるなら同じ列契約を持つ
+  # profile_resolve.pyも一緒に上げないと、$SRCのgit HEAD（旧resolver・8列）を
+  # 新install-main.sh（7列読み）が誤読しrole.leaderがunknownへ丸まる
+  # （実測発見・2026-09-16）。
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$SRC/claude/hooks/lib/profile_resolve.py"
+  git -C "$SRC" add scripts/update-sub.sh scripts/install-main.sh scripts/lib/managed-symlink.sh \
+    claude/hooks/lib/profile_resolve.py
   if ! git -C "$SRC" diff --cached --quiet; then
     git -C "$SRC" commit -q -m "fixture: current scripts"
   fi
@@ -3377,9 +3442,13 @@ echo "=== 50. git ls-tree自体が非0で失敗する場合（HEAD非追跡で�
   git -C "$SRC" remote set-url origin "$BARE"
   cp "$REPO_ROOT/scripts/update-sub.sh" "$SRC/scripts/update-sub.sh"
   cp "$REPO_ROOT/scripts/install-main.sh" "$SRC/scripts/install-main.sh"
-  mkdir -p "$SRC/scripts/lib"
+  mkdir -p "$SRC/scripts/lib" "$SRC/claude/hooks/lib"
   cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$SRC/scripts/lib/managed-symlink.sh"
-  git -C "$SRC" add scripts/update-sub.sh scripts/install-main.sh scripts/lib/managed-symlink.sh
+  # test 48と同じ理由（list-rolesの列数8→7）でprofile_resolve.pyも併せて
+  # 現行へ上げる（2026-09-16実測発見）。
+  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$SRC/claude/hooks/lib/profile_resolve.py"
+  git -C "$SRC" add scripts/update-sub.sh scripts/install-main.sh scripts/lib/managed-symlink.sh \
+    claude/hooks/lib/profile_resolve.py
   if ! git -C "$SRC" diff --cached --quiet; then
     git -C "$SRC" commit -q -m "fixture: current scripts"
   fi
@@ -3460,8 +3529,8 @@ echo "=== 51. scripts/lib/managed-symlink.shだけを更新したコミットを
 
   # upstream側でscripts/lib/managed-symlink.shだけを識別marker付きへ更新し、
   # 併せて新しいagent roleを1本追加する（update-sub.sh自身は一切変更しない
-  # ＝検証職の再現手順どおり。roleの追加は、既に正しいsymlinkのroleは
-  # 2c.のno-op分岐でsync_managed_symlink()自体を呼ばないため、確実に
+  # ＝検証職の再現手順どおり。roleの追加は、新規MISSINGロールなら必ず
+  # sync_managed_symlink()がlinked出力・symlink作成まで行うため、確実に
   # この関数が呼ばれる新規対象を作るため）。
   sed -e 's/linked: \$dest -> \$src/linked: $dest -> $src [MARKER-NEW-LIB-R5]/' \
     "$REPO_ROOT/scripts/lib/managed-symlink.sh" > "$SRC/scripts/lib/managed-symlink.sh"
@@ -3479,8 +3548,8 @@ echo "=== 51. scripts/lib/managed-symlink.shだけを更新したコミットを
     "$(echo "$out" | grep -q "update-sub.sh自身が更新されました" && echo 0 || echo 1)"
   assert_true "pull後のscripts/lib/managed-symlink.shは新版（marker付き）になっている" \
     "$(grep -q 'MARKER-NEW-LIB-R5' "$SUB/scripts/lib/managed-symlink.sh" && echo 1 || echo 0)"
-  assert_true "新規agent roleはこの実行中にsymlink化される（2c.が実際に走った証拠）" \
-    "$([[ -L "$FAKE_HOME/.claude/agents/reviewer-r5.md" ]] && echo 1 || echo 0)"
+  assert_true "新規agent roleはこの実行中にsymlinkとして配置される（2c.が実際に走った証拠）" \
+    "$([ -L "$FAKE_HOME/.claude/agents/reviewer-r5.md" ] && echo 1 || echo 0)"
   assert_true "同一実行中の出力に新版markerが出る（pull後sourceにより新版関数が使われた証拠。修正前はここがNGだった＝lib_on_disk_new=yes・new_lib_used=no）" \
     "$(echo "$out" | grep -q 'MARKER-NEW-LIB-R5' && echo 1 || echo 0)"
 
@@ -3524,7 +3593,7 @@ echo "=== 52. HEAD不変のまま共有lib（scripts/lib/managed-symlink.sh）�
   rm -rf "$WORK"
 }
 
-echo "=== PD-03: model付き既存8職種を退避してmodel無しrepo定義へ置換 ==="
+echo "=== PD-03(案件③ B-1 D-4・effort-per-role v2の生成実ファイル方式を退役してsymlinkへ戻す・設計-v1.1.3.md §5 手順1): 旧v2生成物（effort:行つき実ファイル）が退避されてsymlinkへ置き換わる ==="
 {
   WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
   BARE="$WORK/origin.git"
@@ -3540,17 +3609,21 @@ echo "=== PD-03: model付き既存8職種を退避してmodel無しrepo定義へ
   FAKE_HOME="$WORK/home"
   mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian" "$FAKE_HOME/.claude/agents"
   LOCK="$WORK/lock"
+  # v2が生成していた実ファイル（素材＋effort:行）を配置先へ置いておく
+  # （素材との差分は`effort:`行だけ＝sync_managed_symlink()から見ればただの
+  # 「差分のある既存の実ファイル」で、他の管理symlinkと同じ退避規則が適用
+  # される＝§5移行経路。バックアップ有無を分ける特別扱いはしない）。
   for role in adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier; do
-    printf '%s\n' '---' "name: $role" 'model: claude-sonnet-5' '---' > "$FAKE_HOME/.claude/agents/$role.md"
+    { cat "$REPO_ROOT/claude/agents/$role.md"; printf 'effort: high\n---\n'; } > "$FAKE_HOME/.claude/agents/$role.md"
   done
   run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" >/dev/null
   pd03_ok=1
   for role in adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier; do
     [ -L "$FAKE_HOME/.claude/agents/$role.md" ] || pd03_ok=0
-    grep -q '^model:' "$FAKE_HOME/.claude/agents/$role.md.pre-aienv.bak" || pd03_ok=0
-    grep -q '^model:' "$FAKE_HOME/.claude/agents/$role.md" && pd03_ok=0
+    [ "$(readlink "$FAKE_HOME/.claude/agents/$role.md")" = "$SUB/claude/agents/$role.md" ] || pd03_ok=0
+    grep -q '^effort:' "$FAKE_HOME/.claude/agents/$role.md.pre-aienv.bak" || pd03_ok=0
   done
-  assert_true "PD-03 8職種すべて退避・symlink化・model行撤去" "$pd03_ok"
+  assert_true "PD-03 旧v2生成物8職種すべてが退避のうえsymlinkへ置き換わる" "$pd03_ok"
 
   rm -rf "$WORK"
 }
@@ -3592,6 +3665,94 @@ echo "=== 53. pull後に共有lib（scripts/lib/managed-symlink.sh）が新HEAD�
     "$(echo "$out" | grep -q "settings.json を再生成しました" && echo 0 || echo 1)"
 
   rm -rf "$WORK"
+}
+
+echo "=== BASELINE-V7-SUB: AC-15b。撤去前コード（baseline）でも実体v7・旧2キーなしのプロファイルからmachine_role:subを解決でき、update-sub.shのstep 0を通過する（AIENV_BASELINE_DIR未設定時はskip） ==="
+{
+  if [ -z "${AIENV_BASELINE_DIR:-}" ] || [ ! -d "$AIENV_BASELINE_DIR" ]; then
+    echo "  skip - AIENV_BASELINE_DIRが未設定/存在しないためBASELINE-V7-SUBをskipします"
+  else
+    WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
+    BARE="$WORK/origin.git"
+    SRC="$WORK/src"
+    # ⚠️ make_origin()ではなくmake_origin_from_baseline()を使う——run_update()は
+    # 現在側のcloneをDIRとして渡し、update-sub.shはPROFILE_RESOLVE_LIB・
+    # AIENV_AGENTS_DIRをDIR配下から既定値で解決するため、DIR自体が撤去後
+    # コードのままだと旧コードでの解決を証明できない（r4-3）。DIR配下一式を
+    # baselineにする。
+    make_origin_from_baseline "$BARE" "$SRC" "$AIENV_BASELINE_DIR"
+    SUB="$WORK/sub"
+    make_sub_clone "$BARE" "$SUB"
+    FAKE_HOME="$WORK/home"
+    mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+    LOCK="$WORK/lock"
+
+    # make_sub_profile()はv7・machine_role: configured value=sub・旧2キー
+    # なしの実体を書く（§9.1のS2状態＝実体v7・旧2キーなし×旧コード＝正常）。
+    rc=0
+    # ⚠️ AIENV_MODEL_DEFS_FILEをケース内でHOME配下の実体へ明示する（検証
+    # 1巡目MAJOR-2対応）。resolverはこの変数をHOME配下のmodels.confより
+    # 優先して読むため、外側の環境（§6.1の共通セットアップ）でexportされた
+    # ままだと、make_sub_profile()が書いたsonnet-highを持たない別の
+    # models.confを読みに行きmachine_role判定がfail-closedになる
+    # （実測。手順側のunsetとの二重の防壁）。
+    out=$(AIENV_MODEL_DEFS_FILE="$FAKE_HOME/.config/takumi009-ai-env/models.conf" \
+      run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK") || rc=$?
+    assert_eq "BASELINE-V7-SUB: exit0で完走する" "0" "$rc"
+    assert_true "BASELINE-V7-SUB: 『サブ機として登録されていません』では拒否されない（旧コードがv7を解決できている証拠）" \
+      "$(echo "$out" | grep -q "サブ機として登録されていません" && echo 0 || echo 1)"
+
+    rm -rf "$WORK"
+  fi
+}
+
+echo "=== FAILSOFT-UNKNOWN-CODE: AC-19(NFR-3)。未知の失敗コード(BOGUS_CODE)でも異常終了せずdone.まで到達し、rc=1・『原因不明。コード:』で終わる（AIENV_FAILSOFT_STUB未設定時はskip） ==="
+{
+  if [ -z "${AIENV_FAILSOFT_STUB:-}" ] || [ ! -f "$AIENV_FAILSOFT_STUB" ]; then
+    echo "  skip - AIENV_FAILSOFT_STUBが未設定/存在しないためFAILSOFT-UNKNOWN-CODEをskipします"
+  else
+    WORK="$(mktemp -d "$_TMPBASE/test-update-sub.XXXXXX")"
+    BARE="$WORK/origin.git"
+    SRC="$WORK/src"
+    make_origin "$BARE" "$SRC"
+    # leader-runtime委譲（install-main.sh --print-leader-runtime）を実際に
+    # 通すため、settings.jsonテンプレ＋install-main.shをSRCへ足す（無いと
+    # 2b.の入口でskipされ、スタブのresolve-leader分岐に到達しない）。
+    add_settings_json_template "$SRC"
+    SUB="$WORK/sub"
+    make_sub_clone "$BARE" "$SUB"
+    FAKE_HOME="$WORK/home"
+    mkdir -p "$FAKE_HOME/.codex" "$FAKE_HOME/Data/obsidian"
+    LOCK="$WORK/lock"
+    # 「変更なし」早期終了（908-912行）に落ちるとdone.（1007行）まで届かない
+    # ため、clone後にupstreamへ1件pushして「変更あり」経路を通す。
+    echo "# 追加方針" > "$SRC/vault-public/Preferences/rule2.md"
+    git -C "$SRC" add -A
+    git -C "$SRC" commit -q -m "add rule2"
+    git -C "$SRC" push -q origin HEAD:main
+
+    rc=0
+    # ⚠️ update-sub.sh自身の直接resolve()呼び出しはPROFILE_RESOLVE_LIBで、
+    # install-main.sh --print-leader-runtimeへの委譲先（resolve-leader）は
+    # 別名のAIENV_PROFILE_RESOLVE_LIBで解決する（install-main.sh:156）——
+    # 子プロセスへは環境変数として引き継がれるが変数名が違うため、両方を
+    # スタブへ向けないとBOGUS_CODE経路に入らない（2026-09-16実測。設計・
+    # 要件の記述はPROFILE_RESOLVE_LIB1個だが実装は2変数必要）。
+    # ⚠️ AIENV_MODEL_DEFS_FILEもケース内でHOME配下の実体へ明示する（検証
+    # 1巡目MAJOR-2対応。理由は上のBASELINE-V7-SUBと同じ）。
+    out="$(PROFILE_RESOLVE_LIB="$AIENV_FAILSOFT_STUB" AIENV_PROFILE_RESOLVE_LIB="$AIENV_FAILSOFT_STUB" \
+      AIENV_REAL_LIB="$SUB/claude/hooks/lib/profile_resolve.py" \
+      AIENV_MODEL_DEFS_FILE="$FAKE_HOME/.config/takumi009-ai-env/models.conf" \
+      run_update "$SUB" "$FAKE_HOME" "$FAKE_HOME/Data/obsidian" "$LOCK" 2>&1)" || rc=$?
+
+    assert_eq "FAILSOFT-UNKNOWN-CODE: exit 1" "1" "$rc"
+    assert_true "FAILSOFT-UNKNOWN-CODE: done.まで到達する（異常終了しない）" \
+      "$(echo "$out" | grep -qF '[update-sub] done.' && echo 1 || echo 0)"
+    assert_true "FAILSOFT-UNKNOWN-CODE: 『原因不明。コード:』を含む（未知コードは汎用文言に落ちる）" \
+      "$(echo "$out" | grep -qF '原因不明。コード:' && echo 1 || echo 0)"
+
+    rm -rf "$WORK"
+  fi
 }
 
 echo

@@ -388,9 +388,12 @@ if ! /bin/bash -n "$DIR/scripts/lib/managed-symlink.sh" 2>/dev/null; then
 fi
 # shellcheck source=scripts/lib/managed-symlink.sh
 source "$DIR/scripts/lib/managed-symlink.sh"
-if ! declare -F sync_managed_symlink >/dev/null 2>&1; then
-  fail "共有ライブラリの読み込みに失敗しました（sync_managed_symlink()が定義されていません）: $DIR/scripts/lib/managed-symlink.sh"
-fi
+for _managed_symlink_fn in sync_managed_symlink; do
+  if ! declare -F "$_managed_symlink_fn" >/dev/null 2>&1; then
+    fail "共有ライブラリの読み込みに失敗しました（${_managed_symlink_fn}()が定義されていません）: $DIR/scripts/lib/managed-symlink.sh"
+  fi
+done
+unset _managed_symlink_fn
 
 # --- 2a. 実配置にdriftがあれば既存installerで再同期する（HEAD不変でも実行） ---
 # 2026-09-11 検証2巡目MAJOR-1対応: pull差分を起動条件にすると、配置前の中断や
@@ -517,8 +520,8 @@ else
       LEADER_UNCONFIGURED)
         msg="リーダー配役が未確定です（unknown・not_adopted・行なしのいずれか）"
         ;;
-      LEADER_UNAVAILABLE_NO_FALLBACK)
-        msg="リーダーの本命・fallbackの双方が使用不可です"
+      LEADER_UNAVAILABLE)
+        msg="リーダー候補が使用不可です"
         ;;
       LEADER_CANDIDATE_INVALID:*)
         msg="リーダー候補の検証に失敗しました（条件番号: ${code#LEADER_CANDIDATE_INVALID:}）"
@@ -617,7 +620,7 @@ def is_clean_str(s):
 KNOWN_CODE_RE = re.compile(
     r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|"
     r"PROFILE_RESOLVER_MISSING|PROFILE_RESOLVER_ERROR|LEADER_UNCONFIGURED|"
-    r"LEADER_UNAVAILABLE_NO_FALLBACK|"
+    r"LEADER_UNAVAILABLE|"
     r"PROFILE_INVALID:[A-Za-z0-9_-]+|LEADER_CANDIDATE_INVALID:[A-Za-z0-9_-]+)$"
 )
 
@@ -815,6 +818,9 @@ if [ -d "$AGENTS_SRC_DIR" ]; then
   # ②repoから消えた定義へのdangling symlinkの2つを固定文（§2.1）で報告し、
   # ②が1件でもあれば非0終了する（①は終了コードに影響しない）。
   AGENTS_NEWLY_PLACED=()
+  # 案件③ B-1 D-4（設計-v1.1.3.md §5 手順1）: effort-per-role v2の生成実
+  # ファイル方式を退役し、install-main.sh link()と同じsync_managed_symlink()
+  # 経由のsymlink化へ戻す。
   for f in "$AGENTS_SRC_DIR"/*.md; do
     [ -e "$f" ] || continue
     agents_md_count=$((agents_md_count + 1))
@@ -828,9 +834,10 @@ if [ -d "$AGENTS_SRC_DIR" ]; then
     fi
     if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$f" ]; then
       # 既にsymlinkでリンク先も正しければ何もしない（no-op）。それ以外
-      # （古いrepoパスを指している・danglingを含む・symlinkでない実ファイル）は
-      # sync_managed_symlink()が「常に正しい状態へ収束させる」＝install-main.sh
-      # link()と同じ方針・同じ退避規則で張り直す。
+      # （古いrepoパスを指している・danglingを含む・symlinkでない実ファイル
+      # ＝v2が生成した実ファイルもここに含む）は sync_managed_symlink() が
+      # 「常に正しい状態へ収束させる」＝install-main.sh link() と同じ方針・
+      # 同じ退避規則で張り直す。
       continue
     fi
     sync_managed_symlink "$f" "$dest" "update-sub"
