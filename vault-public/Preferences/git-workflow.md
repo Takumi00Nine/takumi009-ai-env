@@ -2,13 +2,15 @@
 date: 2026-06-14
 tags: [preference, git, github, security]
 project: meta
-updated: 2026-07-28
+updated: 2026-09-19
 related:
   - "[[Preferences/readme-bilingual]]"
+  - "[[Decisions/2026-09-19-commit-free-push-by-visibility]]"
 aliases:
   - "privateから作成"
   - "GitHub Release提案"
   - "リポジトリをpublic"
+  - "push の可否"
 ---
 
 # git push運用と権限分担
@@ -77,9 +79,9 @@ commit/push/private作成/force-push・`visibility=private`・visibilityの読�
 - git push の認証は **OS の資格情報ストア**を使う（トークンをファイルに書かない。設定・スコープの実運用詳細＝[[Knowledge/github-auth-ops]]・private）。
 - commit/push はローカル git で行う（MCP の push_files は履歴が分かれるので使わない。MCP は Issue/PR/検索/読み取り用）。
 
-## 🚩 ルール：push 前に未push コミットを整理する（push済みは書き換えない）
+## 🚩 ルール：commit は意味の区切りで切る・push は repo の可視性で分岐（push済みは書き換えない）
 
-**push する前に、未push のローカルコミット（`origin/main..HEAD`）を少数の論理的コミットに集約してから push する。** wip/fixup/export snapshot 等のノイズを潰し、意味の区切りでまとめる。
+**commit は都度確認なしで行い、意味の区切り（スライス完了・工程の締め・案件の締め・export）で切る。push は repo の可視性で分岐＝private は AI が自由に push・public は本人が判断（AI は push せず「push 待ち」を報告）。可視性は直前に `gh repo view <owner>/<repo> --json visibility` で実測する。**
 
 - **書き換えてよいのは未push 分だけ。push 済みコミット（特に `origin/main`）は書き換えない＝force-push しない。**
   - **Why**: サブ機はセッション開始のたびに（SessionStartフック`claude/hooks/check-sub-update.sh`が）このリポジトリ（takumi009-ai-env）への未反映コミットを確認し、あれば `scripts/update-sub.sh`（`git pull --ff-only`）の手動実行を案内する運用（2026-07-23〜。それ以前は1日2回の無人自動pullだった）。push済み履歴を rewrite すると ff 不可で pull が失敗し、**サブ機の追従が止まる**（復旧に各クローンで手動 `git fetch && git reset --hard origin/main` が必要）。公開履歴の書き換えは取り消しにくい。※自分専用の未共有ブランチの整理に force-push を使うのは可。禁止対象は「他が既に追従している push済み履歴」。
@@ -87,9 +89,9 @@ commit/push/private作成/force-push・`visibility=private`・visibilityの読�
   - 1コミット化: `git reset --soft origin/main && git commit`。
   - 複数コミット化: フェーズ境界ごとに `git reset --hard <境界commit>` → `git reset --soft <前の新commit>` → `git commit` を繰り返す（各中間ツリーが元と一致＝**内容ロスなし**）。
   - **集約後、元HEADとのツリー差分がゼロであることを検証**（`git diff --quiet <backup> HEAD`）してから本ブランチを移す。**バックアップブランチ**（例 `backup-before-tidy`）を push まで残す。
-- **粒度の既定＝「1 push 1 コミット」（2026-07-28 本人決定・都度の確認は不要）**: push は「1つの改修を加えた」という意味の単位なので、未push分は原則1コミットに集約してから push する（例外を作りたい場合のみ本人に確認）。作業中の細かいコミットは自由に積んでよいが、push 直前に必ず畳む。**push 自体は本人専任**（外部脳系リポジトリ＝[[Preferences/coding-delegation]]）。
+- **粒度＝意味の区切りごとに 1 commit（2026-09-19 本人決定＝「1 push 1 コミット」は撤回）**: 未 push 分を 1 つに畳まない。畳むのは wip／fixup 型のノイズだけ。push の可否は可視性で分岐（上記）。
 
-**Why:** fixup/wip/export の細かいコミットがそのまま公開履歴に残ると、後から「何が入ったか」を追いにくい。push は不可逆な公開操作なので、その直前に一度きれいにする。ただし整理は"まだ誰も見ていない未push分"に限定し、既に共有された履歴には触れない。
+**Why:** fixup/wip/export の細かいコミットがそのまま公開履歴に残ると、後から「何が入ったか」を追いにくい。push は不可逆な公開操作なので、その直前に一度きれいにする。ただし整理は"まだ誰も見ていない未push分"に限定し、既に共有された履歴には触れない。push の確認を private repo でまで求めると往復が増えるだけで安全性は上がらない（2026-09-19 本人決定＝[[Decisions/2026-09-19-commit-free-push-by-visibility]]）。
 
 ## 🚩 ルール：GitHub Release はキリの良いタイミングで提案する
 

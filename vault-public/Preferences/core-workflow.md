@@ -24,6 +24,7 @@ related:
   - "[[Decisions/2026-09-17-requirements-scope-purpose-requirements-constraints]]"
   - "[[Decisions/2026-09-17-worker-wrapper-b1]]"
   - "[[Decisions/2026-09-18-project-docs-main-local-only]]"
+  - "[[Decisions/2026-09-19-commit-free-push-by-visibility]]"
 aliases:
   - "共通コア工程"
   - "職種定義"
@@ -85,8 +86,8 @@ aliases:
 
 ## 5. 公開・git
 - push 済みの履歴は書き換えない（追従している他機の pull が ff 不可で止まる）。
-- push 前に未push コミットを1コミットに集約する。
-- git 上の立場は `{{machine_role}}` で決まる＝メイン機は ai-env の2 repo（takumi009-ai-env／-private）へ commit 可（push は本人の明示指示時のみ）。サブ機は2 repo とも pull 専用。他 repo は都度本人に確認する。pull 専用の repo には push・public 化・Release を提案しない（本人の持ち帰りへ）。
+- commit は意味の区切り（スライス・工程・締め・export）で切る（1 つに畳まない）。push は repo の可視性で分岐＝private は AI が push・public は本人判断（直前に `gh repo view --json visibility` で実測）＝[[Decisions/2026-09-19-commit-free-push-by-visibility]]。
+- git 上の立場は `{{machine_role}}` で決まる＝メイン機は ai-env の2 repo（takumi009-ai-env／-private）へ commit 可（push の可否は上の行）。サブ機は2 repo とも pull 専用。他 repo も同じ扱い（commit 可・push は可視性で分岐）。pull 専用の repo には push・public 化・Release を提案しない（本人の持ち帰りへ）。
 - Preferences の編集・公開スナップショットの生成と commit はメイン機だけ（サブ機は配布物を pull して読むだけ・`{{machine_role}}` 由来）。
 - 公開スナップショットの export（`export-public-vault.sh`）は週次メンテ Phase0 と案件の締め（§2 の 2 ゲート直前）の 2 回だけ行う（編集のたびには行わない）。
 
