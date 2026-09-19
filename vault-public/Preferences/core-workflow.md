@@ -13,6 +13,7 @@ related:
   - "[[Preferences/coding-delegation]]"
   - "[[Preferences/absolute-rules]]"
   - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
+  - "[[Decisions/2026-09-14-recast-points-on-resume]]"
   - "[[Preferences/worker-role-prompts]]"
   - "[[Preferences/core-worker]]"
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"

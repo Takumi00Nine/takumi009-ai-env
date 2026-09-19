@@ -1,12 +1,15 @@
 ---
 date: 2026-06-21
-updated: 2026-09-05
+updated: 2026-09-19
 tags: [preference, rule, strict, absolute, web-research, verification]
 project: meta
 related:
   - "[[Preferences/absolute-rules]]"
   - "[[Preferences/coding-delegation]]"
   - "[[Knowledge/mistakes]]"
+  - "[[Preferences/worker-role-prompts]]"
+  - "[[Decisions/2026-09-10-leader-free-model-choice]]"
+  - "[[Decisions/2026-09-17-worker-wrapper-b1]]"
 aliases:
   - "裏取り担当分担"
   - "軽い裏取り"
@@ -19,9 +22,9 @@ aliases:
 
 **実装・回答・設定変更に入る前に、毎回必ず Web で一次情報を裏取りする。自己判断・推測のまま進めない。** 裏取り自体の省略は不可。**ただし誰が裏取りするかは軽重で分ける**。
 
-## 担当の振り分け（軽重）※既定は Claude 側（Codex への調査委任も可＝2026-07-23 改定 [[Decisions/2026-07-23-codex-delegation-reopened]]。使い所＝上限の余剰・得意分野・本人指定）
+## 担当の振り分け（軽重）※担当はリーダーが配役表の候補から選ぶ（既定は持たない＝[[Decisions/2026-09-10-leader-free-model-choice]]。Codex への調査委任も可＝2026-07-23 改定 [[Decisions/2026-07-23-codex-delegation-reopened]]）
 - **軽い裏取り → Claude 本体が直接**（WebFetch/WebSearch）。特定URLの内容確認・単発の事実/タイトル/バージョン確認など、1〜数回の取得で完結するもの。
-- **重い裏取り → Claude ワーカー（Agent Teams チームメイト / Agent ツール）に委任**。複数ソースの横断調査・一次情報の特定・比較検討・仕様の深掘りなど。結論＋根拠URLを受け取ってから着手（[[Preferences/coding-delegation]]）。
+- **重い裏取り → Claude ワーカー（researcher 職＝ラッパー起動・[[Preferences/worker-role-prompts]]）に委任**。複数ソースの横断調査・一次情報の特定・比較検討・仕様の深掘りなど。結論＋根拠URLを受け取ってから着手（[[Preferences/coding-delegation]]）。
 - 迷ったら：取得点数が少なく結論が一意なら軽（本体直）、探索や比較・出典特定が要るなら重（ワーカー）。
 
 ## やり方（共通）

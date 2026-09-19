@@ -1,6 +1,6 @@
 ---
 date: 2026-09-07
-updated: 2026-09-16
+updated: 2026-09-19
 tags: [preference, core, profile, sample, bedrock]
 project: takumi009-ai-env
 related:
@@ -9,6 +9,7 @@ related:
   - "[[Decisions/2026-08-21-machine-role-model-assignment]]"
   - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
   - "[[Decisions/2026-09-08-model-definitions-file]]"
+  - "[[Decisions/2026-09-19-ai-env-optimization-rulings]]"
 aliases:
   - "bedrock.env サンプル"
   - "Bedrockピン留めファイル"
@@ -37,4 +38,4 @@ aliases:
 | `CLAUDE_CODE_USE_BEDROCK` | Bedrock 機なら `1`。サブスク本命機ならファイルごと置かない |
 | `AWS_REGION` | 推論プロファイルのリージョンを AWS コンソールで確認して書く |
 | `ANTHROPIC_DEFAULT_*_MODEL` | 配役表で使う別名の分だけ残し、ID を Bedrock コンソール（Cross-region inference）で確認する。使わない別名の行は削除する |
-| 確認コマンド | `scripts/install-main.sh --print-bedrock-env-json`（許可されたキーだけが JSON に出る。認証情報らしいキーが出たら書式違反） |
+| 確認コマンド | （`--print-bedrock-env-json` は 2026-09-19 段3-3 で退役。生成物を目視で確認＝認証情報らしいキーが載っていれば書式違反） |

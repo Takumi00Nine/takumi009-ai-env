@@ -28,7 +28,7 @@ aliases:
 ## この案の要点
 - **v6 schema**は role 行から `provider`／`execution`／`effort` の属性を撤去し、モデル定義ファイル（[[Preferences/model-definitions-sample]]）の定義名を `model=<定義名>[,<定義名>…]` で参照する形へ変えた（[[Decisions/2026-09-08-model-definitions-file]]）。
 - **v7 schema**は代替配役の行（`fallback` 接頭辞）と禁止モデル列挙の固定キーを撤去した（2026-09-16）。本命が使えないときの選び直しはリーダーが同じ行の候補から行い、禁止は「候補に書かない」で表す（[[Decisions/2026-09-08-model-definitions-file]] の規則5・6・9 は撤回）。
-- **v4 schema**（基本形＝配役表解凍-設計-2026-09-01.md §3.2 が正本。v3 は P3 段階4 で `no_read_paths` を追加、v4 は 3モード体制で `team_mode` を追加・能力軸 `reviewer` を廃止・`execution` の enum を `external-cli`／`external-api` に改めた＝[[Decisions/2026-09-07-three-team-mode-rollout]]）。旧版の能力軸7キーだけの形式（`schema_version`が無い/`1`の実体）は現行実装（`resolve_local_profile()`）へ委譲され続ける（§3.5）。v5 は能力軸を `team_mode`・`no_read_paths`・`machine_role` の3キーへ整理し、`machine_role` を新設した（[[Decisions/2026-09-07-profile-axes-consolidation]]）。
+- **v4 schema**（基本形＝配役表解凍-設計-2026-09-01.md §3.2 が正本。v3 は P3 段階4 で `no_read_paths` を追加、v4 は 3モード体制で `team_mode` を追加・能力軸 `reviewer` を廃止・`execution` の enum を `external-cli`／`external-api` に改めた＝[[Decisions/2026-09-07-three-team-mode-rollout]]）。schema 6 未満は一律拒否（v1 委譲経路は 2026-09-08 に撤去＝[[Decisions/2026-09-08-model-definitions-file]]）。v5 は能力軸を `team_mode`・`no_read_paths`・`machine_role` の3キーへ整理し、`machine_role` を新設した（[[Decisions/2026-09-07-profile-axes-consolidation]]）。
 - 配役は**職種を第一階層にしたインライン形式**（`role.<職種>: <状態> model=<定義名>[,<定義名>…]`）。代替は同じ行の2件目以降の候補で表す（機構は選ばない）。
 - **正本は repo の設定サンプル**（2026-09-08 本人決定）: `takumi009-ai-env` の `config/profile.md.sample`／`config/models.conf.sample`／`config/bedrock.env.sample`（実ファイル・値はメイン機の実値）が正本。本人が `~/.config/takumi009-ai-env/` へコピーして使う（`mkdir -p ~/.config/takumi009-ai-env && cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md` の要領。models.conf も同様・bedrock.env は Bedrock 機だけ）。サブ機はコピー後に `machine_role`（と必要なら `role.leader`）だけ書き換える。installer は実体が無いときだけ `config/profile.md.sample` を雛形としてコピーする（既存は壊さない）。symlink・同期処理は無い。
 - 各キー・各状態のとりうる値は**本ノートの「書式ととりうる値」節に書く**（2026-09-16 本人指示＝サンプルと実体から説明コメントを除去して起動注入を軽量化。deprecated 2026-09-16＝旧「コメントに書く」2026-08-30 方針）。本文中で説明しない値は書かない。
@@ -68,10 +68,9 @@ aliases:
 1. `git pull --ff-only`（update-sub.sh でなく素の pull。旧プロファイルのままでは update-sub.sh が拒否するため）
 2. sample を実体へコピー: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は `profile.md.bak.v<旧版>-<日付>` に退避してから。権限 0600）
 3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-high`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
-4. `scripts/install-sub.sh --check-profile`（副作用ゼロの検査。OK を確認）
-5. `scripts/update-sub.sh`（引数なし。pull→`install-sub.sh`→Preferences 再同期を毎回行う）。`AGENTS: dangling` が出たら表示されたファイルを削除。
-7. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
-8. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/work/takumi009-ai-env/cmux/`、描画側（Dock 常駐）は dotfiles の `~/work/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。
+4. `scripts/update-sub.sh`（引数なし。pull→`install-sub.sh`→Preferences 再同期を毎回行う）。`AGENTS: dangling` が出たら表示されたファイルを削除。
+5. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
+6. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/work/takumi009-ai-env/cmux/`、描画側（Dock 常駐）は dotfiles の `~/work/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。
    - `cd ~/work/takumi009-ai-env && git pull --ff-only && scripts/install-main.sh`（供給側の実体を配置。ai-env 未導入機は Dock 側が縮退表示）
    - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は `scripts/install-sub.sh --with-dotfiles`）。install.sh が `~/.config/cmux/dock.json` の symlink・dock-guard LaunchAgent を整える。
    - cmux を再起動 → dock-guard が Usage／Project／Task／System の4枠へ再シードする。

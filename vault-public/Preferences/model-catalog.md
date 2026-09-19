@@ -1,6 +1,6 @@
 ---
 date: 2026-09-09
-updated: 2026-09-18
+updated: 2026-09-19
 tags: [preference, model, catalog, claude, codex, routing, quota, bedrock, vllm]
 project: meta
 related:
@@ -56,7 +56,7 @@ aliases:
 | サービス | 認証 | 枠・窓 | リセットの仕組み | 使用率の取れ方 | 機能差 | 費用の性質 | 向く・向かない |
 |---|---|---|---|---|---|---|---|
 | **Claude サブスク** | claude.ai ログイン（キーチェーン保存の OAuth） | `claude-subscription`。`five_hour`・`seven_day`（＋Fable 専用の週次上限＝全体7日枠の内側。Fable 利用は両方を進める） | `/limit-reset`＝**未公開**の CLI コマンド。**5時間窓だけ**リセット、週次には効かない。残数の機械取得は未確認 | **【使用率】ブロックに出る**（3枠の1つ） | 組み込み WebSearch 等フル機能 | 定額（契約プラン） | 向く＝通常運用・判断の重い上流工程。向かない＝枠が切迫した状況での大量消費 |
-| **Claude Bedrock**（現行＝配役表 `provider=bedrock`＋`bedrock.env` のピン留め。設計中の統合経路名は要件書側） | AWS プロファイル→短期ベアラートークン（presigned URL 方式・実効期限は指定値と AWS 認証情報の残り期限の短い方）。使用側に IAM の明示 Allow（`bedrock:CallWithBearerToken`）が要る | `unlimited`（枠の概念なし） | 無し（上限の概念が無いためリセットという操作が意味を持たない） | 出ない（`unlimited` は使用率を読まない） | **WebSearch は利用可**（2026-08 時点の「不可」という公式注記は 2026-09-01 実測で訂正済み＝[[Knowledge/bedrock-claude-code-pitfalls]]） | 従量課金（AWS 側でトークン量課金） | 向く＝サブスク枠を使い切りたくない場面の保険的経路、費用を許容できる場面。向かない＝定額枠で足りている状況（従量課金が無駄になる）。注意＝短期トークンの実効期限・SSO 再ログインが要る場合がある |
+| **Claude Bedrock**（現行＝`models.conf` の Bedrock 定義（`provider=bedrock`）＋`bedrock.env` のピン留め（配役表の role 行に provider は無い）。設計中の統合経路名は要件書側） | AWS プロファイル→短期ベアラートークン（presigned URL 方式・実効期限は指定値と AWS 認証情報の残り期限の短い方）。使用側に IAM の明示 Allow（`bedrock:CallWithBearerToken`）が要る | `unlimited`（枠の概念なし） | 無し（上限の概念が無いためリセットという操作が意味を持たない） | 出ない（`unlimited` は使用率を読まない） | **WebSearch は利用可**（2026-08 時点の「不可」という公式注記は 2026-09-01 実測で訂正済み＝[[Knowledge/bedrock-claude-code-pitfalls]]） | 従量課金（AWS 側でトークン量課金） | 向く＝サブスク枠を使い切りたくない場面の保険的経路、費用を許容できる場面。向かない＝定額枠で足りている状況（従量課金が無駄になる）。注意＝短期トークンの実効期限・SSO 再ログインが要る場合がある |
 | **Codex サブスク**（ChatGPT ログイン） | ChatGPT の OAuth ログイン | `codex-subscription`。`five_hour`・`seven_day` | **公式の「rate-limit reset credit」**（本人の呼び方＝チケット）。**5時間窓と週次窓の両方**を一度にリセット、付与から30日で失効 | **【使用率】ブロックに出る**。チケットの枚数・期限も `account/rateLimits/read` から機械取得できる（確度高＝[[Knowledge/codex-rate-limit-reset-banking]]） | フル機能（WebSearch 含む） | 定額（契約プラン） | 向く＝一次レビュー・bounded task の実装委任・画像生成一気通貫。向かない＝枠切迫時の大量投入（チケットで回復できるが枚数に限りがある） |
 | **Codex Bedrock**（`amazon-bedrock` model provider） | Bedrock API キー（`AWS_BEARER_TOKEN_BEDROCK`）または AWS SDK の資格情報チェーン（前者を優先。ChatGPT ログインとは別建て） | ChatGPT サブスクの枠とは別建て（従量課金）。⚠️ **rate-limit reset credit の対象になるかは未確認**（公式ドキュメントに記載なし＝推定で「対象外」とは断定しない） | 記載なし（サブスクの窓の概念自体が無いため無いと推定。確度中） | 出ない想定（Codex サブスクの `usage` とは別系統） | **WebSearch 不可**（公式ドキュメントが機能表で明記＝「OpenAI がホストするクラウド機能に依存する機能は非対応」）。利用可能モデルは `gpt-5.6-sol`／`terra`／`luna` と旧世代 `gpt-5.5`／`gpt-5.4`（リージョン依存、公式確認済み） | 従量課金（トークン単位、シート契約なし＝AWS 公式ブログの表現） | 向く＝Codex サブスク枠が枯渇していて費用を許容できる保険。向かない＝WebSearch が要る裏取り系タスク（researcher 等） |
 | **ローカル LLM（vLLM）** | API キー認証（管理方式は設計中） | `unlimited`（枠の概念なし＝「何を任せても持ち時間が減らない」） | 無し | 出ない（そもそも使用率を読まない設計） | Claude Code の組み込みツール（WebSearch 等）が使えるかはモデル・呼び出し元次第で個別確認が要る。vLLM 自体はモデルを提供するだけでツール実行機構を持たない | 電気代・機材維持費（従量課金でも定額でもない自己ホスト） | 向く＝枠を気にせず量をこなしたい定型・反復作業。向かない＝高度な判断・複雑な設計（モデル規模が小さく性能が下位）。注意＝Claude Code 側の経路統合（認証ヘッダの要否等）は要確認事項 |
@@ -82,7 +82,7 @@ aliases:
 - Codex の rate-limit reset credit＝[[Knowledge/codex-rate-limit-reset-banking]]・[[Knowledge/claude-codex-usage]]（2026-09-09 実測節）。
 - Claude `/limit-reset` の性質＝[[Knowledge/claude-codex-usage]]（2026-09-09 節）。
 - vLLM の稼働実態（gpt-oss-20b・Gemma 4 12B・ポート8000）＝`ローカルLLM段階経路-要件-2026-09-03.md` §1。枠・窓・`kind` 4値の定義＝同書 §2.1・§2.2・§4.4・§4.14。
-- 運用上の役割分担・既定モデル＝`Preferences/coding-delegation`・`Preferences/codex-review-protocol`（2026-09-08〜09 時点の現行値）。
+- 運用上の役割分担＝`Preferences/coding-delegation`・`Preferences/codex-review-protocol`（既定モデルは持たない＝[[Decisions/2026-09-10-leader-free-model-choice]]）。
 - GPT-5.6 3階層の位置づけ（Sol=flagship／Terra=miniティア相当・日常主力／Luna=nanoティア相当・最速最安）＝OpenAI 公式 https://openai.com/index/gpt-5-6/ （2026-09-09 取得）。
 - Codex 一次レビューでの Terra/Luna の使い分け運用（軽い定型チェック=Luna・日常レビューの中間=Terra）＝[[Preferences/codex-review-protocol]]「使用モデルと effort の指標」節（2026-07-20 追加・2026-09-09 参照）。
 - モデル一覧・実測可否の背景＝[[Knowledge/gpt-5-6-and-gpt-live]]。
