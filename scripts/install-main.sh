@@ -894,6 +894,9 @@ link claude/hooks/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.
 # フック導入時にリポジトリ収録が漏れており、サブ機で settings.json が
 # 存在しないパスを参照して起動時警告が出ていた。
 link claude/hooks/bash-danger-gate.sh "$HOME/.claude/hooks/bash-danger-gate.sh"
+# 方針ガード(PreToolUse Bash・公開ガード/pip仮想環境/brewランタイムの3規則)。
+# 2026-09-19 追加: settings.json の inline 3 本をファイル化（段3-5 τ）。
+link claude/hooks/bash-policy-gate.sh "$HOME/.claude/hooks/bash-policy-gate.sh"
 # 外部脳 想起支援(UserPromptSubmit)・利用ログ(PostToolUse Read) の2フック
 # （2026-07-10 追加。settings.json への hooks 登録はリーダーが別途行う＝
 # このスクリプトはsymlink配置のみを担当）。
@@ -982,7 +985,8 @@ fi
 
 if [ "$DRY_RUN" != "1" ]; then
   chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh" \
-           "$DIR/claude/hooks/bash-danger-gate.sh" "$DIR/claude/hooks/dock-pane-resolve.sh" \
+           "$DIR/claude/hooks/bash-danger-gate.sh" "$DIR/claude/hooks/bash-policy-gate.sh" \
+           "$DIR/claude/hooks/dock-pane-resolve.sh" \
            "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh" \
            "$DIR/claude/hooks/check-sub-update.sh" "$DIR/claude/hooks/context-size-warn.sh" \
            "$DIR/claude/hooks/agent-model-guard.sh" \

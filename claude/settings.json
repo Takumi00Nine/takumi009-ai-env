@@ -193,18 +193,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); deny(){ printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' \"$1\"; exit 0; }; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+create' && printf '%s' \"$cmd\" | grep -Eq -- '--public([[:space:]]|=|$)'; then deny 'リポジトリの公開はブロックされています。publicにするにはユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflowルール）。'; fi; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+edit' && printf '%s' \"$cmd\" | grep -Eqi -- '--visibility[[:space:]=]+public'; then deny 'private→publicの変更はブロックされています。ユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflowルール）。'; fi; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+create' && ! printf '%s' \"$cmd\" | grep -Eq -- '--private([[:space:]]|=|$)'; then deny 'gh repo create は必ず --private を明示してください（private既定に依存しない方針）。public化は作成と分離し、ユーザーの明示許可後に行います（git-workflow/absolute-rulesルール）。'; fi; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+api' && printf '%s' \"$cmd\" | grep -Eqi 'visibility' && printf '%s' \"$cmd\" | grep -Eqi 'public'; then deny 'GitHub API(gh api)経由のpublic化はブロックされています。ユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflow/absolute-rulesルール）。'; fi; if printf '%s' \"$cmd\" | grep -Eqi '(^|[[:space:]/])(curl|wget)' && printf '%s' \"$cmd\" | grep -Eqi 'api.github.com' && printf '%s' \"$cmd\" | grep -Eqi 'visibility' && printf '%s' \"$cmd\" | grep -Eqi 'public'; then deny 'curl/wget 経由のGitHub public化はブロックされています。ユーザーの明示許可が必要です（git-workflow/absolute-rulesルール）。'; fi",
-            "statusMessage": "公開コマンドのガード確認中"
-          },
-          {
-            "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); is_pip=0; printf '%s' \"$cmd\" | grep -Eq '(^|[^[:alnum:]_])(pip|pip3)[[:space:]]+install' && is_pip=1; printf '%s' \"$cmd\" | grep -Eq '(^|[^[:alnum:]_])python[0-9.]*[[:space:]]+-m[[:space:]]+pip[[:space:]]+install' && is_pip=1; printf '%s' \"$cmd\" | grep -Eq '(^|[^[:alnum:]_])uv[[:space:]]+pip[[:space:]]' && is_pip=0; if [ \"$is_pip\" = \"1\" ]; then venv_ok=0; [ -n \"$VIRTUAL_ENV\" ] && venv_ok=1; [ -n \"$CONDA_PREFIX\" ] && venv_ok=1; printf '%s' \"$cmd\" | grep -Eq '(source|\\.)[[:space:]]+[^;&|]*activate' && venv_ok=1; printf '%s' \"$cmd\" | grep -Eq 'venv[^[:space:]]*/bin/(pip|python)' && venv_ok=1; printf '%s' \"$cmd\" | grep -Eq 'VIRTUAL_ENV=' && venv_ok=1; if [ \"$venv_ok\" = \"0\" ]; then printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' 'グローバルへの直接pip installはブロックされています。先に仮想環境を用意してください：python -m venv .venv && source .venv/bin/activate してから pip install。.venv/bin/pip 等の明示パスや uv pip も可（python-venvルール）。'; exit 0; fi; fi",
-            "statusMessage": "pip仮想環境ガード確認中"
-          },
-          {
-            "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); if printf '%s' \"$cmd\" | grep -Eqi '(^|[^[:alnum:]_])brew[[:space:]]+(install|reinstall|upgrade)([[:space:]]|$)'; then set -f; args=$(printf '%s' \"$cmd\" | sed -E 's/.*brew[[:space:]]+(install|reinstall|upgrade)//; s/[;&|].*$//'); blocked=\"\"; for tok in $args; do case \"$tok\" in -*) continue ;; esac; base=$(printf '%s' \"$tok\" | sed -E 's/@.*$//' | tr 'A-Z' 'a-z'); case \"$base\" in openjdk|java|temurin|oracle-jdk|adoptopenjdk|go|golang|ruby|php|python|python3|node|nodejs|deno|perl|lua|erlang|elixir|scala|crystal|kotlin) blocked=\"$tok\"; break ;; esac; done; if [ -n \"$blocked\" ]; then reason=\"言語ランタイム(${blocked})をbrewで直接入れるのはブロックされています。anyenv経由で管理してください：anyenv install <言語env>（例 jenv/rbenv/goenv）→ その*envでバージョン導入（anyenv-runtimeルール）。\"; printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"%s\"}}' \"$reason\"; exit 0; fi; fi",
-            "statusMessage": "ランタイム導入ガード確認中"
+            "command": "$HOME/.claude/hooks/bash-policy-gate.sh",
+            "timeout": 5,
+            "statusMessage": "方針ガード確認中"
           },
           {
             "type": "command",

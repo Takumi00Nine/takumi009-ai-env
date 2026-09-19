@@ -230,6 +230,7 @@ SYMLINKS=(
   "$HOME/.claude/hooks/bootstrap-vault.sh|$DIR/claude/hooks/bootstrap-vault.sh"
   "$HOME/.claude/hooks/delegation-gate-v2.sh|$DIR/claude/hooks/delegation-gate-v2.sh"
   "$HOME/.claude/hooks/bash-danger-gate.sh|$DIR/claude/hooks/bash-danger-gate.sh"
+  "$HOME/.claude/hooks/bash-policy-gate.sh|$DIR/claude/hooks/bash-policy-gate.sh"
   "$HOME/.claude/hooks/vault-recall.sh|$DIR/claude/hooks/vault-recall.sh"
   "$HOME/.claude/hooks/vault-read-log.sh|$DIR/claude/hooks/vault-read-log.sh"
   "$HOME/.claude/hooks/dock-pane-resolve.sh|$DIR/claude/hooks/dock-pane-resolve.sh"
