@@ -3473,83 +3473,6 @@ echo "=== 80. ⑨[USAGE-FETCH-NOT-LOADED]・[USAGE-FETCH-DISABLED] ==="
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 81. ⑨[USAGE-FETCH-DUPLICATE]: 旧と新が両方ロードされている（陽性・陰性とも） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  FAKE_LAUNCHCTL_LOADED_LABELS="com.claude-codex-usage.refresh com.takumi009.usage-fetch"
-  FAKE_LAUNCHCTL_DISABLED_LABELS=""
-  refresh_fake_launchctl
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "両方ロード済みでDUPLICATEを検知する" "$out" "[USAGE-FETCH-DUPLICATE]"
-  assert_contains "healの案内が含まれる" "$out" "--heal"
-  rm -rf "$REPO" "$HOME_DIR"
-
-  # 陰性: 旧だけ単独で1件動いている移行前の機は誤報しない（設計書§2.5）
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  FAKE_LAUNCHCTL_LOADED_LABELS="com.claude-codex-usage.refresh"
-  FAKE_LAUNCHCTL_DISABLED_LABELS=""
-  refresh_fake_launchctl
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "旧だけ単独ロードはDUPLICATEにならない（移行前の正常な機を誤検知しない）" "$out" "[USAGE-FETCH-DUPLICATE]"
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 82. ⑨[USAGE-MIGRATION-INCOMPLETE]: state.jsonがあるのに有効な取得ジョブが0件（陽性・陰性とも） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  mkdir -p "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration"
-  cat > "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration/state.json" <<'EOF'
-{"had_old_job":true,"phase":"old-stopped"}
-EOF
-  FAKE_LAUNCHCTL_LOADED_LABELS=""
-  FAKE_LAUNCHCTL_DISABLED_LABELS=""
-  refresh_fake_launchctl
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "取得0件のまま止まっているとMIGRATION-INCOMPLETEを検知する" "$out" "[USAGE-MIGRATION-INCOMPLETE]"
-  rm -rf "$REPO" "$HOME_DIR"
-
-  # 陰性: 巻き戻し完了（state.json削除済み）の新規機は取得0件が正常
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  FAKE_LAUNCHCTL_LOADED_LABELS=""
-  FAKE_LAUNCHCTL_DISABLED_LABELS=""
-  refresh_fake_launchctl
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "state.jsonが無い（巻き戻し済み等）機ではMIGRATION-INCOMPLETEを出さない" "$out" "[USAGE-MIGRATION-INCOMPLETE]"
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 83. ⑨[USAGE-MIGRATION-INCOMPLETE]: phase=confirmingは中断した確定の再開を促す別扱い ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  mkdir -p "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration" "$HOME_DIR/Library/LaunchAgents"
-  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
-  cat > "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration/state.json" <<'EOF'
-{"had_old_job":true,"phase":"confirming"}
-EOF
-  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
-  FAKE_LAUNCHCTL_DISABLED_LABELS=""
-  refresh_fake_launchctl
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "phase=confirmingはジョブがあってもMIGRATION-INCOMPLETEとして再開を促す" "$out" "[USAGE-MIGRATION-INCOMPLETE]"
-  assert_contains "再開コマンドが--confirmである" "$out" "install-usage-fetch.sh --confirm"
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
 echo "=== 84. ⑨[USAGE-LOCK-STUCK]: ロックが固着している ==="
 {
   REPO="$(mktemp -d)"
@@ -3564,45 +3487,6 @@ echo "=== 84. ⑨[USAGE-LOCK-STUCK]: ロックが固着している ==="
   refresh_fake_launchctl
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "固着したロックを検知する" "$out" "[USAGE-LOCK-STUCK]"
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 85. ⑨[USAGE-FETCH-REVIVABLE]: 確定済みなのに旧plistが実在（陽性・確定前は陰性） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  mkdir -p "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration" "$HOME_DIR/Library/LaunchAgents"
-  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
-  : > "$HOME_DIR/Library/LaunchAgents/com.claude-codex-usage.refresh.plist"
-  cat > "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration/state.json" <<'EOF'
-{"had_old_job":true,"phase":"confirmed"}
-EOF
-  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
-  FAKE_LAUNCHCTL_DISABLED_LABELS=""
-  refresh_fake_launchctl
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "確定済みなのに旧plistが実在するとREVIVABLEを検知する" "$out" "[USAGE-FETCH-REVIVABLE]"
-  assert_not_contains "REVIVABLEはhealを案内しない（まだ二重ではないため）" "$(printf '%s\n' "$out" | grep 'USAGE-FETCH-REVIVABLE')" "--heal"
-  rm -rf "$REPO" "$HOME_DIR"
-
-  # 陰性: 確定前（verified等）は退避物が意図的に残っているので正常
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  mkdir -p "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration" "$HOME_DIR/Library/LaunchAgents"
-  : > "$HOME_DIR/Library/LaunchAgents/com.takumi009.usage-fetch.plist"
-  : > "$HOME_DIR/Library/LaunchAgents/com.claude-codex-usage.refresh.plist"
-  cat > "$HOME_DIR/.local/state/takumi009-ai-env/usage-migration/state.json" <<'EOF'
-{"had_old_job":true,"phase":"verified"}
-EOF
-  FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.usage-fetch"
-  FAKE_LAUNCHCTL_DISABLED_LABELS=""
-  refresh_fake_launchctl
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "確定前は退避物が残っていてもREVIVABLEを出さない（意図的な残置）" "$out" "[USAGE-FETCH-REVIVABLE]"
   rm -rf "$REPO" "$HOME_DIR"
 }
 

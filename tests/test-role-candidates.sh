@@ -68,7 +68,7 @@ profile_slug: fixture
 team_mode:            configured value=full
 no_read_paths:        unavailable
 machine_role:         configured value=main
-role.leader:          configured model=opus-high
+role.leader:          configured model=t-opus-high
 role.implementer:     configured model=sonnet-noeffort,codex-high
 role.verifier:        configured model=codex-high
 role.researcher:      unavailable model=sonnet-noeffort
@@ -79,7 +79,7 @@ role.system-designer: configured model=bedrock-opus
 EOF
 
 cat > "$BASE/models.conf" <<'EOF'
-[opus-high]
+[t-opus-high]
 provider=anthropic-api
 model=claude-opus-5
 effort=high
@@ -273,7 +273,7 @@ echo "=== MINOR-8(FR-23): list-candidatesの壊れた行を捨てたらstderrへ
 import sys
 cmd = sys.argv[1] if len(sys.argv) > 1 else ""
 if cmd == "list-candidates":
-    print("leader\tconfigured\topus-high\tsubagent\topus\tOK")
+    print("leader\tconfigured\tt-opus-high\tsubagent\topus\tOK")
     print("broken\tconfigured\tdef")  # MINOR-8: 6列未満の壊れた行
     sys.exit(0)
 sys.exit(1)

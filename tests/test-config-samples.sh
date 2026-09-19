@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # tests/test-config-samples.sh — 設定ファイルsample配布-実装-2026-09-08.md
 # の受入条件 AC-1〜AC-4（config/*.sample 3本が resolver・installer を
-# 実際に通ること）を検証する。
+# 実際に通ること）と、AC-5（tests/ が sample の定義名・ローカル実体パスを
+# 持たない＝設定値への結合の再発防止・2026-09-19 着手順 1）を検証する。
 #
 # 正本: ~/work/takumi009-ai-env-private/docs/core-split/
 #   設定ファイルsample配布-実装-2026-09-08.md
@@ -19,7 +20,9 @@ PROFILE_SAMPLE="$CONFIG_DIR/profile.md.sample"
 MODELS_SAMPLE="$CONFIG_DIR/models.conf.sample"
 BEDROCK_SAMPLE="$CONFIG_DIR/bedrock.env.sample"
 AGENTS_DIR="$REPO_ROOT/claude/agents"
-NGWORDS_FILE="${NGWORDS_FILE:-$HOME/work/takumi009-ai-env-private/ngwords.txt}"
+# ngwords はローカル実体（private repo）にしか無いので既定では指さない。
+# 指定が無ければ AC-4 の ngwords 部分は skip（赤にしない）。
+NGWORDS_FILE="${NGWORDS_FILE:-}"
 
 PASS=0
 FAIL=0
@@ -59,13 +62,14 @@ for f in "$PROFILE_SAMPLE" "$MODELS_SAMPLE" "$BEDROCK_SAMPLE"; do
   [ -f "$f" ] || { fail_case "前提: $f が存在する"; }
 done
 
-echo "=== AC-1: resolve が OK・TEAM_MODE:full・MACHINE_ROLE:main を含み MODEL_MISMATCH を含まない ==="
+echo "=== AC-1: resolve が OK・TEAM_MODE:<値>・MACHINE_ROLE:<値> の形を含み MODEL_MISMATCH を含まない ==="
 {
   out="$(AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" python3 "$LIB" resolve "$PROFILE_SAMPLE" --agents-dir "$AGENTS_DIR")"; rc=$?
   assert_eq "AC-1: exit0" "0" "$rc"
   assert_starts_with "AC-1: OKで始まる" "$out" "OK"
-  assert_contains "AC-1: TEAM_MODE:full" "$out" "TEAM_MODE:full"
-  assert_contains "AC-1: MACHINE_ROLE:main" "$out" "MACHINE_ROLE:main"
+  # 値でなく形を見る（sample の値を変えても赤にしない＝Decision 09-17 ③）。
+  assert_eq "AC-1: TEAM_MODE:<値> の形" "1" "$(printf '%s' "$out" | grep -cE '(^|\t)TEAM_MODE:[a-z]+(\t|$)')"
+  assert_eq "AC-1: MACHINE_ROLE:<値> の形" "1" "$(printf '%s' "$out" | grep -cE '(^|\t)MACHINE_ROLE:[a-z]+(\t|$)')"
   assert_not_contains "AC-1: MODEL_MISMATCHを含まない" "$out" "MODEL_MISMATCH"
   # 要件書 AC-1（形の不変条件の追加分）: 未定義参照が出ていない。
   # ⚠️ VACANT_REASON: の非包含は v1.5 で撤去した（要件書 FR-7）。未対応経路の
@@ -161,13 +165,13 @@ echo "=== AC-3: --print-bedrock-env-json が認証情報キーを1つも出さ�
 
 echo "=== AC-4: ngwords・/Users/・禁止キー名を含まない（3本） ==="
 {
-  if [ -f "$NGWORDS_FILE" ]; then
+  if [ -n "$NGWORDS_FILE" ] && [ -f "$NGWORDS_FILE" ]; then
     for f in "$PROFILE_SAMPLE" "$MODELS_SAMPLE" "$BEDROCK_SAMPLE"; do
       hit="$(grep -n -F -f "$NGWORDS_FILE" "$f" || true)"
       assert_eq "AC-4: $(basename "$f") がngwordsに当たらない" "" "$hit"
     done
   else
-    fail_case "AC-4: NGWORDS_FILE($NGWORDS_FILE)が見つからない"
+    echo "  skip - AC-4 ngwords: NGWORDS_FILE 未指定（または不在）"
   fi
 
   # 禁止キー名の判定は claude/hooks/lib/profile_resolve.py の
@@ -234,16 +238,40 @@ for s in pr.FORBIDDEN_KEY_SUBSTRINGS:
   done
 }
 
-echo "=== 変異確認: schema_version を5に書き換えた一時コピーでAC-1が赤になる ==="
+echo "=== AC-5: tests/ が sample の定義名・ローカル実体パスを持たない（再発防止） ==="
 {
-  mutant="$WORK/profile-schema5.md.sample"
-  sed 's/^schema_version: 7$/schema_version: 5/' "$PROFILE_SAMPLE" > "$mutant"
-  grep -q '^schema_version: 5$' "$mutant" || fail_case "変異確認: 前提（schema_versionを5へ書き換え済み）"
+  # (a) 定義名: 行頭 [name] を毎回 sample から取る。別名 4 語（fable/opus/sonnet/haiku）と同名の定義は除外
+  names="$(grep -oE '^\[[a-z0-9][a-z0-9-]*\]' "$MODELS_SAMPLE" | tr -d '[]' | grep -vxE 'fable|opus|sonnet|haiku' | paste -sd'|' -)"
+  # (b) ローカル実体・private repo（HOME 偽装で吸収できない literal 形だけ）。
+  #     ~/.claude/・~/Data/obsidian の形は入れない（ゲート系テストが deny 入力として正当に使う）
+  paths='takumi009-ai-env-private|/Users/[^/[:space:]]+/(Data/obsidian|\.config|\.claude|\.codex)'
+  # 除外＝自ファイル（パターン定義行が自己一致する）・S11 で縮小する 4 本（S11 着地で外す）
+  excl='tests/test-config-samples.sh|tests/test-install-main.sh|tests/test-update-sub.sh|tests/test-check-drift.sh|tests/test-install-sub.sh'
+  scan() {  # scan <file...> → 該当行（コメント行・見出し行を除く）
+    grep -nHE "(^|[^a-z0-9-])(${names})([^a-z0-9-]|$)|${paths}" "$@" \
+      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#|^[^:]+:[0-9]+:echo "===' || true
+  }
+  [ -n "$names" ] || { fail_case "AC-5: sample から定義名を 1 件も抽出できない（空虚な真の禁止）"; names='__none__'; }
+  targets="$(ls "$TESTS_DIR"/test-*.sh "$TESTS_DIR"/lib-*.sh | grep -vE "(${excl})$")"
+  hits="$(scan $targets)"
+  assert_eq "AC-5: 該当 0 行" "" "$hits"
+  # 陽性対照: 先頭の定義名と private パスを書いた一時ファイルが両方 hit する
+  first="${names%%|*}"; ctrl="$WORK/ac5-positive.sh"
+  printf 'x=%s\ny=$HOME/work/takumi009-ai-env-private/ngwords.txt\n' "$first" > "$ctrl"
+  assert_eq "AC-5 陽性対照: 2 行 hit" "2" "$(scan "$ctrl" | wc -l | tr -d ' ')"
+}
+
+echo "=== 変異確認: schema_version を 1 つ下げた一時コピーでAC-1が赤になる ==="
+{
+  mutant="$WORK/profile-schema-prev.md.sample"
+  cur="$(python3 "$LIB" print-schema-version "$PROFILE_SAMPLE")"
+  sed "s/^schema_version: ${cur}\$/schema_version: $((cur-1))/" "$PROFILE_SAMPLE" > "$mutant"
+  grep -q "^schema_version: $((cur-1))\$" "$mutant" || fail_case "変異確認: 前提（schema_versionを$((cur-1))へ書き換え済み）"
   out="$(AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" python3 "$LIB" resolve "$mutant" --agents-dir "$AGENTS_DIR")"; rc=$?
   if [ "$rc" -ne 0 ] && [[ "$out" != OK* ]]; then
-    pass "変異確認: schema_version=5でAC-1が赤になる（サンプルが実際にresolverを通っている証拠）"
+    pass "変異確認: schema_version=$((cur-1))でAC-1が赤になる（サンプルが実際にresolverを通っている証拠）"
   else
-    fail_case "変異確認: schema_version=5でも通ってしまった（実際=$out）"
+    fail_case "変異確認: schema_version=$((cur-1))でも通ってしまった（実際=$out）"
   fi
 }
 

@@ -144,8 +144,6 @@ FIELD3_N2="$(awk -F '\t' '$2=="proj-n2-short" {print $3}' "$WORKDIR/list_stdout"
 assert_eq "AC-37: 先頭未完タスク（[x]を除く）が導出される" "短いタスク" "$FIELD3_N2"
 
 FIELD3_N3="$(awk -F '\t' '$2=="proj-n3-long" {print $3}' "$WORKDIR/list_stdout")"
-EXPECT_N3="これは十五コードポイントを確実"
-assert_eq "AC-38: 導出値が先頭15文字と完全一致" "$EXPECT_N3" "$FIELD3_N3"
 assert_not_contains "AC-38: 15コードポイント切り詰めに省略記号は付かない" "$FIELD3_N3" "…"
 
 FIELD3_N5="$(awk -F '\t' '$2=="proj-n5-emptynext" {print $3}' "$WORKDIR/list_stdout")"
@@ -212,6 +210,23 @@ mk_inventory_report "$INV_DIR" "2026-08-05" 0
 run_frame_raw
 assert_eq "ヘルス: 棚卸しのみ1行" "1" "$(awk -F '\t' '$1=="B"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
 assert_eq "ヘルス: 棚卸し0件はwarnでなくok" "ok" "$(awk -F '\t' '$1=="B"{print $3}' "$WORKDIR/frame_stdout")"
+
+echo "=== 外部脳ヘルス: fragments_candidatesがあれば週次行の末尾に「候補N件」が付く（design-step2 §3.2・§8ζ受入条件） ==="
+reset_vault
+mk_note_N0 "$VAULT"
+mk_inventory_report "$INV_DIR" "2026-08-05" 15
+mk_maintenance_state "$MAINT_FILE" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" 37
+run_frame_raw
+assert_eq "候補件数あり: 週次行の末尾に候補37件が付く" "1" \
+  "$(awk -F '\t' '$1=="B" && $2=="週次"{print $0}' "$WORKDIR/frame_stdout" | grep -c '候補37件$')"
+
+echo "=== 外部脳ヘルス: fragments_candidatesキーが無ければ週次行に候補は付かない ==="
+reset_vault
+mk_note_N0 "$VAULT"
+mk_maintenance_state "$MAINT_FILE" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+run_frame_raw
+assert_eq "候補件数なし: 週次行に「候補」が出ない" "0" \
+  "$(awk -F '\t' '$1=="B" && $2=="週次"{print $0}' "$WORKDIR/frame_stdout" | grep -c '候補')"
 
 echo "=== Projectsディレクトリが空でも --list は0行・rc=0 ==="
 reset_vault

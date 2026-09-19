@@ -12,7 +12,7 @@
 # （未解決参照を機械的に検知するのがこのテストの目的そのもの）。
 #
 # 追加（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応）: 「必読ファイル集合」の
-# 3重管理（claude/hooks/bootstrap-vault.shのFILES配列／scripts/vault-agents/
+# 3重管理（claude/hooks/bootstrap-vault.shのFILES配列／claude/hooks/lib/
 # keyword_recall_helper.pyのEXCLUDE_RELPATHS／scripts/vault-agents/
 # vault_inventory.pyのBOOTSTRAP_FILES）が一致しているかを検証する静的テストも
 # 本ファイルに同居させる（registry・版管理は作らない・3ファイルの現物を都度
@@ -187,7 +187,7 @@ echo "=== 4. 回帰: ハイフン等を含む未知形式のプレースホル�
 
 echo "=== 5. 必読ファイル集合の3重管理（bootstrap FILES／keyword_recall_helper EXCLUDE_RELPATHS／vault_inventory BOOTSTRAP_FILES）が集合として一致する（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応。registry・版管理は作らず3ファイルの現物を静的抽出して突合するだけ） ==="
 {
-  KEYWORD_RECALL_PY="$REPO_ROOT/scripts/vault-agents/keyword_recall_helper.py"
+  KEYWORD_RECALL_PY="$REPO_ROOT/claude/hooks/lib/keyword_recall_helper.py"
   VAULT_INVENTORY_PY="$REPO_ROOT/scripts/vault-agents/vault_inventory.py"
 
   # bootstrap-vault.sh・keyword_recall_helper.py・vault_inventory.pyの現物

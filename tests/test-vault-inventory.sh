@@ -83,7 +83,7 @@ make_base_vault() {
 }
 
 # make_base_vault に加え、必読5ファイルの updated/aliases 欠落（§1・§9）と
-# Fragments capture停止疑い（§8）を解消し、要確認件数(n_issues)が0件になる
+# Fragments capture停止疑い（§8）を解消し、要確認件数(actionable)が0件になる
 # 「クリーンな」Vaultを作る。要確認件数への各警告種別の算入テスト（32番台）で
 # 「対象の警告だけを単独で発生させて差分を見る」ための土台として使う
 # （2026-07-14 外部脳バックログ・唯一未裏取りだったCodex指摘の確認・修正対応）。
@@ -99,7 +99,7 @@ make_clean_vault() {
 }
 
 # レポート本文から「要確認 N 件」のNを取り出す
-extract_n_issues() {
+extract_actionable() {
   echo "$1" | grep -oE '要確認 [0-9]+ 件' | head -1 | grep -oE '[0-9]+'
 }
 
@@ -1181,486 +1181,11 @@ echo "=== 31. §6b: statusノートのupdated/dateが未来日だと要確認と
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 32. 要確認件数(n_issues): §5個別ファイルのサイズ超過(120行超)が算入される（2026-07-14・Codex指摘の未裏取り分を確認し確定した実バグの修正。2026-09-05 §9.3 P3段階4対応に伴う閾値再基準化＝リーダー裁定で100→120行へ引き上げ） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  # Preferences/vault-operation.md をSIZE_LIMIT_LINES(120行)超にする（合計は
-  # 300行未満のままにし、個別ファイル警告だけを単独発生させ、§5合計超過
-  # (要確認33)とは分離する）
-  {
-    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-vault-operation]"; echo "---"; echo
-    for i in $(seq 1 120); do echo "line $i"; done
-  } > "$V/Preferences/vault-operation.md"
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_contains "§5に120行超の⚠️が表示される" "$out_after" "\`Preferences/vault-operation.md\` — 126 行"
-  assert_contains "§5に120行超の⚠️マークが付く" "$out_after" "⚠️ 120行超"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "vault-operation.mdの120行超で要確認件数が0→1に増える（修正前は§5がn_issuesから漏れていた）"
-  else
-    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 32d. 境界値: 個別ファイルがちょうどSIZE_LIMIT_LINES(120行)ならば個別警告(120行超)は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  {
-    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-vault-operation]"; echo "---"; echo
-    for i in $(seq 1 114); do echo "line $i"; done
-  } > "$V/Preferences/vault-operation.md"
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_not_contains "ちょうど120行(本文114行+ヘッダ6行=計120行)では120行超の⚠️が出ない" "$out_after" "⚠️ 120行超"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 0 ]]; then
-    pass "ちょうど120行では要確認件数が増えない(0→0)"
-  else
-    fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→0)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 32e. 境界値: 個別ファイルがSIZE_LIMIT_LINES+1(121行)ならば個別警告(120行超)が出る（32dの対比） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  {
-    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-vault-operation]"; echo "---"; echo
-    for i in $(seq 1 115); do echo "line $i"; done
-  } > "$V/Preferences/vault-operation.md"
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_contains "121行(本文115行+ヘッダ6行=計121行・境界+1)では120行超の⚠️が出る" "$out_after" "⚠️ 120行超"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "121行では要確認件数が0→1に増える"
-  else
-    fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→1)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 33. 要確認件数(n_issues): §5合計サイズ超過（各ファイルは120行以下でも合計300行超）が算入される（2026-09-05 §9.3 P3段階4対応に伴う閾値再基準化＝リーダー裁定で330→300行へ引き下げ） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  # 必読5ファイル（BOOTSTRAP_FILES最終形＝2026-09-05 §9.3 P3段階4後の構成）
-  # それぞれを本文60行（frontmatter5行+空行1行=計66行・個別上限120行未満）にし、
-  # 合計330行（合計上限300行超）にする
-  for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
-           "Preferences/vault-operation.md" "Personal/profile-personal.md"; do
-    {
-      echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-      echo "aliases: [clean-vault-alias-$(basename "$f" .md)]"; echo "---"; echo
-      for i in $(seq 1 60); do echo "line $i"; done
-    } > "$V/$f"
-  done
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_contains "§5に要圧縮の⚠️が表示される" "$out_after" "⚠️ **要圧縮**"
-  assert_not_contains "個別ファイルはいずれも120行以下なので個別警告(120行超)は出ない" "$out_after" "⚠️ 120行超"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "合計サイズ超過のみ(個別超過なし)で要確認件数が0→1に増える"
-  else
-    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 33d. 境界値: 合計がちょうどSIZE_LIMIT_TOTAL_LINES(300行)ならば合計超過警告は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  # 5ファイルすべてを本文54行(=計60行)にする。合計は5*60=300行(ちょうど閾値)。
-  # 個別はいずれも120行未満のまま。
-  for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
-           "Preferences/vault-operation.md" "Personal/profile-personal.md"; do
-    {
-      echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-      echo "aliases: [clean-vault-alias-$(basename "$f" .md)]"; echo "---"; echo
-      for i in $(seq 1 54); do echo "line $i"; done
-    } > "$V/$f"
-  done
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-  total_lines_after="$(extract_total_lines "$out_after")"
-
-  assert_eq "合計行数がちょうど300行になっている(fixture計算の前提確認)" "300" "$total_lines_after"
-  assert_not_contains "ちょうど300行では要圧縮の⚠️が出ない" "$out_after" "⚠️ **要圧縮**"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 0 ]]; then
-    pass "ちょうど300行では要確認件数が増えない(0→0)"
-  else
-    fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→0)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 33e. 境界値: 合計がSIZE_LIMIT_TOTAL_LINES+1(301行)ならば合計超過警告が出る（33dの対比） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  # 33dと同じ配分だが最後の1ファイルだけ本文55行(=計61行)にする。
-  # 合計は4*60+61=301行(閾値+1)。個別はいずれも120行未満のまま。
-  for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md" \
-           "Preferences/vault-operation.md"; do
-    {
-      echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-      echo "aliases: [clean-vault-alias-$(basename "$f" .md)]"; echo "---"; echo
-      for i in $(seq 1 54); do echo "line $i"; done
-    } > "$V/$f"
-  done
-  {
-    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-profile-personal]"; echo "---"; echo
-    for i in $(seq 1 55); do echo "line $i"; done
-  } > "$V/Personal/profile-personal.md"
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-  total_lines_after="$(extract_total_lines "$out_after")"
-
-  assert_eq "合計行数がちょうど301行になっている(fixture計算の前提確認)" "301" "$total_lines_after"
-  assert_contains "301行(閾値+1)では要圧縮の⚠️が出る" "$out_after" "⚠️ **要圧縮**"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "301行では要確認件数が0→1に増える"
-  else
-    fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→1)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 33b. 要確認件数(n_issues): §5合計サイズ超過はbytes側(45,500 bytes超)単独でも算入される（2026-09-05 §9.3 P3段階4対応に伴う閾値再基準化＝リーダー裁定で53,500→45,500 bytesへ引き下げ） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  # 行数は増やさず(個別120行以下・合計300行以下のまま)、1行を46000文字にして
-  # bytes側(45,500 bytes)だけを合計超過させる（size_over_totalがtotal_linesと
-  # total_bytesの両方をorで見ている式のうち、bytes側だけが脱落する回帰を検出する）。
-  # 対象ファイルはBOOTSTRAP_FILES最終形に含まれるPreferences/absolute-rules.md。
-  {
-    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-absolute-rules]"; echo "---"; echo
-    printf 'a%.0s' $(seq 1 46000); echo
-  } > "$V/Preferences/absolute-rules.md"
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_contains "§5に要圧縮の⚠️が表示される（bytes超過）" "$out_after" "⚠️ **要圧縮**"
-  assert_not_contains "行数は上限内なので個別警告(120行超)は出ない" "$out_after" "⚠️ 120行超"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "bytes側のみの合計超過で要確認件数が0→1に増える"
-  else
-    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 33h. 境界値: 合計bytesがちょうどSIZE_LIMIT_TOTAL(45,500 bytes)ならば合計超過警告は出ない（Codex一次レビュー指摘・Minor対応: '>'ではなく'>='への回帰を検出する境界値テスト） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  # clean_vault(5ファイル)のベースライン合計は480 bytes（実測）。
-  # absolute-rules.mdの1行を45,025文字のpad行にすると合計は
-  # (480-96)+90+45,025+1(改行)=45,500 bytes(ちょうど閾値)になる
-  # （実測で確認済み・行数側は変えないので個別/合計行数は300行以下のまま）。
-  {
-    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-absolute-rules]"; echo "---"; echo
-    printf 'a%.0s' $(seq 1 45025); echo
-  } > "$V/Preferences/absolute-rules.md"
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-  total_bytes_after="$(extract_total_bytes "$out_after")"
-
-  assert_eq "合計bytesがちょうど45,500になっている(fixture計算の前提確認)" "45500" "$total_bytes_after"
-  assert_not_contains "ちょうど45,500 bytesでは要圧縮の⚠️が出ない" "$out_after" "⚠️ **要圧縮**"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 0 ]]; then
-    pass "ちょうど45,500 bytesでは要確認件数が増えない(0→0)"
-  else
-    fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→0)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 33i. 境界値: 合計bytesがSIZE_LIMIT_TOTAL+1(45,501 bytes)ならば合計超過警告が出る（33hの対比） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  # 33hと同じ配分だがpad行を1文字増やす（45,026文字）。合計は
-  # (480-96)+90+45,026+1=45,501 bytes(閾値+1)になる（実測で確認済み）。
-  {
-    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-    echo "aliases: [clean-vault-alias-absolute-rules]"; echo "---"; echo
-    printf 'a%.0s' $(seq 1 45026); echo
-  } > "$V/Preferences/absolute-rules.md"
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-  total_bytes_after="$(extract_total_bytes "$out_after")"
-
-  assert_eq "合計bytesがちょうど45,501になっている(fixture計算の前提確認)" "45501" "$total_bytes_after"
-  assert_contains "45,501 bytes(閾値+1)では要圧縮の⚠️が出る" "$out_after" "⚠️ **要圧縮**"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "45,501 bytesでは要確認件数が0→1に増える"
-  else
-    fail_case "要確認件数が想定通りにならない(before=${before_n} after=${after_n}・期待 0→1)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 33c. 要確認件数(n_issues): §5個別超過と合計超過が同時発生すると両方が別々に加算される（2026-09-05 §9.3 P3段階4対応に伴う閾値再基準化＝リーダー裁定で個別120行・合計300行へ変更） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  # 3ファイルを本文125行(=ファイル計131行・個別上限120行超×3件)にし、残り2ファイルは
-  # make_clean_vaultのデフォルト(ファイル計7行)のまま。合計は3*131+2*7=407行で
-  # 合計上限300行も超える＝個別3件＋合計1件＝計4件が同時に加算されるはず（もし
-  # 実装が size_over_total と size_over_files を`or`でまとめる形に誤って統合
-  # されていたら1件にしかならずこの期待値4で検出できる。対象ファイルは
-  # BOOTSTRAP_FILES最終形に含まれる3件（2026-09-05 §9.3 P3段階4後の構成）。
-  for f in "Preferences/absolute-rules.md" "Preferences/core-conduct.md" "Preferences/core-workflow.md"; do
-    {
-      echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
-      echo "aliases: [clean-vault-alias-$(basename "$f" .md)]"; echo "---"; echo
-      for i in $(seq 1 125); do echo "line $i"; done
-    } > "$V/$f"
-  done
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_contains "§5に要圧縮の⚠️が表示される" "$out_after" "⚠️ **要圧縮**"
-  assert_contains "個別超過(120行超)が3件分表示される" "$out_after" "⚠️ 120行超"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 4 ]]; then
-    pass "個別超過3件＋合計超過1件が同時に加算され要確認件数が0→4になる（or統合されていないことを確認）"
-  else
-    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→4)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 34. 要確認件数(n_issues): §8 Fragments capture停止疑いが算入される ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-  rm "$V/Fragments/$(date +%F).md"   # capture停止状態にする（frag_files=0）
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_contains "§8にcapture停止疑いの⚠️が表示される" "$out_after" "⚠️ capture が止まっている可能性"
-  if [[ "$after_n" -eq 1 ]]; then
-    pass "Fragments capture停止のみで要確認件数が1件になる（修正前は§8がn_issuesから漏れていた）"
-  else
-    fail_case "要確認件数が想定通りにならない(after=${after_n}・期待 1)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 35. 要確認件数(n_issues): §11 review_by の14日以内到来(review_soon)が算入される ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  before_n="$(extract_n_issues "$(run_inventory "$VAULT_HOME")")"
-
-  write_note "$V" "Decisions/2026-01-01-n-issues-review-soon.md" \
-    "date: 2026-01-01
-aliases: [n-issues-review-soon-alias]
-review_by: $(d_date 7)"
-
-  out_after="$(run_inventory "$VAULT_HOME")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_contains "§11に14日以内到来のノートが表示される" "$out_after" "n-issues-review-soon.md\` — review_by $(d_date 7)"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 1 ]]; then
-    pass "review_soon 1件で要確認件数が0→1に増える（修正前はreview_overdueのみ算入・review_soonが漏れていた）"
-  else
-    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→1)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 36. 要確認件数(n_issues): §12 session_idが空のRead/提示行が算入される ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  LOGDIR="$V/../.claude-logs-n-issues-no-session"
-  mkdir -p "$LOGDIR"
-  printf '%s\t\tKnowledge/n-issues-no-session-dummy.md\n' "$(d_ts -5)" > "$LOGDIR/vault-reads.tsv"
-  printf '%s\t\tKnowledge/n-issues-no-session-dummy.md\tk\n' "$(d_ts -5)" > "$LOGDIR/vault-recall.tsv"
-
-  before_n="$(extract_n_issues "$(VAULT_READS_LOG="$LOGDIR/vault-reads-none.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall-none.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
-    cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")")"
-
-  out_after="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
-    cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
-  after_n="$(extract_n_issues "$out_after")"
-
-  assert_contains "session_idが空のRead行の注記が出る" "$out_after" "session_id が空のRead行 1 件"
-  assert_contains "session_idが空の提示行の注記が出る" "$out_after" "session_id が空の提示行 1 件"
-  if [[ "$before_n" -eq 0 && "$after_n" -eq 2 ]]; then
-    pass "session_idが空のRead行・提示行それぞれ1件で要確認件数が0→2に増える（修正前はいずれもn_issuesから漏れていた）"
-  else
-    fail_case "要確認件数が想定通り増えない(before=${before_n} after=${after_n}・期待 0→2)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 36b. §12 session_idが空のRead/提示行: compute_dismissal_rates()と同じ直近30日窓で数える（窓外は警告・n_issuesから消える・2026-08-08本人承認） ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_clean_vault "$V"
-
-  # まず「窓外(31日前)のsession_id空行」単独で n_issues が増えないことを確認する
-  # （Codex一次レビュー再指摘・Minor対応: 窓内行と窓外行を混在させたケースだけだと、
-  # 件数表示（例: 2件→3件）の完全一致検証では窓外行の混入を検出できるが、n_issues
-  # は「件数>0なら+1」という警告種別単位の加算のため、窓内行が既に非ゼロなら
-  # 窓外行を誤って数えても値が変わらず見分けが付かない＝分離ケースで独立検証する）。
-  # ただし直近ログを1行も残さないとreads/recall
-  # 双方が「直近30日以内の有効な記録が無い」(死活判定・stale)で別途n_issuesが
-  # 増えてしまい、session_id集計の検証にならない。session_id有りの直近行を
-  # 1行添えてログを非staleに保つ（この直近行はログ未成熟＝「要観察」扱いなので
-  # n_issuesには算入されない＝§12未読確定(unread_confirmed)のみがn_issuesに入る
-  # 設計のため影響しない）。
-  write_note "$V" "Knowledge/outside-window-tracked-note.md" $'date: 2026-01-01\naliases:\n  - outside-window-tracked-note-alias'
-  LOGDIR_OUT="$V/../.claude-logs-n-issues-no-session-window-outside"
-  mkdir -p "$LOGDIR_OUT"
-  {
-    printf '%s\tsessFresh\tKnowledge/outside-window-tracked-note.md\n' "$(d_ts -5)"
-    printf '%s\t\tKnowledge/n-issues-no-session-window-outside-dummy.md\n' "$(d_ts -31)"
-  } > "$LOGDIR_OUT/vault-reads.tsv"
-  {
-    printf '%s\tsessFresh\tKnowledge/outside-window-tracked-note.md\tk\n' "$(d_ts -5)"
-    printf '%s\t\tKnowledge/n-issues-no-session-window-outside-dummy.md\tk\n' "$(d_ts -31)"
-  } > "$LOGDIR_OUT/vault-recall.tsv"
-
-  out_outside="$(VAULT_READS_LOG="$LOGDIR_OUT/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR_OUT/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
-    cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
-  n_outside="$(extract_n_issues "$out_outside")"
-
-  assert_not_contains "窓外(31日前)のみの場合はRead側のsession_id空行注記自体が出ない" \
-    "$out_outside" "session_id が空のRead行"
-  assert_not_contains "窓外(31日前)のみの場合は提示側のsession_id空行注記自体が出ない" \
-    "$out_outside" "session_id が空の提示行"
-  if [[ "$n_outside" -eq 0 ]]; then
-    pass "窓外(31日前)のみのsession_id空行はn_issuesに算入されない(=0)"
-  else
-    fail_case "窓外のみのケースでn_issuesが0にならない(actual=${n_outside}・期待0)"
-  fi
-
-  # 続けて、窓内(0日・30日)2行＋窓外(31日)1行を混在させ、窓外の1行だけが
-  # カウント・n_issuesから除外されることを確認する（提示無視率の窓判定と揃える
-  # 変更の主眼＝旧実装は全期間対象だったため、この31日行も従来は数えられて
-  # いた）。
-  LOGDIR="$V/../.claude-logs-n-issues-no-session-window"
-  mkdir -p "$LOGDIR"
-  {
-    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\n' "$(d_ts 0)"
-    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\n' "$(d_ts -30)"
-    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\n' "$(d_ts -31)"
-  } > "$LOGDIR/vault-reads.tsv"
-  {
-    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\tk\n' "$(d_ts 0)"
-    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\tk\n' "$(d_ts -30)"
-    printf '%s\t\tKnowledge/n-issues-no-session-window-dummy.md\tk\n' "$(d_ts -31)"
-  } > "$LOGDIR/vault-recall.tsv"
-
-  out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
-    cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
-  n="$(extract_n_issues "$out")"
-
-  assert_contains "当日・30日前の2件のみ窓内としてRead側の注記に数えられる（31日前は含まれない）" \
-    "$out" "session_id が空のRead行 2 件"
-  assert_contains "当日・30日前の2件のみ窓内として提示側の注記に数えられる（31日前は含まれない）" \
-    "$out" "session_id が空の提示行 2 件"
-  assert_contains "注記文言に窓（直近30日以内）が明記される" "$out" "直近30日以内でsession_id が空のRead行"
-  if [[ "$n" -eq 2 ]]; then
-    pass "窓内2種別(Read・提示それぞれ1)のみがn_issuesに算入される(=2・31日前は不算入)"
-  else
-    fail_case "n_issuesが想定と異なる(actual=${n}・期待2)"
-  fi
-
-  rm -rf "$VAULT_HOME"
-}
+# 旧32・33・33b・33c・34・35・36・36b（§5／§8／§11 review_soon／§12 session_id
+# 空行の「actionable 算入」検査）は退役（design-step2 §3.3・本人裁定2026-09-19③）。
+# これらの警告種別は新定義actionableでは陰性＝md本文の情報表示として残る
+# だけになったため、恒久テストから外した（受入条件は締めで1回確認して終わり
+# ＝Decisions/2026-09-17-tests-rough-not-strict）。
 
 echo "=== 37. read_log()のerror_rows: claude/hooks/vault-recall.sh log_fact()由来の6列目'INFO'行はERROR件数に算入しない（旧形式のレベル列なし行は従来どおり算入・後方互換） ==="
 {
@@ -1735,22 +1260,22 @@ echo "=== 38. 2026-07-16簡素化: 隔週間隔ガードを撤去し常に実行
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 38b. §1 missing_updated: FIX機能撤去後もupdated欠落の検出自体（レポート§1表示・n_issues計上）は維持され、--jsonにmissing_updated_fix_candidatesキーはもう含まれない（2026-07-18本人裁定「FIXごと削除」の回帰検知・Codex一次レビュー指摘Minor対応でn_issuesの0→1増分を厳密比較） ==="
+echo "=== 38b. §1 missing_updated: FIX機能撤去後もupdated欠落の検出自体（レポート§1表示・actionable計上）は維持され、--jsonにmissing_updated_fix_candidatesキーはもう含まれない（2026-07-18本人裁定「FIXごと削除」の回帰検知・Codex一次レビュー指摘Minor対応でactionableの0→1増分を厳密比較。json鍵は旧称→actionableへ改名＝design-step2 §3.1） ==="
 {
   # FIX機能（action: fix_approve）は2026-07-18本人裁定で丸ごと削除された
   # （[[Decisions/2026-07-18-external-brain-hardening]]2周目）が、missing_updated
   # の検出自体（人間が読み時/棚卸し相談で直す対象）は他の棚卸し項目と同じく
-  # 維持される契約であることを直接検証する。make_clean_vault（n_issues=0の
-  # 土台）を使い、対象ノート追加前後でn_issuesが厳密に0→1増分することまで
+  # 維持される契約であることを直接検証する。make_clean_vault（actionable=0の
+  # 土台）を使い、対象ノート追加前後でactionableが厳密に0→1増分することまで
   # 確認する（make_base_vaultだけだと既存の他ノートのupdated欠落と混ざり
-  # n_issues>=1が対象ノート追加の有無に関わらず常に成立してしまう）。
+  # actionable>=1が対象ノート追加の有無に関わらず常に成立してしまう）。
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
   make_clean_vault "$V"
 
   BEFORE_JSON="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  n_issues_before="$(printf '%s' "$BEFORE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['n_issues'])")"
-  assert_eq "対象ノート追加前はn_issues=0(クリーンなVault)" "0" "$n_issues_before"
+  actionable_before="$(printf '%s' "$BEFORE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['actionable'])")"
+  assert_eq "対象ノート追加前はactionable=0(クリーンなVault)" "0" "$actionable_before"
 
   # aliasesも付与し、§9(aliases欠落)がついでに算入されて増分が2件になる
   # （missing_updated単独の増分を見たいのに他の警告種別と混ざる）事態を防ぐ。
@@ -1759,11 +1284,11 @@ echo "=== 38b. §1 missing_updated: FIX機能撤去後もupdated欠落の検出�
   HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null 2>&1
   REPORT="$(cat "$(find "$VAULT_HOME/.claude/logs/vault-inventory" -name '20*.md' | head -1)")"
   assert_contains "レポート§1にupdated欠落ノートが表示される" "$REPORT" "Preferences/fix-removed-note.md"
-  assert_eq "レポート冒頭の要確認件数が0→1へ増分する" "1" "$(extract_n_issues "$REPORT")"
+  assert_eq "レポート冒頭の要確認件数が0→1へ増分する" "1" "$(extract_actionable "$REPORT")"
 
   JSON_OUT="$(HOME="$VAULT_HOME" python3 "$SCRIPT" --json 2>/dev/null)"
-  n_issues_after="$(printf '%s' "$JSON_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['n_issues'])")"
-  assert_eq "--json のn_issuesも0→1へ増分する" "1" "$n_issues_after"
+  actionable_after="$(printf '%s' "$JSON_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['actionable'])")"
+  assert_eq "--json のactionableも0→1へ増分する" "1" "$actionable_after"
   assert_not_contains "--json出力にmissing_updated_fix_candidatesキーはもう含まれない(FIX機能撤去済み)" \
     "$JSON_OUT" "missing_updated_fix_candidates"
 
@@ -1787,26 +1312,22 @@ echo "=== 44. --json: 標準出力はJSON1行のみ（人間向けメッセー�
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 45. 必読5ファイルのうち1つが欠けてもクラッシュせずwarningとしてレポート§5に載る（tester独立検証で発見・リーダー裁定2026-07-16対応） ==="
+echo "=== 45. 必読5ファイルのうち1つが欠けてもクラッシュせずwarningとしてレポート§5に載る（tester独立検証で発見・リーダー裁定2026-07-16対応。必読欠落はactionableに数えない情報表示＝design-step2 §3.1・§10-4裁定のため、旧称時代の0→1増分assertは0→0据え置きへ書き換え） ==="
 {
   # 以前はBOOTSTRAP_FILES内の必読ファイルを無条件でread_text()しており、
   # いずれか1つでも欠けると未処理のFileNotFoundErrorでCLI全体がクラッシュ
   # していた（サブ機・骨格未整備のVault・ファイル名変更直後等で実際に
   # 起こりうる）。claude/hooks/bootstrap-vault.sh側の「存在するファイルだけ
   # 必読リストに載せる」という既存の扱いに揃え、クラッシュさせず「検出のみ」
-  # としてレポートへwarning表示する。
-  # make_clean_vault はn_issues=0のクリーンな状態を作る（要確認件数への
-  # 個別種別の算入テストと同じ土台）。欠落前後でn_issuesが0→1へ増分する
-  # ことまで直接確認する（Codexレビュー指摘Minor対応: 「要確認」という
-  # 文字列自体は件数に関わらず常にレポート冒頭へ出るため、文字列containsだけ
-  # ではn_issuesへの加算漏れを検出できなかった）。
+  # としてレポートへwarning表示する。必読欠落（§5）はactionableに数えない
+  # 情報表示のため、欠落前後でactionableは0のまま変わらないことを確認する。
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
   make_clean_vault "$V"
 
   out_before="$(run_inventory "$VAULT_HOME")"
-  n_before="$(extract_n_issues "$out_before")"
-  assert_eq "欠落前はn_issues=0(クリーンなVault)" "0" "$n_before"
+  n_before="$(extract_actionable "$out_before")"
+  assert_eq "欠落前はactionable=0(クリーンなVault)" "0" "$n_before"
 
   rm -f "$V/Preferences/vault-operation.md"
 
@@ -1815,13 +1336,13 @@ echo "=== 45. 必読5ファイルのうち1つが欠けてもクラッシュせ�
   assert_eq "1ファイル欠落でもクラッシュせずexit 0のまま完走する" "0" "$rc"
   assert_contains "欠落ファイルがwarningとして§5に載る" "$out" "Preferences/vault-operation.md\` — ⚠️ ファイルが見つかりません"
   assert_contains "残り4ファイルの注入サイズ監視は健在（§5見出し自体は変わらない）" "$out" "## 5. 必読5ファイルの注入サイズ"
-  n_after="$(extract_n_issues "$out")"
-  assert_eq "欠落後はn_issuesが0→1へ増分する(要確認件数へ正しく加算される)" "1" "$n_after"
+  n_after="$(extract_actionable "$out")"
+  assert_eq "欠落後もactionableは0のまま変わらない(必読欠落は情報表示のみ・数えない)" "0" "$n_after"
 
   rm -rf "$VAULT_HOME"
 }
 
-echo "=== 45b. --json実行でも必読ファイル欠落でクラッシュせずexit 0で有効なJSONを返しn_issuesへ加算される（同上・Codexレビュー指摘Minor対応） ==="
+echo "=== 45b. --json実行でも必読ファイル欠落でクラッシュせずexit 0で有効なJSONを返す（同上・Codexレビュー指摘Minor対応。必読欠落はactionableに数えない情報表示のため加算assertは撤去＝design-step2 §3.3） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
@@ -1838,8 +1359,6 @@ echo "=== 45b. --json実行でも必読ファイル欠落でクラッシュせ�
   parse_rc=0
   echo "$stdout_out" | python3 -c "import json,sys; json.load(sys.stdin)" || parse_rc=$?
   assert_eq "標準出力は引き続き有効なJSONとしてパースできる" "0" "$parse_rc"
-  json_n_issues="$(echo "$stdout_out" | python3 -c "import json,sys; print(json.load(sys.stdin)['n_issues'])")"
-  assert_eq "JSON payloadのn_issuesにも欠落1件が加算される(クリーンなVault起点なので1になる)" "1" "$json_n_issues"
 
   rm -rf "$VAULT_HOME"
 }
@@ -1859,8 +1378,8 @@ echo "=== 46. Vault内に壊れたsymlink(.md)があってもクラッシュせ�
   out="$(run_inventory "$VAULT_HOME")" || rc=$?
   assert_eq "壊れたsymlinkがあってもクラッシュせずexit 0のまま完走する" "0" "$rc"
   assert_contains "壊れたsymlinkが「読込に失敗したノート」として§0に載る" "$out" "Knowledge/broken-link.md\` —"
-  n_after="$(extract_n_issues "$out")"
-  assert_eq "壊れたsymlinkの検出もn_issuesへ1件加算される" "1" "$n_after"
+  n_after="$(extract_actionable "$out")"
+  assert_eq "壊れたsymlinkの検出もactionableへ1件加算される" "1" "$n_after"
 
   rm -rf "$VAULT_HOME"
 }
@@ -1903,8 +1422,67 @@ echo "=== 47. Vault内に\`.md\`という名前のディレクトリがあって
   out="$(run_inventory "$VAULT_HOME")" || rc=$?
   assert_eq "\`.md\`名ディレクトリがあってもクラッシュせずexit 0のまま完走する" "0" "$rc"
   assert_contains "\`.md\`名ディレクトリが「読込に失敗したノート」として§0に載る" "$out" "Knowledge/weird-dir.md\` —"
-  n_after="$(extract_n_issues "$out")"
-  assert_eq "\`.md\`名ディレクトリの検出もn_issuesへ1件加算される" "1" "$n_after"
+  n_after="$(extract_actionable "$out")"
+  assert_eq "\`.md\`名ディレクトリの検出もactionableへ1件加算される" "1" "$n_after"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== IV-P1. actionable(陽性): クリーンVaultにリンク切れ1件を置くと actionable=1・latest.json/sections.broken_links も1になる（design-step2 §3.3・§8ζ受入条件） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+  write_note "$V" "Knowledge/iv-p1-broken-link.md" \
+    $'date: 2026-01-01\naliases:\n  - iv-p1-broken-link-alias' \
+    "本文 [[iv-p1-no-such-target]] への言及。"
+
+  out="$(run_inventory "$VAULT_HOME")"
+  assert_eq "IV-P1: レポート冒頭の要確認件数が1になる" "1" "$(extract_actionable "$out")"
+
+  LATEST="$VAULT_HOME/.claude/logs/vault-inventory/latest.json"
+  actionable="$(python3 -c "import json; print(json.load(open('$LATEST'))['actionable'])")"
+  broken="$(python3 -c "import json; print(json.load(open('$LATEST'))['sections']['broken_links'])")"
+  assert_eq "IV-P1: latest.jsonのactionableが1" "1" "$actionable"
+  assert_eq "IV-P1: latest.jsonのsections.broken_linksが1" "1" "$broken"
+
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== IV-N1. actionable(陰性): 停滞プロジェクト・review_by 10日後到来・120行超の必読ファイルはいずれもactionableへ数えない（md本文には§6/§11/§5の情報表示のまま残る・design-step2 §3.3・§8ζ受入条件） ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+
+  # §6: 停滞プロジェクト（active・40日前更新）
+  write_note "$V" "Projects/iv-n1-stalled-project.md" \
+    "date: $(d_date -40)
+updated: $(d_date -40)
+status: active
+aliases: [iv-n1-stalled-project-alias]"
+  # §11: review_by 10日後到来（review_soon・14日以内）
+  write_note "$V" "Decisions/2026-01-01-iv-n1-review-soon.md" \
+    "date: 2026-01-01
+aliases: [iv-n1-review-soon-alias]
+review_by: $(d_date 10)"
+  # §5: 必読ファイル1件を120行超にする（missing_updated/missing_aliasesを
+  # 誘発しないよう、make_clean_vaultと同じ date/updated/aliases を保つ）
+  {
+    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
+    echo "aliases: [clean-vault-alias-vault-operation]"; echo "---"; echo
+    for i in $(seq 1 125); do echo "line $i"; done
+  } > "$V/Preferences/vault-operation.md"
+
+  out="$(run_inventory "$VAULT_HOME")"
+  assert_eq "IV-N1: レポート冒頭の要確認件数は0のまま" "0" "$(extract_actionable "$out")"
+  assert_contains "IV-N1: 停滞プロジェクトは§6に情報表示される" "$out" "Projects/iv-n1-stalled-project.md\`"
+  assert_contains "IV-N1: review_soonは§11に情報表示される" "$out" "iv-n1-review-soon.md\` — review_by $(d_date 10)"
+  assert_contains "IV-N1: §5個別サイズ超過は情報表示される" "$out" "⚠️ 120行超"
+
+  LATEST="$VAULT_HOME/.claude/logs/vault-inventory/latest.json"
+  actionable="$(python3 -c "import json; print(json.load(open('$LATEST'))['actionable'])")"
+  assert_eq "IV-N1: latest.jsonのactionableが0" "0" "$actionable"
 
   rm -rf "$VAULT_HOME"
 }

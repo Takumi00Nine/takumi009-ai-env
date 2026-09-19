@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """maintenance.sh（設計書§1.2 Phase 1）が各検出ステップ（check-drift.sh・
-fragments_log.py・vault_inventory.py・knowledge_merge_candidates.py・
-decision_propagation.py）を起動するための共通ラッパー。
+fragments_log.py・vault_inventory.py）を起動するための共通ラッパー。
 
 責務（設計書§1.2「各ステップは scripts/vault-agents/maintenance_run_step.py
 経由で起動しPython subprocess.run(cmd, timeout=N, start_new_session=True)＋

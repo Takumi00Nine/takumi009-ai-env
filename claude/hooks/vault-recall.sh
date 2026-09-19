@@ -248,17 +248,19 @@ case "$KEYWORD_KILL_GRACE_MS" in
 esac
 
 # 想起候補の表示上限（FR2）。従来はキーワード枠側がループ内のリテラル`5`のまま
-# ハードコードされており、recall_bench.pyのMAX_KEYWORD_CANDIDATES（SSOT検証テスト・
-# tests/test-recall-bench.sh）はこのリテラルをgrepで抽出する脆いSSOTだった。
-# 名前付き定数へ切り出し、値そのものは変えない（5のまま）。
+# ハードコードされていたのを名前付き定数へ切り出した（旧SSOT検証テスト
+# recall_bench.py／test-recall-bench.shは2026-09-19退役）。値そのものは変えない
+# （5のまま）。
 MAX_KEYWORD_CANDIDATES=5   # キーワード枠（先頭スコア順）の表示上限（FR2）
 
 # claude/hooks/vault-recall.sh は install-main.sh により $HOME/.claude/hooks/ へ
 # シンボリックリンクされる（実体はリポジトリ内）ため、BASH_SOURCEをシンボリックリンク
-# 解決してからリポジトリルートを求める必要がある（macOSのBSD readlinkは-fを持たない
-# ため、手動でループ解決する定番のbash 3.2互換イディオム）。直接パス実行（テスト等）
-# でもシンボリックリンクが無いだけで同じロジックがそのまま正しく動く。
-resolve_repo_root() {
+# 解決してから自身の実体ディレクトリを求める必要がある（macOSのBSD readlinkは-fを
+# 持たないため、手動でループ解決する定番のbash 3.2互換イディオム。bash-danger-gate.sh
+# の同種ヘルパーと同じ書き方）。直接パス実行（テスト等）でもシンボリックリンクが
+# 無いだけで同じロジックがそのまま正しく動く。helperはhooks/lib/直下に同居する
+# ため、リポジトリルートを経由せず自身のディレクトリから直接たどる。
+resolve_self_dir() {
   local src="${BASH_SOURCE[0]}" dir link
   while [ -h "$src" ]; do
     dir="$(cd -P "$(dirname "$src")" && pwd)"
@@ -268,11 +270,9 @@ resolve_repo_root() {
       *) src="$dir/$link" ;;
     esac
   done
-  dir="$(cd -P "$(dirname "$src")" && pwd)"
-  (cd -P "$dir/../.." && pwd)
+  cd -P "$(dirname "$src")" && pwd
 }
-REPO_ROOT="${VAULT_RECALL_REPO_ROOT:-$(resolve_repo_root 2>/dev/null)}"
-KEYWORD_HELPER="${VAULT_RECALL_KEYWORD_HELPER:-$REPO_ROOT/scripts/vault-agents/keyword_recall_helper.py}"
+KEYWORD_HELPER="${VAULT_RECALL_KEYWORD_HELPER:-$(resolve_self_dir 2>/dev/null)/lib/keyword_recall_helper.py}"
 PYTHON_BIN="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 
 INPUT="$(cat 2>/dev/null || true)"

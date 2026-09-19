@@ -1,78 +1,26 @@
 #!/bin/bash
-# SessionStart hook: 外部脳(Obsidian)の必読ノートを「Readで全文読め」と強制する。
-#
-# 旧方式は全文をadditionalContextへダンプしていたが、合計が大きいとハーネスが
-# ファイルに退避し、AIには先頭プレビュー(約2KB)しか見えず「読んだ」と錯覚する事故が起きた。
-# そこで本スクリプトは「全文は注入しない。各ファイルを Read ツールで開け」という
-# 短い必須指示だけを出す。短い指示はサイズ上限に絶対かからない=切り詰められない。
-#
-# 2026-07-05: Agent Teams 対応。チームメイト/ワーカーのセッションには何も
-# 注入しない（2026-09-03 軽量版撤去。in-process では届いていなかったことが
-# transcript実測で確認され、absolute-rules必読・Vault書込禁止は職種定義
-# 側の共通ルール節が正本になった＝下部 is_worker 分岐参照）。判定は
-#   a) stdin JSON の agent_type が付いている（--agent 起動 or サブエージェント）
-#   b) 自分の session_id が「他セッションがリーダーのチーム」config.json に載っている
-#      （チーム設定は ~/.claude/teams/session-{リーダーID先頭8桁}/config.json）
-# 判定に失敗したらフル版へフォールバック（安全側＝遅いだけ）。
-# VAULT は環境変数で上書き可（ユニットテスト用。本番は既定値のまま）。
+# SessionStart hook: 必読の Read 指示・開幕1行・外部脳ヘルス・実体プロファイル警告を注入する。
+# 全文は注入しない（大きいとハーネスがファイルへ退避し先頭しか見えない）＝「各ファイルを Read で全文読め」の短い指示だけを出す。
+# ワーカー（stdin JSON に agent_type が付く／他セッションがリーダーのチーム config.json に自分の session_id が載る）には何も注入しない。
+# 経緯＝[[Decisions/2026-09-19-ai-env-optimization-rulings]]
 VAULT="${BOOTSTRAP_VAULT:-$HOME/Data/obsidian}"
 TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 
-# 外部脳ヘルス行（2026-07-10 敵対的レビュー2回目 §5-2・8.0の柱②対応）。
-# 「本人が定期的にレポート/ログを見に行かないと死活が分からない」問題への
-# 最後の砦として、SessionStart（毎回必ず走る唯一のフック）に軽い死活サマリを
-# 1〜4行だけ注入する。リーダー向けフル版のみに注入する（ワーカー分岐には
-# 何も注入しない＝2026-09-03 軽量版撤去）。SessionStartは毎回走るため軽量必須：
-#   - scripts/check-drift.sh の再実行はしない（フルスキャンで数百msかかりうる）
-#   - ディレクトリの glob（forkなし）・ファイル1件へのgrep・ログのtail程度に留める
-#   - fail-open: ここで何が起きてもブートストラップ本文は必ず出す
-#     （この関数のエラーはグローバルに伝播させない。呼び出し側で出力を捨てるだけ）
+# 外部脳ヘルス行（fail-open・軽量: check-drift.sh は再実行しない。ファイル1件への jq／ログの tail 程度に留める）。
 : "${VAULT_READS_LOG:=$HOME/.claude/logs/vault-reads.tsv}"
 : "${VAULT_RECALL_LOG:=$HOME/.claude/logs/vault-recall.tsv}"
 : "${VAULT_AGENT_LOG_STALE_DAYS:=7}"  # scripts/check-drift.sh ⑥ と同じ既定値
-# fragments-log（旧fragments-review・2026-07-11リネーム）・vault-inventory の
-# レポート出力先（2026-07-11 決定「読まれない人間向け資料をVaultに置かない」で
-# Vault配下(Explorations/...)から $HOME/.claude/logs/ 配下へ移設。
-# scripts/vault-agents/vault_inventory.py のOUT_DIRと同じ既定値）。
+# vault_inventory.py の OUT_DIR と同じ既定値（直下の latest.json を読む）。
 : "${VAULT_INVENTORY_LOG_DIR:=$HOME/.claude/logs/vault-inventory}"
-# Preferences提案ディレクトリ（2026-07-18ハードニング・[[Decisions/
-# 2026-07-18-external-brain-hardening]]で pending マーカー層を撤去）。
-# scripts/vault-agents/maintenance_apply.pyのDEFAULT_PREFERENCES_PROPOSALS_DIRと
-# 同じ既定値。正本＝このディレクトリ自体（マーカーJSON等の派生物は持たない）。
-: "${PREFERENCES_PROPOSALS_DIR:=$HOME/.claude/logs/maintenance/preferences-proposals}"
-# 死活検知: maintenance.sh(週次)のlast-run.json（Critical対処・2026-07-18
-# ハードニング）。started_atは実行のたびに（busy/error早期終了でも）
-# 無条件更新される契約のため、これが古いままなら「週次メンテ自体が
-# 全く起動していない」ことを受動的に検知できる（maintenance.shのコメント
-# 「自己ロックアウト対策」参照）。
+# maintenance.sh（週次）の状態ファイル。started_at は毎回無条件更新の契約＝古いままなら週次メンテ自体が起動していない。
 : "${MAINTENANCE_LAST_RUN_FILE:=$HOME/.claude/logs/maintenance/last-run.json}"
 : "${MAINTENANCE_STALE_DAYS:=8}"
 
-# ローカル実体プロファイル（2026-08-30 共通コア分離 §9.0 A-1 P1機構）。
-# 正本は各マシンのローカル（$HOME/.config/takumi009-ai-env/profile.md）で
-# repo管理外のまま（§11.2 source of truth定義）。推奨経路は repo の
-# config/profile.md.sample を手でコピーして作ること＝実値入り。
-# 2026-09-08 本人裁定A案（設定ファイルsample配布）: 実体が無いときだけ動く
-# 既存の雛形自動生成（scripts/install-main.sh）は、読み元を
-# vault-public/Preferences/profile-sample.md から repo の
-# config/profile.md.sample へ付け替えた（挙動＝「実体が無いときだけ雛形を
-# 置く」は変えていない）。本人が事前にコピーしておけば雛形配置の非破壊性
-# によりそれを上書きしない。
-# Vault外の固定パスを必読
-# リストへ載せる小改修だが、有効化そのものはA-1-3の順序厳守対象（移送先
-# core-workflow.mdが未整備のうちに必読へ加えると「どちらも読まれない窓」が
-# 開く＝§7.3③）だったため、当初は既定を無効(0)のまま実装し、Vault側改訂
-# （core-conduct.md・core-workflow.md）が完了してから切り替える設計にしていた。
-# 2026-09-02: Vault反映が完了したため、本人裁定（案A・両機同時切替。
-# rollout-runbook.md 現行トラック§7）に従い既定値を 0→1 へ切り替え済み
-# （FILES一覧・DIRECTIVE本文は無改変。変わるのはこのフラグの既定値1点のみ）。
+# ローカル実体プロファイル（正本＝各マシンの $HOME/.config/takumi009-ai-env/profile.md・repo 管理外）。
 : "${BOOTSTRAP_ENABLE_LOCAL_PROFILE:=1}"
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
-# v2配役表解凍（配役表解凍-設計-2026-09-01.md §4.1-g・U-5）: 判定式の正本は
-# claude/hooks/lib/profile_resolve.py の1箇所だけに置く。installerはhookを
-# 個別symlinkしており（install-main.sh:574-599）lib専用のリンクは持たないため、
-# bootstrap-vault.sh自身のsymlinkを解決した実体ディレクトリ直下のlib/を見る
-# （二重管理を避ける＝A-0-3で潰した「値表2箇所重複」の再発防止と同じ考え方）。
+# 判定式の正本は lib/profile_resolve.py の1箇所。installer は hook を個別 symlink するので、
+# 自身の symlink を解決した実体ディレクトリ直下の lib/ を見る。
 resolve_bootstrap_self_dir() {
   local src="${BASH_SOURCE[0]}"
   while [ -L "$src" ]; do
@@ -88,37 +36,13 @@ resolve_bootstrap_self_dir() {
 }
 BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 : "${PROFILE_RESOLVE_LIB:=$BOOTSTRAP_SELF_DIR/lib/profile_resolve.py}"
-# 使用率スナップショット（B1a「使用率の見える化」-実装-2026-09-08.md・
-# FR-104/FR-108①）: bootstrap-vault.sh自身のsymlinkを解決した実体ディレクトリ
-# 直下のlib/を見る（PROFILE_RESOLVE_LIBと同じ二重管理防止の考え方）。
-: "${USAGE_SNAPSHOT_LIB:=$BOOTSTRAP_SELF_DIR/lib/usage_snapshot.py}"
-: "${USAGE_BLOCK_LIB:=$BOOTSTRAP_SELF_DIR/lib/usage-block.sh}"
-# shellcheck source=lib/usage-block.sh
-if ! . "$USAGE_BLOCK_LIB" 2>/dev/null; then
-  compute_usage_block() { printf '%s取得口が使えません（内部エラー）' "$1"; }
-fi
-# Bedrockのピン留め実値ファイル（install-main.shと同じ既定値。§6.1）。
-# V9-d③・V12の判定にだけ使う＝値そのものは読まず特定キーの有無/非空だけ見る。
+# Bedrock のピン留め実値ファイル（install-main.sh と同じ既定値。特定キーの有無だけ見る＝値は読まない）。
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
-# コア職種マニフェスト（V1-a・V1-b）の実体側入力。claude/hooks/../agents。
+# コア職種マニフェストの実体側入力。claude/hooks/../agents。
 : "${AIENV_AGENTS_DIR:=$BOOTSTRAP_SELF_DIR/../agents}"
-# installerの生成物（scripts/install-main.sh generate_settings_json()の
-# 出力先。scripts/check-drift.shのSETTINGS_JSON_LIVEと同じ既定値）。
-# S10/S11/S16対応（check_leader_settings_drift参照）の比較先として読むだけ
-# ＝副作用ゼロ。
-: "${AIENV_SETTINGS_JSON_FILE:=$HOME/.claude/settings.json}"
-# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）:
-# v1由来の既知キー配列（7→3キーの第2正本だったもの）と、それを読むだけの
-# テスト専用フックBOOTSTRAP_PRINT_KNOWN_KEYS_ONLYを撤去した。唯一の消費先
-# だったtest-core-docs-placeholder-schema.shのテスト8（v1/v2の能力軸キー
-# 集合の突合）も同じコミットで削除する（突合相手が消えるため）。能力軸の
-# 正本は profile_resolve.py の CAPABILITY_KEYS 側だけになる。
 
-# 3モード体制（3モード体制-設計-2026-09-06.md §4.3(b)）: team_mode能力軸の値
-# （solo|lean|full|unknown）から開幕1行の文面を組み立てる。builtinだけで書き
-# （外部プロセスを起こさない＝§10.5・NFR-4）、結果は $TEAM_MODE_LINE へ入れる。
-# ⚠️ 3本＋未確定行の正本はPreferences/core-conduct.md §1（規範）。本関数は
-# それを実装として複製する（両者の一致は静的テストが機械検証する＝§10.3-10）。
+# 開幕1行（team_mode＝solo|lean|full|unknown）。builtin だけで書く（外部プロセスを起こさない）。
+# 文面の正本＝Preferences/core-conduct.md §1（両者の一致は静的テストが検証する）。
 compose_team_mode_line() {   # $1 = solo|lean|full|unknown
   case "$1" in
     solo) TEAM_MODE_LINE='🧭 現在＝単独モード（リーダーが全工程を自分で行います。第三者検証はありません）。他のモード＝軽量／フル。切り替えたいときは言ってください' ;;
@@ -128,8 +52,7 @@ compose_team_mode_line() {   # $1 = solo|lean|full|unknown
   esac
 }
 
-# 3モード体制（§4.3(e)）: DIRECTIVE ⑤（オーケストレーター行動則）をモード別に
-# 組み立てる。結果は $TEAM_MODE_DIRECTIVE5 へ入れる（先頭に「⑤ 」を含む）。
+# DIRECTIVE ⑤（オーケストレーター行動則）をモード別に組み立てる（先頭に「⑤ 」を含む）。
 compose_team_mode_directive5() {   # $1 = solo|lean|full|unknown
   local base5='⑤ オーケストレーター行動則（詳細＝Preferences/core-workflow.md §1・§2）: 「作る工程」は自分でやらず委任し、成果物の修正はリーダーが直接行わず作成元ロールへ差し戻す。⚠️ リーダー自身の Edit/Write が正当なのは、~/.claude・scratchpad・リーダー自身の成果物への軽微な修正・ユーザーの直接作業指示のみ（Vault は含まない）。許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。'
   case "$1" in
@@ -148,15 +71,7 @@ compose_team_mode_directive5() {   # $1 = solo|lean|full|unknown
   esac
 }
 
-# テスト専用: BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY=1のとき、4本の開幕1行
-# （solo/lean/full/未確定）をcompose_team_mode_line()で組み立てて1行1本、
-# 標準出力へ返して即終了する（BOOTSTRAP_PRINT_KNOWN_KEYS_ONLYと同型）。
-# stdin JSON読み込み・resolve呼び出し等の本処理には一切進まない。本番では
-# 未設定のため無効。⚠️ この口が測るのは compose_team_mode_line()（文面の
-# 組み立て）だけがbuiltinで書けているか（§10.5⑦の0件検査）と、
-# core-conduct.md正本との文面一致（§10.3-10）の2つ。「TEAM_MODE:値の
-# 取り出し」自体（このifより後段のDIRECTIVE組み立て内）はこの口を通らない
-# ——そちらの外部プロセス非増加はAC-1②（SessionStart全体の実走）が担保する。
+# テスト専用: BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY=1 なら開幕1行4本を1行1本で出して即終了する（本処理には進まない）。
 if [ "${BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY:-0}" = "1" ]; then
   for _tm_mode in solo lean full unknown; do
     compose_team_mode_line "$_tm_mode"
@@ -164,72 +79,35 @@ if [ "${BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY:-0}" = "1" ]; then
   done
   exit 0
 fi
-# 未記入のまま残っていると壊れているのと同じ扱いにする印（T2-MINIMAL。
-# 設計書v10.3で確定した表記＝凍結側の別のT2と識別子が衝突しないよう分離）。
-# サンプルは本人裁定（2026-08-30「初期値はメイン機の実値を既定値に戻す」・
-# 2026-09-08「正本はrepoのconfig/*.sample」＝設定ファイルsample配布）に
-# より全キー（能力軸3キーを含む）とも実運用値（メイン機の確認済み実値）を
-# 入れて配布する（正本＝repoの`config/profile.md.sample`。Vaultの
-# `Preferences/profile-sample.md`は2026-09-08以降、schema本体を持たない
-# 案内ノートへ縮小され「正本はrepoのconfig/profile.md.sample」を指すだけに
-# なった）ため、このsentinelはどのキーにも使わない。
-# fail-soft機構（sentinel検出・未記入判定）自体はコード契約として維持する
-# （サブ機・別マシンで値を書き換えず出荷した場合や、将来キーが増えた場合の
-# 安全弁のため）。詳細は
-# ~/work/takumi009-ai-env-private/docs/core-split/profile-sample-draft.md）。
+# 未記入のまま残っていると壊れているのと同じ扱いにする印（T2-MINIMAL）。
+# sample（config/profile.md.sample）は実値入りで配布するのでどのキーにも使わないが、安全弁として検出機構は維持する。
 LOCAL_PROFILE_SENTINEL='<fill-in>'
 
-# 2026-09-08 モデル定義ファイルと候補指定対応（モデル定義ファイルと候補指定-
-# 設計-2026-09-08.md §3.8・D-13）: 旧v1解決関数（7キー・
-# 状態を持たない自由値の実体を解決していた旧経路）を撤去した。schema 6の
-# コードはv1形式そのもの（schema_versionの行が無い実体）を含む6未満の
-# 全実体をT4-LEGACYで一律解決失敗にするため、v1委譲という経路そのものが
-# 成立しなくなった（no-backward-compat）。
-
-# is_v2_resolve_output_well_formed <line> <exit_code> — v2 resolve の出力が
-# §5 stdout契約のフィールド文法どおりか（固定順・既知フィールドのみ・
-# 単一行）を厳密に検査する（Codex二次・三次レビュー指摘・Major対応:
-# 従来はOK/MINIMALで始まる1行というだけを見ており、余分な文字列の混入や
-# フィールドの重複・順序違反を素通りさせていた＝§5「未知・重複・順序違反は
-# 最小能力へ倒す」に反していた）。
-# ⚠️ このregexはclaude/hooks/lib/profile_resolve.pyのdo_resolve()が生成する
-# フィールド集合と1対1で対応する。新しいフィールドをresolve()の出力へ足す
-# ときは、この関数も同じコミットで更新すること（値表の重複ではなく契約の
-# 形式検査であり、profile_resolve.py側には同じ正規表現を持たせない＝
-# 判定式を2箇所化しないため、更新漏れの検出は両者を変更するテスト
-# （test-bootstrap-vault.sh）が担う）。
+# is_v2_resolve_output_well_formed <line> <exit_code> — resolve の出力が stdout 契約
+# （固定順・既知フィールドのみ・単一行）どおりかを検査する。
+# ⚠️ この regex は lib/profile_resolve.py の do_resolve() が生成するフィールド集合と1対1。
+# resolve() の出力へフィールドを足すときは同じコミットでここも更新すること。
 is_v2_resolve_output_well_formed() {
   local s="$1" rc="$2"
-  # 複数行（改行混入）は問答無用で契約違反。
+  # 複数行（改行混入）は契約違反。
   [ "$(printf '%s' "$s" | wc -l | tr -d ' ')" = "0" ] || return 1
-  # nameは職種名(role.<name>の<name>部分)＝parserのKEY_RE(§3.1)と同じ文字集合
-  # [A-Za-z0-9_.-]+を許す（Codexレビュー指摘・Major対応: 小文字ハイフンのみに
-  # 限定していたため、大文字・アンダースコア・ドットを含む正常な職種名の
-  # 出力を誤ってT10へ倒していた）。
+  # name は職種名（role.<name> の <name>）＝parser の KEY_RE と同じ文字集合。
   local name='[A-Za-z0-9_.-]+' code='[A-Za-z0-9_-]+' key='[A-Za-z0-9_.-]+' tab notab
   tab="$(printf '\t')"
-  # ⚠️ POSIX ERE（bashの=~が使うバックエンド）はブラケット式内で\tを
-  # タブへ解釈しない。実際のタブ文字を埋め込む必要がある。
+  # ⚠️ POSIX ERE はブラケット式内で \t をタブへ解釈しない。実際のタブ文字を埋め込む。
   notab="[^${tab}]+"
-  # ADVISORYの将来拡張でコロン区切りの補助情報を持つコードも読めるよう、
-  # 1要素だけ`code`より広い`adv_code`を使う。未知advisoryは呼出側で観測する。
+  # ADVISORY はコロン区切りの補助情報を持つコードも読めるよう、1要素だけ code より広い。
   local adv_code="${code}(:${name}(:${name})?)?"
   case "$s" in
     OK"$tab"*)
       [ "$rc" = "0" ] || return 1
-      # ⚠️ TEAM_MODE:はschema_version=<N>の直後・必須（3モード体制-設計-
-      # 2026-09-06.md §4.2）。任意にすると「TEAM_MODEもUNKNOWN_EXTRAも無い行」
-      # を文法が受理してしまい、位置が一意に決まらなくなる。MACHINE_ROLE:は
-      # TEAM_MODE:の直後・同じく必須（配役表-能力軸整理-設計-2026-09-07.md
-      # §2.1・D-2）。
+      # TEAM_MODE: は schema_version の直後・MACHINE_ROLE: はその直後で、どちらも必須（位置を一意にする）。
       local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)${tab}MACHINE_ROLE:(main|sub|unknown|unavailable)(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${adv_code}(,${adv_code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
       [[ "$s" =~ $re ]]
       ;;
     MINIMAL"$tab"*)
       [ "$rc" = "1" ] || return 1
-      # 理由部分にタブを含めない＝コード・理由の2フィールドだけに限定する
-      # （Codexレビュー指摘・Major対応: `.+`は改行以外の任意文字＝タブも含む
-      # ため、余分な第4フィールドが紛れ込んでも受理してしまっていた）。
+      # 理由部分にタブを含めない＝コード・理由の2フィールドだけに限定する。
       local re="^MINIMAL${tab}[A-Za-z0-9_-]+${tab}${notab}\$"
       [[ "$s" =~ $re ]]
       ;;
@@ -239,16 +117,10 @@ is_v2_resolve_output_well_formed() {
   esac
 }
 
-# resolve_local_profile <path> — 実体を解決する（配役表解凍-設計-2026-09-01.md
-# §3.5の①〜⑥のうち、v1委譲・分類の部分を撤去したもの＝
-# 「symlink拒否／存在確認→preflight(V15)→resolve」の3段だけになった
-# （2026-09-08 モデル定義ファイルと候補指定対応・同設計§3.8・§4(a)。
-# 版・形式の分類呼び出しが1つ減る＝外部プロセス数への影響は§11.3参照）。
+# resolve_local_profile <path> — 実体を解決する（symlink拒否／存在確認→preflight→resolve）。
 # 標準出力へタブ区切り1行:
-#   MINIMAL\t<コード>\t<理由>          … 最小能力+⚠️（§6.2状態機械A。
-#     schema_version無し・6未満の実体はT4-LEGACYとしてここに含まれる）
-#   OK\t<解決値>[\tVACANT:...][\tVACANT_REASON:...]
-#        [\tVACANT_UNKNOWN:...][\tADVISORY:...][\tUNKNOWN_EXTRA:...]
+#   MINIMAL\t<コード>\t<理由>          … 最小能力+⚠️（schema_version 無し・旧版は T4-LEGACY としてここに含まれる）
+#   OK\t<解決値>[\tVACANT:...][\tVACANT_REASON:...][\tVACANT_UNKNOWN:...][\tADVISORY:...][\tUNKNOWN_EXTRA:...]
 resolve_local_profile() {
   local path="$1"
   [ -L "$path" ] && { printf 'MINIMAL\tSYMLINK\t実体はsymlinkであってはいけません（マシンローカルの通常ファイルとして直接作成してください）: %s\n' "$path"; return; }
@@ -282,295 +154,41 @@ resolve_local_profile() {
   fi
 }
 
-# check_leader_settings_drift <path> — 配役表解凍-設計-2026-09-01.md
-# §6.2-B（状態機械B）のS10（settings.jsonを手で直した/`/model`で保存した）・
-# S11（旧settings.jsonを保持したまま放置）・S16（profile更新は成功したが
-# settings生成は失敗した）に対応する。3状態はいずれも共通して「次の
-# SessionStartでV13が必ず⚠️を出す」ことを設計契約として要求している
-# （§6.2-B各行）。しかし週次drift（scripts/check-drift.shのV13＝三者一致の
-# フル実装）は「次にcheck-drift.shを手動/cronで実行するまで」気づけない。
-# 本関数はそのギャップを埋める軽量版で、SessionStartの毎回で必ず走る。
-#
-# スコープをv2のrole.leader行に限定する（v2の実体ではsettings.jsonの
-# modelは配役表のrole.leaderから決まり、v1の値出力口＝AIENV_MODEL_MAIN/SUBは
-# v1実体・実体不在に縮退したときのlegacy値選択にしか効かない別経路である。
-# ここで再実装すると判定式が2箇所に増える＝A-0-3で潰した重複の再発になる。
-# v1はcheck-drift.shの週次V13が既に--print-leader-runtime経由でmodel/effort
-# 両方をカバーしている。呼び出し元＝本ファイル下部でprofile_kind="OK"
-# （v2の`resolve`が成功）のときだけ本関数を呼ぶ）。
-#
-# 期待値（何がリーダー行の解決値か）はprofile_resolve.pyのresolve-leader
-# サブコマンド1箇所に委譲し、本関数はその結果とsettings.jsonの実値を
-# 突き合わせるだけに留める（判定式を複数箇所に増やさない＝§4.1-g・U-5と
-# 同じ考え方の横展開。install-main.shの--print-leader-runtimeも同じ
-# resolve-leaderを呼ぶ＝値表の正本は1箇所のまま）。
-#
-# 副作用ゼロ・読み取り専用（settings.jsonは開いて読むだけ）。
-# 標準出力: 0行（一致・監視対象外）または1行の⚠️メッセージ。
-# ⚠️ 絶対厳守③（認証情報・シークレットを露出しない）はトークン・鍵・
-# パスワード・`.env`等の全般が対象であり、本関数はそのいずれも扱わない
-# （比較に使うのは"model"/"effortLevel"という設定値のみ）。加えてBedrockの
-# ピン留め実値も本関数の比較対象・出力のどちらにも現れない
-# （bedrock.envの値そのものはgenerate_settings_json()が"env"ブロックへ
-# 別途マージするが、settings.jsonをjson.loadで読む際に構造上そのブロックも
-# メモリへは載る。ただし比較・出力のどちらにも一切参照・使用しない＝
-# 実際に見るのは"model"/"effortLevel"の2キーだけ。resolve-leaderの出力にも
-# ピン実値は含まれない＝profile-resolve-contract §9）。
-# ⚠️ 不一致メッセージはフィールド名（model/effortLevel）だけを列挙し、
-# 実際の値（settings.json側・プロファイル側どちらも）は一切出力しない。
-check_leader_settings_drift() {
-  local path="$1"
-  local leader_json leader_rc
-  leader_json="$(python3 "$PROFILE_RESOLVE_LIB" resolve-leader "$path" \
-    --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)"
-  leader_rc=$?
-  # 呼び出し元はresolve_local_profile()が既にv2のOKを返した直後にだけ
-  # 本関数を呼ぶ契約のため、resolve-leaderは通常ここで成功するはずである
-  # （V4＝§3.5-Lのfail条件はresolve()のexit契約に含まれるため、resolve()が
-  # OKを返した時点でleader行は候補評価まで通っている）。それでも失敗する
-  # 場合はプロファイルが2回のプロセス起動の間に書き換わった・python3が
-  # 一時的に落ちた等のレースであり、静かに素通りさせず「監視不能」として
-  # 扱う（リーダー要件③＝比較不能を静かに通過させない）。
-  if [ "$leader_rc" != "0" ] || [ -z "$leader_json" ]; then
-    printf '⚠️ settings.json(%s)との整合を確認できませんでした（配役表のリーダー実行値を再取得できません＝監視不能）。scripts/install-main.sh --check-profile で確認してください。\n' "$AIENV_SETTINGS_JSON_FILE"
-    return
-  fi
-
-  local cmp_out cmp_rc
-  cmp_out="$(python3 -c "
-import json, sys
-
-leader_json_raw = sys.argv[1]
-settings_path = sys.argv[2]
-
-try:
-    leader = json.loads(leader_json_raw)
-except Exception:
-    print('UNAVAILABLE\t配役表のリーダー実行値を解析できません')
-    sys.exit(0)
-if not isinstance(leader, dict):
-    print('UNAVAILABLE\t配役表のリーダー実行値が想定形式ではありません')
-    sys.exit(0)
-expected_model = leader.get('model')
-if not isinstance(expected_model, str) or not expected_model:
-    print('UNAVAILABLE\t配役表のリーダー実行値にmodelがありません')
-    sys.exit(0)
-# 契約(profile-resolve-contract §4)ではeffort未指定時はキー自体を出さない
-# ため、キーが無い場合だけ「未指定」として扱う。キーはあるのに値が文字列
-# でない・空文字列という契約違反の形は「未指定」へ静かに丸めず監視不能に
-# する（Codex一次レビュー指摘・Major対応: 従来は不正な型を黙ってNone
-# 〈未指定〉へ変換しており、resolverの契約違反を検出できずに一致と誤判定
-# しうる穴があった）。
-if 'effort' in leader:
-    expected_effort = leader.get('effort')
-    if not isinstance(expected_effort, str) or not expected_effort:
-        print('UNAVAILABLE\t配役表のリーダー実行値のeffortが不正です')
-        sys.exit(0)
-else:
-    expected_effort = None
-
-try:
-    with open(settings_path, encoding='utf-8') as f:
-        settings = json.load(f)
-except FileNotFoundError:
-    print('UNAVAILABLE\tsettings.jsonが存在しません（installerを実行してください）')
-    sys.exit(0)
-except (OSError, json.JSONDecodeError):
-    print('UNAVAILABLE\tsettings.jsonを読めません（壊れている・権限不足の可能性）')
-    sys.exit(0)
-if not isinstance(settings, dict):
-    print('UNAVAILABLE\tsettings.jsonの内容が想定形式ではありません')
-    sys.exit(0)
-
-problems = []
-actual_model = settings.get('model')
-if actual_model != expected_model:
-    problems.append('model' if isinstance(actual_model, str) and actual_model else 'model(欠落)')
-
-has_effort_key = 'effortLevel' in settings
-actual_effort = settings.get('effortLevel')
-if expected_effort is None:
-    if has_effort_key:
-        problems.append('effortLevel(想定は未設定)')
-else:
-    if actual_effort != expected_effort:
-        problems.append('effortLevel')
-
-if problems:
-    print('MISMATCH\t' + ','.join(problems))
-else:
-    print('OK')
-" "$leader_json" "$AIENV_SETTINGS_JSON_FILE" 2>/dev/null)"
-  cmp_rc=$?
-  if [ "$cmp_rc" != "0" ] || [ -z "$cmp_out" ]; then
-    printf '⚠️ settings.json(%s)との整合を確認できませんでした（比較処理自体が失敗＝監視不能）。\n' "$AIENV_SETTINGS_JSON_FILE"
-    return
-  fi
-
-  local tab
-  tab="$(printf '\t')"
-  case "$cmp_out" in
-    OK)
-      : # 一致。何も出力しない（呼び出し元は空文字列を「警告なし」として扱う）。
-      ;;
-    "UNAVAILABLE${tab}"*)
-      printf '⚠️ settings.json(%s)との整合を確認できませんでした（%s）。\n' "$AIENV_SETTINGS_JSON_FILE" "${cmp_out#UNAVAILABLE"$tab"}"
-      ;;
-    "MISMATCH${tab}"*)
-      printf '⚠️ settings.json(%s)が配役表のリーダー行(role.leader)の解決値と一致していません（不一致フィールド: %s）。scripts/install-main.sh の再実行（サブ機は scripts/update-sub.sh）で追随させるか、意図的な一時切替（/model 等）でなければ確認してください。\n' "$AIENV_SETTINGS_JSON_FILE" "${cmp_out#MISMATCH"$tab"}"
-      ;;
-    *)
-      printf '⚠️ settings.json(%s)との整合を確認できませんでした（比較結果を解釈できません＝監視不能）。\n' "$AIENV_SETTINGS_JSON_FILE"
-      ;;
-  esac
-}
-
-# テスト専用: BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1のとき、
-# check_leader_settings_drift()の生出力（0行または1行の⚠️メッセージ）だけを
-# 標準出力へ返して即終了する。stdin JSON読み込み・ヘルス行計算等の本処理
-# には一切進まない。本番では未設定のため無効（S10/S11/S16結合テスト用・
-# 2026-09-01追加）。
-if [ "${BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY:-0}" = "1" ]; then
-  check_leader_settings_drift "$AIENV_LOCAL_PROFILE_PATH"
-  exit 0
-fi
-
-# 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で
-# 「レポート生成→リーダーがセッション内で処理」という間接ループを廃止し、
-# 定常メンテは夜間バッチ(maintenance.sh)がVaultへ直接書き込む方式へ移行した。
-# 旧・未処理レポート検知（fragments-log/vault-inventory/knowledge-merge-candidates
-# のprocessedマーカー監視）・未解決ALERT監視（knowledge_merge.py由来。同スクリプトは
-# 撤去済み）はこの間接ループの一部だったため、対応するreport_frontmatter()・
-# latest_unprocessed_report_date()・count_unresolved_alerts()ごと削除した。
-# 代替の新鮮度チェック（maintenance.shのlast-run.json・started_atの経過日数のみで
-# 判定）はmaintenance.sh新設（PR2）と同時に導入する。旧実装を読みたい場合は
-# `git log -p claude/hooks/bootstrap-vault.sh` を参照。
-
+# 外部脳ヘルス行。fail-open＝ここで何が起きてもブートストラップ本文は必ず出す（呼び出し側は 2>/dev/null で出力を捨てるだけ）。
+# $machine_role は呼び出し前に代入済み（下部の resolve 出力からの取り出し）。
 compute_health_lines() {
-  local inv_dir lines="" latest count now_epoch stale_names=""
+  local lines="" now_epoch stale_names=""
 
-  # ① 最新棚卸しレポートの日付・検出件数（frontmatter/タイトルには件数が無いため、
-  # 本文冒頭の「要確認 N 件」を1回のgrepで拾う。取れなければ日付のみ表示する）。
-  # 2026-07-11 決定でVault配下(Explorations/vault-inventory)から
-  # $HOME/.claude/logs/vault-inventory へ出力先が移設された（vault_inventory.py
-  # のOUT_DIRと同じ既定値）。
-  inv_dir="$VAULT_INVENTORY_LOG_DIR"
-  if [ -d "$inv_dir" ]; then
-    shopt -s nullglob
-    local files=("$inv_dir"/20*.md)
-    shopt -u nullglob
-    if [ "${#files[@]}" -gt 0 ]; then
-      latest="${files[$((${#files[@]} - 1))]}"  # ファイル名がYYYY-MM-DDなのでglob順=時系列順（bash 3.2互換のため負インデックス不使用）
-      count="$(grep -m1 -oE '要確認[^0-9]*[0-9]+' "$latest" 2>/dev/null | grep -oE '[0-9]+$')"
-      # 表示は日付のみではなくフルパス（本人がそのままファイルを開けるように・
-      # Codexレビュー指摘の運用改善。2026-07-12追加）。
-      if [ -n "$count" ]; then
-        lines="${lines}- 棚卸し最新: ${latest}（要確認 ${count} 件）
+  # ① 最新棚卸し＝latest.json（書き手＝vault_inventory.py）。不在→行なし／JSON 破損・date/actionable 欠落・型違反→⚠️1行。
+  # jq が無ければ行なし（④と同じ fail-open）。last-run.json の fragments_candidates は読まない（AI へ注入しない）。
+  local inv_json="$VAULT_INVENTORY_LOG_DIR/latest.json"
+  if [ -f "$inv_json" ] && command -v jq >/dev/null 2>&1; then
+    local inv_fields inv_path inv_n inv_date inv_rest
+    inv_fields="$(jq -r 'select(type == "object" and (.date | type) == "string" and (.actionable | type) == "number" and .actionable >= 0 and (.actionable | floor) == .actionable) | [(.report_path // "" | tostring), (.actionable | tostring), .date] | join("\t")' "$inv_json" 2>/dev/null)"
+    if [ -n "$inv_fields" ]; then
+      inv_path="${inv_fields%%$'\t'*}"
+      inv_rest="${inv_fields#*$'\t'}"
+      inv_n="${inv_rest%%$'\t'*}"
+      inv_date="${inv_rest#*$'\t'}"
+      [ -n "$inv_path" ] || inv_path="$inv_json"
+      lines="${lines}- 棚卸し最新: ${inv_path}（要確認 ${inv_n} 件・${inv_date}）
 "
-      else
-        lines="${lines}- 棚卸し最新: ${latest}
+    else
+      lines="${lines}- ⚠️ 棚卸しの状態記録が壊れています（latest.json: ${inv_json}）
 "
-      fi
     fi
   fi
 
   now_epoch="$(date -u +%s 2>/dev/null)"
 
-  # ② Preferences提案（2026-07-18ハードニング・[[Decisions/2026-07-18-
-  # external-brain-hardening]]で pending マーカー層を撤去）: 提案ディレクトリ
-  # 自体（`<slug>.md`＝maintenance_apply.pyのapply_promote_preferences_
-  # proposal()が排他書込する下書き本文そのもの）を**正本として直接スキャン**し、
-  # `*.md`ファイルの件数を「未確認N件」として毎起動で通知し続ける。承認/却下は
-  # リーダーが`.md`（＋sidecarの`.meta.json`）を削除するだけでよく、通知件数が
-  # 自然に追従する（派生物のマーカーJSON・破損時自己修復ロジックは持たない＝
-  # 部品削減。旧実装はgit log -p参照）。
-  # fail-open: ディレクトリが無い/読めない等はここで例外的に落ちずヘルス行を
-  # 諦めるだけにする（呼び出し側の`compute_health_lines 2>/dev/null`と二重に
-  # fail-openを守る）。
-  if [ -d "$PREFERENCES_PROPOSALS_DIR" ]; then
-    shopt -s nullglob
-    local proposal_files=("$PREFERENCES_PROPOSALS_DIR"/*.md)
-    shopt -u nullglob
-    local n_proposals="${#proposal_files[@]}"
-    if [ "$n_proposals" -gt 0 ]; then
-      # ファイル名（拡張子除く＝slug）を決定的な表示順にするため一旦ソートする
-      # （globの列挙順はファイルシステム依存で保証されないため）。
-      # slug列挙は先頭5件までに抑え、6件目以降は「ほかN件」に畳む
-      # （2026-07-17 tester2差し戻し対応・任意Minor: ヘルス行が際限なく
-      # 長くなるのを防ぐ。方式変更後も同じ制限を踏襲する）。
-      local sorted_slugs=() f base shown_slugs="" remaining=0 i=0
-      while IFS= read -r base; do
-        sorted_slugs+=("${base%.md}")
-      done < <(printf '%s\n' "${proposal_files[@]##*/}" | sort)
-      for i in "${!sorted_slugs[@]}"; do
-        [ "$i" -ge 5 ] && break
-        shown_slugs="${shown_slugs}${shown_slugs:+・}${sorted_slugs[$i]}"
-      done
-      if [ "$n_proposals" -gt 5 ]; then
-        remaining=$((n_proposals - 5))
-        shown_slugs="${shown_slugs}・ほか${remaining}件"
-      fi
-      lines="${lines}- 🆕 夜間バッチで運用ルールの昇格提案があります（未確認${n_proposals}件）: ${shown_slugs}
-"
-    fi
-  fi
-
-  # ④ 死活検知（Critical対処・2026-07-18ハードニング／2周目・全体構成再レビュー
-  #
-  # サブ機スキップ（2026-08-06追加。本人報告・実害対応）: maintenance.sh（週次
-  # メンテ）とそれを起動するLaunchAgentはメイン機専用機能であり、サブ機には
-  # 設計上存在しない（install-sub.shはmaintenance.sh関連のインストールを一切
-  # 行わない）。そのためサブ機ではlast-run.jsonが常に不在のままとなり、
-  # 以下の判定が「毎セッション必ず」④の警告を出し続けてしまっていた
-  # （本来は正常な状態にもかかわらず）。判定は配役表の`machine_role`能力軸
-  # （配役表-能力軸整理-設計-2026-09-07.md §2.1・§4.2）を使う（$machine_role
-  # は本関数の呼び出し前に代入済み＝下部の`resolve`出力からの取り出し参照）。
-  # fail-closed＝解決失敗/欠落/"sub"以外の値はすべて「メイン機」とみなし
-  # 従来どおり④を実行する。積極的な証明＝厳密に"sub"の場合のみスキップする。
-  # ①②等の他セクションは元々ディレクトリ不在時に静かにスキップする
-  # fail-open設計のため対象外（変更しない）。
+  # ④ 死活検知（last-run.json）。サブ機（machine_role が厳密に "sub"）には maintenance.sh が無いのでスキップ。
+  # それ以外（解決失敗・欠落・main）はメイン機とみなして判定する（fail-closed）。
   if [ "$machine_role" != "sub" ]; then
-  # Codex+Fable5収束後の小修正＝impl4）: maintenance.sh(週次)のlast-run.json
-  # started_atが${MAINTENANCE_STALE_DAYS}日以上前のままなら「週次メンテ自体が
-  # 動いていない」疑いとして警告する（started_atはbusy/error早期終了でも
-  # 無条件更新される契約＝maintenance.sh参照。メンテ全停止を受動的に検知する
-  # 最後の砦）。2周目で以下2点を追加（「複雑化させない」原則で既存判定への
-  # 足しに留める）:
-  #   (a) last_success_atのN日停滞検知＝started_atは新しくてもlast_success_at
-  #       が${MAINTENANCE_STALE_DAYS}日以上古ければ「起動はするが成功していない」
-  #       ＝「毎週起動して毎週失敗」の不可視を塞ぐ（Phase1①のfail-fastや
-  #       Phase2の失敗が続いていても、started_atだけ見ていると気付けない）。
-  #   (b) last-run.json不在・JSON破損・両フィールドとも未記録、または
-  #       実在するいずれかのフィールドの値が解析不能／未来日時（空文字列・
-  #       null・不正な文字列を含む＝2周目再レビューでhas()による区別へ
-  #       修正済み）のときは `[ -f ]`等で静かにスキップせず「状態記録が
-  #       無い/壊れています」と警告する＝初回未稼働・状態ファイル消失/破損・
-  #       片方だけの破損の不可視を塞ぐ。
-  # fail-open: jqが無い/JSON破損/フィールド欠落/時刻パース不能のいずれでも
-  # クラッシュはしない（このcompute_health_lines関数自体が呼び出し側で
-  # 2>/dev/nullされる二重の安全網もそのまま維持）。
-  #
-  # tester4差し戻し・Major対応（2周目・全体構成再レビュー独立検証で発見された
-  # A②の穴）: 従来は(b)の判定が「started_epoch・success_epochの両方が空の
-  # ときだけ」発火しており、片方だけ値が壊れている（不正な文字列・未来日時）
-  # ケースを静かに見逃していた。最も痛いのは「last_success_atだけ破損・
-  # started_atは正常」＝(a)が狙う「起動するが成功しない」検知そのものが
-  # 破損データによって無効化される。修正: 各フィールドについて「値は有るのに
-  # 信用できない（解析不能または未来日時）」状態を`*_broken`として個別に
-  # 判定し、いずれか一方でもbrokenなら(b)の警告を出す（「値が無い」＝キー
-  # 自体が未設定という正常な過渡状態＝初回未成功等とは区別する。7l系テストが
-  # 保証する「last_success_at未設定でも警告なし」は壊さない）。
-  #
-  # 再レビュー指摘Major対応: 「キーが無い(has()==false)」と「キーはあるが
-  # 値が偽値（空文字列/null）」を`.field // empty`だけでは区別できない
-  # （どちらも`jq -r`の出力としては空文字列になる。`jq -r '"" // empty'`も
-  # 出力上は空文字列と見分けが付かない）。maintenance.sh自身は常に有効な
-  # ISO8601文字列しか書かない契約のため、後者（キーは実在するが値が空/null）
-  # は書込側の異常（破損）を示す信号であり、「まだ一度も成功していない」という
-  # 正常な過渡状態（＝キー自体が無い）と混同してはいけない。`has()`で
-  # キーの実在を独立に確認し、実在するのに解析できない/未来日時の場合のみ
-  # brokenとする（キーが存在しないなら`*_broken`は立てない＝7l系テストの
-  # 正常無警告契約を保つ）。
+  # started_at が ${MAINTENANCE_STALE_DAYS} 日以上前＝週次メンテが動いていない。
+  #   (a) started_at は新しいが last_success_at が古い＝起動はするが成功していない。
+  #   (b) 不在・JSON 破損・両フィールド未記録・実在する値が解析不能/未来日時＝状態記録が無い/壊れている。
+  # has() でキーの実在を確認し、実在するのに解析できない値だけを broken にする
+  # （キーが無い＝初回未成功の正常な過渡状態とは区別する。`.field // empty` だけでは空文字列/null と区別できない）。
   if [ -n "$now_epoch" ]; then
     local started_at last_success_at started_epoch success_epoch started_age success_age
     local started_broken=0 success_broken=0 has_started="" has_success=""
@@ -586,9 +204,6 @@ compute_health_lines() {
     started_epoch=""
     if [ "$has_started" = "true" ]; then
       [ -n "$started_at" ] && started_epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${started_at%Z}" +%s 2>/dev/null)"
-      # キーは実在するのに解析できない（空文字列/null/不正な文字列）、
-      # または未来日時（時計ズレ/破損の疑い）なら壊れているとみなす。
-      # 以降のstale判定には使わせない。
       if [ -z "$started_epoch" ] || [ "$started_epoch" -gt "$now_epoch" ]; then
         started_broken=1
         started_epoch=""
@@ -603,18 +218,9 @@ compute_health_lines() {
       fi
     fi
 
-    # 注意（2026-08-10 実測発見・工程横断レビュー対応中に判明）: このmacOS
-    # 標準bash（3.2.57・/bin/bash）は、二重引用符文字列の中で `$VARNAME`
-    # （波括弧無し）の直後に全角文字（例: `）`）が続くと、変数名の切れ目を
-    # 誤認識し値が化ける実害がある（`$VAR）` → 空/文字化けした展開。
-    # `${VAR}）`のように波括弧で明示的に閉じれば発生しない）。本関数の
-    # $MAINTENANCE_LAST_RUN_FILE を含む行は必ず`${MAINTENANCE_LAST_RUN_FILE}）`
-    # の形（波括弧付き）で書くこと。既存の各行も本対応でこの形へ揃えた。
+    # ⚠️ macOS の bash 3.2 は二重引用符内で `$VAR）`（波括弧無し＋全角）が化ける。必ず `${VAR}）` の形で書く。
     if { [ -z "$started_at" ] && [ -z "$last_success_at" ]; } \
        || [ "$started_broken" -eq 1 ] || [ "$success_broken" -eq 1 ]; then
-      # (b) ファイル不在／JSON破損／両フィールドとも記録が無い、または
-      # いずれかのフィールドに値は有るが解析不能/未来日時＝状態記録が
-      # 部分的にでも信用できない。
       lines="${lines}- ⚠️ 週次メンテの状態記録が無い/壊れています（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
 "
     else
@@ -624,39 +230,18 @@ compute_health_lines() {
         lines="${lines}- ⚠️ 週次メンテが${started_age}日動いていません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
 "
       elif [ -z "$started_epoch" ] && [ -n "$success_epoch" ] && [ "$success_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
-        # started_atが未設定（キー自体が無い）の場合のみ、従来どおり
-        # last_success_atへフォールバックする（started_atの値が壊れている
-        # ケースは上のstarted_broken判定で既に(b)枝へ拾われている）。
+        # started_at キー自体が無いときだけ last_success_at へフォールバックする。
         lines="${lines}- ⚠️ 週次メンテが${success_age}日動いていません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
 "
       elif [ -n "$started_epoch" ] && [ -n "$success_epoch" ] && [ "$success_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
-        # (a) started_atは新しい(=起動はしている)がlast_success_atだけが
-        # 古い＝起動するが成功し続けていない疑い。
         lines="${lines}- ⚠️ 週次メンテが起動はするが${success_age}日成功していません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
 "
       fi
     fi
   fi
 
-  # last_result（旧D4・[[Decisions/2026-08-10-round6-rulings]]決定1のセット
-  # 条件「警告・失敗の可視化」）: 前回の週次メンテ実行結果がwarn/failなら
-  # ⚠️1行を追加する。上のstarted_at/last_success_at経過日数ベースの死活
-  # 監視とは別軸＝「動いてはいるが直近1回で警告/失敗があった」を、
-  # started_at自体は新しいままの間も翌セッション冒頭で必ず拾えるように
-  # する（正本＝[[Decisions/2026-08-05-bootstrap-health-warning-report]]
-  # 「検知は機能していたが誰も拾わず放置された」への対処＝既存ヘルス行の
-  # 方式に合わせる）。last_resultはmaintenance.sh側でsuccess/warn/failの
-  # 3値のみを書く契約（scripts/maintenance.sh参照）。それ以外の値・キー
-  # 欠落・ファイル不在・jq不在はfail-openで無視する（この行が出ないだけで、
-  # 上記①〜④の判定には影響しない）。
-  #
-  # success＋last_result_summary非空はℹ️（情報提供のみ・⚠️とは区別）で表示
-  # する（2026-08-10 工程横断レビュー指摘Major対応）。用途＝②のTOML三分類で
-  # 検出された未知config.tomlキーのように、driftでも異常でもないが
-  # RUN_DIRログ（30日TTL）に埋もれさせず翌セッションまでは見えるように
-  # したい情報（scripts/maintenance.shのadd_info_note()参照）。last_result
-  # 自体をwarnへ昇格させない（本人裁定）ため、⚠️と混同されないよう記号・
-  # 文言を明確に分ける。
+  # last_result（success|warn|fail＝maintenance.sh が書く3値）: warn/fail は ⚠️、success＋summary 非空は ℹ️。
+  # それ以外の値・キー欠落・ファイル不在・jq 不在は fail-open で無視する。
   if [ -f "$MAINTENANCE_LAST_RUN_FILE" ]; then
     local last_result last_result_summary
     last_result="$(jq -r '.last_result // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
@@ -669,12 +254,10 @@ compute_health_lines() {
 "
     fi
   fi
-  fi  # machine_role != sub（サブ機では④の全判定を無警告でスキップ）
+  fi  # machine_role != sub
 
-  # ③ check-drift.sh ⑥相当の簡易死活。reads/recallログそれぞれの「最終有効行」
-  # （3列目=ノート相対パスが空でない行）の経過日数が閾値超なら死の疑いを出す。
-  # 全行走査はしない（tail の範囲内に有効行が無ければ判定を諦めてfail-openする＝
-  # 詳細判定はcheck-drift.sh（週次drift通知）の役目で、ここは毎回軽く見るだけ）。
+  # ③ check-drift.sh ⑥相当の簡易死活。reads/recall ログの「最終有効行」（3列目非空）の経過日数が閾値超なら死の疑い。
+  # tail の範囲内に有効行が無ければ判定を諦める（fail-open。詳細判定は check-drift.sh の役目）。
   if [ -n "$now_epoch" ]; then
     local pair name f ts epoch age
     for pair in "vault-reads.tsv|$VAULT_READS_LOG" "vault-recall.tsv|$VAULT_RECALL_LOG"; do
@@ -699,19 +282,6 @@ compute_health_lines() {
   printf '%s' "$lines"
 }
 
-# 使用率ブロックの本体は lib/usage-block.sh の compute_usage_block() に置く。
-# usage_snapshot.pyの既定出力（枠あたり1行・常に3行）へ、この入口では
-# 見出しと末尾1行を添える。⚠️ timeoutは使わない（macOSに無い）。
-# ⚠️ AIENV_USAGE_CACHE_DIRはこの関数が明示的に転送しなくても、bashの子
-# プロセス（python3）へ環境変数として自然に継承される（テストで
-# fixtureディレクトリを差すときは呼び出し元でこの変数をexportするだけでよい）。
-# ⚠️ AIENV_USAGE_NOW（テスト専用・2026-09-08 worker-driven一次レビュー
-# MAJOR-4対応で新設）: 設定されていれば`--now`としてusage_snapshot.pyへ
-# そのまま渡す。年齢計算・リセット時刻表示（同日/翌日の書式分岐）を
-# 実時刻から切り離して決定的にテストできるようにするため
-# （resolve_local_profile()の--nowに相当する既存の設計則をこの新機能にも
-# 踏襲した）。本番では未設定のため無効＝常に実時刻を使う。
-# fail-open契約も共有関数が担い、呼び出し側でも空出力を内部エラーへ縮退する。
 INPUT=$(cat 2>/dev/null || true)
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // ""' 2>/dev/null)
 AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // ""' 2>/dev/null)
@@ -732,32 +302,10 @@ if [ "$is_worker" = "0" ] && [ -n "$SESSION_ID" ] && [ -d "$TEAMS_DIR" ]; then
 fi
 
 if [ "$is_worker" = "1" ]; then
-  # 2026-09-03 軽量版撤去＝共通ルールは agents/*.md の共通ルール節が正本。
-  # in-process ワーカーには本フックの注入が届いていなかった（transcript実測で
-  # 確認）ため、absolute-rules必読・Vault書込禁止は既に職種定義側へ移管済み。
-  # 旧DIRECTIVE第3項目「obsidian-mcpは使わない」は該当ツールを職種定義の
-  # tools:に付与しないことで担保する（別経路のため本フックでの言及は不要）。
-  # ペイン型・定義なし個体を再採用する場合は、その起動経路で共通ルールの
-  # 供給を改めて実装・実測すること。
+  # ワーカーには何も注入しない（共通ルールの正本＝agents/*.md の共通ルール節。in-process ワーカーには本フックの注入が届かない）。
   exit 0
 else
-  # 2026-08-30 §9.0 A-1-3 波及改修（本人承認済み・順序厳守どおり
-  # 移送先core-conduct.md/core-workflow.mdがVault側に配置済み/配置中になった
-  # 段階で実施＝§7.3③「移送先が必読として読まれる状態になってから移送元を
-  # 外す」）: `Knowledge/mistakes.md` を必読から除去し、代わりに
-  # `Preferences/core-conduct.md`・`Preferences/core-workflow.md` を追加した
-  # （§9.3 P2受入①）。
-  # 2026-09-05 §9.3 P3段階4対応（Decisions/2026-09-03-p3-staged-execution
-  # 段階2で移送・段階3で配布済みを受けての段階4実施）: `Preferences/
-  # coding-delegation.md`・`Preferences/profile.md` を必読から外した
-  # （応対規則・工程規範はcore-conduct.md/core-workflow.mdへ移送済み。
-  # 残る手順・経緯は必要時に読む＝必読からは外れるだけでノート自体は残る）。
-  # ⚠️ サブ機/メイン機で別配列に分岐させていない——サブ機（private層を持たない
-  # 環境）での欠落判定は下のfor文の存在確認（`-f`）だけで行われ、
-  # core-conduct.md・core-workflow.mdはいずれもPreferences配下＝vault-public
-  # スナップショット経由でサブへも同一pushで届く（Knowledge/
-  # vault-public-distribution-scope）ため、単一のFILES配列のままで
-  # メイン/サブ両方に正しく効く。
+  # 必読リスト。サブ機（private 層を持たない）との違いは Personal/ の有無だけ＝単一配列でメイン/サブ両方に効く。
   FILES=(
     "Preferences/absolute-rules.md"
     "Preferences/core-conduct.md"
@@ -765,15 +313,7 @@ else
     "Personal/profile-personal.md"
     "Preferences/vault-operation.md"
   )
-  # 意図的にサブ機へ配らない（private層）ファイル。FILES配列のうちこれ**だけ**が
-  # 「無くて正常」（2026-07-08リーダー指示）。それ以外は全てPreferences配下＝
-  # vault-publicスナップショット経由でメイン/サブ両方へ同一pushで届く想定の
-  # 必須publicノートであり、欠落は同期失敗・checkout破損・移送順序ミス等の
-  # 異常を示す（2026-08-30 Codex一次レビュー指摘・Major対応: 従来は全ての
-  # 欠落を一律「privateノートはこのマシンには無い」として無警告で握り潰して
-  # いたため、core-conduct.md・core-workflow.mdのような必須publicノートが
-  # 欠落しても「サブでは普通にある欠落」と誤認され、§7.3③が懸念する
-  # 「移送元も移送先も読まれない窓」が実際に開いていても気づけなかった）。
+  # private 層＝サブ機に「無くて正常」なファイル。それ以外の欠落は同期失敗・checkout 破損等の異常として別枠で警告する。
   LOCAL_ONLY_FILES=(
     "Personal/profile-personal.md"
   )
@@ -785,14 +325,8 @@ else
     return 1
   }
 
-  # 必読ファイル一覧を絶対パス+存在確認+行数付きで生成（行数を載せておくと、
-  # 後でReadした結果が全文かどうかAI自身が照合できる）。
-  # サブ機（private層を持たない環境）では Personal/profile-personal.md が
-  # 存在しないため、「見つかりません」と毎回警告するのではなく
-  # **存在するファイルだけを必読リストに載せる**（2026-07-08 リーダー指示・install-sub.sh対応）。
-  # メイン機（全5ファイルが揃う環境）の挙動は変わらない＝5ファイル全部が列挙される
-  # （ローカル実体プロファイルは別枠でこの後さらに1件追加され、メイン機の
-  # present_countは合計6・サブ機は5になる＝共通コア分離-設計 §9.3 の最終形）。
+  # 必読ファイル一覧を絶対パス+行数付きで生成（行数があれば Read の結果が全文か AI 自身が照合できる）。
+  # 存在するファイルだけを載せる＝サブ機で毎回「見つかりません」と警告しない。
   list=""
   present_count=0
   missing_count=0
@@ -808,9 +342,6 @@ else
     elif is_local_only_file "$f"; then
       missing_count=$((missing_count + 1))
     else
-      # private層ではない＝サブでも本来存在するはずのpublicノートが欠落している
-      # （同期失敗・checkout破損・移送順序ミス等）。「無くて正常」の件数には
-      # 数えず、別枠で強めに警告する。
       unexpected_missing="$unexpected_missing
   - $abs"
       unexpected_missing_count=$((unexpected_missing_count + 1))
@@ -825,111 +356,40 @@ else
   ⚠️ 必読のはずのpublicノートが見つかりません（想定外・同期失敗やcheckout破損の可能性。scripts/update-sub.shの再実行・scripts/check-drift.shでの確認を推奨）:$unexpected_missing"
   fi
 
-  # ローカル実体プロファイル（P1機構・2026-09-02から既定有効。
-  # BOOTSTRAP_ENABLE_LOCAL_PROFILE=0を明示したときだけ、Vault外の固定パスを
-  # 必読リストへ追加しない旧来の挙動（P1導入前）に戻る）。
-  #
-  # 必読掲載条件（§4a・U-8裁定 2026-09-01→FR-10〈要件v1.2.1〉で全文Read指示
-  # 自体を撤去）: 「通常ファイル→preflight→浅い走査→分類別parser→fail区分の
-  # validator非違反→UNKNOWN_EXTRA無し」の**全部**が成功したかどうかは、もう
-  # listへの全文Read指示では表さない。代わりに🧭モード行の末尾セグメント
-  # （下部のTEAM_MODE_LINE組み立て参照）へ①成否②schema_version③machine_role
-  # ④照会コマンドを織り込む。1つでも欠ければ「利用不可（区分）」の短い注記を
-  # 同じセグメントに出す（AI側は最小能力として振る舞う。機械側の解決可否とは
-  # 独立＝§4a表の「機械は既知キー部分が有効でもAIは除外」）。
+  # ローカル実体プロファイル: 必読リストには載せない。解決の成否・schema_version・machine_role・照会コマンドは
+  # 🧭モード行の末尾セグメントへ織り込む。失敗時は「利用不可（区分）」を同じセグメントに出す（AI は最小能力として振る舞う）。
   LOCAL_PROFILE_WARNING=""
-  # 3モード体制（§4.3(c)）: profile_kindは現行ではこのブロックの中でしか
-  # 代入されない。TEAM_MODE:の取り出しはブロックの外でも動く必要があるので、
-  # ここで明示的に初期化する（初期化しないと将来の改修で未定義参照になる）。
+  # profile_kind／machine_role はこのブロックの外でも参照するので先に初期化する。
   profile_kind=""
-  # 配役表-能力軸整理-設計-2026-09-07.md §4.2: machine_roleも同じ理由で
-  # 同じ位置で初期化する（BOOTSTRAP_ENABLE_LOCAL_PROFILE=0の経路でも未定義
-  # 参照にしない。外部脳ヘルス行④のcompute_health_linesが読む）。
   machine_role=""
   if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
-    # resolve_local_profile()自身がsymlink拒否(SYMLINK)・不在(T1)を含めた
-    # 全状態を返すため、必読リスト表示側で-L/-fを個別に再判定しない
-    # （判定式を2箇所に増やさない＝A-0-3と同型の重複防止）。
     profile_status="$(resolve_local_profile "$AIENV_LOCAL_PROFILE_PATH")"
     profile_kind="${profile_status%%$'\t'*}"
     profile_rest="${profile_status#*$'\t'}"
     profile_has_unknown_extra=0
     printf '%s' "$profile_status" | grep -q 'UNKNOWN_EXTRA:' && profile_has_unknown_extra=1
 
-    if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
-      # FR-10（要件v1.2.1）: 実体プロファイルは必読リストから外した（U-8の
-      # 全文Read指示はここで打ち切り、present_countも増やさない）。解決の
-      # 成否・schema_version・machine_role・照会コマンドは🧭モード行の末尾
-      # セグメントへ織り込む（FR-11・下部のTEAM_MODE_LINE組み立て参照）。
-      :
-    else
-      # FR-10差し戻し（検証1巡目MINOR-4・2026-09-17）: 失敗経路（不在T1・
-      # symlink・fail区分のvalidator違反・UNKNOWN_EXTRA）でも必読リストへは
-      # 一切追加しない（OK経路だけでなく全経路で外す）。失敗の情報は🧭
-      # モード行の「利用不可（<区分>）」セグメント（FR-12・下部の
-      # TEAM_MODE_LINE組み立て参照）へ一本化する。区分語（T1/SYMLINK/T10等
-      # のprofile_reason_codeまたはUNKNOWN_EXTRA）はそのセグメント側で
-      # 既に失敗種別ごとに出し分けているため、ここでの掲載は不要。
-      # present_countはこの分岐ではもともと加算していないため整合済み。
-      :
-    fi
-
+    # 警告＝コード＋取るべき行動1つ。
     if [ "$profile_kind" = "MINIMAL" ]; then
       profile_reason_code="${profile_rest%%$'\t'*}"
       profile_reason_msg="${profile_rest#*$'\t'}"
       if [ "$profile_reason_code" = "T11" ]; then
-        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})に認証情報らしいキー名があります（${profile_reason_msg}）。該当行を削除してください。認証情報は専用の資格情報機構（AWS CLI/SSO等）へ置いてください。bedrock.envに置いてよいのは認証情報ではないモデルのピン留め値だけです。最小能力（各能力軸キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。"
+        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})に認証情報らしいキー名があります（T11: ${profile_reason_msg}）→ 該当行を削除して再開。最小能力として扱う。"
       else
-        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})を解決できません（${profile_reason_code}: ${profile_reason_msg}）。最小能力（各能力軸キーは空席・unavailable相当）として扱い、fail-softの申告（Preferences/core-workflow.md §7 職種が空席のとき）を行うこと。既定値を発明しない。"
+        LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})を解決できません（${profile_reason_code}: ${profile_reason_msg}）→ 最小能力として扱い、空席の申告（Preferences/core-workflow.md §7）を行う。既定値を発明しない。"
       fi
     elif [ "$profile_has_unknown_extra" = "1" ]; then
-      # T9'（U-8裁定）: 未知キーの「値」にV15では検出できない秘密が
-      # 書かれている可能性があるため、advisoryとして読ませ続けることをやめ、
-      # AI向けには必読除外・最小能力として振る舞わせる（機械側の解決は有効）。
-      # ⚠️ リーダー裁定（UNKNOWN_EXTRAフィールド追加の承認と同時、2026-09-01）:
-      # 「プロファイル利用不可＝最小能力」「ワーカー起動は本人確認へ倒す」を
-      # 文言として明示する（4.1-fのDIRECTIVE注入契約どおり、この信号を根拠に
-      # 具体的な振る舞いまで書く。単に「最小能力として扱ってください」だけでは
-      # ワーカー起動時に何をすべきかが伝わらない）。
+      # 未知キーの「値」に秘密が書かれている可能性があるため、機械側の解決は有効でも AI 向けには最小能力として扱う。
       unknown_extra="${profile_status#*UNKNOWN_EXTRA:}"
-      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイルに未知のキーがあります（${unknown_extra}）。機械側（resolver/installer）は既知キー部分のみ有効ですが、**プロファイル利用不可＝最小能力**としてAI向けには必読から除外します（U-8裁定・秘匿優先。まだこのマシンのコードが追随していない新しいキーの可能性があります）。配役の状態が確認できない以上、**ワーカー起動は本人確認へ倒してください**（Preferences/core-workflow.md §7 職種が空席のとき）。"
+      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイルに未知のキーがあります（${unknown_extra}）→ プロファイル利用不可＝最小能力として扱い、ワーカー起動は本人確認へ倒してください（Preferences/core-workflow.md §7）。"
     elif printf '%s' "$profile_status" | grep -q -E '(VACANT|VACANT_REASON|VACANT_UNKNOWN|ADVISORY):'; then
-      # 4.1-f: 配役の値そのものは再掲しないが、縮退・未確定の
-      # 職種名と条件番号はDIRECTIVEへ必ず注入する（静かな失敗を防ぐ）。
+      # 配役の値そのものは再掲しないが、縮退・未確定の職種名と条件番号は必ず注入する（静かな失敗を防ぐ）。
       casting_note="$(printf '%s' "$profile_status" | sed -E 's/^OK\t//')"
       LOCAL_PROFILE_WARNING="ℹ️ 配役表の状態（職種名と条件番号のみ・値は含みません）: ${casting_note}。詳細はPreferences/core-workflow.md §7（職種が空席のとき）を参照してください。"
     fi
-
-    # S10/S11/S16対応（check_leader_settings_drift参照）: v2の`resolve`が
-    # OKを返した（＝role.leaderが候補評価まで通った）セッションでは、
-    # settings.jsonがその解決値へ追随しているかを毎回軽く比較する。
-    # ⚠️ UNKNOWN_EXTRAの有無を問わない（上のAI向け必読可否＝§4a・U-8とは
-    # 独立の判定。resolve-leaderはUNKNOWN_EXTRAを見ないため機械側は既知キー
-    # 部分が有効＝§4aの表のとおり）。
-    if [ "$profile_kind" = "OK" ]; then
-      leader_settings_drift_warning="$(check_leader_settings_drift "$AIENV_LOCAL_PROFILE_PATH")"
-      if [ -n "$leader_settings_drift_warning" ]; then
-        if [ -n "$LOCAL_PROFILE_WARNING" ]; then
-          LOCAL_PROFILE_WARNING="${LOCAL_PROFILE_WARNING}
-${leader_settings_drift_warning}"
-        else
-          LOCAL_PROFILE_WARNING="$leader_settings_drift_warning"
-        fi
-      fi
-    fi
-
-    # FR-11（要件v1.2.1）: 職種ごとの候補一覧（定義名）の注入は撤去した。
-    # spawn 直前の照会は新設の候補一覧コマンド（claude/hooks/lib/
-    # role_candidates.py・担当C実装）へ一本化し、SessionStart注入には
-    # 出さない（NFR-5）。呼び出し例は🧭モード行の末尾セグメントに含める。
   fi
 
-  # 3モード体制（3モード体制-設計-2026-09-06.md §4.3(c)）: OK行の
-  # TEAM_MODE:フィールドから値を取り出す（外部プロセスを起こさない＝
-  # bashのパラメータ展開だけで行う＝NFR-4）。⚠️ `"$(printf '\t')"`は
-  # command substitutionでありbuiltinのみでもsubshellを1つ増やすため、
-  # ANSI-Cクォート`$'\t'`で代入する（Codex一次レビュー指摘・MAJOR対応。
-  # bash 3.2でも動作確認済み）。
+  # TEAM_MODE: の取り出し（パラメータ展開だけ＝外部プロセスなし。$'\t' は command substitution を避けるため）。
   tm_tab=$'\t'
   tm_pat="${tm_tab}TEAM_MODE:"
   team_mode=""
@@ -941,37 +401,21 @@ ${leader_settings_drift_warning}"
   compose_team_mode_line "$team_mode"
   compose_team_mode_directive5 "$team_mode"
 
-  # 配役表-能力軸整理-設計-2026-09-07.md §4.2: MACHINE_ROLE:フィールドを
-  # 同じ形で取り出す。⚠️ team_modeとは条件が違い、profile_has_unknown_extraは
-  # 見ない（機械側＝機構の分岐は既知キー部分だけを使う＝FR-13①。降格させると
-  # 廃止キーが残っている過渡状態のサブ機で外部脳ヘルス行④の誤警告が毎セッション
-  # 出る＝2026-08-06に実害として直した挙動が戻る）。
+  # MACHINE_ROLE: も同じ形で取り出す。⚠️ unknown_extra は見ない（機構の分岐は既知キー部分だけを使う。
+  # 降格させると廃止キーが残る過渡状態のサブ機で④の誤警告が毎セッション出る）。
   mr_tab=$'\t'
   mr_pat="${mr_tab}MACHINE_ROLE:"
   if [ "$profile_kind" = "OK" ]; then
     mr_rest="${profile_status#*"$mr_pat"}"
     [ "$mr_rest" != "$profile_status" ] && machine_role="${mr_rest%%"$mr_tab"*}"
   fi
-  # ⚠️ Codex一次レビュー指摘（MAJOR-1・2026-09-07）対応: unavailableを
-  # unknownへ潰すと、直後の保留行判定が「unavailableでも保留を出さない」
-  # という下のコメントの意図を実現できない（両方ともunknownに見えるため）。
-  # main|sub|unavailableの3値だけをそのまま通し、それ以外（値の欠落・
-  # resolverが返し得ない未知値）だけをunknownへ倒す。
+  # main|sub|unavailable はそのまま通し、それ以外だけ unknown へ倒す（unavailable では保留行を出さない）。
   case "$machine_role" in main|sub|unavailable) : ;; *) machine_role="unknown" ;; esac
-  # FR-9・D-5（§4.3）: machine_roleがunknownのときだけDIRECTIVEへ保留の
-  # 1行を足す（unavailableでは足さない＝本人が「機役割を持たない」と
-  # 明示した状態のため。§7.2 S5）。
   MACHINE_ROLE_HOLD_LINE=""
   [ "$machine_role" = "unknown" ] && MACHINE_ROLE_HOLD_LINE='⚠️ 配役表の machine_role が未確定です（この機がメイン機かサブ機かを本人が宣言していません）。機役割に依存する判断（Preferences の編集・公開スナップショットの生成・git の立場）は本人へ確認してから行う。既定値を発明しない。'
 
-  # FR-11・FR-12（要件v1.2.1・タスク2）: 実体プロファイルを必読リストから
-  # 外した代わりに、既存の🧭モード行の末尾へ①解決の成否②schema_version
-  # ③machine_role④照会コマンドの呼び出し例を1セグメントとして織り込む
-  # （行数を増やさない＝NFR-1。新しい外部プロセスは起こさない＝値は既に
-  # 取得済みのresolve OK行のフィールドから取り出すだけ）。
-  # ⚠️ BOOTSTRAP_ENABLE_LOCAL_PROFILE=0（解決そのものを行わないテスト専用
-  # 経路）ではprofile_kindが空文字のまま＝セグメントを付けない（解決を
-  # 試みていないので成否を語れない。既存の4本の固定文面だけを出す）。
+  # 🧭モード行の末尾セグメント（解決の成否・schema_version・machine_role・照会コマンド）。
+  # BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 では解決を試みていないので付けない。
   if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
     if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
       sv_tab=$'\t'
@@ -979,9 +423,7 @@ ${leader_settings_drift_warning}"
       schema_version_value="${sv_rest%%"$sv_tab"*}"
       TEAM_MODE_LINE="${TEAM_MODE_LINE}｜配役表＝OK schema_version=${schema_version_value} machine_role=${machine_role} 照会＝python3 ~/work/takumi009-ai-env/claude/hooks/lib/role_candidates.py [--role <職種>]"
     else
-      # FR-12: 不在・symlink・fail区分のvalidator違反はprofile_reason_code
-      # （T1/SYMLINK/T5/T6/…）、UNKNOWN_EXTRAは専用コード名を区分として出す
-      # （値そのものは再掲しない＝OV-10・秘匿優先）。
+      # 不在・symlink・validator 違反は区分コード（T1/SYMLINK/T5/…）、UNKNOWN_EXTRA は専用コード名（値は再掲しない）。
       profile_unresolved_code=""
       if [ "$profile_kind" = "MINIMAL" ]; then
         profile_unresolved_code="$profile_reason_code"
@@ -994,12 +436,6 @@ ${leader_settings_drift_warning}"
 
   # 外部脳ヘルス行（fail-open: 失敗してもブートストラップ本文は必ず出す）。
   HEALTH_LINES="$(compute_health_lines 2>/dev/null)" || HEALTH_LINES=""
-
-  # 使用率ブロック（B1a・FR-108①）: 外部脳ヘルスの直後・常に出す
-  # （HEALTH_LINESと違い空になることはない＝AC-91④「起動注入に枠あたり
-  # 1行のブロックが現れる」は取得失敗時でも行数を変えない設計のため）。
-  USAGE_BLOCK="$(compute_usage_block '【使用率】' '委任の前に見直すときは同じ口＝usage_snapshot.py（配役表・Preferencesの規則参照）' 2>/dev/null)"
-  [ -z "$USAGE_BLOCK" ] && USAGE_BLOCK='【使用率】取得口が使えません（内部エラー）'
 
   read -r -d '' DIRECTIVE <<EOF
 【セッション開始ブートストラップ｜ハーネス強制注入】
@@ -1015,17 +451,14 @@ ${TEAM_MODE_LINE}
 $list
 
 ② 上記を読み終えるまで、ユーザー依頼の実作業（調査・検索・コード変更・委任を含む）に着手しない。
-③ ユーザーの質問に関連するキーワードで Vault($VAULT) を Read/Grep/Glob で検索し、ヒットしたノートを読んでから回答する(obsidian-mcp は使わない)。
-④ 新たな知見・判断・好み・プロジェクト変化が出たら、その場で Vault へ記録する。決定者・委任・空席時の申告の型は Preferences/core-workflow.md §4・§7 のとおりに従う（リーダー直筆は禁止＝delegation-gate が deny）。⚠️ vault-scribe の起動は Task tool の subagent_type に必ず"vault-scribe"を渡す（"scribe"という省略形は職種名・エージェント定義ファイル名のいずれとも一致せず spawn 失敗する。2026-09-03 実機で発生した実害の再発防止）。vault-scribe 不在なら起動してから振る。
+④ 記録職＝subagent_type: vault-scribe（略称不可）。
 ${TEAM_MODE_DIRECTIVE5}
-⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）
+⑥ プロジェクトが確定したら1回だけ宣言する: ~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>（宣言済みなら呼び直さない・実行はリーダーであってフックではない）
 ${MACHINE_ROLE_HOLD_LINE:+
 ${MACHINE_ROLE_HOLD_LINE}}
 ${HEALTH_LINES:+
 【外部脳ヘルス】（scripts/check-drift.sh ⑥の簡易版。詳細確認は本体を実行）
 $HEALTH_LINES}
-
-$USAGE_BLOCK
 ${LOCAL_PROFILE_WARNING:+
 【ローカル実体プロファイル】
 $LOCAL_PROFILE_WARNING}

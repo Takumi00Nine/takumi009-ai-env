@@ -43,18 +43,17 @@ takumi009-ai-env/
 │   ├── install-sub.sh           # Installer for the sub environment (sets up the Vault skeleton, then delegates to install-main.sh)
 │   ├── install-backup.sh        # Installer for the Vault-backup LaunchAgent
 │   ├── install-maintenance.sh   # Installer for the weekly maintenance-runner LaunchAgent (main only)
-│   ├── install-usage-fetch.sh   # Installer/migrator for the usage-fetch LaunchAgent (from claude-codex-usage; run manually per machine)
+│   ├── install-usage-fetch.sh   # Installer for the usage-fetch LaunchAgent (bootstrap+enable; run manually per machine)
 │   ├── codex-exec.sh            # The sole entry point for invoking Codex (wraps `codex exec`; replaces the old MCP registration)
 │   ├── claude-exec.sh            # The sole entry point for launching a worker as a separate `claude -p` process (mirrors codex-exec.sh's contract)
-│   ├── check-claude-bypass.sh    # Static detector for `claude -p`/`claude --print` invocations that bypass claude-exec.sh
 │   ├── backup-vault.sh          # Periodically git commits (+pushes) the Vault
 │   ├── usage-fetch.sh           # Fetches Claude/Codex usage and writes the usage caches read by the dotfiles repo's cmux-usage-watch.sh display script (formerly claude-codex-usage, retired 2026-09-18)
-│   ├── maintenance.sh           # Weekly maintenance runner (backup snapshot + detection + headless-Claude apply + summary; main only)
+│   ├── maintenance.sh           # Weekly maintenance runner (backup snapshot + detection + summary; Fragments promotion is done by vault-scribe while the user is present; main only)
 │   ├── update-sub.sh            # Manually-run command that refreshes the sub's rules (sub only; invoked on demand from the check-sub-update.sh SessionStart hook's guidance)
 │   ├── export-public-vault.sh   # Exports the Vault's public folder to vault-public/
 │   ├── check-drift.sh           # Manual audit tool that detects "drift" in symlinks/config.toml/repo/vault-public/private repo visibility
 │   ├── audit.sh                 # One-shot pre-publish audit (NG words/username paths/secrets over full git history, tracked-file drift, completeness); `--quick` skips the (slow) history scan and only checks the current tree
-│   ├── vault-agents/            # Detectors driven by maintenance.sh (vault_inventory.py, fragments_log.py, knowledge_merge_candidates.py, decision_propagation.py, maintenance_apply.py, etc.; main-only feature)
+│   ├── vault-agents/            # Detectors driven by maintenance.sh (vault_inventory.py, fragments_log.py, maintenance_run_step.py, vault_lib.py) plus apply_aliases.py (manual CLI); main-only feature
 │   ├── ngwords.txt              # NG-word definitions (private data; **not included in this repository** — see "Setup" below)
 │   └── templates/               # README templates for the private skeleton folders
 ├── launchagents/
@@ -108,8 +107,8 @@ cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # Model def
 scripts/install-main.sh          # Symlinks claude/ and codex/ into ~/.claude and ~/.codex
 scripts/install-backup.sh        # Installs the Vault-backup LaunchAgent
 scripts/install-maintenance.sh   # Installs the weekly maintenance-runner LaunchAgent (main only)
-scripts/install-usage-fetch.sh --dry-run  # Preview the usage-fetch migration/install plan first
-scripts/install-usage-fetch.sh            # Installs (or migrates from claude-codex-usage/refresh.sh)
+scripts/install-usage-fetch.sh --dry-run  # Preview the usage-fetch install (prints the current state only)
+scripts/install-usage-fetch.sh            # Installs the usage-fetch LaunchAgent
 ```
 
 - `config/*.sample` is the source for these three local config files' real values. `config/profile.md.sample` and `config/models.conf.sample` ship with the real values used on the maintainer's main machine, so a fresh main machine can copy them as-is; a sub machine should copy them too and then edit at least `machine_role` (and, if it plays a different leader role, `role.leader`). `config/bedrock.env.sample` (→ `~/.config/takumi009-ai-env/bedrock.env`, permission 0600) is only for machines that actually use Bedrock — don't place it on a subscription-only machine; there is no auto-copy for it, you always copy it yourself. `config/models.conf.sample` likewise has no auto-copy — copy it yourself. `config/profile.md.sample` is different: if `~/.config/takumi009-ai-env/profile.md` doesn't exist yet, `install-main.sh` automatically copies `config/profile.md.sample` there for you the first time it runs (an existing skeleton-placement step from before `config/*.sample` existed; it never overwrites a profile that's already there). Copying it yourself beforehand has the same effect — either way you end up with this machine's real values, not a placeholder.
@@ -120,7 +119,6 @@ scripts/install-usage-fetch.sh            # Installs (or migrates from claude-co
 - Codex is invoked exclusively through `scripts/codex-exec.sh` (a wrapper around `codex exec`, i.e. the CLI, not an MCP server). There is no registration step for `install-main.sh` to run: as long as `codex` is on `PATH`, the wrapper works. The wrapper enforces reading the Vault's `Preferences/absolute-rules.md` note (it refuses to run — exit code 2 — if the request text doesn't reference it), which used to be enforced by a Claude Code PreToolUse hook on the old MCP tools; see `Preferences/codex-exec-worker.md` in the Vault for the invocation pattern.
 - **`claude-exec.sh`**: a role that has candidates in the local profile is launched as a separate `claude -p` process through `scripts/claude-exec.sh` rather than in-process via the `Agent` tool (a `PreToolUse` hook rejects the in-process form for those roles): `scripts/claude-exec.sh --role <role> --model-def <definition-name> --task-id <id> --prompt-file <absolute-path> --out <absolute-path> [--resume <session_id>] [--force] [--dry-run]`. Like the Codex wrapper it enforces reading `Preferences/absolute-rules.md` in the request text, and its own stdout is only 4 lines (`SESSION_ID:`/`OUT:`/`REASON:`/`EXIT:`) — it never surfaces the child's own output into the caller's context. **Reading the worker's report**: the worker's actual final report is the `result` field inside the JSON written to `--out` once the call has completed — read it with `jq -r '.result' <out>`, not the wrapper's own stdout. Any deliverable files the worker produces are written by the worker itself into its own working directory (the parent directory of `--out`, under a name the request text specifies) — the worker never writes to `--out` itself, since the wrapper only creates that file once, atomically, at the end of the run. **Recovering from a leftover lock**: while a call is in flight it reserves `--out` with a `<out>.lock` file; if a previous run was killed before it could release that reservation, the next call to the same `--out` fails until the stale lock is cleared — remove it manually (`rm <out>.lock`) before retrying. **Diagnosing a failed launch**: whenever a child is actually launched, its full stderr is saved next to the artifact as `<out>.stderr` (not created for `--dry-run`, and not used for classification) — when the artifact can't be parsed as JSON (`REASON:other`), this is the first place to look. **`effort:`**: the wrapper resolves `--effort` fresh on every call from the local profile's candidate (via `resolve-candidate`) and passes it straight to `claude -p` — role definitions under `~/.claude/agents/<role>.md` never carry an `effort:` frontmatter line (that per-role generation scheme was retired once the wrapper started resolving effort itself).
 - The weekly drift-notification LaunchAgent (`com.takumi009.drift-check.plist` / `scripts/drift-notify.sh`) that `install-main.sh` used to install, and the standalone Vault-cultivation LaunchAgents (`vault-inventory`/`fragments-log`/`knowledge-merge-detect`) formerly installed by `install-vault-agents.sh`, were all removed/consolidated on 2026-07-16 (see [[Decisions/2026-07-16-nightly-batch-direct-write]] in the Vault). `install-maintenance.sh` migrates any of these 4 retired LaunchAgent labels still loaded on the machine (bootout + remove) before installing the new `com.takumi009.maintenance` LaunchAgent. The unattended weekly path now lives entirely in the new `maintenance.sh` runner.
-- `install-usage-fetch.sh` is not a plain bootstrap+enable installer like `install-backup.sh`/`install-maintenance.sh`: it moved the Claude/Codex usage-percentage fetcher from the separate `claude-codex-usage` repository's `refresh.sh` into this repository (`scripts/usage-fetch.sh`, LaunchAgent `com.takumi009.usage-fetch`, once per minute; 2026-09 migration). On a machine that already had the old `com.claude-codex-usage.refresh` job running, it stops the old job first, installs the new one, and prints a display comparison for you to confirm — never running both at once (avoids the double-fetch/429 storm that happened once before). See "Usage fetcher" below for the full switch-over sequence (`--dry-run` → run → `--verify` → `--confirm`) and how to roll back (`--rollback`) or recover from an accidental double-fetch (`--heal`). The cache files it writes (`~/.cache/claude-codex-usage/{claude,codex}-cache.json`) keep the same paths and `schema_version`, and any fields added later (e.g. Codex's `reset_credits`, added 2026-09-09) are backward-compatible extensions that leave every pre-existing key untouched, so display scripts that only read the pre-existing keys keep working without modification — currently `cmux-usage-watch.sh`, bundled in the separate `dotfiles` repo (`cmux/cmux-usage-watch.sh`) after the old dedicated `claude-codex-usage` repo, which used to hold it alongside `tmux-usage.sh`, was retired (2026-09-18).
 - On the main environment, a **private patch (a separate private repository)** is layered on top of this base package. The private patch contains the Vault's substance (`~/Data/obsidian`) and settings that cannot be made public. See that repository's own documentation for its setup steps.
 
 #### Sub environment
@@ -178,18 +176,17 @@ The user creates and configures the remote for the Vault's backup destination (a
 
 ### Weekly Maintenance Runner (main only)
 
-`scripts/maintenance.sh` is the single weekly runner (Monday 03:00, installed by `scripts/install-maintenance.sh`) that replaced the older separate Vault-cultivation LaunchAgents on 2026-07-16 (see [[Decisions/2026-07-16-nightly-batch-direct-write]] in the Vault — "the nightly batch writes to the Vault directly, no more report → leader-processes-it indirection"). It runs in 4 phases:
+`scripts/maintenance.sh` is the single weekly runner (Monday 03:00, installed by `scripts/install-maintenance.sh`) that replaced the older separate Vault-cultivation LaunchAgents on 2026-07-16. The unattended headless-Claude apply step (Fragments promotion / Knowledge merge / Decision propagation) was retired on 2026-09-19 — the runner now only detects and counts; promotion happens while the user is present, via `vault-scribe`. It runs in 3 phases:
 
 - **Phase 0** — takes a pre-run snapshot via `backup-vault.sh`, acquires a Vault write-lock (PID file, held through Phase 3), and retries `export-public-vault.sh` if the `vault-public/Preferences` snapshot is behind.
-- **Phase 1 (detection only, read-only)** — runs, in order, `check-drift.sh` (environment health check; since 2026-08-10, a drift finding, execution error, or timeout no longer aborts the run — it's recorded as a warning and the run continues. The sole gate for Vault write safety is Phase 0's pre-run snapshot), `fragments_log.py`, `vault_inventory.py`, `knowledge_merge_candidates.py`, and `decision_propagation.py`. Steps 1–5 are isolated from each other's failures.
-- **Phase 2** — `scripts/vault-agents/maintenance_apply.py` sends the Phase 1 detection results to a single headless Claude Code call (tool use fully disabled, JSON-Schema-constrained structured output, independently re-validated) and, only for validated, safe actions, promotes Fragments directly into `Knowledge/Decisions/Projects`, or non-destructively merges obviously-duplicate `Knowledge/` notes (2/week cap) — all with TOCTOU re-checks immediately before each write. A Fragment promoted to `Preferences` is **not** written to the Vault at all; the draft is saved outside the Vault as a pending proposal that requires the user and the leader to jointly review and explicitly approve it before it's created in the Vault (since Preferences notes are public and shape AI behavior).
-- **Phase 3** — appends a one-line summary to today's Fragments file, updates `last-run.json` (`last_success_at` only on a fully clean run; `last_result` — success/warn/fail — is always recorded, and a warning or failure shows up as a ⚠️ line in the next session's startup health check), takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
+- **Phase 1 (detection only, read-only)** — runs, in order, `check-drift.sh` (environment health check; since 2026-08-10, a drift finding, execution error, or timeout no longer aborts the run — it's recorded as a warning and the run continues. The sole gate for Vault write safety is Phase 0's pre-run snapshot), `fragments_log.py`, and `vault_inventory.py`. The 3 steps are isolated from each other's failures. `vault_inventory.py` writes `~/.claude/logs/vault-inventory/latest.json` (`actionable` = number of fixable findings), which the SessionStart health line and the Dock read.
+- **Phase 3** — appends a one-line summary to today's Fragments file, updates `last-run.json` (`last_success_at` only on a fully clean run; `last_result` — success/warn/fail — is always recorded, and a warning or failure shows up as a ⚠️ line in the next session's startup health check; `fragments_candidates` = number of unprocessed Fragments since the last successful run, shown by the Dock's Project pane weekly line as "候補N件" — it is never injected into the AI, and nothing moves until the user says "昇格して"), takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
 
 All intermediate files and machine-readable status files for a given run live under `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/`, with `~/.claude/logs/maintenance/latest` always pointing at the most recent run.
 
 ### Usage Monitoring (usage_snapshot.py)
 
-Every session start shows a **【使用率】** block with one line per quota pool (`claude-subscription` / `codex-subscription` / `unlimited`). The `UserPromptSubmit` hook also injects the same three lines as **【使用率・この発言時点】** on every user prompt, so the orchestrator sees a fresh snapshot throughout the session. This is presentation-only: the mechanism never picks candidates based on usage, ranks pools against each other, or computes a "bias" — it just lays the remaining percentages side by side and lets the orchestrator decide.
+The `UserPromptSubmit` hook injects a **【使用率・この発言時点】** block with one line per quota pool (`claude-subscription` / `codex-subscription` / `unlimited`) on every user prompt, so the orchestrator sees a fresh snapshot throughout the session. This is presentation-only: the mechanism never picks candidates based on usage, ranks pools against each other, or computes a "bias" — it just lays the remaining percentages side by side and lets the orchestrator decide.
 
 - **Prerequisite**: a usage fetcher (see "Usage fetcher" below) refreshes `~/.cache/claude-codex-usage/claude-cache.json` / `codex-cache.json` once a minute; `usage_snapshot.py` only reads those files and never touches the network itself.
 - **Manual check**: `python3 claude/hooks/lib/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot).
@@ -199,21 +196,9 @@ Every session start shows a **【使用率】** block with one line per quota po
 
 ### Usage fetcher (scripts/usage-fetch.sh / scripts/install-usage-fetch.sh)
 
-`scripts/usage-fetch.sh` fetches Claude's OAuth usage percentages, Codex's `rateLimits`, and (since 2026-09-09) Codex's banked rate-limit reset credits (`reset_credits`, see "Codex tickets" above) once a minute (LaunchAgent `com.takumi009.usage-fetch`, installed by `scripts/install-usage-fetch.sh`) and writes them atomically to `~/.cache/claude-codex-usage/{claude,codex}-cache.json` — the same paths and `schema_version` (1) that the Dock-rendering display script `cmux-usage-watch.sh` reads (now bundled in the separate `dotfiles` repo); every field it relies on is preserved byte-for-byte, so it needs no changes even as new fields are added on top. It replaced `claude-codex-usage/refresh.sh` in 2026-09 (only one fetcher is ever meant to run, to avoid a repeat of a past double-fetch/429 storm); the old dedicated `claude-codex-usage` repo, which used to also hold the display scripts, is retired (2026-09-18). A rate-limited (429) response is a complete no-op (not a byte of the cache changes); any other failure (timeout, network error, malformed response, missing `codex` command) is recorded as `last_error` without touching `fetched_at`, so a display reading a stale-but-`ok` cache and a display reading a freshly-recorded failure are always distinguishable.
-
-On a machine that already has the old job running, switch over with:
-
-```sh
-scripts/install-usage-fetch.sh --capture-display   # optional: record today's tmux/cmux output for later comparison
-scripts/install-usage-fetch.sh --dry-run            # see the plan (which route it will take) without changing anything
-scripts/install-usage-fetch.sh                      # stop the old job, install and load the new one, wait for the new job to touch both caches (a recorded failure counts too, e.g. if this machine has no codex command)
-scripts/install-usage-fetch.sh --verify             # re-check the cache, show a before/after display comparison, and ask you to confirm
-scripts/install-usage-fetch.sh --confirm             # after running for a few days: delete the stashed old plist and finalize
-```
-
-The old LaunchAgent's `plist` is stashed (never deleted outright) under `~/.local/state/takumi009-ai-env/usage-migration/`, so `scripts/install-usage-fetch.sh --rollback` can restore it at any point before `--confirm`. If the two jobs ever end up loaded at the same time (e.g. the old job's install path revived it), `scripts/install-usage-fetch.sh --heal` is the one command that safely stops the old one again — it never deletes the old repo's installer itself, so you still have a way back until you deliberately retire it. On a machine that never had the old job, the same command just installs fresh (no `--confirm` step needed — rolling back simply removes the new job). None of this touches a real LaunchAgent unless you run it yourself; `check-drift.sh` reports drift under `[USAGE-FETCH-*]`/`[USAGE-MIGRATION-INCOMPLETE]`/`[USAGE-LOCK-STUCK]` codes if a switch-over is left half-done or the job stops updating. Sub machines are not given this LaunchAgent automatically (`install-sub.sh` never installs LaunchAgents) — run `scripts/install-usage-fetch.sh` there yourself if you want usage tracking on that machine too.
-
-If a rerun (or `--heal`) fails with a message saying it loaded the new job but can't confirm whether `enable` finished (this can happen right after `bootstrap`, or if a re-run raced with a competing `enable`), the message names the exact command to run: `launchctl enable gui/<uid>/com.takumi009.usage-fetch`. Run it once, then re-run `scripts/install-usage-fetch.sh` (or `--heal`); this is a fail-closed check, not an error in the new job itself, so it never auto-retries on its own.
+`scripts/usage-fetch.sh` fetches Claude's OAuth usage percentages, Codex's `rateLimits`, and (since 2026-09-09) Codex's banked rate-limit reset credits (`reset_credits`, see "Codex tickets" above) once a minute (LaunchAgent `com.takumi009.usage-fetch`) and writes them atomically to `~/.cache/claude-codex-usage/{claude,codex}-cache.json` — the same paths and `schema_version` (1) that the Dock-rendering display script `cmux-usage-watch.sh` reads (bundled in the separate `dotfiles` repo). A rate-limited (429) response is a complete no-op (not a byte of the cache changes); any other failure (timeout, network error, malformed response, missing `codex` command) is recorded as `last_error` without touching `fetched_at`, so a display reading a stale-but-`ok` cache and a display reading a freshly-recorded failure are always distinguishable.
+Install it with `scripts/install-usage-fetch.sh` (a plain bootstrap+enable installer, same shape as `install-backup.sh`; `--dry-run` only prints the current state). If the retired `com.claude-codex-usage.refresh` job is still loaded on the machine, the installer stops without changing anything and prints the `launchctl bootout` command to run first (only one fetcher is ever meant to run). `check-drift.sh` reports `[USAGE-FETCH-*]` / `[USAGE-LOCK-STUCK]` if the job is not loaded, disabled, or stops updating.
+Sub machines are not given this LaunchAgent automatically (`install-sub.sh` never installs LaunchAgents, and `update-sub.sh` does not re-run this installer) — run `scripts/install-usage-fetch.sh` there yourself if you want usage tracking on that machine too.
 
 ### Drift Detection (check-drift.sh)
 
@@ -259,7 +244,7 @@ cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # (edit mac
 scripts/install-main.sh --with-dotfiles   # symlinks + dotfiles + codex MCP registration
 scripts/install-backup.sh                 # Resume periodic backups
 scripts/install-maintenance.sh            # Resume the weekly maintenance runner
-scripts/install-usage-fetch.sh --dry-run  # Resume usage tracking: preview the plan first
+scripts/install-usage-fetch.sh --dry-run  # Resume usage tracking: print the current state first
 scripts/install-usage-fetch.sh            # Resume usage tracking
 
 # 5. Log in to each app (manual): Claude Code / Codex / others
@@ -360,18 +345,17 @@ takumi009-ai-env/
 │   ├── install-sub.sh           # サブ環境用インストーラ（Vault骨格配置＋install-main.shへ委譲）
 │   ├── install-backup.sh        # Vaultバックアップ用LaunchAgentのインストーラ
 │   ├── install-maintenance.sh   # 週次メンテナンスランナー用LaunchAgentのインストーラ（メイン専用）
-│   ├── install-usage-fetch.sh   # 使用率取得器用LaunchAgentのインストーラ／移行（claude-codex-usageから移設・機ごとに手動実行）
+│   ├── install-usage-fetch.sh   # 使用率取得器用LaunchAgentのインストーラ（bootstrap+enable・機ごとに手動実行）
 │   ├── codex-exec.sh            # Codexを呼び出す唯一の口（`codex exec`のラッパー。旧MCP登録に代わるもの）
 │   ├── claude-exec.sh            # ワーカーを別プロセスの`claude -p`として起動する唯一の口（codex-exec.shと同型の契約）
-│   ├── check-claude-bypass.sh    # claude-exec.shを経由しない`claude -p`/`claude --print`起動を静的検出するツール
 │   ├── backup-vault.sh          # Vaultを定期的にgit commit（+push）するスクリプト
 │   ├── usage-fetch.sh           # Claude/Codexの使用率を取得し、dotfilesリポジトリのcmux-usage-watch.sh表示スクリプトが読むキャッシュへ書き出す（旧claude-codex-usageは2026-09-18退役）
-│   ├── maintenance.sh           # 週次メンテナンスランナー（バックアップ＋検出＋ヘッドレスClaude適用＋サマリ。メイン専用）
+│   ├── maintenance.sh           # 週次メンテナンスランナー（バックアップ＋検出＋サマリ。Fragments昇格は在席時にvault-scribe。メイン専用）
 │   ├── update-sub.sh            # サブのルールを最新化する手動実行コマンド（サブ専用。check-sub-update.shの案内から本人が実行）
 │   ├── export-public-vault.sh   # Vaultのpublicフォルダを vault-public/ へエクスポートするスクリプト
 │   ├── check-drift.sh           # symlink/config.toml/repo/vault-public/private repo可視性の「ズレ」を検知する手動監査ツール
 │   ├── audit.sh                 # public公開前の総監査ツール（git履歴全体のNGワード/実ユーザー名パス/シークレット・追跡ファイル逸脱・完備性）。`--quick` で履歴スキャン（重い）を省き現在ツリーのみ実行
-│   ├── vault-agents/            # maintenance.shが起動する検出器群（vault_inventory.py・fragments_log.py・knowledge_merge_candidates.py・decision_propagation.py・maintenance_apply.py等。メイン専用機能）
+│   ├── vault-agents/            # maintenance.shが起動する検出器群（vault_inventory.py・fragments_log.py・maintenance_run_step.py・vault_lib.py）＋apply_aliases.py（手動CLI）。メイン専用機能
 │   ├── ngwords.txt              # NGワード定義（私的データのため**このリポジトリには含まれない**。詳細は「導入手順」参照）
 │   └── templates/               # private骨格フォルダ用のREADMEテンプレ
 ├── launchagents/
@@ -425,8 +409,8 @@ cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # モデル
 scripts/install-main.sh          # claude/・codex/ を ~/.claude・~/.codex へ symlink 化
 scripts/install-backup.sh        # Vaultバックアップ用LaunchAgentを配置
 scripts/install-maintenance.sh   # 週次メンテナンスランナー用LaunchAgentを配置（メイン専用機能）
-scripts/install-usage-fetch.sh --dry-run  # 使用率取得器: まず計画だけ確認
-scripts/install-usage-fetch.sh            # 使用率取得器（claude-codex-usageからの移行 or 新規導入）
+scripts/install-usage-fetch.sh --dry-run  # 使用率取得器: まず状態だけ確認（何もしない）
+scripts/install-usage-fetch.sh            # 使用率取得器のLaunchAgentを導入
 ```
 
 - この3本のローカル設定ファイルの実値の入手元は `config/*.sample` です。`config/profile.md.sample`・`config/models.conf.sample` にはメンテナ本人のメイン機の実値がそのまま入っているため、新しいメイン機はそのままコピーして使えます。サブ機もコピーしたうえで、少なくとも `machine_role`（本人が別のリーダー配役を担うなら `role.leader` も）を書き換えます。`config/bedrock.env.sample`（コピー先＝`~/.config/takumi009-ai-env/bedrock.env`・パーミッション0600）は実際にBedrockを使う機だけが置くもので、サブスク本命機には置きません。自動コピーは無いので必ず自分でコピーします。`config/models.conf.sample` も同様に自動コピーは無く、自分でコピーします。`config/profile.md.sample` だけは別で、`~/.config/takumi009-ai-env/profile.md` がまだ無ければ `install-main.sh` が初回実行時に `config/profile.md.sample` を自動でそこへコピーします（`config/*.sample` 新設より前からある既存の雛形配置ステップで、既にある実体は上書きしません）。事前に自分でコピーしても結果は同じで、どちらの経路でも placeholder ではなくこのマシンの実値が入ります。
@@ -437,7 +421,6 @@ scripts/install-usage-fetch.sh            # 使用率取得器（claude-codex-us
 - Codexは `scripts/codex-exec.sh`（`codex exec`＝CLIのラッパーであり、MCPサーバーではない）を通じてのみ呼び出します。`codex` がPATH上にありさえすれば動くため、`install-main.sh` 側に登録ステップはありません。ラッパー自身がVaultの `Preferences/absolute-rules.md` 参照を強制します（依頼文にその参照が無ければ実行せずexit code 2で終了する。旧MCPツールに対するClaude CodeのPreToolUseフックが担っていた検査をこちらへ移したもの）。起動の型はVaultの `Preferences/codex-exec-worker.md` を参照してください。
 - **`claude-exec.sh`**: 配役表に候補を持つ職種は、`Agent` ツールでの in-process 起動ではなく（`PreToolUse` フックがそちらを拒否します）、`scripts/claude-exec.sh` 経由で別プロセスの `claude -p` として起動します：`scripts/claude-exec.sh --role <職種> --model-def <定義名> --task-id <id> --prompt-file <絶対パス> --out <絶対パス> [--resume <session_id>] [--force] [--dry-run]`。Codexラッパーと同様に依頼文への `Preferences/absolute-rules.md` 参照を強制し、自身の標準出力は常に4行だけ（`SESSION_ID:`／`OUT:`／`REASON:`／`EXIT:`）です——子（起動されたワーカー）の出力を呼び出し元の文脈へそのまま持ち込みません。**報告の読み方**: ワーカーの最終報告は、呼び出し完了後に `--out` へ確定されたJSONの `result` フィールドです——`jq -r '.result' <out>` で読みます（ラッパー自身の標準出力ではありません）。ワーカーが作る成果物ファイルは、ワーカー自身が自分の作業ディレクトリ（`--out` の親ディレクトリ・依頼文が指定する名前）へ書きます——`--out` 自体には書きません（ラッパーが実行の最後に一度だけ、原子的にそのファイルを作るため）。**ロック残りの回復**: 実行中は `<out>.lock` で `--out` を予約しており、前回の呼び出しがこの予約を解除する前に強制終了されると、同じ `--out` への次回呼び出しはロックが残ったままだと失敗し続けます——再試行の前に手動で削除してください（`rm <out>.lock`）。**起動失敗の診断**: 子を実際に起動した呼び出しでは、子の標準エラー全文が `--out` の隣に `<out>.stderr` として常に残ります（`--dry-run` では作られず、分類にも使いません）——成果物がJSONとして解析できない（`REASON:other`）場合はまずここを確認してください。**`effort:` について**: ラッパーは呼び出しのたびに配役表の候補から `--effort` を新たに解決し（`resolve-candidate` 経由）、そのまま `claude -p` へ渡します——`~/.claude/agents/<職種>.md` の職種定義に `effort:` frontmatter行が乗ることはありません（その生成方式はラッパー自身がeffortを解決するようになったため退役しました）。
 - `install-main.sh` が配置していた**週次drift通知LaunchAgent**（`com.takumi009.drift-check.plist`／`scripts/drift-notify.sh`）と、`install-vault-agents.sh`（撤去済み）が配置していたVault育成系LaunchAgent3種（`vault-inventory`／`fragments-log`／`knowledge-merge-detect`）は、いずれも2026-07-16の簡素化で撤去・統合しました（Vault内 `Decisions/2026-07-16-nightly-batch-direct-write` 参照）。`install-maintenance.sh` はこの旧4ラベルがまだマシンに残っていれば移行（bootout＋削除）してから新設の `com.takumi009.maintenance` LaunchAgentを設置します。週次無人実行の経路は新設の `maintenance.sh` ランナーへ完全に移りました。
-- `install-usage-fetch.sh` は `install-backup.sh`・`install-maintenance.sh` のような単純なbootstrap+enableインストーラではありません。Claude/Codexの使用率取得器を、別リポジトリ `claude-codex-usage` の `refresh.sh` からこのリポジトリ（`scripts/usage-fetch.sh`・LaunchAgent `com.takumi009.usage-fetch`・毎分）へ移設したもの（2026-09移行。取得器は常に1つだけという方針のため）。旧ジョブ（`com.claude-codex-usage.refresh`）が既に動いている機では、旧を止めてから新を入れ、表示の比較を出して本人の確認を求めます（二重取得の429ストーム再発を防ぐため）。切替の全手順（`--dry-run` → 実行 → `--verify` → `--confirm`）・巻き戻し（`--rollback`）・誤って二重になったときの復旧（`--heal`）は下記「使用率取得器」節を参照してください。書き出すキャッシュのパス・`schema_version` は不変で、後から足したフィールド（Codexの`reset_credits`＝2026-09-09追加など）は既存キーを1バイトも変えない後方互換拡張なので、既存キーだけを読む表示スクリプトは無改修のまま動き続けます——現在はDock描画スクリプト`cmux-usage-watch.sh`（旧・専用リポジトリ`claude-codex-usage`から別リポジトリ`dotfiles`へ移設済み。`tmux-usage.sh`も含め旧`claude-codex-usage`自体は2026-09-18に退役）。
 - メイン環境では、この基本パッケージの上に**私的パッチ（別のprivateリポジトリ）**を重ねます。私的パッチには Vault の実体（`~/Data/obsidian`）や、公開できない設定が含まれます。私的パッチの導入手順は当該リポジトリ側のドキュメントを参照してください。
 
 #### サブ環境
@@ -495,18 +478,17 @@ Vault のバックアップ先（private repo）の作成・remote設定は本�
 
 ### 週次メンテナンスランナー（メイン専用機能）
 
-`scripts/maintenance.sh` は、2026-07-16の簡素化で旧来の個別Vault育成系LaunchAgentを統合した単一の週次ランナーです（毎週月曜03:00・`scripts/install-maintenance.sh` が設置。Vault内 `Decisions/2026-07-16-nightly-batch-direct-write`「夜間バッチが直接Vaultへ書く・レポート→リーダー処理の間接ループを廃止」参照）。4フェーズで構成されます:
+`scripts/maintenance.sh` は、2026-07-16の簡素化で旧来の個別Vault育成系LaunchAgentを統合した単一の週次ランナーです（毎週月曜03:00・`scripts/install-maintenance.sh` が設置）。無人のヘッドレスClaude適用（Fragments昇格・Knowledgeマージ・Decision波及）は2026-09-19に退役し、ランナーは検出と件数の記録だけを行います。昇格は在席時に `vault-scribe` が行います。3フェーズで構成されます:
 
 - **Phase 0** — `backup-vault.sh` で直前スナップショットを取得し、Vault書込ロック（PIDファイル・Phase 3終了まで保持）を取得。`vault-public/Preferences` のスナップショットが遅れていれば `export-public-vault.sh` を再試行。
-- **Phase 1（検出のみ・読み取り専用）** — `check-drift.sh`（環境ヘルスの点検。2026-08-10からdrift検知・実行異常・timeoutを検知しても中断せず警告として記録し完走する。Vault書込み安全の門番はPhase 0の直前スナップショット取得のみに一本化されている）→ `fragments_log.py` → `vault_inventory.py` → `knowledge_merge_candidates.py` → `decision_propagation.py` の順で実行。①〜⑤は互いの失敗から隔離される。
-- **Phase 2** — `scripts/vault-agents/maintenance_apply.py` がPhase 1の検出結果をヘッドレスClaude Codeへ1回だけ渡し（ツール使用を完全無効化・JSON Schemaで構造を強制した出力を独立に再検証）、安全と確認できたactionのみ、Fragmentsを `Knowledge/Decisions/Projects` へ直接昇格、またはKnowledge内の明白な重複ノートの非破壊マージ（週2件上限）のいずれかをVaultへ適用する（各書込み直前にTOCTOU再照合）。`Preferences` へのFragments昇格だけはVaultへ一切書き込まれない：下書きはVault外へ「承認待ちの提案」として保管され、本人とリーダーが協働レビューし明示的に承認して初めてVaultへ作成される（Preferencesは公開物かつAIの挙動を左右するため）。
-- **Phase 3** — 実施サマリをFragments当日ファイルへ1行追記、`last-run.json` を更新（`last_success_at`は完全正常終了時のみ・`last_result`はsuccess/warn/failの実行結果を毎回記録し、警告/失敗があれば翌セッションの起動ヘルス行に⚠️で表示される）、`backup-vault.sh` で最終スナップショットを取得、Vault書込ロックを解放、異常時のみmacOS通知、30日超過のログを削除。
+- **Phase 1（検出のみ・読み取り専用）** — `check-drift.sh`（環境ヘルスの点検。2026-08-10からdrift検知・実行異常・timeoutを検知しても中断せず警告として記録し完走する。Vault書込み安全の門番はPhase 0の直前スナップショット取得のみに一本化されている）→ `fragments_log.py` → `vault_inventory.py` の3本を順に実行。3本は互いの失敗から隔離される。`vault_inventory.py` は `~/.claude/logs/vault-inventory/latest.json`（`actionable`＝対処可能な件数）を書き、SessionStartのヘルス行とDockがそれを読む。
+- **Phase 3** — 実施サマリをFragments当日ファイルへ1行追記、`last-run.json` を更新（`last_success_at`は完全正常終了時のみ・`last_result`はsuccess/warn/failの実行結果を毎回記録し、警告/失敗があれば翌セッションの起動ヘルス行に⚠️で表示される・`fragments_candidates`＝前回成功以降の未処理Fragments数をDock Project枠の週次行が「候補N件」と表示する。AIへは注入しない・本人が「昇格して」と言うまで動かない）、`backup-vault.sh` で最終スナップショットを取得、Vault書込ロックを解放、異常時のみmacOS通知、30日超過のログを削除。
 
 各回の中間ファイル・機械可読status-fileは `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/` 配下にまとまり、`~/.claude/logs/maintenance/latest` が常に最新の実行を指します。
 
 ### 使用率の見える化（usage_snapshot.py）
 
-セッション開始のたびに、枠（`claude-subscription`・`codex-subscription`・`unlimited`）あたり1行の**【使用率】**ブロックが出ます。さらに `UserPromptSubmit` フックが本人の発言ごとに同じ3行を**【使用率・この発言時点】**として注入するため、セッション中もその瞬間の残量を確認できます。あくまで提示専用の仕組みで、使用率から候補を選んだり、枠どうしを比較・順位付けしたり「偏り」を計算したりはしません。残量を並べて出すだけで、判断はリーダーに委ねます。
+`UserPromptSubmit` フックが本人の発言ごとに、枠（`claude-subscription`・`codex-subscription`・`unlimited`）あたり1行の**【使用率・この発言時点】**ブロックを注入するため、セッション中その瞬間の残量を確認できます。あくまで提示専用の仕組みで、使用率から候補を選んだり、枠どうしを比較・順位付けしたり「偏り」を計算したりはしません。残量を並べて出すだけで、判断はリーダーに委ねます。
 
 - **前提**: 使用率取得器（下記「使用率取得器」節）が毎分 `~/.cache/claude-codex-usage/claude-cache.json`・`codex-cache.json` を更新し、`usage_snapshot.py` はそのファイルを読むだけで通信は一切行いません。
 - **手動で見る口**: `python3 claude/hooks/lib/usage_snapshot.py` を実行すると同じ3行がその場で表示されます（`--json` を付けると機械可読の1行JSONになります）。
@@ -516,21 +498,9 @@ Vault のバックアップ先（private repo）の作成・remote設定は本�
 
 ### 使用率取得器（scripts/usage-fetch.sh／scripts/install-usage-fetch.sh）
 
-`scripts/usage-fetch.sh` は毎分（LaunchAgent `com.takumi009.usage-fetch`・`scripts/install-usage-fetch.sh` が設置）Claude の OAuth 使用率・Codex の `rateLimits`・（2026-09-09以降）Codex のチケット（`reset_credits`。上記「Codexの『チケット』」参照）を取得し、`~/.cache/claude-codex-usage/{claude,codex}-cache.json` へ原子的に書き出します——パスと `schema_version`（1）は、Dock描画スクリプト`cmux-usage-watch.sh`（別リポジトリ`dotfiles`に同梱）が読んでいるものと同じで、それが読む既存キーは1バイトも変えていないので、新しいフィールドを足しても表示側は無改修で動き続けます。2026-09 に `claude-codex-usage/refresh.sh` から移設しました（取得器は常に1つだけという方針。過去の二重取得・429ストームの再発を防ぐため）。表示スクリプトも含め旧・専用リポジトリ`claude-codex-usage`自体は2026-09-18に退役済みです。429（レート制限）応答はキャッシュへの完全な no-op（1バイトも変わりません）。それ以外の失敗（タイムアウト・通信エラー・壊れた応答・`codex` コマンド不在）は `fetched_at` を変えずに `last_error` へ記録するので、「古いが `ok`」なキャッシュと「取得直後に失敗を記録した」キャッシュを表示側が常に区別できます。
-
-旧ジョブが既に動いている機での切替:
-
-```sh
-scripts/install-usage-fetch.sh --capture-display   # 任意: 比較用に今日のtmux/cmux表示を記録
-scripts/install-usage-fetch.sh --dry-run            # 何もせず計画（どちらの経路を取るか）だけ確認
-scripts/install-usage-fetch.sh                      # 旧を止め、新を配置・ロードし、新ジョブが両サービスに取得を試みるまで待つ（失敗の記録も含む。例＝この機にcodexコマンドが無い場合）
-scripts/install-usage-fetch.sh --verify             # キャッシュを再確認し、移行前後の表示を並べて出し、本人に確認を求める
-scripts/install-usage-fetch.sh --confirm             # 数日運用したのち: 退避した旧plistを削除して確定
-```
-
-旧LaunchAgentの `plist` は（即座に削除せず）`~/.local/state/takumi009-ai-env/usage-migration/` 配下へ退避するので、`--confirm` の前ならいつでも `scripts/install-usage-fetch.sh --rollback` で復元できます。何らかの理由（旧の配布元が復活させた等）で両方が同時にロードされてしまったときは、`scripts/install-usage-fetch.sh --heal` が唯一の安全な復旧コマンドです——旧repoのインストーラ自体は削除しないので、本人が確定的に退役させるまで戻る道が残ります。旧ジョブが一度も無かった機では、同じコマンドが新規導入として動きます（`--confirm` は不要。巻き戻しは単に新ジョブを止めるだけです）。実行しない限り実LaunchAgentには一切触れません。切替が中断したまま・取得が止まったままの機は `check-drift.sh` が `[USAGE-FETCH-*]`／`[USAGE-MIGRATION-INCOMPLETE]`／`[USAGE-LOCK-STUCK]` として報告します。サブ機には自動導入されません（`install-sub.sh` はLaunchAgentを一切設置しない方針のため）。サブ機でも使用率を追いたい場合は本人が `scripts/install-usage-fetch.sh` をそのサブ機で直接実行してください。
-
-再実行（または `--heal`）が「新ジョブはロードしたが enable が完了したか確認できない」旨のメッセージで失敗した場合（`bootstrap` 直後や、再実行が他の `enable` 呼び出しと競合したときに起こりえます）、メッセージ自体に実行すべき正確なコマンドが書かれています＝`launchctl enable gui/<uid>/com.takumi009.usage-fetch`。これを一度実行したうえで、もう一度 `scripts/install-usage-fetch.sh`（または `--heal`）を実行してください。これは新ジョブ自体の異常ではなく安全側の照会不能判定（fail-closed）なので、自動では再試行しません。
+`scripts/usage-fetch.sh` は毎分（LaunchAgent `com.takumi009.usage-fetch`）Claude の OAuth 使用率・Codex の `rateLimits`・（2026-09-09以降）Codex のチケット（`reset_credits`。上記「Codexの『チケット』」参照）を取得し、`~/.cache/claude-codex-usage/{claude,codex}-cache.json` へ原子的に書き出します——パスと `schema_version`（1）は、Dock描画スクリプト`cmux-usage-watch.sh`（別リポジトリ`dotfiles`に同梱）が読んでいるものと同じです。429（レート制限）応答はキャッシュへの完全な no-op（1バイトも変わりません）で、それ以外の失敗（タイムアウト・通信エラー・壊れた応答・`codex` コマンド不在）は `fetched_at` を変えずに `last_error` へ記録するので、「古いが `ok`」なキャッシュと「取得直後に失敗を記録した」キャッシュを表示側が常に区別できます。
+導入は `scripts/install-usage-fetch.sh`（`install-backup.sh` と同型の素の bootstrap+enable インストーラ。`--dry-run` は現在の状態を表示するだけ）。退役済みの旧ジョブ `com.claude-codex-usage.refresh` がまだロードされている機では、何も変えずに中断し、先に実行すべき `launchctl bootout` コマンドを表示します（取得器は常に1つだけという方針）。ジョブが未ロード・disabled・取得停止のときは `check-drift.sh` が `[USAGE-FETCH-*]`／`[USAGE-LOCK-STUCK]` として報告します。
+サブ機には自動導入されません（`install-sub.sh` はLaunchAgentを一切設置せず、`update-sub.sh` もこのインストーラを再実行しません）。サブ機でも使用率を追いたい場合は本人が `scripts/install-usage-fetch.sh` をそのサブ機で直接実行してください。
 
 ### ズレの検知（check-drift.sh）
 
@@ -576,7 +546,7 @@ cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # （machin
 scripts/install-main.sh --with-dotfiles   # symlink 化＋dotfiles＋codex MCP 登録
 scripts/install-backup.sh                 # 定期バックアップ再開
 scripts/install-maintenance.sh            # 週次メンテナンスランナー再開
-scripts/install-usage-fetch.sh --dry-run  # 使用率取得の再開: まず計画だけ確認
+scripts/install-usage-fetch.sh --dry-run  # 使用率取得の再開: まず状態だけ確認
 scripts/install-usage-fetch.sh            # 使用率取得を再開
 
 # 5. 各アプリのログイン（手動）: Claude Code / Codex / その他

@@ -93,33 +93,6 @@ provider=anthropic-api
 model=claude-sonnet-5
 effort=medium
 
-# --- 旧世代（保管・一覧参照用）。resolve-candidateでsubagentへ選ぶと
-# AGENT_MODEL_UNSUPPORTED（exit 2）で拒否される ---
-[fable-5-legacy]
-provider=anthropic-api
-model=claude-fable-5
-effort=high
-
-[opus-4-8-legacy]
-provider=anthropic-api
-model=claude-opus-4-8
-effort=high
-
-[opus-4-7-legacy]
-provider=anthropic-api
-model=claude-opus-4-7
-effort=high
-
-[opus-4-6-legacy]
-provider=anthropic-api
-model=claude-opus-4-6
-effort=high
-
-[sonnet-4-6-legacy]
-provider=anthropic-api
-model=claude-sonnet-4-6
-effort=high
-
 # =====================================================================
 # ② Codex サブスク（external。Codex CLI経由。scripts/codex-exec.shが
 #  ハンドラ）。execution=external-cli必須。model=外部CLIが受理する実IDか
@@ -214,68 +187,13 @@ execution=external-cli
 model=gpt-5.6-luna
 effort=low
 
-# GPT-5.5（前世代flagship）。一部経路でまだ選べる旧世代として残す
-[codex-gpt-5-5-legacy]
-provider=external
-execution=external-cli
-model=gpt-5.5
-effort=high
-
 # =====================================================================
 # B. Bedrock系（Claude/Codexのサブスク時間枠を消費しない従量課金経路。
 #  AWS側のアカウントには別途デフォルトクォータがある＝無制限ではない）
 # =====================================================================
-
-# =====================================================================
-# ③ Claude Bedrock 別名方式（bedrock）。AWSプロファイル→短期ベアラー
-#  トークン方式。Claude/Codexのサブスク時間枠は消費しない従量課金経路
-#  ——ただしAWS側のアカウントには別途デフォルトクォータがある（AWS公式
-#  Bedrockモデルカードの「Quotas and Limits」節で明記。無制限ではない）。
-#  WebSearch可＝2026-09-01実測で訂正済み。model は別名のみ（opus/sonnet/
-#  haiku/fable）、実IDは bedrock.env のピン留め側（ANTHROPIC_DEFAULT_*_
-#  MODEL）が持つ。effortは現行のピン留め方式で効く保証が無いため書かない。
-#  メイン機は現状サブスク本命で未使用（2026-09-08実測）——サブ機・サブスク
-#  枠切迫時の保険用に定義だけ置く。定義と一覧表示は可能だが、非anthropic-api
-#  のsubagent起動は未対応であり、resolve-candidateは
-#  SUBAGENT_PROVIDER_UNSUPPORTED（exit 2）で拒否する
-# =====================================================================
-[bedrock-fable]
-provider=bedrock
-model=fable
-
-[bedrock-opus]
-provider=bedrock
-model=opus
-
-[bedrock-sonnet]
-provider=bedrock
-model=sonnet
-
-[bedrock-haiku]
-provider=bedrock
-model=haiku
-
-# =====================================================================
-# ④ Claude Bedrock Messages API（bedrock-mantle）。③と同じ枠・費用の性質
-#  だが、model は実ID（anthropic.<...>）をそのまま書ける＝bedrock.env側の
-#  ピン留めが要らない経路。定義と一覧表示は可能だが、subagent起動は未対応で
-#  resolve-candidateはSUBAGENT_PROVIDER_UNSUPPORTED（exit 2）で拒否する
-# =====================================================================
-[mantle-fable]
-provider=bedrock-mantle
-model=anthropic.claude-fable-5-1
-
-[mantle-opus]
-provider=bedrock-mantle
-model=anthropic.claude-opus-5
-
-[mantle-sonnet]
-provider=bedrock-mantle
-model=anthropic.claude-sonnet-5
-
-[mantle-haiku]
-provider=bedrock-mantle
-model=anthropic.claude-haiku-4-5
+# ③④（bedrock／bedrock-mantle）の定義は 2026-09-19 本人裁定で削除＝休眠。
+#  コード経路は残す（ローカル LLM 段階経路スライス B で再追加・Decisions/
+#  2026-09-19-ai-env-optimization-rulings）。
 
 # =====================================================================
 # ⑤ Codex on Bedrock（amazon-bedrock model provider）。すべてコメント

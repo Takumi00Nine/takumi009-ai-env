@@ -7,27 +7,20 @@
     aliases正規化(normalize_aliases)・汎用alias禁止リスト読込
     (load_generic_aliases) は scripts/vault-agents/vault_inventory.py に
     定義されていたが、CLI（棚卸し検出）と共有ライブラリが同一ファイルに同居していた
-    （embedding_index.py・knowledge_merge_candidates.py・knowledge_merge.py・
-    merge_quality_gate.py・recall_bench.py が `import vault_inventory` して
-    これらの関数だけを使っていた＝2026-07-15棚卸しレポートで指摘された構造）。
-    本ファイルへ抽出し、vault_inventory.py 自身も含め全員がここを参照する側へ回る。
+    （複数の週次スクリプトが `import vault_inventory` してこれらの関数だけを
+    使っていた＝2026-07-15棚卸しレポートで指摘された構造。それらの利用側は
+    2026-09-19までに退役済み）。本ファイルへ抽出し、vault_inventory.py 自身も
+    含め全員がここを参照する側へ回る。
   - apply_updated・write_note_atomic・require_generic_aliases・parse_tsv・
     process_note・find_aliases_block・build_aliases_block・strip_quotes・
     split_flow_list は scripts/vault-agents/apply_aliases.py に定義されていた
-    alias一括適用ロジック。PR2の maintenance_apply.py（当初はFIX機能の
-    missing_updated適用のためだったが、FIXは2026-07-18本人裁定で削除済み＝
-    [[Decisions/2026-07-18-external-brain-hardening]]。現在はMERGE時の原ノート
-    スタブ化＝build_merge_stub_text()がupdated:更新にapply_updatedを再利用する）
-    がapply_updated/write_note_atomicを再利用するために先出しで共有化した
-    のが最初の動機（設計書§3.5）だが、Codexレビュー指摘・Major対応でスコープを
-    拡大した: recall_bench.py（--alias-overlayのオーバーレイ適用）が
-    process_note/parse_tsv/require_generic_aliasesも必要としており、これらを
-    apply_aliases.py側に残したままだと`import apply_aliases`が全廃できず
-    （設計書「import apply_aliases は全廃」の要件を満たせない）、かつ
-    apply_aliases.py↔recall_bench.pyの2ファイル間で「共有で使っているもの」の
-    分離原則（cleanup決定#10）にも反する。よって alias 一括適用の再利用可能な
-    純粋関数一式をここへ集約し、apply_aliases.py自身もCLI（argparse・diff表示・
-    ファイルI/O orchestration）専業へ縮小した。
+    alias一括適用ロジック。週次メンテの無人適用（2026-09-19退役）が
+    apply_updated/write_note_atomicを再利用するために先出しで共有化したのが
+    最初の動機だが、他の利用側（2026-09-19退役）も process_note/parse_tsv/
+    require_generic_aliases を必要としており、`import apply_aliases` を全廃する
+    ため alias 一括適用の再利用可能な純粋関数一式をここへ集約し、
+    apply_aliases.py自身はCLI（argparse・diff表示・ファイルI/O orchestration）
+    専業へ縮小した。現在の利用側＝vault_inventory.py・apply_aliases.py。
 
 方針: 本ファイルは「複数ファイルから使われる純粋な解析・書込ヘルパ」のみを置く。
 各CLIツール固有のビジネスロジック（棚卸しの各チェック項目・非破壊マージ判定 等）は
@@ -105,9 +98,8 @@ LINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 
 # コードフェンス（```〜```）・インラインコード（`〜`）検出用の正規表現。リンク切れ
 # 検査等で「コード例の中に書式として出てくる[[...]]やURL」を誤検知しないために
-# 本文から除外する用途で使う（2026-07-16 merge_checks.py新設に伴いvault_inventory.py
-# から抽出＝設計書§2.5「import vault_inventoryは全廃」の対象を将来の共有モジュール
-# にも適用）。
+# 本文から除外する用途で使う（2026-07-16にvault_inventory.pyから抽出＝設計書§2.5
+# 「import vault_inventoryは全廃」の対象を将来の共有モジュールにも適用）。
 CODE_RE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 
 
@@ -242,7 +234,8 @@ def require_generic_aliases(path):
 
     リストが欠落/空の状態は「汎用語チェックが安全に機能しない」ことを意味し、
     load_generic_aliases()単体（空集合を返すだけの純粋関数）を直接呼ぶ全ての
-    呼び出し元（apply_aliases.py main()・recall_bench.py build_overlay_vault()―
+    呼び出し元（apply_aliases.py main()・recall_bench.py build_overlay_vault()
+    ―recall_bench.pyは2026-09-19退役・記述は歴史的経緯として残す。
     どちらも独立した呼び出し元で重複実装するとfail-closedの抜け漏れが起きやすい
     ため、ここへ集約する）が共通してこの関数を経由する契約にする。書き込み・
     採点いずれの用途でも、チェックが機能しない状態のまま処理を続けない。

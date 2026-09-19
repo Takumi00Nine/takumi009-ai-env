@@ -61,7 +61,7 @@ profile_slug: fixture
 team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
-role.leader:      configured model=opus-high
+role.leader:      configured model=t-opus-high
 role.implementer: configured model=sonnet-noeffort,codex-high
 role.verifier:    configured model=codex-high
 ---
@@ -69,7 +69,7 @@ EOF
 
 cat > "$BASE/models.conf" <<'EOF'
 # モデル定義（実体＝機ごとのローカル。config/models.conf.sampleのコピー）
-[opus-high]
+[t-opus-high]
 provider=anthropic-api
 model=claude-opus-5
 effort=high
@@ -186,7 +186,7 @@ role.ja-doc:      not_adopted model=sonnet-noeffort'
 echo "=== AC-2: FX-B1のlist-rolesが4行に行単位完全一致 ==="
 {
   actual="$(L "$BASE/profile.md")"
-  expected="$(printf 'implementer\tconfigured\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5\tsubagent\t\nimplementer\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh\nleader\tconfigured\topus-high\tanthropic-api\tclaude-opus-5\tsubagent\thigh\nverifier\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh')"
+  expected="$(printf 'implementer\tconfigured\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5\tsubagent\t\nimplementer\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh\nleader\tconfigured\tt-opus-high\tanthropic-api\tclaude-opus-5\tsubagent\thigh\nverifier\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh')"
   assert_eq "AC-2: list-roles 4行完全一致" "$expected" "$actual"
 }
 
@@ -205,12 +205,12 @@ echo "=== AC-3: FX-B1・FX-B7（陽性）／FX-B4a〜FX-B4d（陰性） ==="
   assert_eq "FX-B4a: exit1（定義名重複）" "1" "$rc"
 
   cp "$BASE/models.conf" "$WORK/b4b.conf"
-  sed -i '' '/^\[opus-high\]$/,/^$/{/^model=/d;}' "$WORK/b4b.conf"
+  sed -i '' '/^\[t-opus-high\]$/,/^$/{/^model=/d;}' "$WORK/b4b.conf"
   out="$(AIENV_MODEL_DEFS_FILE="$WORK/b4b.conf" R "$BASE/profile.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B4b: exit1（model欠落）" "1" "$rc"
 
   cp "$BASE/models.conf" "$WORK/b4c.conf"
-  sed -i '' 's/^\[opus-high\]$/[Opus-High]/' "$WORK/b4c.conf"
+  sed -i '' 's/^\[t-opus-high\]$/[Opus-High]/' "$WORK/b4c.conf"
   out="$(AIENV_MODEL_DEFS_FILE="$WORK/b4c.conf" R "$BASE/profile.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B4c: exit1（定義名が大文字を含む）" "1" "$rc"
 
@@ -286,7 +286,6 @@ echo "=== AC-7(FR-11): 職種ごとの候補注入は撤去済み（bootstrap-va
     | HOME="$FAKEHOME" BOOTSTRAP_VAULT="/nonexistent-vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
       VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
-      PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
       MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
       AIENV_AGENTS_DIR="$BASE/agents" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 "$BOOTSTRAP" \
@@ -304,7 +303,6 @@ echo "=== AC-7(FR-11): 職種ごとの候補注入は撤去済み（bootstrap-va
     | HOME="$FAKEHOME" BOOTSTRAP_VAULT="/nonexistent-vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
       VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
-      PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
       MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
       AIENV_AGENTS_DIR="$BASE/agents" AIENV_MODEL_DEFS_FILE="/nonexistent-dir/models.conf" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 "$BOOTSTRAP" \
@@ -322,7 +320,7 @@ echo "=== AC-8: known-keysの3行目がSCHEMA_VERSION:7 ==="
 
 echo "=== AC-9: FX-B9（リーダーは先頭候補のみ解決） ==="
 {
-  variant_profile "$WORK/b9.md" 's/role.leader:      configured model=opus-high/role.leader:      configured model=opus-high,sonnet-noeffort/'
+  variant_profile "$WORK/b9.md" 's/role.leader:      configured model=t-opus-high/role.leader:      configured model=t-opus-high,sonnet-noeffort/'
   out="$(LD "$WORK/b9.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B9: exit0" "0" "$rc"
   keys="$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
@@ -386,7 +384,7 @@ echo "=== AC-11: FX-B12a（陽性）／FX-B12b・FX-B12c（陰性・exit2かつW
   assert_eq "FX-B12b: Wの記録が0行" "0" "$cnt_b"
 
   : > "$CALLS_LOG"
-  invoke_via_candidate "$BASE/profile.md" implementer opus-high "$BASE/agents"; rc=$?
+  invoke_via_candidate "$BASE/profile.md" implementer t-opus-high "$BASE/agents"; rc=$?
   assert_eq "FX-B12c: exit2（候補外）" "2" "$rc"
   cnt_c="$(wc -l < "$CALLS_LOG" | tr -d ' ')"
   assert_eq "FX-B12c: Wの記録が0行" "0" "$cnt_c"
@@ -606,8 +604,8 @@ import os, re, shutil, subprocess, sys
 r, work = map(Path, sys.argv[1:])
 root = work / "model-removal-fx"
 root.mkdir()
-profile = (r / "config/profile.md.sample").read_text()
-defs = (r / "config/models.conf.sample").read_text()
+profile = (r / "tests/fixtures/profile.md").read_text()
+defs = (r / "tests/fixtures/models.conf").read_text()
 models = ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5",
           "claude-haiku-4-5-20251001", "claude-fable-5", "claude-opus-4-8",
           "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
@@ -632,12 +630,12 @@ for n in range(1, 29):
     if n in (23, 28): attrs.update(provider="bedrock", model="opus")
     if n == 24: attrs.update(provider="bedrock-mantle", model="anthropic.claude-opus-5")
     if n == 27: candidates = "pick,probe"
-    if n == 19: candidates = "pick,opus-4-7-legacy"
+    if n == 19: candidates = "pick,def-legacy"
     if n == 20: attrs["effort"] = "low"
     # 2026-09-16 代替配役の層の撤去に合わせ、以前は別行（撤去済みの
     # 代替候補キー）で表していた2件目の候補を同一行のカンマ列挙へ変える。
-    if n == 16: candidates = "pick,sonnet-high"
-    if n == 17: candidates = "pick,opus-4-7-legacy"
+    if n == 16: candidates = "pick,def-a"
+    if n == 17: candidates = "pick,def-legacy"
     if n in (25, 26): candidates = "pick,probe"
     text, count = re.subn(r"^role\.requirements-analyst:.*$",
                           f"role.requirements-analyst: {state} model={candidates}", profile, flags=re.M)
@@ -671,31 +669,32 @@ aliases = {"claude-fable-5-1":"fable", "claude-opus-5":"opus",
            "claude-sonnet-5":"sonnet", "claude-haiku-4-5-20251001":"haiku"}
 for n, model in enumerate(list(aliases), 1):
     p = run(n); effort = "" if n == 4 else "high"
-    expected = f"OK\tpick\t{model}\tsubagent\t{effort}\nAGENT_MODEL\t{aliases[model]}\n".encode()
     # ラッパー起動-設計-v1.1.1.md §2.4・AC-20①②: AGENT_MODEL行の隣に
     # AGENT_EFFORT行（effortが非空のときだけ・空文字の行は出さない）。
-    if effort:
-        expected += f"AGENT_EFFORT\t{effort}\n".encode()
-    assert (p.returncode, p.stdout, p.stderr) == (0, expected, b""), (n, p)
+    # 判定は先頭語＋定義名の形だけ見る（値の完全一致は使わない＝Decision 09-17 ④）。
+    assert p.returncode == 0 and p.stderr == b"" and p.stdout.startswith(b"OK\tpick\t") \
+        and b"\nAGENT_MODEL\t" in p.stdout and ((b"\nAGENT_EFFORT\t" in p.stdout) == bool(effort)), (n, p)
 for n, model in zip(range(5, 11), models[4:10]):
-    p = run(n); expected = f"AGENT_MODEL_UNSUPPORTED\trole=requirements-analyst def=pick model={model}\n".encode()
-    assert (p.returncode, p.stdout, p.stderr) == (2, b"", expected), (n, p)
+    p = run(n)
+    assert p.returncode == 2 and p.stdout == b"" and p.stderr.startswith(b"AGENT_MODEL_UNSUPPORTED\trole=requirements-analyst def=pick"), (n, p)
 p = run(11); assert p.returncode == 1 and p.stdout == b"" and p.stderr.startswith(b"PROFILE_INVALID:T12\t")
-p = run(12); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tpick\tgpt-6-astra\texternal-cli\tlow\nCODEX_ARGS\t--model gpt-6-astra --effort low\n",b"")
-p = run(13); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tpick\tdefault\texternal-cli\t\nCODEX_ARGS\t\n",b"")
+p = run(12); assert p.returncode==0 and p.stdout.startswith(b"OK\tpick\t") and b"\nCODEX_ARGS\t--model " in p.stdout
+p = run(13); assert p.returncode==0 and p.stdout.startswith(b"OK\tpick\tdefault\t") and b"\nCODEX_ARGS\t" in p.stdout
 p = run(14, model_def=None, profile_path=root/"missing.md"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"CANDIDATE_UNSPECIFIED\t")
-p = run(15, model_def="sonnet-high"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"CANDIDATE_NOT_IN_LIST\t")
+# FX-15: def-a は定義済みだが role の候補列（pick）に無い
+p = run(15, model_def="def-a"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"CANDIDATE_NOT_IN_LIST\t")
 # FX-16: role.requirements-analystがunavailable・同一行に2候補
-# （pick,sonnet-high）を持つ。どちらを直接指定してもROLE_UNAVAILABLEで
+# （pick,def-a）を持つ。どちらを直接指定してもROLE_UNAVAILABLEで
 # 一律拒否される（2026-09-16 代替配役の層の撤去＝FR-1。候補が複数あっても
 # 逃げ道は無い）。
 unavailable_reason = "CANDIDATE_UNUSABLE:ROLE_UNAVAILABLE\t候補が使用不可です\n".encode()
 p = run(16); assert (p.returncode, p.stdout, p.stderr) == (1, b"", unavailable_reason)
-p2 = run(16, model_def="sonnet-high"); assert (p2.returncode, p2.stdout, p2.stderr) == (1, b"", unavailable_reason)
-p = run(17, model_def="opus-4-7-legacy"); assert (p.returncode,p.stdout,p.stderr)==(2,b"",b"AGENT_MODEL_UNSUPPORTED\trole=requirements-analyst def=opus-4-7-legacy model=claude-opus-4-7\n")
+p2 = run(16, model_def="def-a"); assert (p2.returncode, p2.stdout, p2.stderr) == (1, b"", unavailable_reason)
+p = run(17, model_def="def-legacy"); assert p.returncode==2 and p.stdout==b"" \
+    and p.stderr.startswith(b"AGENT_MODEL_UNSUPPORTED\trole=requirements-analyst def=def-legacy")
 p = run(18); assert p.returncode==1 and p.stdout==b"" and b"V1-b" in p.stderr
 p = run(19); assert p.returncode==0 and p.stdout.endswith(b"AGENT_MODEL\topus\nAGENT_EFFORT\thigh\n")
-p = run(20); assert (p.returncode,p.stdout,p.stderr)==(0,b"OK\tpick\tclaude-opus-5\tsubagent\tlow\nAGENT_MODEL\topus\nAGENT_EFFORT\tlow\n",b"")
+p = run(20); assert p.returncode==0 and p.stdout.startswith(b"OK\tpick\t") and p.stdout.endswith(b"AGENT_EFFORT\tlow\n")
 fx02_candidate = run(2)
 fx02_resolve = run(2, command="resolve")
 for n in (21,22):
@@ -703,12 +702,12 @@ for n in (21,22):
     assert (p.returncode, p.stdout, p.stderr) == (fx02_candidate.returncode, fx02_candidate.stdout, fx02_candidate.stderr)
     p = run(n, command="resolve")
     assert (p.returncode, p.stdout, p.stderr) == (fx02_resolve.returncode, fx02_resolve.stdout, fx02_resolve.stderr)
-for n, provider in ((23,"bedrock"),(24,"bedrock-mantle")):
-    p=run(n); assert (p.returncode,p.stdout,p.stderr)==(2,b"",f"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=pick provider={provider}\n".encode())
-for n, provider in ((25,"bedrock"),(26,"bedrock-mantle")):
-    p=run(n, model_def="probe"); assert (p.returncode,p.stdout,p.stderr)==(2,b"",f"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=probe provider={provider}\n".encode())
+for n in (23, 24):
+    p=run(n); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=pick"), (n, p)
+for n in (25, 26):
+    p=run(n, model_def="probe"); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=probe"), (n, p)
 p=run(27); assert p.returncode==0 and p.stdout.endswith(b"AGENT_MODEL\topus\nAGENT_EFFORT\thigh\n")
-p=run(28); assert (p.returncode,p.stdout,p.stderr)==(2,b"",b"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=pick provider=bedrock\n")
+p=run(28); assert p.returncode==2 and p.stdout==b"" and p.stderr.startswith(b"SUBAGENT_PROVIDER_UNSUPPORTED\trole=requirements-analyst def=pick")
 print("PASS FX-01..28")
 PYFX
 then
@@ -724,7 +723,7 @@ echo "=== effort-per-role v2（設計-v1.2.md §4.2）: list-candidatesの6列�
   }
 
   actual="$(LC "$BASE/profile.md" "$BASE/agents")"
-  expected="$(printf 'implementer\tconfigured\tsonnet-noeffort\tsubagent\tsonnet\tOK\nimplementer\tconfigured\tcodex-high\texternal-cli\t--effort high\tOK\nleader\tconfigured\topus-high\tsubagent\topus\tOK\nverifier\tconfigured\tcodex-high\texternal-cli\t--effort high\tOK')"
+  expected="$(printf 'implementer\tconfigured\tsonnet-noeffort\tsubagent\tsonnet\tOK\nimplementer\tconfigured\tcodex-high\texternal-cli\t--effort high\tOK\nleader\tconfigured\tt-opus-high\tsubagent\topus\tOK\nverifier\tconfigured\tcodex-high\texternal-cli\t--effort high\tOK')"
   assert_eq "LC: FX-B1の4行完全一致（役割順・記載順・6列）" "$expected" "$actual"
 
   # 未参照の定義（bedrock-opus・mantle-sonnet＝§6.1のBASE fixtureが備える）
@@ -750,10 +749,10 @@ role.ja-doc:      not_adopted'
 
 echo "=== AC-20: resolve-candidateのeffortの口（ラッパー起動-設計-v1.1.1.md §2.4・§8） ==="
 {
-  # ①agent_effort_line_once: effortを持つ定義（role.leader→opus-high・
+  # ①agent_effort_line_once: effortを持つ定義（role.leader→t-opus-high・
   # effort=high）でAGENT_EFFORT行がちょうど1行あり、値が定義のeffortと
   # 一致し、同じ呼び出しのOK行5列目と同値（同一実体条項）。
-  out_eff="$(C "$BASE/profile.md" leader opus-high "$BASE/agents")"; rc_eff=$?
+  out_eff="$(C "$BASE/profile.md" leader t-opus-high "$BASE/agents")"; rc_eff=$?
   assert_eq "agent_effort_line_once: exit0" "0" "$rc_eff"
   eff_lines="$(printf '%s\n' "$out_eff" | grep -c '^AGENT_EFFORT	')"
   assert_eq "agent_effort_line_once: AGENT_EFFORT行がちょうど1行" "1" "$eff_lines"

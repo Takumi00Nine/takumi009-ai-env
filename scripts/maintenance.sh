@@ -1,71 +1,17 @@
 #!/usr/bin/env bash
-# 週次メンテナンスランナー（設計書§1「maintenance.sh本体設計」・PR2）。
-#
-# LaunchAgent com.takumi009.maintenance（毎週月曜03:00・RunAtLoad=false）から
-# 無人実行される前提。Phase 0（バックアップ＋ロック）→ Phase 1（検出・読取専用）
-# → Phase 2（ヘッドレスClaude判断＋Vault適用・maintenance_apply.py）→
-# Phase 3（サマリ・通知・保持整理）の順に進む。
-#
-# Phase 0: 直前スナップショット（backup-vault.sh）＋Vault書込ロック取得
-#   （Phase0開始時〜Phase3終了までPID方式で保持。~/.claude/logs/maintenance/
-#   vault-writer.lock）＋last-run.jsonのstarted_at無条件更新（自己ロック
-#   アウト対策）＋vault-public/Preferences差分（check-drift④相当）が残って
-#   いればexport-public-vault.shを即再試行。
-# Phase 1: 検出専用（読み取り専用・実行順固定・各ステップは
-#   maintenance_run_step.py経由でtimeout付き起動）:
-#   ①check-drift.sh --json（環境ヘルスの点検。④を除いたdrift>0または実行
-#     異常/timeoutでも中断せず警告として記録し完走する＝2026-08-10 fail-fast
-#     廃止・[[Decisions/2026-08-10-round6-rulings]]決定1。Vault書込み安全の
-#     門番はPhase 0の直前スナップショット（backup-vault.sh成功必須）に一本化
-#     済み。旧fail-fastは18日間の週次メンテ停止（[[Decisions/2026-08-05-
-#     bootstrap-health-warning-report]]）の主因だった＝止めた実績はいずれも
-#     実行安全とは無関係〈config.tomlアプリ自動追記・リーダー作業途中の
-#     未コミット〉。警告・失敗の可視化はPhase3末尾のlast_result記録＋
-#     claude/hooks/bootstrap-vault.shの起動ヘルス行が担う）
-#   ②fragments_log.py --since <前回成功時刻> --json
-#   ③vault_inventory.py --json
-#   ④knowledge_merge_candidates.py --json
-#   ⑤decision_propagation.py --since <前回成功時刻> --out <レポート>
-#   ①〜⑤は1本失敗/timeoutしても他は継続する（エラー隔離）。
-# Phase 2: maintenance_apply.py が②④の検出結果を集約しヘッドレスClaudeへ
-#   1回投げ、検証済みの構造化出力に基づきPROMOTE/MERGEをVaultへ適用する
-#   （FIX機能は2026-07-18本人裁定で丸ごと削除済み＝[[Decisions/2026-07-18-
-#   external-brain-hardening]]2周目。理由＝Preferences限定でしか動かず
-#   「夜間はPreferencesを書かない」境界の唯一の違反経路だった・値も効果限定的。
-#   ③vault_inventory.pyのmissing_updated検出は棚卸しレポート表示のみに残り、
-#   maintenance_apply.pyへは渡さない）。
-#   PROMOTEのtarget_folder=="Preferences"のみVaultへは書かず、下書き全文を
-#   Vault外の提案保管先へ保管するだけにとどめる（2026-07-17改定・[[Decisions/
-#   2026-07-16-nightly-batch-direct-write]]同日改定＝Preferencesは「無人
-#   直書き」ではなく「提案→承認後に作成」）。
-# Phase 3: Preferences提案件数（proposals_dir直下*.mdの参考glob件数。通知は
-#   claude/hooks/bootstrap-vault.shが起動のたびに直接スキャンする＝
-#   2026-07-18ハードニングでpendingマーカー層は撤去済み）を含む実施サマリを
-#   Fragments当日ファイルへ1行追記、last-run.jsonのlast_success_at
-#   を完全正常終了時のみ更新、last_result（success/warn＋警告要旨の短文。
-#   Phase0の直前スナップショット失敗時は"fail"を個別に記録＝2026-08-10
-#   [[Decisions/2026-08-10-round6-rulings]]決定1のセット条件）を常に更新、
-#   backup-vault.shを再度呼び即commit、Vault書込ロック解放（EXIT trap自動）、
-#   異常時のみmacOS通知、30日超過の実行ディレクトリを削除。
-#
-# 中間ファイル・status-fileの置き場（設計書§1.3・リーダー裁定2026-07-16）:
-#   ~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/ という実行ごと
-#   一意のディレクトリを本スクリプトが開始時に作成し、そこへ全部まとめる。
-#   加えて ~/.claude/logs/maintenance/latest symlink を開始時に原子的に
-#   張り替える（一時名で作ってからrename）。30日保持は日付ディレクトリの
-#   mtime判定で自動削除する。
-#
-# パスはすべて環境変数で上書き可（ユニットテスト用。本番実行時は既定値の
-# ままでよい）。
+# 週次メンテナンスランナー（LaunchAgent com.takumi009.maintenance・月曜 03:00・無人）。
+# Phase0: backup-vault.sh（直前スナップショット）→ Vault 書込ロック → export-public-vault.sh 再試行
+# Phase1: ① check-drift.sh --json（drift は警告・止めない）② fragments_log.py --since <last_success_at> --json
+#         ③ vault_inventory.py --json（各ステップは maintenance_run_step.py で timeout 隔離・1 本の失敗で止めない）
+# Phase3: cmux-task-declare.sh prune → Fragments 当日ファイルへサマリ 1 行 → backup-vault.sh → last-run.json → 異常時のみ macOS 通知 → 30 日整理
+# 出力: ~/.claude/logs/maintenance/<日付>/<時刻-pid>/（latest symlink）と last-run.json（契約＝design-step2 §6・読み手＝bootstrap-vault.sh ④・cmux-next-model.sh）
+# 環境変数で全パス・timeout を上書き可（テスト用）。経緯＝Decisions/2026-08-10-round6-rulings・2026-09-19-ai-env-optimization-rulings
 #
 # 実行方法: scripts/maintenance.sh
 
 set -uo pipefail  # -e は使わない（Phase1の1項目失敗で残りが止まらないようにする）
 
-# 中間ファイル（ディレクトリ0700・ファイル0600＝設計書§1.3）。ディレクトリ側は
-# mkdir後にchmodで個別に強制するが、ファイル側はプロセスのumaskに委ねられて
-# いたため、スクリプト冒頭でumaskそのものを絞る（2026-07-16 Codexレビュー
-# 指摘Minor対応）。
+# 中間ファイルはディレクトリ0700・ファイル0600（ファイル側はumaskで絞る）。
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,76 +27,44 @@ source "$SCRIPT_DIR/lib/macos-notify.sh"
 : "${MAINTENANCE_LOG_ROOT:=$HOME/.claude/logs/maintenance}"
 : "${VAULT_WRITER_LOCK_FILE:=$MAINTENANCE_LOG_ROOT/vault-writer.lock}"
 : "${LAST_RUN_FILE:=$MAINTENANCE_LOG_ROOT/last-run.json}"
-# Preferences提案の保管先（maintenance_apply.pyのDEFAULT_PREFERENCES_PROPOSALS_DIRと
-# 同じ既定値。明示的に環境変数で両者へ結線し、片方だけ変更してもう片方が
-# 追従し忘れるドリフトを避ける＝2026-07-18ハードニング）。
-: "${PREFERENCES_PROPOSALS_DIR:=$HOME/.claude/logs/maintenance/preferences-proposals}"
-# Vault書込ロックのstale判定秒数。週次実行1回分（検出＋ヘッドレスClaude1回＋
-# 適用）が十分収まる余裕を見て既定2時間。前回実行がクラッシュしてロックを
-# 片付けられなかった場合の自動解除しきい値（backup-vault.shのSTALE_LOCK_SECONDS
-# と同じ考え方）。
+# Vault書込ロックのstale判定秒数（週次実行1回分が収まる余裕＝既定2時間。
+# 前回実行がクラッシュしてロックを片付けられなかった場合の自動解除しきい値）。
 : "${MAINTENANCE_STALE_LOCK_SECONDS:=7200}"
 : "${MAINTENANCE_RETENTION_DAYS:=30}"
 
-# 各ステップの個別timeout（秒）。設計書§1.2「各ステップ個別timeout」。
+# 各ステップの個別timeout（秒）。
 : "${TIMEOUT_BACKUP_VAULT:=180}"
 : "${TIMEOUT_EXPORT_PUBLIC_VAULT:=180}"
 : "${TIMEOUT_CHECK_DRIFT:=120}"
 : "${TIMEOUT_FRAGMENTS_LOG:=90}"
 : "${TIMEOUT_VAULT_INVENTORY:=180}"
-: "${TIMEOUT_KNOWLEDGE_MERGE:=300}"
-: "${TIMEOUT_DECISION_PROPAGATION:=120}"
-: "${TIMEOUT_MAINTENANCE_APPLY:=720}"
-# 宣言記録の掃除（cmux-session-todo・FR-47・設計書§16.2）。cmuxを叩くため
-# ソケット半死でハングしうる。既存ステップと同じ形で打ち切る（既定30秒）。
+# 宣言記録の掃除（cmux-task-declare.sh prune）はcmuxを叩くためソケット半死で
+# ハングしうる。既存ステップと同じ形で打ち切る（既定30秒）。
 : "${TIMEOUT_TASK_PRUNE:=30}"
-# maintenance_apply.py自身の内部--claude-timeout（上記TIMEOUT_MAINTENANCE_APPLYより
-# 短くする＝外側のmaintenance_run_step.pyタイムアウトが内側より先に発火すると
-# 内部の状況が分からないまま強制終了されるため、内側を先に切れさせる）。
-: "${MAINTENANCE_APPLY_CLAUDE_TIMEOUT:=600}"
-: "${MAINTENANCE_APPLY_MAX_MERGE_ACTIONS:=2}"
-# ヘッドレスClaudeのモデル・バイナリ（maintenance_apply.py側の既定＝
-# MAINTENANCE_APPLY_MODEL/MAINTENANCE_APPLY_CLAUDE_BIN環境変数）をそのまま
-# 継承させる。本スクリプト独自のCLI引数は設けない（運用者は環境変数で統一
-# して上書きする＝二重の設定経路を作らない）。
 
 log() { echo "[maintenance] $*"; }
 warn() { echo "[maintenance] WARN: $*" >&2; }
 
 # 完全正常終了かどうか（last-run.jsonのlast_success_at更新判定に使う）。
-# add_anomaly()を1回でも呼べば自動的に0になる（下記参照）。
+# add_anomaly()を1回でも呼べば自動的に0になる。
 RUN_FULLY_OK=1
 
-# 異常理由の蓄積（Phase3「異常時のみmacOS通知」用）。呼ぶたびに
-# RUN_FULLY_OK も自動的に0へ倒す（2026-07-16 Codexレビュー指摘Major対応:
-# 従来は個別の異常系分岐ごとに`RUN_FULLY_OK=0`を書き忘れると
-# last_success_atが誤って進んでしまう構造だった。「隔離して継続する異常」
-# であっても、fragments_log.py/decision_propagation.pyの--sinceが次回も
-# 正しく巻き戻れるよう、1件でも異常があればlast_success_atは進めない
-# という保守的な方針に統一する＝設計書「完全正常終了時のみ」を文字どおり
-# 満たす）。
+# 異常理由の蓄積（Phase3「異常時のみmacOS通知」用）。呼ぶたびにRUN_FULLY_OKも
+# 0へ倒す＝「隔離して継続する異常」でも1件あればlast_success_atは進めない
+# （fragments_log.pyの--sinceが次回も同じ窓を再走査できるようにする）。
 ANOMALIES=()
 add_anomaly() { ANOMALIES+=("$1"); warn "$1"; RUN_FULLY_OK=0; }
 
-# informationalな注記の蓄積（2026-08-10・工程横断レビュー指摘Major対応）。
-# add_anomaly()と違い、RUN_FULLY_OKは倒さない＝last_result/last_success_atの
-# 判定には一切影響しない「参考情報」専用チャネル。用途＝②のTOML三分類で
-# 検出された未知config.tomlキーのように、「driftでも異常でもないが、
-# RUN_DIRログ（30日TTL）に埋もれさせず翌セッションの起動ヘルス行までは
-# 見えるようにしたい」情報を通す（本人裁定「warnへ昇格させない」）。
-# ログには残すがwarn()（stderr）は使わない＝完全に正常な実行のノイズに
-# しないため（stdoutのlog()のみ）。
+# informationalな注記の蓄積。add_anomaly()と違いRUN_FULLY_OKは倒さない＝
+# last_result/last_success_atの判定には影響しない「参考情報」専用チャネル
+# （未知config.tomlキー・宣言掃除の未実施など「warnへ昇格させない」情報）。
+# stderrのwarn()は使わずlog()のみ。
 INFO_NOTES=()
 add_info_note() { INFO_NOTES+=("$1"); log "INFO: $1"; }
 
 # --- last-run.json 読み書きヘルパ（原子更新・破損時はfail-openで{}扱い） ---
-# ファイルパス・フィールド名・値はいずれもPythonコード文字列へ直接埋め込まず
-# sys.argv 経由で渡す（2026-07-16 リーダー裁定・scripts/check-drift.shの
-# check_maintenance_freshness()で検出された同型欠陥＝Codexレビュー指摘Major
-# 「シェル変数のコード直接埋め込みは、値に ' が含まれるだけで構文が壊れ、
-# 細工された値では任意コード実行の経路になりうる」の横展開修正。
-# $LAST_RUN_FILE は環境変数で上書き可能なため単一ユーザーローカル運用でも
-# 防御的に塞ぐ）。
+# ファイルパス・フィールド名・値はPythonコード文字列へ埋め込まずsys.argv経由で
+# 渡す（値に ' が含まれると構文が壊れ、細工された値では任意コード実行になりうる）。
 read_last_run_field() {
   python3 -c "
 import json, sys
@@ -182,19 +96,36 @@ os.replace(str(tmp), str(path))
 " "$LAST_RUN_FILE" "$1" "$2"
 }
 
-# last_result（旧D4・[[Decisions/2026-08-10-round6-rulings]]決定1のセット
-# 条件「警告・失敗の可視化」）: success/warn/failの3値＋警告要旨の短文を
-# last-run.jsonへ記録する。claude/hooks/bootstrap-vault.shの起動ヘルス行が
-# 翌セッション冒頭でこれを拾い⚠️表示する（正本＝[[Decisions/2026-08-05-
-# bootstrap-health-warning-report]]）。last_result/last_result_summaryは
-# 常にペアで意味を持つ値（新しいvalueに古いsummaryが対応してしまうと
-# 誤解を招く）のため、write_last_run_field()を2回呼ぶ独立更新にはせず
-# 1回のPython起動で両方を同時に書く＝Codex一次レビュー指摘Major対応
-# （2回に分けると1回目成功・2回目失敗時に新旧値が混在しうる）。
-# write_last_run_field()と同じfail-open方針（書込失敗はwarn()するだけで
-# 処理は止めない＝last_resultは「次回への申し送り」であり、これ自体の
-# 書込失敗で今回の実行結果を左右すべきではないため）。$2（summary）は
-# 空文字列でもよい（success時）。
+# write_last_run_json <key> <json-literal>: 値をJSONリテラル（数値・"文字列"等）
+# として入れる。`null` ならキーを削除する（前回値を残さないため）。原子更新・
+# 破損時{}扱いはwrite_last_run_field()と同じ。文字列専用の同関数は残す。
+write_last_run_json() {
+  python3 -c "
+import json, os, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+value = json.loads(sys.argv[3])
+if value is None:
+    data.pop(sys.argv[2], None)
+else:
+    data[sys.argv[2]] = value
+tmp = path.parent / ('.' + path.name + '.tmp-' + str(os.getpid()))
+tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
+os.replace(str(tmp), str(path))
+" "$LAST_RUN_FILE" "$1" "$2"
+}
+
+# last_result: success/warn/failの3値＋警告要旨の短文をlast-run.jsonへ記録する
+# （bootstrap-vault.shの起動ヘルス行が翌セッション冒頭で拾う）。
+# last_result/last_result_summaryは常にペアで意味を持つため1回のPython起動で
+# 両方を同時に書く（2回に分けると1回目成功・2回目失敗時に新旧値が混在しうる）。
+# fail-open（書込失敗はwarn()するだけで処理は止めない）。$2は空文字列でもよい。
 write_last_result() {
   local value="$1" summary="$2"
   python3 -c "
@@ -271,7 +202,7 @@ mkdir -p "$DATE_DIR" || {
 # RUN_DIRは`$$`(PID)を含むため通常は衝突しないが、`mkdir -p`は既存ディレクトリを
 # 静かに再利用してしまう（PID再利用等の極めて稀な衝突時にログが混在しうる）。
 # 単純な`mkdir`（`-p`無し）はディレクトリが既に存在すると失敗するため、これを
-# 衝突検知として使う（2026-07-16 Codexレビュー指摘Minor対応）。
+# 衝突検知として使う。
 if ! mkdir "$RUN_DIR"; then
   echo "[maintenance] FAIL: 実行ディレクトリの作成に失敗しました（既に存在する可能性があります）: $RUN_DIR" >&2
   write_last_result "fail" "実行ディレクトリの作成に失敗しました（${RUN_DIR}）"
@@ -311,9 +242,8 @@ if ! write_last_run_field started_at "$STARTED_AT"; then
   # started_atはcheck-drift.sh⑥相当の死活監視が依拠する自己ロックアウト
   # 対策の要であり、これが書けない環境（ディスク枯渇・権限異常等）では
   # 以降の処理を続けても同種の書込みが軒並み失敗する可能性が高いため、
-  # ここだけはfail-fastする（2026-07-16 Codex二次レビュー指摘Minor対応:
-  # 従来は戻り値を見ておらず、書込失敗が黙って握り潰されたまま
-  # 「started_atは記録済み」という前提で処理が進んでいた）。
+  # ここだけはfail-fastする（戻り値を見ないと書込失敗が黙って握り潰されたまま
+  # 「started_atは記録済み」という前提で処理が進んでしまうため）。
   echo "[maintenance] FAIL: last-run.jsonのstarted_at更新に失敗しました: $LAST_RUN_FILE" >&2
   # last_resultも同じファイルへの書込みのため、started_at同様に失敗しうる
   # （write_last_result自体はfail-openでwarn()するだけ＝二重に中断はしない）。
@@ -324,41 +254,35 @@ if ! write_last_run_field started_at "$STARTED_AT"; then
   exit 1
 fi
 
-# --sinceに渡す日付の算出（fragments_log.py --since / decision_propagation.py
-# --sinceはいずれも日付部分のみ解釈する契約＝時刻精度は不要）。前回成功実行が
-# 無い/形式不正/未来日時/30日超過はいずれも7日前へfail-openでフォールバック
-# する（設計書「初回/破損/未来日時/30日超過は7日にフォールバックしfactログ・
-# 中断しない」・fragments_log.py自身のresolve_since()と同じ閾値・同じ考え方
-# ＝2026-07-16 Codexレビュー指摘Major対応。従来は先頭10文字を無条件に切り出す
-# だけで、未来日時・30日超過の検証が抜けていた）。
+# --sinceに渡す日付の算出（fragments_log.py --sinceは日付部分のみ解釈する契約）。
+# 前回成功実行が無い/形式不正/未来日時/30日超過はいずれも7日前へfail-openで
+# フォールバックする（fragments_log.py自身のresolve_since()と同じ閾値）。
 PREV_SUCCESS_AT="$(read_last_run_field last_success_at)"
 SINCE_DATE="$(python3 -c "
 import datetime, re, sys
 raw = sys.argv[1].strip()
 # last_success_atはUTC（date -u）で保存されるため、今日の日付判定もUTC基準に
-# 揃える（2026-07-16 Codex四次レビュー指摘Minor対応: ローカル日付
-# （datetime.date.today()）のままだと、UTCとローカルTZの日付が食い違う
-# 時間帯（例: 週次実行予定のJST 03:00はUTCでは前日）で未来日判定・30日
-# 境界が1日ずれうる）。
+# 揃える（ローカル日付（datetime.date.today()）のままだと、UTCとローカルTZの
+# 日付が食い違う時間帯（例: 週次実行予定のJST 03:00はUTCでは前日）で未来日
+# 判定・30日境界が1日ずれうるため）。
 today = datetime.datetime.now(datetime.timezone.utc).date()
 fallback = (today - datetime.timedelta(days=7)).isoformat()
 parsed = None
 if raw:
     # write_last_run_field()が書く形式（date -u +%Y-%m-%dT%H:%M:%SZ）に加え、
     # 日付のみの形式も許容するが、末尾に無関係な文字列が付いた壊れた値
-    # （例: '2026-07-16broken'）は正規表現で構造ごと弾く（2026-07-16 Codex
-    # 二次レビュー指摘Minor対応: 従来は先頭10文字を切り出すだけでraw[:10]が
-    # たまたま有効な日付形式に見えれば通過していた）。
+    # （例: '2026-07-16broken'）は正規表現で構造ごと弾く（先頭10文字を
+    # 切り出すだけだとraw[:10]がたまたま有効な日付形式に見えれば通過して
+    # しまうため）。
     m = re.match(r'^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2}))?\$', raw)
     if m:
         try:
             if m.group(2):
-                # 時刻部分を含む場合は文字列全体を厳密に解析する
-                # （2026-07-16 Codex三次レビュー指摘Minor対応: 日付部分
-                # （m.group(1)）だけをfromisoformat()に渡していたため、
+                # 時刻部分を含む場合は文字列全体を厳密に解析する（日付部分
+                # （m.group(1)）だけをfromisoformat()に渡すと、
                 # '2026-07-16T99:99:99Z'のような不正な時刻値でも正規表現の
                 # 桁数チェックさえ満たせば日付部分は正常に解析され、時刻の
-                # 妥当性が一切検証されないまま通過していた）。
+                # 妥当性が一切検証されないまま通過してしまうため）。
                 parsed = datetime.datetime.fromisoformat(raw.replace('Z', '+00:00')).date()
             else:
                 parsed = datetime.date.fromisoformat(m.group(1))
@@ -379,11 +303,11 @@ log "=== Phase 0: ロック＋バックアップ ==="
 
 # --- Vault書込ロック取得（Phase0開始時〜Phase3終了まで保持・PID方式） ---
 # 設計書「Phase0開始時に取得しPhase3終了まで保持」を文字どおり最初に行う
-# （2026-07-16 Codexレビュー指摘Major対応: 従来はPhase0の直前スナップショット
-# ＝backup-vault.sh呼び出しの後にロック取得していたため、2つのmaintenance.sh
-# が重複起動した場合、どちらも「自分自身の呼び出し」としてMAINTENANCE_
-# INTERNAL_CALLバイパスでbackup-vault.shのbusyチェックを素通りしてしまい、
-# ロックによる相互排他が機能しない窓があった）。acquire_pid_lockはbusy/error
+# （Phase0の直前スナップショット＝backup-vault.sh呼び出しの後にロック取得
+# すると、2つのmaintenance.shが重複起動した場合、どちらも「自分自身の
+# 呼び出し」としてMAINTENANCE_INTERNAL_CALLバイパスでbackup-vault.shの
+# busyチェックを素通りしてしまい、ロックによる相互排他が機能しない窓が
+# できるため）。acquire_pid_lockはbusy/error
 # 時にプロセスごとexitする契約（scripts/lib/pid-lock.sh参照）。取得できれば
 # EXIT trapで自動解放されるため、以降のどのexit経路でも明示的な解放処理は
 # 不要。
@@ -393,8 +317,7 @@ log "=== Phase 0: ロック＋バックアップ ==="
 # クラッシュ痕跡の可能性・scripts/lib/pid-lock.sh参照）。この経路は
 # maintenance.sh側のadd_anomaly/write_last_resultを一切経由せず直接
 # プロセスごとexitするため、素通しだと前回のlast_result（success/warn）が
-# 誤って残ったまま翌セッションのヘルス行に出てしまう（2026-08-10 Codex
-# 一次レビュー2周目指摘Major対応）。acquire_pid_lock自体はライブラリ関数
+# 誤って残ったまま翌セッションのヘルス行に出てしまう。acquire_pid_lock自体はライブラリ関数
 # として busy/error を呼び出し元へ判別可能な形で返さない（バックアップ
 # 対象がbackup-vault.shとも共用する汎用ロックのため、maintenance.sh固有の
 # last_result概念をpid-lock.sh側へ持ち込みたくない＝関心の分離）ため、
@@ -425,8 +348,8 @@ MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE=0
 # backup-vault.shへ渡す「このロックを保持しているのは自分自身だ」という
 # 証明。単なる真偽値フラグ(旧MAINTENANCE_INTERNAL_CALL=1)だと、
 # launchctl setenv等でこの環境変数がアンビエントに漏れ残っていた場合に
-# 毎時LaunchAgent側のbackup-vault.shまで誤ってbypassしてしまう
-# （2026-07-16 Codexレビュー指摘Major対応）。ロックファイルに実際に書かれた
+# 毎時LaunchAgent側のbackup-vault.shまで誤ってbypassしてしまうため。
+# ロックファイルに実際に書かれた
 # PIDと一致する場合のみbypassする設計にすることで、「本当にこのロックを
 # 取得したプロセス自身からの呼び出しか」をbackup-vault.js側で検証できる
 # ようにする。
@@ -442,10 +365,9 @@ BACKUP0_RESULT="$(parse_step_status "$BACKUP0_STATUS_FILE")"
 BACKUP0_STATUS_WORD="$(read_status_file "$RUN_DIR/backup0-status.txt" 2>/dev/null || echo missing)"
 log "Phase0直前スナップショット: $BACKUP0_RESULT (status-file=$BACKUP0_STATUS_WORD)"
 
-# busy/completed/no-change/error/missingを個別に判定する（2026-07-16 Codex
-# レビュー指摘Major対応: 従来は"error"/"missing"だけを弾いており、"busy"が
-# 素通りしてPhase1以降へ進んでしまっていた。設計書は「busyなら今回の週次
-# 実行を穏当にskip」と明記している）。
+# busy/completed/no-change/error/missingを個別に判定する（"error"/"missing"
+# だけを弾くと"busy"が素通りしてPhase1以降へ進んでしまうため。設計書は
+# 「busyなら今回の週次実行を穏当にskip」と明記している）。
 if [[ "$BACKUP0_RESULT" != "OK 0" ]]; then
   add_anomaly "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）"
   write_last_result "fail" "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）"
@@ -519,12 +441,9 @@ run_export_retry "Phase0"
 log "=== Phase 1: 検出 ==="
 
 # --- ①check-drift.sh --json（環境ヘルスの点検・警告化） ---
-# 2026-08-10 fail-fast廃止（[[Decisions/2026-08-10-round6-rulings]]決定1）。
-# 旧: ④を除いたdrift>0または実行異常/timeoutでexit 1しPhase1②以降・Phase2を
-# 実行せず中断していた（定期成功0/4の主因）。
-# 新: 結果に関わらず②以降・Phase2へ進む。Vault書込み安全の門番はPhase 0の
-# 直前スナップショット（本ファイル上部のbackup-vault.sh呼び出し・busy/error時は
-# 既にこの行より前でexitしている）に一本化済みのため、ここで止める理由が無い。
+# drift>0・実行異常・timeoutのいずれも警告として記録し②以降へ進む（fail-fastしない
+# ＝Decisions/2026-08-10-round6-rulings 決定1。Vault書込み安全の門番はPhase0の
+# 直前スナップショットに一本化済み）。
 DRIFT_STATUS_FILE="$RUN_DIR/step-status-drift.json"
 run_wrapped_step "$TIMEOUT_CHECK_DRIFT" "$DRIFT_STATUS_FILE" \
   "$RUN_DIR/drift-stdout.log" "$RUN_DIR/drift-stderr.log" \
@@ -534,26 +453,17 @@ DRIFT_RESULT="$(parse_step_status "$DRIFT_STATUS_FILE")"
 log "①check-drift.sh: $DRIFT_RESULT"
 
 if [[ "$DRIFT_RESULT" != "OK 0" ]]; then
-  # rc=1(④を除いたdrift>0)・rc>=2(実行エラー)・WRAPPER_FAIL(timeout等)の
-  # いずれも警告として記録するだけで、②以降・Phase2はそのまま継続する
-  # （add_anomaly()がwarn()出力・ANOMALIES追記・RUN_FULLY_OK=0への降格を
-  # まとめて行う＝本ファイル冒頭のadd_anomaly()定義参照）。
+  # rc=1(drift>0)・rc>=2(実行エラー)・WRAPPER_FAIL(timeout等)のいずれも警告として
+  # 記録するだけで②以降は継続する。
   DRIFT_JSON_LINE="$(tail -n 1 "$RUN_DIR/drift-stdout.log" 2>/dev/null || true)"
   add_anomaly "Phase1①: check-drift.shがdrift/実行異常を検知しました（${DRIFT_RESULT}・警告として記録し継続します）。JSON: $DRIFT_JSON_LINE"
 fi
 
-# --- ①相当: check-drift.sh②(config.toml三分類)の未知キー件数をinformational
-#     として拾う（2026-08-10・工程横断レビュー指摘Major対応） ---
-# 未知キー（テンプレにも既知アプリ管理キー一覧にも無いキー）はcheck-drift.sh
-# 側の設計どおりdriftには数えない＝上のDRIFT_RESULTが"OK 0"（異常なし）でも
-# 起こりうる。driftでないぶんadd_anomaly()の対象にはせず（last_result=warnへ
-# 昇格させない・本人裁定）、add_info_note()でsuccess時のlast_result_summary
-# だけに拾う。これが無いと「WARN表示のみ→drift非計上→last_result=success→
-# 起動ヘルス行に出ない」経路になり、RUN_DIRログ（30日TTL）の奥に埋もれて
-# 誰にも読まれないまま消えていた（工程横断レビューで指摘された可視化導線の
-# 欠落）。DRIFT_RESULTがWRAPPER_FAIL(timeout等)でJSON自体が出力されていない
-# 場合はpython3のjson.loads()が例外を投げ、fail-openで何もしない（既に
-# add_anomaly側でその異常は捕捉済みのため二重に警告する必要が無い）。
+# --- ①相当: check-drift.sh②(config.toml三分類)の未知キー件数をinformationalとして拾う ---
+# 未知キーはdriftには数えない（DRIFT_RESULTが"OK 0"でも起こりうる）ため
+# add_anomaly()ではなくadd_info_note()でlast_result_summaryにだけ載せる
+# （warnへ昇格させない・本人裁定）。JSONが無い/壊れている場合はfail-openで何もしない
+# （その異常はadd_anomaly側で捕捉済み）。
 DRIFT_JSON_LAST_LINE="$(tail -n 1 "$RUN_DIR/drift-stdout.log" 2>/dev/null || true)"
 if UNKNOWN_CONFIG_KEYS_COUNT="$(python3 -c "
 import json, sys
@@ -570,10 +480,11 @@ fi
 
 # --- ②fragments_log.py --since <前回成功時刻> --json ---
 # fragments_log.py/vault_inventory.pyはVaultパスを$HOME/Data/obsidianに固定
-# しており--vault相当のオプション/環境変数を持たない（2026-07-16実装時に
-# 判明した既存の仕様＝knowledge_merge_candidates.py・maintenance_apply.pyは
-# --vaultを持つのに対し非対称。本スクリプトはVAULTを渡せる範囲では渡すに
-# 留め、この2本の改修はPR2のスコープ外として現状追随する）。
+# しており--vault相当のオプションを持たない（本スクリプトは現状追随）。
+# 成功時は候補件数（len(fragments)・truncatedは含めない）をlast-run.jsonの
+# fragments_candidates／fragments_since（--sinceの日付）へ書く。読み手＝
+# cmux-next-model.sh の週次行「候補N件」（AIへは注入しない）。
+# 失敗時（rc≠0・timeout・JSON破損・契約違反）は前週の値を残さないよう両キーを削除する。
 FRAGMENTS_STATUS_FILE="$RUN_DIR/step-status-fragments.json"
 FRAGMENTS_JSON="$RUN_DIR/fragments.json"
 run_wrapped_step "$TIMEOUT_FRAGMENTS_LOG" "$FRAGMENTS_STATUS_FILE" \
@@ -581,20 +492,13 @@ run_wrapped_step "$TIMEOUT_FRAGMENTS_LOG" "$FRAGMENTS_STATUS_FILE" \
   python3 "$SCRIPT_DIR/vault-agents/fragments_log.py" --since "$SINCE_DATE" --json
 FRAGMENTS_RESULT="$(parse_step_status "$FRAGMENTS_STATUS_FILE")"
 log "②fragments_log.py: $FRAGMENTS_RESULT"
-FRAGMENTS_JSON_ARG=()
+FRAGMENTS_CANDIDATES=""   # 空＝件数を確定できなかった（サマリ行は「不明」）
 if [[ "$FRAGMENTS_RESULT" == "OK 0" ]]; then
   # fragments_log.pyは個々のFragmentsファイルの読取失敗をscan_error_countとして
-  # JSONへ返すが、それ自体はexit 0の契約（設計書の「読取専用・fail-open」）の
-  # ため、上のrc判定（$FRAGMENTS_RESULT）だけでは検知できない「静かな取りこぼし」
-  # だった（2周目・全体構成再レビューCodex+Fable5収束後の小修正＝impl4）。
-  # scan_error_count>0ならanomaly化し、last_success_atを進めない（apply側の
-  # state_update_warning等と同クラスの最小の足し＝失敗した窓を翌週再走査させる）。
-  # JSON自体が破損/契約違反（scan_error_countが無い・非負整数でない等）で
-  # 件数を確定できない場合も「0件（正常）」へfail-openで丸めてはいけない
-  # （2026-07-18 2周目Codexレビュー指摘Major対応: 従来は例外時に0を印字して
-  # おり、fragments_log.py側の契約違反や出力破損を静かな正常扱いにしてしまい、
-  # 今回追加した「取りこぼしを翌週再走査させる」目的そのものが成立しなくなる
-  # 経路が残っていた）。件数を確定できない場合もanomaly化してPhase2へは渡さない。
+  # JSONへ返しつつexit 0で終わる契約のため、rcだけでは検知できない。
+  # scan_error_count>0はanomaly化してlast_success_atを進めない（翌週再走査）が、
+  # 件数自体は書く。JSON破損/契約違反（キー欠落・非負整数でない）は「0件（正常）」へ
+  # 丸めずanomaly化し、件数も書かない。
   if FRAGMENTS_SCAN_ERROR_COUNT="$(python3 -c "
 import json, sys
 d = json.load(open(sys.argv[1], encoding='utf-8'))
@@ -603,24 +507,38 @@ if not (isinstance(v, int) and not isinstance(v, bool) and v >= 0):
     raise SystemExit(1)
 print(v)
 " "$FRAGMENTS_JSON" 2>/dev/null)" && [[ "$FRAGMENTS_SCAN_ERROR_COUNT" =~ ^[0-9]+$ ]]; then
-    FRAGMENTS_JSON_ARG=(--fragments-json "$FRAGMENTS_JSON")
+    if FRAGMENTS_CANDIDATES="$(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1], encoding='utf-8'))
+v = d['fragments']
+assert isinstance(v, list)
+print(len(v))
+" "$FRAGMENTS_JSON" 2>/dev/null)" && [[ "$FRAGMENTS_CANDIDATES" =~ ^[0-9]+$ ]] \
+        && write_last_run_json fragments_candidates "$FRAGMENTS_CANDIDATES" \
+        && write_last_run_json fragments_since "\"$SINCE_DATE\""; then
+      log "②昇格候補${FRAGMENTS_CANDIDATES}件（${SINCE_DATE}以降）を last-run.json に記録しました"
+    else
+      FRAGMENTS_CANDIDATES=""
+      write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
+      write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
+      add_anomaly "Phase1②: 候補件数を last-run.json に書けませんでした"
+    fi
     if [[ "$FRAGMENTS_SCAN_ERROR_COUNT" -gt 0 ]]; then
-      add_anomaly "Phase1②: fragments_log.pyが読み取れなかったFragmentsファイルが${FRAGMENTS_SCAN_ERROR_COUNT}件あります（scan_error_count>0・候補は渡しつつ継続しますが、翌週再走査させるためlast_success_atは進めません）"
+      add_anomaly "Phase1②: fragments_log.pyが読み取れなかったFragmentsファイルが${FRAGMENTS_SCAN_ERROR_COUNT}件あります（scan_error_count>0・候補件数は記録しつつ継続しますが、翌週再走査させるためlast_success_atは進めません）"
     fi
   else
-    add_anomaly "Phase1②: fragments_log.pyのJSON出力からscan_error_countを取得できませんでした（契約違反/JSON破損の疑い・候補は渡さず継続します）"
+    write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
+    write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
+    add_anomaly "Phase1②: fragments_log.pyのJSON出力からscan_error_countを取得できませんでした（契約違反/JSON破損の疑い・候補件数は記録せず継続します）"
   fi
 else
+  write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
+  write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
   add_anomaly "Phase1②: fragments_log.pyが失敗/timeoutしました（${FRAGMENTS_RESULT}・継続します）"
 fi
 
 # --- ③vault_inventory.py --json ---
-# missing_updated（Preferences限定）はもはやmaintenance_apply.pyへ渡さない
-# （FIX機能を2026-07-18本人裁定で丸ごと削除済み＝[[Decisions/2026-07-18-
-# external-brain-hardening]]2周目。以後は`.md`棚卸しレポート§1への表示・
-# n_issues計上のみ＝人間が読み時/棚卸し相談で直す）。それでも棚卸し検出
-# 自体（他の項目＝date_drift・リンク切れ・alias欠落等を含む）は週次で
-# 実行し続け、失敗/timeoutはanomaly化する。
+# 棚卸し検出（latest.jsonとmdレポートを書く）。失敗/timeoutはanomaly化する。
 INVENTORY_STATUS_FILE="$RUN_DIR/step-status-inventory.json"
 INVENTORY_JSON="$RUN_DIR/inventory.json"
 run_wrapped_step "$TIMEOUT_VAULT_INVENTORY" "$INVENTORY_STATUS_FILE" \
@@ -631,142 +549,6 @@ log "③vault_inventory.py: $INVENTORY_RESULT"
 if [[ "$INVENTORY_RESULT" != "OK 0" ]]; then
   add_anomaly "Phase1③: vault_inventory.pyが失敗/timeoutしました（${INVENTORY_RESULT}・継続します）"
 fi
-
-# --- ④knowledge_merge_candidates.py --json ---
-MERGE_STATUS_FILE="$RUN_DIR/step-status-merge.json"
-MERGE_JSON="$RUN_DIR/merge.json"
-run_wrapped_step "$TIMEOUT_KNOWLEDGE_MERGE" "$MERGE_STATUS_FILE" \
-  "$MERGE_JSON" "$RUN_DIR/merge-stderr.log" \
-  python3 "$SCRIPT_DIR/vault-agents/knowledge_merge_candidates.py" --vault "$VAULT" --json
-MERGE_RESULT="$(parse_step_status "$MERGE_STATUS_FILE")"
-log "④knowledge_merge_candidates.py: $MERGE_RESULT"
-MERGE_JSON_ARG=()
-if [[ "$MERGE_RESULT" == "OK 0" ]]; then
-  MERGE_JSON_ARG=(--merge-json "$MERGE_JSON")
-else
-  add_anomaly "Phase1④: knowledge_merge_candidates.pyが失敗/timeoutしました（${MERGE_RESULT}・継続します）"
-fi
-
-# --- ⑤decision_propagation.py --since <前回成功時刻> --out <レポート> ---
-# rc=0/1は成功（0=波及漏れ無し・1=波及漏れ検出＝いずれも正常な検出結果）、
-# rc>=2のみ失敗としてラップする（設計書§3.4）。検出結果はmaintenance_apply.py
-# には渡さない（波及修正はSSOT書換＝夜間ジョブ禁止スコープのため、サマリの
-# みFragments日次へ・棚卸し相談で人間が処理する対象＝cleanup決定#6）。
-DECISION_STATUS_FILE="$RUN_DIR/step-status-decision.json"
-DECISION_OUT="$RUN_DIR/decision-propagation.md"
-run_wrapped_step "$TIMEOUT_DECISION_PROPAGATION" "$DECISION_STATUS_FILE" \
-  "$RUN_DIR/decision-stdout.log" "$RUN_DIR/decision-stderr.log" \
-  env VAULT="$VAULT" \
-  python3 "$SCRIPT_DIR/vault-agents/decision_propagation.py" --since "$SINCE_DATE" --out "$DECISION_OUT"
-DECISION_RESULT="$(parse_step_status "$DECISION_STATUS_FILE")"
-log "⑤decision_propagation.py: $DECISION_RESULT"
-DECISION_MISSING_COUNT=0
-case "$DECISION_RESULT" in
-  "OK 0") : ;;
-  "OK 1")
-    # rc=1は「何らかの波及漏れ疑いがある」ことしか保証しないブール値だが、
-    # decision_propagation.pyのレポート本文には実件数
-    # 「波及漏れの疑い: N ノート」が必ず1行含まれる契約（build_report()参照）
-    # のため、可能ならそこから実件数を拾う（2026-07-18ハードニング対処方針4
-    # 「decision_propagationサマリは可能なら実件数へ」）。best-effort:
-    # レポート書式変更・DECISION_OUT読取不可等でパースできない場合は、
-    # 従来どおり「1件以上ある」ことだけを表す1へフォールバックする（0件と
-    # 誤表示しない安全側デフォルト）。
-    DECISION_MISSING_PARSED="$(grep -m1 -oE '波及漏れの疑い: [0-9]+' "$DECISION_OUT" 2>/dev/null | grep -oE '[0-9]+$')"
-    if [[ "$DECISION_MISSING_PARSED" =~ ^[0-9]+$ && "$DECISION_MISSING_PARSED" -gt 0 ]]; then
-      DECISION_MISSING_COUNT="$DECISION_MISSING_PARSED"
-    else
-      DECISION_MISSING_COUNT=1
-    fi
-    ;;
-  *) add_anomaly "Phase1⑤: decision_propagation.pyが失敗/timeoutしました（${DECISION_RESULT}・継続します）" ;;
-esac
-
-# =============================================================================
-# Phase 2: 判断＋適用（maintenance_apply.py）
-# =============================================================================
-
-log "=== Phase 2: 判断＋適用 ==="
-
-APPLY_STATUS_FILE="$RUN_DIR/apply-status.json"
-APPLY_WRAPPER_STATUS_FILE="$RUN_DIR/step-status-apply.json"
-run_wrapped_step "$TIMEOUT_MAINTENANCE_APPLY" "$APPLY_WRAPPER_STATUS_FILE" \
-  "$RUN_DIR/apply-stdout.log" "$RUN_DIR/apply-stderr.log" \
-  python3 "$SCRIPT_DIR/vault-agents/maintenance_apply.py" \
-  --vault "$VAULT" --workdir "$RUN_DIR" --status-file "$APPLY_STATUS_FILE" \
-  --claude-timeout "$MAINTENANCE_APPLY_CLAUDE_TIMEOUT" \
-  --max-merge-actions "$MAINTENANCE_APPLY_MAX_MERGE_ACTIONS" \
-  --preferences-proposals-dir "$PREFERENCES_PROPOSALS_DIR" \
-  ${FRAGMENTS_JSON_ARG[@]+"${FRAGMENTS_JSON_ARG[@]}"} \
-  ${MERGE_JSON_ARG[@]+"${MERGE_JSON_ARG[@]}"}
-APPLY_WRAPPER_RESULT="$(parse_step_status "$APPLY_WRAPPER_STATUS_FILE")"
-log "Phase2 maintenance_apply.py: $APPLY_WRAPPER_RESULT"
-
-# maintenance_apply.py自身は「一切書き込まず」異常でも常にexit 0で終わる契約
-# （設計書§2.6）のため、ラッパー自身がtimeout/spawn_error等で異常終了した
-# 場合（=child自体がapply-status.jsonを書けなかった可能性が高い）と、
-# 子プロセスが正常終了した場合を区別して読む。status-fileの中身自体も
-# fail-closedで厳密に検証する（2026-07-16 Codexレビュー指摘Minor対応:
-# 従来は`.get(key, 0)`/`.get("anomaly")`のtruthy判定のみで、`{}`や
-# `{"ok": false}`のような不完全なstatus-fileも「正常・件数0」として素通り
-# していた。ok/anomalyの型がbool以外、必須キー欠落、件数が非負整数でない
-# 場合はすべて読取失敗＝anomaly扱いにする）。
-N_PROMOTED=0; N_MERGED=0; N_MERGED_PARTIAL=0; N_SKIPPED=0; APPLY_ANOMALY=1; APPLY_REASON="wrapper_failed"
-if [[ "$APPLY_WRAPPER_RESULT" == "OK 0" && -f "$APPLY_STATUS_FILE" ]]; then
-  read -r N_PROMOTED N_MERGED N_MERGED_PARTIAL N_SKIPPED APPLY_ANOMALY APPLY_REASON <<EOF
-$(python3 -c "
-import json, sys
-
-def _nonneg_int(v):
-    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
-
-try:
-    d = json.load(open(sys.argv[1], encoding='utf-8'))
-    # n_fixedキーは2026-07-18本人裁定「FIXごと削除」でmaintenance_apply.py側の
-    # status-file契約から撤去された＝[[Decisions/2026-07-18-external-brain-
-    # hardening]]2周目。この必須キー契約も6キーへ追従する。
-    required = ['ok', 'anomaly', 'n_promoted', 'n_merged', 'n_merged_partial', 'n_skipped']
-    if not isinstance(d, dict) or any(k not in d for k in required):
-        raise ValueError('missing_required_key')
-    if not isinstance(d['ok'], bool) or not isinstance(d['anomaly'], bool):
-        raise ValueError('ok_or_anomaly_not_bool')
-    # ok/anomalyは互いに否定の関係でなければならない契約
-    # （maintenance_apply.py側の_write_status_file呼び出しは常に
-    # ok=not has_anomaly, anomaly=has_anomalyを渡す）。この不変条件が
-    # 崩れている（例: ok=false かつ anomaly=false）status-fileは、
-    # 中間ファイル破損の兆候として素直に信用せずanomaly扱いにする
-    # （2026-07-16 Codex二次レビュー指摘Minor対応: 従来はanomalyフィールド
-    # だけを見ており、「ok: false, anomaly: false」のような矛盾した
-    # 組合せがok=false側を無視して「成功」として通過していた。バッククォート
-    # で囲むと、この行全体がpython3 -cの二重引用符bash文字列の内側にある
-    # ためコマンド置換として誤解釈され「line NNN: {ok:: command not found」
-    # というシェルエラーになる＝2026-07-16 tester独立検証F1で実測発見。
-    # python3 -cのコード文字列内（bashの二重引用符の内側）ではバッククォート
-    # も二重引用符自体も使わない＝2026-07-16 Codexレビュー指摘Minor対応
-    # （本コメント自身が二重引用符を含んでいたため同種の脆弱な構造になって
-    # いた）。
-    if d['ok'] == d['anomaly']:
-        raise ValueError('ok_and_anomaly_inconsistent')
-    counts = [d['n_promoted'], d['n_merged'], d['n_merged_partial'], d['n_skipped']]
-    if not all(_nonneg_int(c) for c in counts):
-        raise ValueError('counts_not_nonneg_int')
-    print(*counts, 1 if d['anomaly'] else 0, (d.get('reason') or 'none').replace(' ', '_'))
-except Exception as e:
-    print(0, 0, 0, 0, 1, f'apply_status_file_invalid:{type(e).__name__}')
-" "$APPLY_STATUS_FILE")
-EOF
-  if [[ "$APPLY_ANOMALY" == "1" ]]; then
-    add_anomaly "Phase2: maintenance_apply.pyがanomalyを報告しました（reason=${APPLY_REASON}）"
-  fi
-else
-  # ラッパー自体の起動失敗（timeout/spawn_error等）は上のstatus-file読取を
-  # 行わない＝APPLY_REASON="wrapper_failed"のままなので、二重に
-  # add_anomaly()しないようここだけで完結させる（2026-07-16 Codexレビュー
-  # 対応の自己点検: 起動失敗時に「起動自体に失敗」と「anomalyを報告」の
-  # 2つの異常メッセージが重複しないようにする）。
-  add_anomaly "Phase2: maintenance_apply.pyの起動自体に失敗しました（${APPLY_WRAPPER_RESULT}）"
-fi
-log "Phase2結果: promote=$N_PROMOTED merge=$N_MERGED merge_partial=$N_MERGED_PARTIAL skip=$N_SKIPPED"
 
 # =============================================================================
 # Phase 3: サマリ・last-run.json更新・最終commit・通知・保持整理
@@ -822,25 +604,18 @@ else
   esac
   if [[ "$TASK_PRUNE_RESULT" != "OK 0" ]]; then
     # rc=1/2/3・WRAPPER_FAILのいずれも、掃除の失敗はadd_info_noteに積む。
-    # add_anomalyは使わない（設計書§16.4）＝add_anomalyはRUN_FULLY_OK=0に
-    # 倒し、last_success_atを進めなくする。last_success_atはPhase1②⑤の
-    # --since算出の起点なので、毎週の掃除失敗が毎週の再走査を引き起こす
-    # 二次被害が出てしまう。月曜03:00にcmuxが起動していないのは異常ではなく
-    # 普通に起こる状態（設計書§16.5）で、それを異常として扱うと警告が
-    # 常態化し本当の異常が埋もれる。FR-47④（掃除が失敗しても記録は元の
-    # まま・他の工程を止めない）は、run_wrapped_stepによる隔離と、prune側の
-    # 「取得に失敗したら1件も消さない」契約の二重で満たされる。
+    # add_anomalyは使わない＝last_success_atはPhase1②の--since算出の起点なので、
+    # 毎週の掃除失敗が毎週の再走査を引き起こす二次被害が出る。月曜03:00にcmuxが
+    # 起動していないのは普通に起こる状態で、異常扱いにすると警告が常態化する。
+    # 掃除が失敗しても記録は元のまま（run_wrapped_stepの隔離＋prune側の
+    # 「取得に失敗したら1件も消さない」契約）。
     TASK_PRUNE_SEGMENT="・宣言掃除 未実施（${TASK_PRUNE_REASON}）"
     add_info_note "Phase3: 宣言記録の掃除は未実施です（${TASK_PRUNE_REASON}・記録は変更していません。ステップ結果=${TASK_PRUNE_RESULT}・詳細: ${RUN_DIR}）"
   fi
 fi
 
 # --- Fragments当日ファイルへ実施サマリを1行追記 ---
-# 定常メンテ（Fragments週次昇格・棚卸し対処）はAIが自律実行し個別報告も
-# 不要という運用（Preferences/vault-operation.md「書き方の鉄則」の例外規定）
-# のもと、監査はこのサマリ行＋git履歴で担保する。失敗時はanomaly化する
-# （2026-07-16 Codexレビュー指摘Major対応: 従来は戻り値を一切見ておらず、
-# 書込失敗が黙って握り潰されたまま処理が続いていた）。
+# 週次メンテの監査はこのサマリ行＋git履歴で担保する。失敗時はanomaly化する。
 append_fragments_summary() {
   local line="$1"
   local month_dir="$VAULT/Fragments/$(date +%Y-%m)"
@@ -866,41 +641,21 @@ append_fragments_summary() {
   mv "$tmp" "$day_file"
 }
 
-# --- Preferences提案件数（Fragmentsサマリ用・2026-07-18ハードニング）---
-# 2026-07-17改定＝[[Decisions/2026-07-16-nightly-batch-direct-write]]同日改定・
-# 本人再裁定でPreferences昇格は「無人直書き」ではなく「提案→承認後に作成」へ
-# 変更された。maintenance_apply.py（Phase2）はtarget_folder=="Preferences"の
-# PROMOTEをVaultへ書かず、下書き全文をVault外の提案保管先（PREFERENCES_
-# PROPOSALS_DIR）へ保管するだけにとどめる。旧実装（apply-log.json内の
-# note_pathが"Preferences/"で始まる結果を検出してexport-public-vault.shを
-# Phase3で再実行する処理）はここで撤去された（Preferencesが夜間にVaultへ
-# 直接書かれなくなったため、同夜exportの必要性自体が消えた＝Phase0冒頭の
-# export再試行＝run_export_retry "Phase0"はリーダーの通常編集由来の差分対策
-# として引き続き残る・別目的のため混同しない）。
-#
-# pendingマーカー層は2026-07-18ハードニング（[[Decisions/2026-07-18-
-# external-brain-hardening]]）で撤去した（正本＝proposals_dir自体を
-# claude/hooks/bootstrap-vault.shが起動のたびに直接スキャンして通知する
-# 方式へ変更・専用マーカーJSON・破損自己修復ロジック・
-# preferences_pending_marker.pyは削除済み＝部品削減。旧実装はgit log -p参照）。
-# ここでは通知は行わず、Fragmentsサマリ行に載せる参考件数として
-# proposals_dir直下の*.mdファイル数を軽く数えるだけにとどめる（列挙自体が
-# 失敗しても0件扱いのfail-openでよい＝この数値は監査用の参考情報であり、
-# 本人への通知はbootstrap-vault.sh側の独立したスキャンが担保するため）。
-N_PENDING_PREFERENCES_PROPOSALS=0
-if [[ -d "$PREFERENCES_PROPOSALS_DIR" ]]; then
-  N_PENDING_PREFERENCES_PROPOSALS="$(find "$PREFERENCES_PROPOSALS_DIR" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
-  [[ "$N_PENDING_PREFERENCES_PROPOSALS" =~ ^[0-9]+$ ]] || N_PENDING_PREFERENCES_PROPOSALS=0
+# 昇格候補の件数（Phase1②）。昇格そのものは在席時にvault-scribeが行う（無人では
+# 動かない）ため、サマリ行は件数と窓（前回成功以降）だけを残す。
+if [[ -n "$FRAGMENTS_CANDIDATES" ]]; then
+  CANDIDATES_SEGMENT="昇格候補${FRAGMENTS_CANDIDATES}件（前回成功 ${SINCE_DATE} 以降・Dock の Project 枠参照）"
+else
+  CANDIDATES_SEGMENT="昇格候補 不明（fragments_log 失敗）"
 fi
-
-SUMMARY_LINE="定常メンテ(週次): 昇格${N_PROMOTED}件・マージ${N_MERGED}件（部分適用${N_MERGED_PARTIAL}件）・見送り${N_SKIPPED}件・Preferences未確認提案${N_PENDING_PREFERENCES_PROPOSALS}件（要承認）・波及漏れ疑い${DECISION_MISSING_COUNT}件${TASK_PRUNE_SEGMENT}（詳細: ${RUN_DIR}）"
+SUMMARY_LINE="定常メンテ(週次): ${CANDIDATES_SEGMENT}${TASK_PRUNE_SEGMENT}（詳細: ${RUN_DIR}）"
 if append_fragments_summary "$SUMMARY_LINE"; then
   log "Fragmentsサマリ追記: $SUMMARY_LINE"
 else
   add_anomaly "Phase3: Fragmentsサマリの追記に失敗しました"
 fi
 
-# --- backup-vault.shを再度呼び即commit（Fragmentsサマリ＋Phase2の全変更を捕捉） ---
+# --- backup-vault.shを再度呼び即commit（Fragmentsサマリを捕捉） ---
 BACKUP3_STATUS_FILE="$RUN_DIR/step-status-backup3.json"
 run_wrapped_step "$TIMEOUT_BACKUP_VAULT" "$BACKUP3_STATUS_FILE" \
   "$RUN_DIR/backup3-stdout.log" "$RUN_DIR/backup3-stderr.log" \
@@ -916,12 +671,9 @@ case "$BACKUP3_STATUS_WORD" in
     fi
     ;;
   *)
-    # busyもここではanomaly扱いにする（2026-07-16 Codexレビュー指摘Major
-    # 対応: Phase3はVault書込ロックを自分自身が保持したまま最後に呼ぶため、
-    # MAINTENANCE_LOCK_OWNER_PIDのbypassが正しく機能していればbusyには
-    # ならないはずで、busyが観測されること自体がバイパスの不整合を示す
-    # 異常＝Phase0のような「穏当なskip」とは意味が異なる）。今回の
-    # Fragmentsサマリ・Phase2の変更が未commitのまま残る可能性があるため
+    # busyもここではanomaly扱いにする（Phase3はVault書込ロックを自分自身が保持した
+    # まま呼ぶため、bypassが正しく機能していればbusyにはならない＝busyはバイパスの
+    # 不整合を示す異常）。Fragmentsサマリが未commitのまま残りうるので
     # last_success_atは更新しない。
     add_anomaly "Phase3: 最終commit(backup-vault.sh)が異常終了しました（${BACKUP3_RESULT}・status=${BACKUP3_STATUS_WORD}）"
     ;;
@@ -929,17 +681,15 @@ esac
 
 # --- last-run.jsonのlast_success_atは完全正常終了時のみ更新 ---
 # Phase3の最終commitまで含めた全ステップが終わった後、最後に判定する
-# （2026-07-16 Codexレビュー指摘Major対応: 従来はFragmentsサマリ追記の直後
-# ＝最終commitより前に判定していたため、最終commit自体が失敗しても
-# last_success_atだけが先に進んでしまっていた）。
+# （Fragmentsサマリ追記の直後＝最終commitより前に判定すると、最終commit
+# 自体が失敗してもlast_success_atだけが先に進んでしまうため）。
 if [[ "$RUN_FULLY_OK" -eq 1 ]]; then
   if write_last_run_field last_success_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; then
     log "last_success_at を更新しました"
   else
     # ここまで来て最後の書込みだけが失敗した場合、次回実行時の--since算出が
     # 古いままの値を使うことになり実害は小さい（fail-open）が、書込失敗
-    # 自体は運用上気付けるようにanomaly化する（2026-07-16 Codex二次レビュー
-    # 指摘Minor対応）。スクリプト自体はここでは中断しない（Phase3の最後の
+    # 自体は運用上気付けるようにanomaly化する。スクリプト自体はここでは中断しない（Phase3の最後の
     # ステップであり、これ以上ロールバックすべき後続処理も無いため）。
     add_anomaly "Phase3: last-run.jsonのlast_success_at更新に失敗しました"
   fi
@@ -1007,13 +757,7 @@ find "$MAINTENANCE_LOG_ROOT" -maxdepth 1 -type d -name '20*' -mtime "+${MAINTENA
 
 log "done."
 # 終了コードはPhase3まで到達できたかどうかだけを表す（0=最後まで走った・
-# Phase1①〜⑤やexport再試行の個別失敗のように「隔離して継続した」異常が
-# あってもここでは0のまま。1=Phase0の直前スナップショット(backup-vault.sh)が
-# 起動失敗/異常終了した場合のみで、そこの早期return箇所で個別にexit 1して
-# いる。Phase1①のcheck-drift.shは2026-08-10からfail-fastを廃止したため、
-# ここでexit 1する経路ではなくなった＝[[Decisions/2026-08-10-round6-
-# rulings]]決定1）。「何か異常があったか」はプロセスの終了コードではなく、
-# 上記のmacOS通知（異常時のみ）で判断する設計＝cronジョブ的な「ジョブ自体は
-# 完走した」と「中身に注意点があった」を別チャネルに分ける一般的な作法に
-# 合わせる。
+# Phase1①〜③やexport再試行の「隔離して継続した」異常があっても0のまま。
+# 1=Phase0の直前スナップショット(backup-vault.sh)の起動失敗/異常終了のみ）。
+# 「何か異常があったか」は終了コードではなくlast_result／macOS通知で判断する。
 exit 0

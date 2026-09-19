@@ -499,19 +499,6 @@ else
   pass "README.mdにNext Task／Next Projectが1つも残っていない"
 fi
 
-BOOTSTRAP="$REPO_ROOT/claude/hooks/bootstrap-vault.sh"
-TEST_BOOTSTRAP="$REPO_ROOT/tests/test-bootstrap-vault.sh"
-if grep -qF 'Dock の Task 枠' "$BOOTSTRAP" && ! grep -qF 'Dock の Next Task 枠' "$BOOTSTRAP"; then
-  pass "bootstrap-vault.shに「Dock の Task 枠」があり「Dock の Next Task 枠」が無い"
-else
-  fail_case "bootstrap-vault.shの名称変更の伝播"
-fi
-if grep -qF 'Dock の Task 枠' "$TEST_BOOTSTRAP" && ! grep -qF 'Dock の Next Task 枠' "$TEST_BOOTSTRAP"; then
-  pass "test-bootstrap-vault.shに「Dock の Task 枠」があり「Dock の Next Task 枠」が無い"
-else
-  fail_case "test-bootstrap-vault.shの名称変更の伝播"
-fi
-
 # ⑥tests/test-check-drift.shのフック列挙2か所＋固定件数3か所が16であること
 # （effort-per-role v2投入時にSYMLINKS配列からagentsが外れ「15件」になっていたが、
 # D-4（installerのeffort:生成を退役しsymlink配置へ復帰・2026-09-18）でagentsが

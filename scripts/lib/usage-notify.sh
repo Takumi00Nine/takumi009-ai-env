@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 # 使用率取得器の通知部分（B1-b・使用率取得器移設）。
 #
-# ⚠️ **B2（FR-110〜FR-112・事象駆動の監視）で置き換える予定の部品である。**
-# 現行の通知（リセット・高使用率警告・トークン失効）を挙動そのまま
-# `claude-codex-usage/refresh.sh` から移設しただけであり、恒久設計ではない
-# （設計書 D-11・§11 B2-2）。`notify-state.json` を引き継ぐか捨てるかは
-# B2 が決める。
-#
 # `claude-codex-usage/refresh.sh` から移設。scripts/usage-fetch.sh からのみ
 # source される（`scripts/lib/usage-source.sh` の atomic_write・now_epoch・
 # json_string・run_with_timeout・log に依存＝先に source されている前提）。

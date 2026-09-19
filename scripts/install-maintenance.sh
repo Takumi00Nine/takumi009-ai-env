@@ -12,7 +12,7 @@
 # migrate_retired_label()で移行しmaintenance.plistを設置」）: これら4本の週次
 # LaunchAgentは maintenance.sh のPhase1（検出）へ全て吸収されたため撤去する。
 # 個々の検出スクリプト自体（vault_inventory.py・fragments_log.py・
-# knowledge_merge_candidates.py・check-drift.sh）は削除しておらず、旧LAが
+# check-drift.sh。knowledge-merge は 2026-09-19 に退役）は削除しておらず、旧LAが
 # 読み込まれたまま残っても「参照先が無くて失敗し続ける」わけではない。実害は
 # maintenance.sh Phase1と同じ検出処理が週次で二重実行され続けること（無駄な
 # 実行時間・ログ/レポートファイルへの書き込み競合）であり、二重実行の温床を

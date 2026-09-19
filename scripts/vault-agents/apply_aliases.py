@@ -36,9 +36,9 @@
 再利用可能な純粋関数（parse_tsv・process_note・require_generic_aliases・
 apply_updated・write_note_atomic 等）はすべて scripts/vault-agents/vault_lib.py へ
 抽出済み。本ファイルはCLI専業（argparse・diff表示・ファイルI/O orchestration）。
-recall_bench.py の --alias-overlay もvault_lib経由でこれらを再利用するため、
-本ファイルはこれ以上どこからも import されない（`import apply_aliases` は
-設計書どおり全廃）。
+recall_bench.py（2026-09-19退役）の --alias-overlay もvault_lib経由でこれらを
+再利用していたため、本ファイルはこれ以上どこからも import されない
+（`import apply_aliases` は設計書どおり全廃）。
 """
 import argparse
 import datetime

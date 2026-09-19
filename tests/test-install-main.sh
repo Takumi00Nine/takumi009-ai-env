@@ -335,10 +335,13 @@ echo "=== 5b. 通知系アプリ管理キー2つ（agentPushNotifEnabled/inputNe
 
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 
-  assert_eq "生成settings.jsonのagentPushNotifEnabledはtrue" "True" \
-    "$(python3 -c "import json; print(json.load(open('$FAKE_HOME/.claude/settings.json'))['agentPushNotifEnabled'])")"
-  assert_eq "生成settings.jsonのinputNeededNotifEnabledはtrue" "True" \
-    "$(python3 -c "import json; print(json.load(open('$FAKE_HOME/.claude/settings.json'))['inputNeededNotifEnabled'])")"
+  # 期待値はテンプレ（claude/settings.json）から動的に取る（値の直書きをしない）。
+  tpl="$REPO_ROOT/claude/settings.json"
+  for key in agentPushNotifEnabled inputNeededNotifEnabled; do
+    exp="$(python3 -c "import json; d=json.load(open('$tpl')); print(d.get('$key'))")"
+    act="$(python3 -c "import json; d=json.load(open('$FAKE_HOME/.claude/settings.json')); print(d.get('$key'))")"
+    assert_eq "生成settings.jsonの${key}はテンプレと同値" "$exp" "$act"
+  done
 
   rm -rf "$FAKE_HOME"
 }
@@ -350,8 +353,11 @@ echo "=== 5c. profile.md（実体プロファイル）へのRead allowルール�
 
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 
-  assert_true "生成settings.jsonのpermissions.allowにprofile.md用Read allowルールが含まれる" \
-    "$(python3 -c "import json; d=json.load(open('$FAKE_HOME/.claude/settings.json')); exit(0 if 'Read(~/.config/takumi009-ai-env/profile.md)' in d['permissions']['allow'] else 1)" && echo 1 || echo 0)"
+  # テンプレの permissions.allow のうち Read(…profile.md) の行を動的に拾い、生成側に含まれることを見る
+  tpl="$REPO_ROOT/claude/settings.json"
+  rule="$(python3 -c "import json; print(next(r for r in json.load(open('$tpl'))['permissions']['allow'] if r.startswith('Read(') and r.endswith('profile.md)')))")"
+  assert_true "生成settings.jsonのpermissions.allowにテンプレのprofile.md用Read allowルールが含まれる" \
+    "$(python3 -c "import json; exit(0 if '$rule' in json.load(open('$FAKE_HOME/.claude/settings.json'))['permissions']['allow'] else 1)" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -946,7 +952,6 @@ echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-
       | BOOTSTRAP_VAULT="$VAULT_FIXTURE" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
         VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
         VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
-        PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
         MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
         BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$PROFILE_PATH" \
         bash "$REPO_ROOT/claude/hooks/bootstrap-vault.sh" \

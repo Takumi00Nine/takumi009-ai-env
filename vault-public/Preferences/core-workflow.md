@@ -1,9 +1,11 @@
 ---
 date: 2026-08-30
-updated: 2026-09-18
+updated: 2026-09-19
 tags: [preference, core, workflow, roles, quality-gate]
 project: takumi009-ai-env
 related:
+  - "[[Decisions/2026-09-19-triage-before-research]]"
+  - "[[Decisions/2026-09-19-config-only-change-no-tests]]"
   - "[[Decisions/2026-09-10-leader-free-model-choice]]"
   - "[[Preferences/model-definitions-usage]]"
   - "[[Preferences/core-conduct]]"
@@ -21,6 +23,7 @@ related:
   - "[[Decisions/2026-09-17-verifier-review-before-tests]]"
   - "[[Decisions/2026-09-17-requirements-scope-purpose-requirements-constraints]]"
   - "[[Decisions/2026-09-17-worker-wrapper-b1]]"
+  - "[[Decisions/2026-09-18-project-docs-main-local-only]]"
 aliases:
   - "共通コア工程"
   - "職種定義"
@@ -40,6 +43,7 @@ aliases:
 - **ナビ職**＝工程ごとのリーダーセッションを起動・管理する最上位の窓口。
 - リーダー職は各工程の采配（割り当て・順序・切替・進行）を担う。
 - 後戻りコストが高い設計・技術選定は合議で決める＝リーダーが論点定義→各ワーカー・検証職が案・根拠・リスクを出す→リーダーが統合して決定する。
+- **対象を減らす判定は先に、直列で**＝止められる・減らせる判定（作らない・やめる・止める・BLOCKING）を最初に通し、残ったものにだけ次の工程を回す。並行してよいのは互いの対象を減らさない工程だけ（例＝見直し案件は adoption-critic の続ける／縮める／やめる→本人裁定→残りだけ researcher・設計へ＝[[Decisions/2026-09-19-triage-before-research]]）。
 
 > 🧊 **ja-doc 職は実測評価後まで凍結**（設計書§9.0 B）＝職種定義・空席分岐を含めない。
 - 委任は職種を名指しで行い、委任文に「向き」を1行書く＝目的・複雑さの上限・不採用の代替案・スコープ外（[[Decisions/2026-09-16-leader-shape-gate-and-triage]]）。採用の有無も配役も `{{配役表}}`。ワーカーモデルはリーダーがspawnごとに候補から選ぶ。未採用・空席は §7。
@@ -68,11 +72,13 @@ aliases:
 - ワーカーの成果物への修正（指摘の反映含む）はリーダーが直接編集せず作成元ロールへ差し戻す（停止済みでも同じロールを再起動して委任）。
 - 長寿命の文書成果物（要件書・設計書級）は、本文（確定事項のみ）と検討経緯（論点・代替案・レビュー録）の2ファイルに分ける（正本＝[[Preferences/coding-doc-style]] §3・[[Decisions/2026-08-30-doc-body-archive-split]]）。
 - **テストの実行範囲**: ワーカー（implementer・verifier とも）は委任文で指定された**担当ファイル範囲のテストだけ**を実行する。全テスト一括は**案件の締め（2ゲートの直前）に1回だけ**リーダーの指示で行う（実行は検証職でよい）。委任文には**担当範囲のテスト名を明記**する（[[Decisions/2026-09-14-worker-test-scope]]）。同じ領域の案件が連続し途中で merge しないなら、一括は最後に1回でよい（[[Decisions/2026-09-16-batch-full-tests-across-tasks]]）。
+- **検証の重さは『その変更が壊しうる対象』で決める**＝委任の前に壊れうるものを1つ挙げる。挙げられない変更（受容済みの値の範囲内の設定変更＝候補の追加・起動時刻・本人が決めた数値・alias 追加など）はテスト・検証職・実装職を付けず、本人指示でリーダーが直接編集→commit→記録1行。構造・契約・読み手コード・新定義を変える変更は通常どおり（[[Decisions/2026-09-19-config-only-change-no-tests]]）。
 
 ## 3. 作る前の型
 - コードを書く必要が出たら、まず既存確認（`~/work` 配下の tools/ と Vault の Preferences・Knowledge）→ 三択（既存拡張／新規／使い捨て）を本人に提案。本人不在時のみ使い捨て暫定・帰還時に必ず報告。
 
 > ⚠️ 本節は既存確認の条文**のみ**採用（2026-08-30 本人裁定）。除外した条文は設計書§3.2 §3 に残置（一覧＝[[Knowledge/core-rules-compression-archive]]）。置き場は依頼のたびにリーダーが指定する。
+> 文書成果物（要件書・設計書級）の既定の置き場＝メイン機ローカル `~/Claude/<案件slug>/docs/`（git 管理外・他機へ配布しない＝意図的な切り離し。[[Decisions/2026-09-18-project-docs-main-local-only]]）。
 
 ## 4. 記録（外部脳）
 - フォルダの意味論＝Fragments 入口／Knowledge 背景／Decisions なぜ／Projects 状態／Preferences 今どう動くか／Personal 個人。どの機でも6フォルダを持つ（中身は機ごとに独立・Preferences だけメイン機から配布）。

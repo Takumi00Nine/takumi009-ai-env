@@ -116,7 +116,7 @@ fi
 if guard_is_vault_ai_path "$fpath"; then
   vault_marker="$MARKER_DIR/claude-vault-direct-ok-$sid"
   [ -f "$vault_marker" ] && exit 0
-  reason="delegation-gate: 外部脳（Vault）の AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への執筆は常駐チームメイト vault-scribe へ委任してください（Preferences/vault-operation。2026-08-12 本人指示で「軽い1件はリーダー直筆可」の例外は撤廃・2026-08-13 本人指示で対象は AI向け6フォルダに限定）。リーダーは内容を確定して vault-scribe へ渡す係です。vault-scribe 不在なら起動してから振る（Task toolのsubagent_typeは必ず\"vault-scribe\"を使う＝\"scribe\"という省略形は職種名・エージェント定義ファイル名のいずれとも一致せずspawn失敗する）。vault-scribe が使えない緊急時のみ、理由をユーザーへの応答で明示した上で次を実行してから再試行: touch $vault_marker"
+  reason="delegation-gate: Vault の AI 向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への書き込みは vault-scribe へ委任してください（subagent_type は必ず \"vault-scribe\"）。緊急時のみ理由を応答に明示して: touch $vault_marker"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
   exit 0
 fi
@@ -149,5 +149,5 @@ marker="$MARKER_DIR/claude-direct-edit-ok-$sid"
 [ -f "$marker" ] && exit 0
 
 # deny（自問を強制）
-reason="delegation-gate: 実装・調査・テスト等の「作る工程」はチームメイト/Agentワーカーへ委任するのが既定です（Preferences/coding-delegation）。このセッションではまだ委任実績がありません。→ (a) チームメイト/ワーカーを起こしてタスクを振るか、(b) 直接編集が妥当な理由（リーダー自身の成果物への軽微な修正・ユーザーの明示指示・例外プロジェクト等。⚠️ワーカー作成の成果物への修正は理由にならない＝作成元ロールへ差し戻し、停止済みなら同ロールを再起動して委任＝Decisions/2026-08-14-deliverable-revision-by-creator）をユーザーへの応答で明示した上で、次を実行してから再試行してください: touch $marker"
+reason="delegation-gate: このセッションに委任実績がありません。作る工程はワーカーへ委任してください（Preferences/coding-delegation）。直接編集が妥当なら理由を応答に明示して: touch $marker"
 jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'

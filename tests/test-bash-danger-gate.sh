@@ -64,15 +64,17 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
-# フックへJSON入力を渡して標準出力を返す。
+# フックへJSON入力を渡して標準出力を返す。第2引数 cwd を渡すと PreToolUse
+# の共通入力フィールド cwd（hook起動時のカレントディレクトリ）を模して渡す。
 run_hook() {
-  local cmd="$1"
-  jq -n --arg cmd "$cmd" '{tool_input:{command:$cmd}}' | bash "$HOOK"
+  local cmd="$1" cwd="${2:-}"
+  jq -n --arg cmd "$cmd" --arg cwd "$cwd" \
+    '{tool_input:{command:$cmd}} + (if $cwd=="" then {} else {cwd:$cwd} end)' | bash "$HOOK"
 }
 
 assert_allowed() {
-  local desc="$1" cmd="$2" out
-  out="$(run_hook "$cmd")"
+  local desc="$1" cmd="$2" cwd="${3:-}" out
+  out="$(run_hook "$cmd" "$cwd")"
   if [ -z "$out" ]; then
     pass "$desc"
   else
@@ -84,8 +86,8 @@ assert_allowed() {
 # まで確認する（「denyはされたが別のルールが誤って発火した」ケースを見逃さ
 # ないため。Codex一次レビュー指摘・Minor）。
 assert_denied() {
-  local desc="$1" cmd="$2" reason_substr="${3:-}" out
-  out="$(run_hook "$cmd")"
+  local desc="$1" cmd="$2" reason_substr="${3:-}" cwd="${4:-}" out
+  out="$(run_hook "$cmd" "$cwd")"
   if ! printf '%s' "$out" | grep -q '"permissionDecision":"deny"'; then
     fail_case "$desc (denyされなかった。cmd=[$cmd] out=[$out])"
     return
@@ -110,6 +112,20 @@ assert_denied "Vaultへの rm -rf はdeny" "rm -rf ~/Data/obsidian/Preferences" 
 assert_denied "~/.claude への rm -r はdeny" "rm -r ~/.claude/agents" "保護パス"
 assert_denied "rm -rf \$HOME はdeny" 'rm -rf "$HOME"' "ホーム直下"
 assert_allowed "無関係な一時ディレクトリへの rm -rf はallow" "rm -rf /tmp/scratch-work-dir"
+assert_allowed "保護名を部分文字列に含むだけの無関係パス（.claude-exec-hooks-alive）はallow（実パス基準化で偽陽性解消）" \
+  "rm -rf /tmp/x/.claude-exec-hooks-alive"
+assert_allowed "保護名を部分文字列に含むだけの無関係ディレクトリ（foo.claude）はallow（実パス基準化で偽陽性解消）" \
+  "rm -rf ~/foo.claude/"
+assert_denied "cd ~ してから裸の .claude を rm すると相対形でdeny" \
+  "cd ~ && rm -rf .claude" "保護パス"
+assert_denied "cwd が HOME のとき裸の .claude を rm すると相対形でdeny" \
+  "rm -rf .claude" "保護パス" "$HOME"
+assert_allowed "cwd が HOME でなければ裸の .claude の rm はallow（相対形は cwd/cd 限定）" \
+  "rm -rf .claude" "/tmp"
+assert_denied "brace 展開（~/{.claude,.codex}）で保護名を包んでもdeny" \
+  "rm -rf ~/{.claude,.codex}" "保護パス"
+assert_denied "パス途中の ./ で崩しても（~/./.claude）正規化してdeny" \
+  "rm -rf ~/./.claude" "保護パス"
 
 echo "=== 3. 新設ルール③: codex exec の直接実行はdeny ==="
 assert_denied "codex exec 直叩きはdeny" \
@@ -151,7 +167,7 @@ echo "=== 5c. 新設ルール③（4巡目レビューCritical対応）: 引用�
 assert_denied "サブコマンドが引用符の後に来る正当なCLI構文（codex -c '...' exec）もdeny" \
   "codex -c 'model_reasoning_effort=high' exec task" "$RULE3_REASON"
 assert_denied "ダブルクォートの引用符後にサブコマンドが来る形もdeny" \
-  'codex --model "gpt-5.6-sol" exec task' "$RULE3_REASON"
+  'codex --model "t-model-x" exec task' "$RULE3_REASON"
 assert_denied "シェルコメントへ --help を紛れ込ませてもdeny（コメントは実行に影響しない）" \
   "codex exec task # --help" "$RULE3_REASON"
 assert_denied "-- 終端記法の後の --help は実際にはプロンプト文字列なのでdeny" \

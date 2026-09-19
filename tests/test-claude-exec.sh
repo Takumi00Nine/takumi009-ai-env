@@ -78,9 +78,9 @@ profile_slug: fixture
 team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
-role.implementer: configured model=sonnet-high,sonnet-low,opus-high
+role.implementer: configured model=t-sonnet-high,t-sonnet-low,t-opus-high
 role.vault-scribe: configured model=sonnet-noeffort
-role.verifier:    configured model=sonnet-medium
+role.verifier:    configured model=t-sonnet-medium
 role.system-designer: configured model=sonnet-legacy
 role.researcher:  not_adopted
 ---
@@ -88,17 +88,17 @@ EOF
 
   MODELS_CONF="$WORK/models.conf"
   cat > "$MODELS_CONF" <<'EOF'
-[sonnet-high]
+[t-sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 effort=high
 
-[sonnet-low]
+[t-sonnet-low]
 provider=anthropic-api
 model=claude-sonnet-5
 effort=low
 
-[sonnet-medium]
+[t-sonnet-medium]
 provider=anthropic-api
 model=claude-sonnet-5
 effort=medium
@@ -107,7 +107,7 @@ effort=medium
 provider=anthropic-api
 model=claude-sonnet-5
 
-[opus-high]
+[t-opus-high]
 provider=anthropic-api
 model=claude-opus-5
 effort=high
@@ -274,13 +274,13 @@ echo "=== AC-2b: resume_passes_model_and_effort_again ==="
 {
   new_fixture
   OUT2B_1="$WORK/o2b-1.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT2B_1" --task-id t-ac2b-1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT2B_1" --task-id t-ac2b-1 --model-def t-sonnet-high
   assert_eq "1通目 exit0" "0" "$RC"
   MODEL_1="$(stub_arg_after --model)"
   EFFORT_1="$(stub_arg_after --effort)"
 
   OUT2B_2="$WORK/o2b-2.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT2B_2" --task-id t-ac2b-2 --model-def sonnet-high --resume resume-sid-test
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT2B_2" --task-id t-ac2b-2 --model-def t-sonnet-high --resume resume-sid-test
   assert_eq "2通目 exit0" "0" "$RC"
   assert_true "resume_passes_model_and_effort_again: --resumeが引数に現れる" "$([ "$(stub_argv_has --resume)" = "1" ] && echo 1 || echo 0)"
   assert_eq "resume_passes_model_and_effort_again: --resumeの値" "resume-sid-test" "$(stub_arg_after --resume)"
@@ -291,7 +291,7 @@ echo "=== AC-2b: resume_passes_model_and_effort_again ==="
 echo "=== AC-4: argv_has_p_agent_json_and_no_bare ==="
 {
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac4 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac4 --model-def t-sonnet-high
   assert_eq "exit 0" "0" "$RC"
   assert_true "argvに -p" "$(stub_argv_has "-p")"
   assert_true "argvに --agent implementer" "$([ "$(stub_arg_after --agent)" = "implementer" ] && echo 1 || echo 0)"
@@ -302,16 +302,16 @@ echo "=== AC-4: argv_has_p_agent_json_and_no_bare ==="
 echo "=== AC-5: model_passed_verbatim / model_switches_with_candidate ==="
 {
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o1.json" --task-id t-ac5a --model-def sonnet-high
-  assert_eq "sonnet-high: --model sonnet" "sonnet" "$(stub_arg_after --model)"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-ac5b --model-def opus-high
-  assert_eq "opus-high: --model opus" "opus" "$(stub_arg_after --model)"
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o1.json" --task-id t-ac5a --model-def t-sonnet-high
+  assert_eq "t-sonnet-high: --model sonnet" "sonnet" "$(stub_arg_after --model)"
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-ac5b --model-def t-opus-high
+  assert_eq "t-opus-high: --model opus" "opus" "$(stub_arg_after --model)"
 }
 
 echo "=== AC-6: effort_present / effort_absent_no_flag / effort_differs_between_two_candidates ==="
 {
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o1.json" --task-id t-ac6a --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o1.json" --task-id t-ac6a --model-def t-sonnet-high
   assert_eq "effort_present: --effort high" "high" "$(stub_arg_after --effort)"
 
   new_fixture
@@ -321,9 +321,9 @@ echo "=== AC-6: effort_present / effort_absent_no_flag / effort_differs_between_
   assert_not_contains "effort_absent_no_flag: effortLevelも現れない" "$argv_json" "effortLevel"
 
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o3.json" --task-id t-ac6c1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o3.json" --task-id t-ac6c1 --model-def t-sonnet-high
   e1="$(stub_arg_after --effort)"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o4.json" --task-id t-ac6c2 --model-def sonnet-low
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o4.json" --task-id t-ac6c2 --model-def t-sonnet-low
   e2="$(stub_arg_after --effort)"
   assert_true "effort_differs_between_two_candidates: high != low" "$([ "$e1" = "high" ] && [ "$e2" = "low" ] && [ "$e1" != "$e2" ] && echo 1 || echo 0)"
 }
@@ -336,14 +336,14 @@ echo "=== AC-7: reject_no_def(2) / reject_unknown_def(3) / reject_profile_4ways(
   assert_eq "reject_no_def: stub 0行" "0" "$(stub_lines)"
 
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-unknown --model-def sonnet-medium
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-unknown --model-def t-sonnet-medium
   assert_eq "reject_unknown_def: exit3" "3" "$RC"
   assert_eq "reject_unknown_def: stub 0行" "0" "$(stub_lines)"
 
   # 4通り: 不在／不正／候補0件／未定義の定義名
   new_fixture
   export AIENV_LOCAL_PROFILE_PATH="$WORK/does-not-exist.md"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-p1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-p1 --model-def t-sonnet-high
   assert_eq "profile不在: exit4" "4" "$RC"
   export AIENV_LOCAL_PROFILE_PATH="$PROFILE"
 
@@ -351,12 +351,12 @@ echo "=== AC-7: reject_no_def(2) / reject_unknown_def(3) / reject_profile_4ways(
   BADPROFILE="$WORK/bad.md"
   sed '/^schema_version:/d' "$PROFILE" > "$BADPROFILE"
   export AIENV_LOCAL_PROFILE_PATH="$BADPROFILE"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-p2 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-p2 --model-def t-sonnet-high
   assert_eq "profile不正: exit4" "4" "$RC"
   export AIENV_LOCAL_PROFILE_PATH="$PROFILE"
 
   new_fixture
-  run_wrapper --role researcher --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-p3 --model-def sonnet-high
+  run_wrapper --role researcher --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-p3 --model-def t-sonnet-high
   assert_eq "候補0件(not_adopted): exit4" "4" "$RC"
 
   new_fixture
@@ -365,22 +365,22 @@ echo "=== AC-7: reject_no_def(2) / reject_unknown_def(3) / reject_profile_4ways(
 
   # 必須5引数を1つずつ落とす＋未知オプション
   new_fixture
-  run_wrapper --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-m1 --model-def sonnet-high
+  run_wrapper --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-m1 --model-def t-sonnet-high
   assert_eq "role欠落: exit2" "2" "$RC"
-  run_wrapper --role implementer --out "$WORK/o.json" --task-id t-m2 --model-def sonnet-high
+  run_wrapper --role implementer --out "$WORK/o.json" --task-id t-m2 --model-def t-sonnet-high
   assert_eq "prompt-file欠落: exit2" "2" "$RC"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --task-id t-m3 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --task-id t-m3 --model-def t-sonnet-high
   assert_eq "out欠落: exit2" "2" "$RC"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --model-def t-sonnet-high
   assert_eq "task-id欠落: exit2" "2" "$RC"
   run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-m5
   assert_eq "model-def欠落: exit2" "2" "$RC"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-m6 --model-def sonnet-high --no-such-option
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-m6 --model-def t-sonnet-high --no-such-option
   assert_eq "未知オプション: exit2" "2" "$RC"
   assert_eq "④6件: stub 0行のまま" "0" "$(stub_lines)"
 
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id "Bad_ID!" --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id "Bad_ID!" --model-def t-sonnet-high
   assert_eq "reject_bad_task_id: exit2" "2" "$RC"
   assert_eq "reject_bad_task_id: stub 0行" "0" "$(stub_lines)"
 }
@@ -397,7 +397,7 @@ echo "=== AC-8: 子環境の組み立て ==="
   export "ANTHROPIC_FAKE_$RAND_SUFFIX=fake1"
   export "AWS_FAKE_$RAND_SUFFIX=fake2"
   export "CLAUDE_CODE_FAKE_$RAND_SUFFIX=fake3"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8a --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8a --model-def t-sonnet-high
   assert_eq "exit0" "0" "$RC"
   n_prefixed="$(python3 -c '
 import json
@@ -426,7 +426,7 @@ print(n)
   export ANTHROPIC_API_KEY="dummy-secret-parent"
   before_env="$(env | grep -E '^(ANTHROPIC_|AWS_|CLAUDE_CODE_)' | sort)"
   before_hash="$(shasum -a 256 "$SETTINGS_SRC" | awk '{print $1}')"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8c --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8c --model-def t-sonnet-high
   after_env="$(env | grep -E '^(ANTHROPIC_|AWS_|CLAUDE_CODE_)' | sort)"
   after_hash="$(shasum -a 256 "$SETTINGS_SRC" | awk '{print $1}')"
   assert_eq "parent_env_and_settings_unchanged: 親環境の3プレフィックス集合が不変" "$before_env" "$after_env"
@@ -435,14 +435,14 @@ print(n)
 
   # ④ path_home_survive
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8d --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8d --model-def t-sonnet-high
   assert_true "path_home_survive: PATHが子環境に残る" "$(stub_env_keys_has PATH)"
   assert_true "path_home_survive: HOMEが子環境に残る" "$(stub_env_keys_has HOME)"
 
   # ⑤(i)(ii)(iii) settings_has_hooks_without_sessionstart /
   # child_settings_pretooluse_nonempty_and_excludes_leader_hooks
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8e1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8e1 --model-def t-sonnet-high
   settings1="$(stub_settings_json)"
   assert_not_contains "settings_has_hooks_without_sessionstart: SessionStartが無い" "$settings1" '"SessionStart"'
   py_check="$(python3 -c '
@@ -458,14 +458,14 @@ print("1" if (nonempty and excludes_leader) else "0")
 ' "$settings1")"
   assert_true "child_settings_pretooluse_nonempty_and_excludes_leader_hooks" "$py_check"
 
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-ac8e2 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-ac8e2 --model-def t-sonnet-high
   settings2="$(stub_settings_json)"
   assert_eq "同じ職種なら毎回同じ--settings集合になる" "$settings1" "$settings2"
 
   # reject_when_source_settings_unreadable_or_empty(8)
   new_fixture
   export AIENV_CHILD_SETTINGS_SRC="$WORK/does-not-exist.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8f1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8f1 --model-def t-sonnet-high
   assert_eq "抽出元が読めない: exit8" "8" "$RC"
   assert_eq "抽出元が読めない: stub 0行" "0" "$(stub_lines)"
 
@@ -475,14 +475,14 @@ print("1" if (nonempty and excludes_leader) else "0")
 {"hooks":{"PreToolUse":[{"matcher":"Edit|Write|NotebookEdit","hooks":[{"type":"command","command":"\$HOME/.claude/hooks/delegation-gate-v2.sh"}]}]}}
 EOF
   export AIENV_CHILD_SETTINGS_SRC="$EMPTYSRC"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8f2 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8f2 --model-def t-sonnet-high
   assert_eq "柵が0本(全部リーダー専用): exit8" "8" "$RC"
   assert_eq "柵が0本: stub 0行" "0" "$(stub_lines)"
 
   # 裁定A: child_settings_has_vault_gate_for_non_scribe /
   # child_settings_omits_vault_gate_for_vault_scribe
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g1 --model-def t-sonnet-high
   s_impl="$(stub_settings_json)"
   assert_contains "child_settings_has_vault_gate_for_non_scribe" "$s_impl" "vault-write-gate.sh"
 
@@ -501,7 +501,7 @@ EOF
   OUT9="$WORK/artifacts9/o.json"
   mkdir -p "$(dirname "$OUT9")/.claude"
   echo '{"env":{"ANTHROPIC_LEAK":"x"}}' > "$(dirname "$OUT9")/.claude/settings.local.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT9" --task-id t-ac8h --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT9" --task-id t-ac8h --model-def t-sonnet-high
   assert_eq "reject_when_local_settings_present: exit9" "9" "$RC"
   assert_eq "reject_when_local_settings_present: stub 0行" "0" "$(stub_lines)"
 }
@@ -510,7 +510,7 @@ echo "=== AC-9: marker_uses_parent_sid / child_sid_marker_does_not_pass / vault_
 {
   new_fixture
   export CLAUDE_CODE_SESSION_ID="parent-sid-ac9"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac9 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac9 --model-def t-sonnet-high
   assert_eq "起動成功" "0" "$RC"
   assert_true "marker_uses_parent_sid: マーカーファイルが親sidで存在する" \
     "$([ -e "$MARKER_DIR/claude-delegated-ok-parent-sid-ac9" ] && echo 1 || echo 0)"
@@ -548,7 +548,7 @@ echo "=== AC-11: parallel_n_lines_and_intact_artifacts / overwrite_denied_withou
   for i in $(seq 1 "$N"); do
     (
       bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" \
-        --out "$WORK/par-$i.json" --task-id "t-par-$i" --model-def sonnet-high \
+        --out "$WORK/par-$i.json" --task-id "t-par-$i" --model-def t-sonnet-high \
         < /dev/null > "$WORK/par-$i.stdout" 2>"$WORK/par-$i.stderr"
     ) &
     PIDS+=($!)
@@ -574,12 +574,12 @@ echo "=== AC-11: parallel_n_lines_and_intact_artifacts / overwrite_denied_withou
   # overwrite_denied_without_force / overwrite_allowed_with_force
   new_fixture
   OUTW="$WORK/w.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTW" --task-id t-ow1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTW" --task-id t-ow1 --model-def t-sonnet-high
   assert_eq "1回目成功" "0" "$RC"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTW" --task-id t-ow2 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTW" --task-id t-ow2 --model-def t-sonnet-high
   assert_eq "overwrite_denied_without_force: exit7" "7" "$RC"
   assert_eq "overwrite_denied_without_force: stub行数は1のまま" "1" "$(stub_lines)"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTW" --task-id t-ow3 --model-def sonnet-high --force
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTW" --task-id t-ow3 --model-def t-sonnet-high --force
   assert_eq "overwrite_allowed_with_force: exit0" "0" "$RC"
   assert_eq "overwrite_allowed_with_force: stub行数は2に増える" "2" "$(stub_lines)"
 }
@@ -589,7 +589,7 @@ echo "=== AC-12: timeout_classifies_and_logs(12) ==="
   new_fixture
   export AIENV_CLAUDE_EXEC_TIMEOUT_SECS=1
   export AIENV_CLAUDE_STUB_SLEEP_SECS=6
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac12 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac12 --model-def t-sonnet-high
   assert_eq "timeout: exit12" "12" "$RC"
   assert_eq "timeout: REASON:timeout" "timeout" "$(printf '%s\n' "$RUN_STDOUT" | awk -F: '/^REASON:/{print $2}')"
   assert_eq "timeout: ログのreason_code=timeout" "timeout" "$(log_field reason_code)"
@@ -605,14 +605,14 @@ echo "=== AC-15: no_secret_in_five_outputs / no_prompt_body_in_log_or_dryrun ===
   echo "absolute-rules を読んでから hello ${UNIQUE_PROMPT_MARKER}" > "$PROMPT"
 
   OUT15="$WORK/o15.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT15" --task-id t-ac15 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT15" --task-id t-ac15 --model-def t-sonnet-high
   n1="$(grep -c "$SECRET" "$LOG" 2>/dev/null || true)"; n1="${n1:-0}"
   n2="$(printf '%s' "$RUN_STDOUT" | grep -c "$SECRET" || true)"; n2="${n2:-0}"
   n3="$(printf '%s' "$RUN_STDERR" | grep -c "$SECRET" || true)"; n3="${n3:-0}"
   n4="$(grep -c "$SECRET" "$OUT15" 2>/dev/null || true)"; n4="${n4:-0}"
 
   DRYOUT="$WORK/dry.json"
-  DRYSTDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$DRYOUT" --task-id t-ac15-dry --model-def sonnet-high --dry-run < /dev/null 2>"$WORK/dry-stderr.log")"
+  DRYSTDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$DRYOUT" --task-id t-ac15-dry --model-def t-sonnet-high --dry-run < /dev/null 2>"$WORK/dry-stderr.log")"
   n5="$(printf '%s' "$DRYSTDOUT" | grep -c "$SECRET" || true)"; n5="${n5:-0}"
 
   assert_eq "no_secret_in_five_outputs: ログに0件" "0" "$n1"
@@ -632,7 +632,7 @@ echo "=== AC-16: artifact_and_session_id_recorded ==="
 {
   new_fixture
   OUT16="$WORK/o16.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT16" --task-id t-ac16 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT16" --task-id t-ac16 --model-def t-sonnet-high
   assert_eq "exit0" "0" "$RC"
   assert_true "成果物ファイルが実在" "$([ -f "$OUT16" ] && echo 1 || echo 0)"
   sid_field="$(log_field child_session_id)"
@@ -647,11 +647,11 @@ echo "=== AC-17: dry_run_prints_names_only ==="
   # 実際に立てておく必要がある（new_fixtureは既定でunsetしている）。
   export CLAUDE_CODE_SESSION_ID="dry-run-parent-sid"
   DRYOUT="$WORK/dry2.json"
-  DRYSTDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$DRYOUT" --task-id t-ac17 --model-def sonnet-high --dry-run < /dev/null 2>"$WORK/dry2-stderr.log")"
+  DRYSTDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$DRYOUT" --task-id t-ac17 --model-def t-sonnet-high --dry-run < /dev/null 2>"$WORK/dry2-stderr.log")"
   DRYRC=$?
   assert_eq "exit0" "0" "$DRYRC"
   assert_eq "スタブ記録0行" "0" "$(stub_lines)"
-  assert_contains "候補の定義名が出る" "$DRYSTDOUT" "sonnet-high"
+  assert_contains "候補の定義名が出る" "$DRYSTDOUT" "t-sonnet-high"
   assert_contains "--modelの値が出る" "$DRYSTDOUT" "model=sonnet"
   assert_contains "effortの値が出る" "$DRYSTDOUT" "effort=high"
   assert_contains "環境変数名が出る(CLAUDE_CODE_SESSION_ID)" "$DRYSTDOUT" "CLAUDE_CODE_SESSION_ID"
@@ -661,7 +661,7 @@ echo "=== AC-17: dry_run_prints_names_only ==="
 
   # dry-runは--outの親ディレクトリが無くても新設しない（DR1-m7）。
   DRYOUT_NESTED="$WORK/dry-run-nested-dir/dry3.json"
-  DRYSTDOUT2="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$DRYOUT_NESTED" --task-id t-ac17-nested --model-def sonnet-high --dry-run < /dev/null 2>"$WORK/dry3-stderr.log")"
+  DRYSTDOUT2="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$DRYOUT_NESTED" --task-id t-ac17-nested --model-def t-sonnet-high --dry-run < /dev/null 2>"$WORK/dry3-stderr.log")"
   DRYRC2=$?
   assert_eq "dry_run_prints_names_only(nested): exit0" "0" "$DRYRC2"
   assert_true "dry_run_prints_names_only(nested): 親ディレクトリは作られない" "$([ ! -e "$WORK/dry-run-nested-dir" ] && echo 1 || echo 0)"
@@ -674,9 +674,9 @@ echo "=== I2-m2: dry_run_matches_production_accept_reject ==="
   BLOCKER_FILE="$WORK/i2m2-blocker"
   : > "$BLOCKER_FILE"
   OUT_BLOCKED="$BLOCKER_FILE/sub/out.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT_BLOCKED" --task-id t-i2m2-a1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT_BLOCKED" --task-id t-i2m2-a1 --model-def t-sonnet-high
   RC_PROD_A="$RC"
-  DRY_A_STDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$OUT_BLOCKED" --task-id t-i2m2-a2 --model-def sonnet-high --dry-run < /dev/null 2>/dev/null)"
+  DRY_A_STDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$OUT_BLOCKED" --task-id t-i2m2-a2 --model-def t-sonnet-high --dry-run < /dev/null 2>/dev/null)"
   RC_DRY_A=$?
   assert_eq "dry_run_matches_production_accept_reject(親不在・作成不能): 本番exit8" "8" "$RC_PROD_A"
   assert_eq "dry_run_matches_production_accept_reject(親不在・作成不能): dry-runも同じexit" "$RC_PROD_A" "$RC_DRY_A"
@@ -686,18 +686,18 @@ echo "=== I2-m2: dry_run_matches_production_accept_reject ==="
   OUTCFG="$WORK/i2m2-cfg/out.json"
   mkdir -p "$(dirname "$OUTCFG")/.claude"
   echo '{"env":{"ANTHROPIC_LEAK":"x"}}' > "$(dirname "$OUTCFG")/.claude/settings.local.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTCFG" --task-id t-i2m2-b1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTCFG" --task-id t-i2m2-b1 --model-def t-sonnet-high
   RC_PROD_B="$RC"
-  DRY_B_STDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$OUTCFG" --task-id t-i2m2-b2 --model-def sonnet-high --dry-run < /dev/null 2>/dev/null)"
+  DRY_B_STDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$OUTCFG" --task-id t-i2m2-b2 --model-def t-sonnet-high --dry-run < /dev/null 2>/dev/null)"
   RC_DRY_B=$?
   assert_eq "dry_run_matches_production_accept_reject(settings.local.jsonあり): 本番exit9" "9" "$RC_PROD_B"
   assert_eq "dry_run_matches_production_accept_reject(settings.local.jsonあり): dry-runも同じexit" "$RC_PROD_B" "$RC_DRY_B"
 
   # ③相対パス＝手順1（引数の形）で本番・dry-run共通にexit2。
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "relative/out.json" --task-id t-i2m2-c1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "relative/out.json" --task-id t-i2m2-c1 --model-def t-sonnet-high
   RC_PROD_C="$RC"
-  DRY_C_STDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "relative/out.json" --task-id t-i2m2-c2 --model-def sonnet-high --dry-run < /dev/null 2>/dev/null)"
+  DRY_C_STDOUT="$(bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "relative/out.json" --task-id t-i2m2-c2 --model-def t-sonnet-high --dry-run < /dev/null 2>/dev/null)"
   RC_DRY_C=$?
   assert_eq "dry_run_matches_production_accept_reject(相対パス): 本番exit2" "2" "$RC_PROD_C"
   assert_eq "dry_run_matches_production_accept_reject(相対パス): dry-runも同じexit" "$RC_PROD_C" "$RC_DRY_C"
@@ -711,7 +711,7 @@ echo "=== AC-19: permission_denials_not_success(13) ==="
 {"is_error":false,"subtype":"success","session_id":"sid-denial","result":"Write was denied by policy","permission_denials":[{"tool_name":"Write","tool_use_id":"x","tool_input":{}}]}
 EOF
   export AIENV_CLAUDE_STUB_RESPONSE_FILE="$RESP"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac19 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac19 --model-def t-sonnet-high
   assert_eq "permission_denials非空でも成功扱いしない: exit13" "13" "$RC"
   assert_eq "ログのreason_code=permission_denied" "permission_denied" "$(log_field reason_code)"
   unset AIENV_CLAUDE_STUB_RESPONSE_FILE
@@ -724,7 +724,7 @@ echo "=== AC-19b: classify_auth_http(11) / classify_auth_not_logged_in(11) / cla
 {"is_error":true,"subtype":"success","api_error_status":401,"terminal_reason":"api_error","result":"Failed to authenticate. API Error: 401 API key is invalid.","num_turns":1,"total_cost_usd":0}
 EOF
   export AIENV_CLAUDE_STUB_RESPONSE_FILE="$R1"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o1.json" --task-id t-b1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o1.json" --task-id t-b1 --model-def t-sonnet-high
   assert_eq "classify_auth_http: exit11" "11" "$RC"
   assert_eq "classify_auth_http: reason_code=auth_failed" "auth_failed" "$(log_field reason_code)"
 
@@ -732,7 +732,7 @@ EOF
 {"is_error":true,"subtype":"success","api_error_status":null,"terminal_reason":"api_error","result":"Not logged in · Please run /login"}
 EOF
   export AIENV_CLAUDE_STUB_RESPONSE_FILE="$R2"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-b2 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-b2 --model-def t-sonnet-high
   assert_eq "classify_auth_not_logged_in: exit11" "11" "$RC"
   assert_eq "classify_auth_not_logged_in: reason_code=auth_failed" "auth_failed" "$(log_field reason_code)"
 
@@ -740,7 +740,7 @@ EOF
 {"is_error":true,"subtype":"success","api_error_status":429,"terminal_reason":"api_error","result":"API Error: Request rejected (429) · upstream limit"}
 EOF
   export AIENV_CLAUDE_STUB_RESPONSE_FILE="$R3"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o3.json" --task-id t-b3 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o3.json" --task-id t-b3 --model-def t-sonnet-high
   assert_eq "classify_limit: exit10" "10" "$RC"
   assert_eq "classify_limit: reason_code=limit_reached" "limit_reached" "$(log_field reason_code)"
 
@@ -748,7 +748,7 @@ EOF
 {"is_error":true,"subtype":"success","api_error_status":529,"terminal_reason":"api_error","result":"API Error: Repeated 529 Overloaded errors"}
 EOF
   export AIENV_CLAUDE_STUB_RESPONSE_FILE="$R4"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o4.json" --task-id t-b4 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o4.json" --task-id t-b4 --model-def t-sonnet-high
   assert_eq "classify_other_529: exit14" "14" "$RC"
   assert_eq "classify_other_529: reason_code=other" "other" "$(log_field reason_code)"
   assert_contains "classify_other_529: resultの全文がラッパーの標準エラーに出る" "$RUN_STDERR" "API Error: Repeated 529 Overloaded errors"
@@ -757,7 +757,7 @@ EOF
 {"is_error":true,"subtype":"success","api_error_status":429,"terminal_reason":"api_error","result":"API Error: too many requests after retries"}
 EOF
   export AIENV_CLAUDE_STUB_RESPONSE_FILE="$R5"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o5.json" --task-id t-b5 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o5.json" --task-id t-b5 --model-def t-sonnet-high
   assert_eq "classify_retried_429_is_other: exit14" "14" "$RC"
   assert_eq "classify_retried_429_is_other: reason_code=other(枠の上限に丸めない)" "other" "$(log_field reason_code)"
 
@@ -769,7 +769,7 @@ EOF
   # 分類が変わらないこと。
   export AIENV_CLAUDE_STUB_RESPONSE_FILE="$R3"
   export AIENV_CLAUDE_STUB_STDERR="Not logged in · Please run /login (dummy stderr noise)"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o6.json" --task-id t-b6 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o6.json" --task-id t-b6 --model-def t-sonnet-high
   assert_eq "stderr_does_not_change_class: exit10のまま" "10" "$RC"
   assert_eq "stderr_does_not_change_class: reason_code=limit_reachedのまま" "limit_reached" "$(log_field reason_code)"
   unset AIENV_CLAUDE_STUB_RESPONSE_FILE AIENV_CLAUDE_STUB_STDERR
@@ -781,7 +781,7 @@ echo "=== DR1-M2: child_stderr_kept_next_to_out ==="
   STDERR_MARKER="CHILD_STDERR_MARKER_$$"
   export AIENV_CLAUDE_STUB_STDERR="$STDERR_MARKER"
   OUTSTDERR="$WORK/ostderr.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTSTDERR" --task-id t-stderr --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTSTDERR" --task-id t-stderr --model-def t-sonnet-high
   assert_eq "child_stderr_kept_next_to_out: exit0（stderrがあっても分類は変わらない）" "0" "$RC"
   assert_true "child_stderr_kept_next_to_out: <out>.stderrが作られる" "$([ -f "${OUTSTDERR}.stderr" ] && echo 1 || echo 0)"
   n_marker="$(grep -c "$STDERR_MARKER" "${OUTSTDERR}.stderr" 2>/dev/null || true)"; n_marker="${n_marker:-0}"
@@ -792,7 +792,7 @@ echo "=== DR1-M2: child_stderr_kept_next_to_out ==="
 echo "=== AC-21: invocation_keys_exact_11 / ts_rfc3339_ms_utc / ids_unique_and_format / child_fields_non_empty_on_success / child_sid_null_when_not_launched ==="
 {
   new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac21 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac21 --model-def t-sonnet-high
   keys_ok="$(python3 -c '
 import json
 rec = json.loads(open("'"$LOG"'").read().splitlines()[-1])
@@ -814,7 +814,7 @@ print("1" if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$", rec["ts"
   # ids_unique_and_format: N並行呼び出しで invocation_id が相異なりUUID/16進形式
   new_fixture
   for i in 1 2 3; do
-    bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$WORK/id-$i.json" --task-id "t-id-$i" --model-def sonnet-high < /dev/null > /dev/null 2>&1
+    bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$WORK/id-$i.json" --task-id "t-id-$i" --model-def t-sonnet-high < /dev/null > /dev/null 2>&1
   done
   ids_ok="$(python3 -c '
 import json, re
@@ -846,7 +846,7 @@ echo "=== 設計固有の失敗経路: reject_prompt_without_absolute_rules(6) =
   new_fixture
   BADPROMPT="$WORK/no-ref.txt"
   echo "こんにちは、何かして" > "$BADPROMPT"
-  run_wrapper --role implementer --prompt-file "$BADPROMPT" --out "$WORK/o.json" --task-id t-noref --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$BADPROMPT" --out "$WORK/o.json" --task-id t-noref --model-def t-sonnet-high
   assert_eq "exit6" "6" "$RC"
   assert_eq "stub 0行" "0" "$(stub_lines)"
   assert_eq "ログ1行" "1" "$(log_lines)"
@@ -855,7 +855,7 @@ echo "=== 設計固有の失敗経路: reject_prompt_without_absolute_rules(6) =
 echo "=== 設計固有の失敗経路: reject_unreadable_prompt_file(6) ==="
 {
   new_fixture
-  run_wrapper --role implementer --prompt-file "$WORK/does-not-exist-prompt.txt" --out "$WORK/o.json" --task-id t-unread --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$WORK/does-not-exist-prompt.txt" --out "$WORK/o.json" --task-id t-unread --model-def t-sonnet-high
   assert_eq "exit6(2ではない＝DR1-M6)" "6" "$RC"
   assert_eq "ログ1行" "1" "$(log_lines)"
 }
@@ -865,13 +865,13 @@ echo "=== 設計固有の失敗経路: reject_when_prereq_missing(8) ==="
   new_fixture
   NOPYDIR="$WORK/no-python3-path"
   build_path_without_python3 "$NOPYDIR"
-  RUN_STDOUT="$(PATH="$NOPYDIR" bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-nopy --model-def sonnet-high < /dev/null 2>"$WORK/nopy-stderr.log")"
+  RUN_STDOUT="$(PATH="$NOPYDIR" bash "$SCRIPT" --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-nopy --model-def t-sonnet-high < /dev/null 2>"$WORK/nopy-stderr.log")"
   RC=$?
   assert_eq "python3が無い: exit8" "8" "$RC"
 
   new_fixture
   export CLAUDE_CODE_WRAPPER_BIN="$WORK/does-not-exist-claude"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-nobin --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-nobin --model-def t-sonnet-high
   assert_eq "claude実行体が無い: exit8" "8" "$RC"
 }
 
@@ -882,7 +882,7 @@ echo "=== 設計固有の失敗経路: classify_non_json_output(14) ==="
   echo "not a json line" > "$RESP"
   export AIENV_CLAUDE_STUB_RESPONSE_FILE="$RESP"
   OUTNJ="$WORK/o-nj.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTNJ" --task-id t-nonjson --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTNJ" --task-id t-nonjson --model-def t-sonnet-high
   assert_eq "非JSON出力: exit14" "14" "$RC"
   assert_eq "非JSON出力: reason_code=other" "other" "$(log_field reason_code)"
   assert_true "非JSON出力: --outに生出力が残る" "$(grep -q "not a json line" "$OUTNJ" && echo 1 || echo 0)"
@@ -895,7 +895,7 @@ echo "=== 設計固有の失敗経路: rename_failure_keeps_tmp(15) ==="
   OUT15R="$WORK/artifacts15/rename-target.json"
   mkdir -p "$OUT15R"
   chmod 555 "$OUT15R"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT15R" --task-id t-rename --model-def sonnet-high --force
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUT15R" --task-id t-rename --model-def t-sonnet-high --force
   assert_eq "rename失敗: exit15" "15" "$RC"
   assert_eq "rename失敗: ログのreason_code=rename_failed" "rename_failed" "$(log_field reason_code)"
   tmp_left="$(find "$(dirname "$OUT15R")" -maxdepth 1 -name 'rename-target.json.tmp.*' 2>/dev/null | wc -l | tr -d ' ')"
@@ -918,7 +918,7 @@ EOF
   sed "s#LIB_DIR=\"\$REPO_ROOT/claude/hooks/lib\"#LIB_DIR=\"$FAKELIB\"#" "$SCRIPT" > "$FAKESCRIPT"
   chmod +x "$FAKESCRIPT"
   START=$(date +%s)
-  RUN_STDOUT="$(bash "$FAKESCRIPT" --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-hang --model-def sonnet-high < /dev/null 2>"$WORK/hang-stderr.log")"
+  RUN_STDOUT="$(bash "$FAKESCRIPT" --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-hang --model-def t-sonnet-high < /dev/null 2>"$WORK/hang-stderr.log")"
   RC=$?
   END=$(date +%s)
   assert_eq "resolverハング: exit4" "4" "$RC"
@@ -930,7 +930,7 @@ echo "=== 設計固有の失敗経路: warnings_go_to_stderr_only ==="
   # F1: 親sidが空
   new_fixture
   unset CLAUDE_CODE_SESSION_ID
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-f1 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-f1 --model-def t-sonnet-high
   assert_eq "F1: 終了コードは変わらず0" "0" "$RC"
   assert_contains "F1: 標準エラーに警告" "$RUN_STDERR" "親セッションID"
 
@@ -938,14 +938,14 @@ echo "=== 設計固有の失敗経路: warnings_go_to_stderr_only ==="
   new_fixture
   export CLAUDE_CODE_SESSION_ID="sid-f2"
   export GATE_MARKER_DIR="$WORK/no-such-marker-dir/nested"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-f2 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-f2 --model-def t-sonnet-high
   assert_eq "F2: 終了コードは変わらず0" "0" "$RC"
   assert_contains "F2: 標準エラーに警告" "$RUN_STDERR" "委任実績マーカー"
 
   # F4: カナリア不在（偽claudeはSessionEndフックを実行しないため常に不在）
   new_fixture
   OUTF4="$WORK/artf4/o.json"
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTF4" --task-id t-f4 --model-def sonnet-high
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$OUTF4" --task-id t-f4 --model-def t-sonnet-high
   assert_eq "F4: 終了コードは変わらず0" "0" "$RC"
   assert_contains "F4: 標準エラーに警告" "$RUN_STDERR" "カナリア"
   assert_true "F4: .claude-exec-hooks-missing が残る" "$([ -e "$WORK/artf4/.claude-exec-hooks-missing" ] && echo 1 || echo 0)"

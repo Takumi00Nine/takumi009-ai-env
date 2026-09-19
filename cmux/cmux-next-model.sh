@@ -39,6 +39,8 @@ VAULT="${CMUX_NEXT_VAULT:-$HOME/Data/obsidian}"
 STATUS_ALLOW="${CMUX_NEXT_STATUS_ALLOW:-active}"
 STATUS_HOLD="${CMUX_NEXT_STATUS_HOLD:-paused}"
 INVENTORY_DIR="${CMUX_NEXT_INVENTORY_DIR:-$HOME/.claude/logs/vault-inventory}"
+# 棚卸しの正本（design-step2 §3.1/§6.1）。書き手は vault_inventory.py だけ。
+INVENTORY_LATEST="${CMUX_NEXT_INVENTORY_LATEST:-$INVENTORY_DIR/latest.json}"
 MAINT_STATE_FILE="${CMUX_NEXT_MAINT_STATE:-$HOME/.claude/logs/maintenance/last-run.json}"
 MAINT_STALE_DAYS="${CMUX_NEXT_MAINT_STALE_DAYS:-8}"
 
@@ -138,41 +140,25 @@ number_entries() {
   awk -F '\t' 'NF { n++; printf "%d\t%s\t%s\t%s\n", n, $1, $3, $4 }'
 }
 
-# 棚卸しレポート（vault-inventory）の最新ファイル（名前順＝日付ファイル名
-# なので辞書順＝時系列順）から「要確認 N 件」を抽出する。見つかれば
-# "count<TAB>M/D" を標準出力へ、抽出失敗時は何も出さず非0を返す。
+# 棚卸しの正本 latest.json（design-step2 §3.2）から「date<TAB>actionable」を
+# jqで読む。見つかれば "count<TAB>M/D" を標準出力へ、抽出失敗時
+# （不在・破損・date/actionable欠落・型違反）は何も出さず非0を返す
+# （呼び出し側 emit_health_rows が「棚卸し n/a」を出す）。
 inventory_status() {
-  local f base latest="" latest_base="" count mmdd mm dd
-  for f in "$INVENTORY_DIR"/*.md; do
-    [ -e "$f" ] || continue
-    base="$(basename "$f" .md)"
-    is_valid_date "$base" || continue
-    if [ -z "$latest" ] || [ "$base" \> "$latest_base" ]; then
-      latest="$f"
-      latest_base="$base"
-    fi
-  done
-  [ -n "$latest" ] || return 1
-  count="$(grep -oE '要確認 [0-9]+ 件' "$latest" 2>/dev/null | head -n1 | grep -oE '[0-9]+')"
+  local out date count mm dd
+  out="$(jq -r '[.date, .actionable] | @tsv' "$INVENTORY_LATEST" 2>/dev/null)" || return 1
+  date="${out%%$(printf '\t')*}"; count="${out#*$(printf '\t')}"
+  is_valid_date "$date" || return 1
   is_number "$count" || return 1
-  base="$(basename "$latest" .md)"
-  mmdd="${base#*-}"
-  mm="${mmdd%-*}"; dd="${mmdd#*-}"
-  mm=$(( 10#$mm )); dd=$(( 10#$dd ))
+  mm=$(( 10#${date:5:2} )); dd=$(( 10#${date:8:2} ))
   printf '%s\t%d/%d\n' "$count" "$mm" "$dd"
 }
 
-# 棚卸しの「データ源」の有無だけを判定する（実在する暦日ファイル名の最新
-# レポートが1件でも見つかるか）。件数抽出（inventory_status）の成否とは
-# 独立させる（v1/v2 と同一契約）。
+# 棚卸しの「データ源」の有無だけを判定する（latest.jsonが存在するか）。
+# 件数抽出（inventory_status）の成否とは独立させる（v1/v2 と同一契約・
+# design-step2 §6.3: 不在＝行なし、破損＝⚠️相当の「棚卸し n/a」）。
 inventory_has_source() {
-  local f base
-  for f in "$INVENTORY_DIR"/*.md; do
-    [ -e "$f" ] || continue
-    base="$(basename "$f" .md)"
-    is_valid_date "$base" && return 0
-  done
-  return 1
+  [ -f "$INVENTORY_LATEST" ]
 }
 
 # 週次メンテ（maintenance.sh）の死活状態を last-run.json の last_success_at
@@ -180,7 +166,7 @@ inventory_has_source() {
 # "ok_or_warn<TAB>表示テキスト" を標準出力へ、状態ファイルが無い／壊れて
 # いる場合は何も出さず非0を返す。
 maintenance_status() {
-  local raw ts epoch now age_days disp
+  local raw ts epoch now age_days disp kind cand
   [ -f "$MAINT_STATE_FILE" ] || return 1
   raw="$(jq -r '.last_success_at // empty' "$MAINT_STATE_FILE" 2>/dev/null)"
   [ -n "$raw" ] || raw="$(jq -r '.started_at // empty' "$MAINT_STATE_FILE" 2>/dev/null)"
@@ -193,12 +179,22 @@ maintenance_status() {
   age_days=$(( (now - epoch) / 86400 ))
   [ "$age_days" -lt 0 ] && age_days=0
   if [ "$age_days" -ge "$MAINT_STALE_DAYS" ]; then
-    printf 'warn\t⚠%d日前\n' "$age_days"
+    kind="warn"
+    disp="$(printf '⚠%d日前' "$age_days")"
   else
     disp="$(date -r "$epoch" '+%-m/%-d' 2>/dev/null)"
     [ -n "$disp" ] || disp="?"
-    printf 'ok\t✅%s\n' "$disp"
+    kind="ok"
+    disp="✅${disp}"
   fi
+  # 候補件数（design-step2 §3.2・S9 A-3）: last-run.json の
+  # fragments_candidates が非負整数のときだけ末尾へ「候補N件」を足す
+  # （0件も表示＝本人裁定⑤・§10-5）。キー無し・型違反はそのまま何も
+  # 足さない（「不明」とは区別せずDockには出さない契約＝design-step2 §6.3）。
+  cand="$(jq -r 'if (.fragments_candidates|type)=="number" and .fragments_candidates>=0
+                 then (.fragments_candidates|floor) else empty end' "$MAINT_STATE_FILE" 2>/dev/null)"
+  [ -n "$cand" ] && disp="${disp} 候補${cand}件"
+  printf '%s\t%s\n' "$kind" "$disp"
 }
 
 # --- `--list`（v1/v2 と同一契約） ------------------------------------------

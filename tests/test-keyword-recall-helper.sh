@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/vault-agents/keyword_recall_helper.py のユニットテスト（想起フック補助・
+# claude/hooks/lib/keyword_recall_helper.py のユニットテスト（想起フック補助・
 # キーワード全体一致＋トークン部分一致の二段構え。8.2ラウンド「統一リファクタリング」で
 # claude/hooks/vault-recall.shからPythonへ移植した際に新設）。
 #
@@ -14,7 +14,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/vault-agents/keyword_recall_helper.py"
+SCRIPT="$REPO_ROOT/claude/hooks/lib/keyword_recall_helper.py"
 
 # bashのファイル名グロブ展開順（strcoll）を再現するhelper側のロケール依存ソートを
 # 決定的にするため、production同様UTF-8ロケールを明示する

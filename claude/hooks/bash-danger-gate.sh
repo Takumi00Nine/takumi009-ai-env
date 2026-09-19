@@ -10,7 +10,9 @@
 # 機械強制はラッパー内部に移した（execはPreToolUseフックの対象外のため）ため、
 # ラッパーを経由しない直叩きが機械強制のバイパス経路にならないようここで塞ぐ。
 
-cmd=$(jq -r '.tool_input.command // ""')
+input=$(cat 2>/dev/null || true)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // ""')
+cwd=$(printf '%s' "$input" | jq -r '.cwd // ""')
 
 deny() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}' "$1"
@@ -25,11 +27,25 @@ if printf '%s' "$cmd" | grep -Eqi '(^|[^[:alnum:]_])(bash|sh|zsh)[[:space:]]+<\(
   deny 'リモートスクリプトのプロセス置換実行（bash <(curl ...)）はブロックされています。スクリプトは一旦ファイルに保存し、内容を確認してから実行してください（bash-danger-gate）。'
 fi
 
-# ② 再帰 rm（rm -r/-R/--recursive）× 保護パス
+# ② 再帰 rm（rm -r/-R/--recursive）× 保護パス（HOME 直下の実パス基準＋相対形は cwd/cd 判定）
 if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])(sudo[[:space:]]+)?rm[[:space:]]+(-[[:alnum:]]*[rR][[:alnum:]]*|--recursive)'; then
-  # 保護パス: Vault / ~/.claude / ~/.codex / ~/.cmuxterm
-  if printf '%s' "$cmd" | grep -Eq '(Data/obsidian|\.claude|\.codex|\.cmuxterm)'; then
-    deny '保護パス（Vault・.claude・.codex・.cmuxterm）への再帰 rm はブロックされています。本当に必要な削除は本人が自分の手で実行してください（bash-danger-gate）。'
+  prot='(Data/obsidian|\.claude|\.codex|\.cmuxterm)'
+  home_pfx='(~|"?\$\{?HOME\}?"?|/Users/[^/[:space:]]+)'
+  tail='([^[:alnum:]_.-]|$)'
+  # 照合前の正規化: `/./`・`//` を `/` に潰す（`~/./.claude`・`~//.claude` の迂回を塞ぐ）。
+  # 照合は大小無区別（APFS は大小無区別＝`/users/<u>/.claude` でも実削除される）。
+  # brace（`~/{.claude,.codex}`）は `home_pfx/` 直後の `{...` を許して拾う。glob（`~/.cl*`）は既知の残存限界。
+  ncmd=$(printf '%s' "$cmd" | sed -E 's#/(\./)+#/#g; s#/{2,}#/#g')
+  # ②-a 絶対形: HOME 直下の保護ディレクトリそのもの・またはその配下（末尾が英数・_・.・- 以外）
+  if printf '%s' "$ncmd" | grep -Eqi "${home_pfx}/(\{[^}]*)?${prot}${tail}"; then
+    deny '保護パス（~/Data/obsidian・~/.claude・~/.codex・~/.cmuxterm）への再帰 rm は拒否しました。必要なら本人が手で実行してください（bash-danger-gate）。'
+  fi
+  # ②-b 相対形: cwd が HOME、または同じコマンド内で HOME へ cd している時だけ、裸の保護名を見る
+  in_home=0
+  [ -n "$cwd" ] && [ "${cwd%/}" = "${HOME%/}" ] && in_home=1
+  printf '%s' "$ncmd" | grep -Eqi "(^|[;&|[:space:]])cd([[:space:]]+${home_pfx}/?)?[[:space:]]*(;|&|\||$)" && in_home=1
+  if [ "$in_home" = 1 ] && printf '%s' "$ncmd" | grep -Eqi "(^|[[:space:]\"'=])(\./)?${prot}${tail}"; then
+    deny '保護パス（~/Data/obsidian・~/.claude・~/.codex・~/.cmuxterm）への再帰 rm は拒否しました。必要なら本人が手で実行してください（bash-danger-gate）。'
   fi
   # HOME 直下・ルートへの再帰 rm（rm -rf ~ / rm -rf /）
   if printf '%s' "$cmd" | grep -Eq 'rm[[:space:]]+-[[:alnum:]]*[rR][[:alnum:]]*[[:space:]]+("?\$HOME"?|~)?/?([[:space:]]|$)'; then

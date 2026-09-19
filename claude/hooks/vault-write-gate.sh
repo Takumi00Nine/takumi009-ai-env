@@ -77,7 +77,7 @@ case "$fpath" in
 esac
 
 if guard_is_vault_ai_path "$fpath"; then
-  reason="vault-write-gate: 外部脳（Vault）の AI 向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への書き込みは許可されていません。成果物は依頼文が指定した作業ディレクトリへ書いてください。Vault への記録が必要な場合はリーダーへ報告し、vault-scribe 経由での記録を依頼してください。"
+  reason="vault-write-gate: Vault の AI 向け6フォルダへの書き込みは不可です。成果物は依頼文の作業ディレクトリへ書き、Vault への記録はリーダーへ報告してください。"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
 fi
 exit 0

@@ -28,7 +28,7 @@
       （旧: Explorations/vault-inventory/）から $HOME/.claude/logs/ 配下へ移設）。
       `--json` 指定時は上記`.md`に加え、機械可読なJSON（棚卸し件数サマリ）を
       標準出力へ返す（2026-07-16簡素化）。missing_updated（Preferences限定の
-      updated欠落）は**検出のみ**（レポート§1・n_issues計上）で、機械的な
+      updated欠落）は**検出のみ**（レポート§1・actionable計上）で、機械的な
       修正（FIX機能・action: fix_approve）は2026-07-18本人裁定で丸ごと削除
       した＝[[Decisions/2026-07-18-external-brain-hardening]]（理由＝
       Preferences限定でしか動かず「夜間はPreferencesを書かない」境界の唯一の
@@ -51,13 +51,14 @@ import os
 import pathlib
 import re
 import sys
+import tempfile
 from collections import Counter
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 # frontmatter解析・wikilink正規表現・aliases正規化・汎用alias禁止リスト読込は
 # 2026-07-16簡素化（cleanup決定#10）でvault_lib.pyへ抽出済み（他4本＝
-# embedding_index.py→撤去済み・knowledge_merge_candidates.py・knowledge_merge.py→
-# 撤去済み・merge_quality_gate.py→撤去済み・recall_bench.pyが`import vault_inventory`
+# embedding_index.py→撤去済み・knowledge_merge.py→撤去済み・merge_quality_gate.py→
+# 撤去済み・重複候補検出関連の旧CLI（2026-09-19退役）・recall_bench.pyが`import vault_inventory`
 # していたのはこれらの関数だけを再利用するためだった＝CLI/共有ライブラリ同居の解消）。
 import vault_lib  # noqa: E402
 
@@ -88,7 +89,7 @@ BOOTSTRAP_FILES = [
 # BOOTSTRAP_FILESへcore-conduct.md・core-workflow.mdを追加した結果、必読
 # 集合の実測がメイン機で274行/44,563バイト（旧閾値150行/20,480バイトを
 # 大きく超過・core-conduct.md単体66行・core-workflow.md単体84行で旧40行
-# 閾値も超過）となり、n_issuesが常時3件以上の恒常ノイズを出していた
+# 閾値も超過）となり、要確認件数が常時3件以上の恒常ノイズを出していた
 # （check-drift誤報と同型の問題）。裁定＝「予算の再基準化」（コア本文の
 # 圧縮はしない＝採用済み本文のchurn回避）。閾値は「現必読集合の実測＋20%
 # 程度の余裕」へ引き上げた。
@@ -97,7 +98,7 @@ BOOTSTRAP_FILES = [
 # 縮小した（内訳: absolute-rules.md 17行/2,502B・core-conduct.md 76行/
 # 13,849B・core-workflow.md 98行/12,819B・profile-personal.md 17行/1,756B・
 # vault-operation.md 40行/6,985B）。同じ「実測＋20%程度の余裕」の基準で
-# 閾値を引き下げる（引き上げっぱなしにすると縮小後もn_issuesが常時0件の
+# 閾値を引き下げる（引き上げっぱなしにすると縮小後も要確認件数が常時0件の
 # まま検出力を失うノイズの逆型になるため）。今後必読集合が変わった際は
 # 本閾値も再度見直すこと。
 SIZE_LIMIT_LINES = 120        # 1ファイルの目安（旧100。実測最大値
@@ -131,8 +132,8 @@ STALE_ALLOWLIST = [
 
 DATE_RE = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
 # wikilink検出用正規表現はvault_lib.LINK_REへ、コードフェンス/インラインコード検出用
-# 正規表現はvault_lib.CODE_REへ抽出済み（2026-07-16簡素化。merge_checks.py新設時に
-# 共用するため後者も抽出）。
+# 正規表現はvault_lib.CODE_REへ抽出済み（2026-07-16簡素化。品質ゲート用CLI（2026-09-19退役）
+# 新設時に共用するため後者も抽出）。
 CODE_RE = vault_lib.CODE_RE
 STALE_PROJECT_DAYS = 30
 
@@ -264,7 +265,8 @@ def parse_iso(ts):
 # `log_row "ERROR\t\t${SESSION_ID:-}\t$1[\t${LOG_LEVEL_INFO}]"` として書かれる
 # （log_error()はレベル列を省略・log_fact()だけ6列目に固定文字列"INFO"を付与する
 # ＝vault-recall.sh側コメント参照）。0-indexで添字5（6列目）がこのレベル列。
-# scripts/vault-agents/recall_bench.py の同名定数と契約を揃える（2026-07-15追加）。
+# 旧scripts/vault-agents/recall_bench.py（2026-09-19退役）の同名定数と契約を
+# 揃えていた名残（2026-07-15追加）。
 LOG_LEVEL_COL = 5
 LOG_LEVEL_INFO_VALUE = "INFO"
 
@@ -463,6 +465,24 @@ def compute_dismissal_rates(recall_rows, reads_rows, today):
         rows.append((rel, n, rate, raw_presented.get(rel, 0)))
     rows.sort(key=lambda r: (r[2], -r[1]))
     return rows[:DISMISS_TOP_N], total_all, windowed_total, excluded_pre_read
+
+
+def write_latest_json(payload):
+    """棚卸しの正本 `OUT_DIR/latest.json` を tmp→os.replace で原子的に書く
+    （design-step2 §3.1・§6.1）。書込失敗は例外のまま呼び出し元(main)へ
+    伝播させる＝maintenance_run_step.py の_write_status_file()と異なり
+    fail-openにしない設計（md書込失敗と同じくPhase1③をanomaly化させ、
+    latest.jsonは前回のまま日付で古さが見えるようにする＝design-step2 §6.4）。
+    """
+    fd, tmp_name = tempfile.mkstemp(prefix=".latest.json.tmp-", dir=str(OUT_DIR))
+    tmp_path = pathlib.Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False))
+        os.replace(str(tmp_path), str(OUT_DIR / "latest.json"))
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def main():
@@ -767,28 +787,32 @@ def main():
                             if not sid and in_dismissal_window(ts, today, DISMISS_WINDOW_DAYS))
 
     # ---- レポート生成 ----
-    # 要確認件数(n_issues)は本文にレポートされる⚠️付き警告種別を漏れなく積む。
-    # 過去の実装は§5(注入サイズ超過)・§8(Fragments capture停止疑い)・
-    # §11のreview_soon(14日以内到来)・session_idが空のRead/提示行(§12)を
-    # 算入しておらず、本文に⚠️が出ているのに「要確認 0件」表示になり得た
-    # （2026-07-14 外部脳バックログ・唯一未裏取りだったCodex指摘の確認により確定。
-    # unread_watch（ログ未成熟時の暫定「要観察」）は意図的に対象外のまま＝
-    # 断定ではない旨がレポート本文・コードコメント双方で明示されているため）。
+    # actionable（旧・要確認件数の全種別合算）は「AIが直せる対処可能な項目」だけを数える
+    # （design-step2 §3.1・本人裁定2026-09-19③）。数える＝§0 unreadable_notes・
+    # §1 missing_updated・§2 date_drift・§3 broken_links・§4 stale_hits・
+    # §6b status_future_dated・§9 missing_aliases・§10 generic_alias_hits・
+    # §11 review_overdue+review_invalid。数えない（md には従来どおり⚠️付き
+    # 情報表示のまま残す）＝§5 サイズ超過・必読欠落（旧裁定の6ファイル基準が
+    # 前提から外れた＝§10-4・段3-4の必読圧縮まで据え置き）・§6 停滞プロジェクト・
+    # §8 Fragments capture停止疑い・§11 review_soon（14日以内到来）・
+    # §12 未読・提示無視率・reads/recallログの死活・解析不能行・session_id空行
+    # （AIが機械的に直せない/人間の目視相談が要る項目のため）。
     size_over_total = total_lines > SIZE_LIMIT_TOTAL_LINES or total_bytes > SIZE_LIMIT_TOTAL
     size_over_files = sum(1 for _f, _n_lines, _n_bytes, over in size_rows if over)
     fragments_stopped = frag_files == 0
-    n_issues = (len(missing_updated) + len(date_drift) + len(broken_links) + len(stale_hits) + len(stalled)
-                + len(status_future_dated)
-                + len(missing_aliases) + len(generic_alias_hits) + len(review_overdue) + len(review_invalid)
-                + len(review_soon)
-                + len(unread_confirmed) + (1 if log_skipped else 0)
-                + (1 if reads_log_stale else 0) + (1 if recall_log_stale else 0)
-                + (1 if reads_log_broken else 0) + (1 if recall_log_broken else 0)
-                + (1 if reads_log_future else 0) + (1 if recall_log_future else 0)
-                + (1 if size_over_total else 0) + size_over_files + len(missing_bootstrap_files)
-                + len(unreadable_notes)
-                + (1 if fragments_stopped else 0)
-                + (1 if reads_no_session else 0) + (1 if recall_no_session else 0))
+    sections = {
+        "unreadable": len(unreadable_notes),
+        "missing_updated": len(missing_updated),
+        "date_drift": len(date_drift),
+        "broken_links": len(broken_links),
+        "stale_keywords": len(stale_hits),
+        "status_future_dated": len(status_future_dated),
+        "missing_aliases": len(missing_aliases),
+        "generic_aliases": len(generic_alias_hits),
+        "review_overdue": len(review_overdue),
+        "review_invalid": len(review_invalid),
+    }
+    actionable = sum(sections.values())
     L = []
     L.append("---")
     L.append(f"date: {today.isoformat()}")
@@ -799,7 +823,8 @@ def main():
     L.append(f"# 外部脳 棚卸しレポート {today.isoformat()}")
     L.append("")
     L.append(f"自動生成（`work/takumi009-ai-env/scripts/vault-agents/`）。ノート {len(notes)} 件を検査し、"
-             f"**要確認 {n_issues} 件**。本レポートは検出のみで自動対処はしない（2026-07-16簡素化で"
+             f"**要確認 {actionable} 件（対処可能な項目のみ。停滞・未読・サイズは各節の情報表示）**。"
+             "本レポートは検出のみで自動対処はしない（2026-07-16簡素化で"
              "「最初のセッションでリーダーが自律対処」運用は撤去済み）。綻び（鮮度・リンク切れ・alias）は"
              "気づいた時点で読み時に直し、更新日ズレ・波及漏れ疑い等は次回の棚卸し相談で人間と目視する"
              "＝[[Knowledge/external-brain-maintenance-split]]。運用ノート:"
@@ -883,7 +908,8 @@ def main():
     else:
         L.append("**期限超過:**" if review_overdue else "**期限超過:** なし")
         L.extend(f"- `{r}` — review_by {d}（{days}日超過）" for r, d, days in review_overdue)
-        L.append(f"**{REVIEW_SOON_DAYS}日以内に到来:**" if review_soon else f"**{REVIEW_SOON_DAYS}日以内に到来:** なし")
+        L.append(f"**{REVIEW_SOON_DAYS}日以内に到来（情報・actionableには数えない）:**"
+                 if review_soon else f"**{REVIEW_SOON_DAYS}日以内に到来（情報）:** なし")
         L.extend(f"- `{r}` — review_by {d}（あと{days}日）" for r, d, days in review_soon)
     if review_invalid:
         L.append("**形式不正（`YYYY-MM-DD`で書き直す）:**")
@@ -996,23 +1022,35 @@ def main():
     out = OUT_DIR / f"{today.isoformat()}.md"
     out.write_text("\n".join(L), encoding="utf-8")
 
+    # latest.json＝最新棚卸しの正本（design-step2 §3.1・§6.1）。mdの直後に
+    # 原子的に書く。書込に失敗すれば例外がmain()を抜けてexit≠0になり、
+    # Phase1③がanomaly化する（latest.jsonは前回のまま＝日付で古さが見える・
+    # design-step2 §6.4）。
+    write_latest_json({
+        "date": today.isoformat(),
+        "report_path": str(out),
+        "actionable": actionable,
+        "n_notes": len(notes),
+        "sections": sections,
+    })
+
     if args.json:
         # --json時は標準出力をJSON1行のみにする（呼び出し元=maintenance_run_step.py
         # がそのままjson.loads()する契約。人間向けメッセージは標準エラーへ回す・
         # fragments_log.pyと同じ流儀）。missing_updated_fix_candidatesキーは
         # FIX機能撤去（2026-07-18本人裁定・[[Decisions/2026-07-18-external-
         # brain-hardening]]）に伴い削除した＝missing_updatedは検出のみで
-        # n_issuesへの計上と`.md`レポート§1への表示にとどまる。
+        # actionableへの計上と`.md`レポート§1への表示にとどまる。
         payload = {
             "date": today.isoformat(),
             "report_path": str(out),
-            "n_issues": n_issues,
+            "actionable": actionable,
             "n_notes": len(notes),
         }
-        print(f"レポート生成: {out}（要確認 {n_issues} 件）", file=sys.stderr)
+        print(f"レポート生成: {out}（要確認 {actionable} 件）", file=sys.stderr)
         print(json.dumps(payload, ensure_ascii=False))
     else:
-        print(f"レポート生成: {out}（要確認 {n_issues} 件）")
+        print(f"レポート生成: {out}（要確認 {actionable} 件）")
 
 
 if __name__ == "__main__":

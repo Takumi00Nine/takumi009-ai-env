@@ -350,10 +350,10 @@ echo "=== 7. --model / --effort: -m と -c model_reasoning_effort= に変換さ�
   OUT="$WORK/out6.md"
 
   PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
-    --prompt-file - --model gpt-5.6-sol --effort high <<< "absolute-rules を読んでやって" >/dev/null 2>&1
+    --prompt-file - --model t-model-x --effort high <<< "absolute-rules を読んでやって" >/dev/null 2>&1
 
-  assert_true "-m gpt-5.6-sol が渡る" \
-    "$(grep -A1 -- '^-m$' "$LOG" | grep -qx 'gpt-5.6-sol' && echo 1 || echo 0)"
+  assert_true "-m t-model-x が渡る" \
+    "$(grep -A1 -- '^-m$' "$LOG" | grep -qx 't-model-x' && echo 1 || echo 0)"
   assert_true "-c model_reasoning_effort=high が渡る" \
     "$(grep -qx 'model_reasoning_effort=high' "$LOG" && echo 1 || echo 0)"
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # claude/hooks/delegation-gate-v2.sh のユニットテスト（前提修正 P-4・設計§4）。
 #
-# ⚠️ claude/hooks/delegation-gate-v2.sh 本体は1行も変えない（設計の絶対条件）。
+# ⚠️ claude/hooks/delegation-gate-v2.sh の判定ロジックは変えない（deny 文面は 2026-09-19 に短縮）。
 # 本ファイルは「変えていないこと」を守るための回帰ガードとして新設する
 # （フックにテストが1本も無かった＝要件§15-2）。
 #

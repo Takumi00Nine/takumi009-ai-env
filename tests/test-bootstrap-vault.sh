@@ -64,7 +64,7 @@ assert_not_contains() {
 
 # assert_ascending_line_positions <desc> <haystack> <marker1> <marker2> ... —
 # 各markerが行頭(^marker + 半角空白)に現れる最初の行番号を取り、渡した順に
-# 単調増加であることを検査する（AC-59: ①→②→③→④→⑤→⑥の順序不変。
+# 単調増加であることを検査する（①→②→④→⑤→⑥の順序不変。③は欠番。
 # 差分レビュー指摘#5対応。並べ替えるとここで落ちる）。
 assert_ascending_line_positions() {
   local desc="$1"; shift
@@ -125,60 +125,25 @@ make_full_vault() {
   done
 }
 
-# bootstrap-vault.sh を実行し、additionalContext文字列を返す（単独セッション相当＝
-# agent_type無し・チーム未所属。session_idは適当な固定値）。
-# reads_log/recall_log・vault-inventoryの出力先ディレクトリは既定で存在しないパス＝
-# 実機の $HOME/.claude/logs/* に依存しない（外部脳ヘルス行の①③死活チェックが
-# 実マシンの状態でテスト結果が揺れないようにする）。ヘルス行そのものをテストする
-# 場合は明示的に渡す。
-# 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で
-# 未処理レポート検知（fragments-log/knowledge-merge-candidates）・未解決ALERT監視・
-# Ollama予熱を撤去したため、対応する引数（frag_log_dir/km_log_dir/alerts_dir・
-# BOOTSTRAP_DISABLE_PREHEAT）も削除した。
-# 2026-07-18ハードニングでPreferences提案pendingマーカー層を撤去し提案
-# ディレクトリの直接スキャン方式へ変更したため、5番目の引数は
-# pending_file(単一ファイル)からproposals_dir(ディレクトリ)へ変わった。
-# last-run.jsonの死活検知（6番目の引数）も同時に追加した。
-# 2026-09-07 配役表-能力軸整理対応: ④死活検知のサブ機スキップ判定は
-# 旧マーカーファイルから配役表の能力軸`machine_role`へ移った
-# （配役表-能力軸整理-設計-2026-09-07.md §4.2・§4.3）。本ヘルパーは
-# BOOTSTRAP_ENABLE_LOCAL_PROFILE=0固定のため機役割は常にunknown（=サブ機
-# ではない）扱いになる。④の機役割別の振る舞いを検証するテストは
-# run_bootstrap_health4()を使う。
-# 2026-09-02: BOOTSTRAP_ENABLE_LOCAL_PROFILEのコード側既定値が0→1へ変更された
-# （案A採用・rollout-runbook.md現行トラック§7）。本ヘルパーはP1機構（ローカル
-# 実体プロファイル）を検証しない大多数のテストで使われるため、既定値の変更に
-# よって実機の$HOME/.config/takumi009-ai-env/profile.mdを不用意に読みに行き
-# 非決定的になる事故を防ぐ目的で、ここでは明示的に0を指定して従来どおり
-# 無効固定にする（P1機構自体の回帰は#37「ゲート無効」テスト・新設した
-# 「既定値1」テスト・run_bootstrap_with_profile()の専用テストで別途担保する）。
+# run_bootstrap <vault> [reads_log] [recall_log] [inv_log_dir] [last_run_file] —
+# bootstrap-vault.sh を実行し additionalContext を返す（単独セッション相当＝agent_type 無し・チーム未所属）。
+# ログ・棚卸し・last-run.json は既定で存在しないパス＝実機の $HOME/.claude/logs/* に依存しない。
+# BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 固定（実機の profile.md を読まない。P1 機構は run_bootstrap_with_profile() で検証）。
 run_bootstrap() {
   local vault="$1"
   local reads_log="${2:-/nonexistent-dir/vault-reads.tsv}"
   local recall_log="${3:-/nonexistent-dir/vault-recall.tsv}"
   local inv_log_dir="${4:-/nonexistent-dir/vault-inventory}"
-  local proposals_dir="${5:-/nonexistent-dir/preferences-proposals}"
-  local last_run_file="${6:-/nonexistent-dir/last-run.json}"
+  local last_run_file="${5:-/nonexistent-dir/last-run.json}"
   echo '{"session_id":"test-session-0000"}' \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="$reads_log" VAULT_RECALL_LOG="$recall_log" \
       VAULT_INVENTORY_LOG_DIR="$inv_log_dir" \
-      PREFERENCES_PROPOSALS_DIR="$proposals_dir" \
       MAINTENANCE_LAST_RUN_FILE="$last_run_file" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 
-# P1機構（ローカル実体プロファイル）のテスト専用ヘルパー。
-# BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 を明示して有効化した状態で実行する
-# （run_bootstrap()は2026-09-02からBOOTSTRAP_ENABLE_LOCAL_PROFILE=0を明示固定に
-# したため、本ヘルパーとは挙動が分かれる独立ヘルパーのまま維持する）。
-# 3番目の引数（省略可）はsettings.jsonの比較先パス。省略時は存在しない
-# パスを既定にする（S10/S11/S16対応・check_leader_settings_drift追加に
-# あわせて2026-09-01追加。既定を実機の$HOME/.claude/settings.jsonのままに
-# すると、v2プロファイルがOKで解決するテスト（#36・#37等）がテスト実行機の
-# 実settings.jsonに依存してしまい非決定的になる＝他のログ系引数と同じく
-# /nonexistent-dir配下を既定にして隔離する）。
 # 2026-09-08 モデル定義ファイルと候補指定対応: 役割の行がmodel=<定義名>だけに
 # なったため、resolve()を通すfixtureは全てモデル定義ファイルを要る。1つの
 # 共有ファイル（読取専用・書き換えない）を全テスト共通で使う。個別に別の
@@ -191,7 +156,7 @@ make_model_defs() {
   mkdir -p "$(dirname "$path")"
   if [ "$#" -eq 0 ]; then
     cat > "$path" <<'EOF'
-[opus-high]
+[t-opus-high]
 provider=anthropic-api
 model=claude-opus-5
 effort=high
@@ -214,7 +179,7 @@ effort=xhigh
 provider=anthropic-api
 model=claude-fable-5[1m]
 
-[sonnet-high]
+[t-sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 
@@ -280,22 +245,22 @@ make_model_defs "$SHARED_MODELS_CONF"
 # 共有できるためこの形にした）。
 export AIENV_MODEL_DEFS_FILE="$SHARED_MODELS_CONF"
 
+# run_bootstrap_with_profile <vault> <profile_path> [models_conf] — P1 機構（ローカル実体プロファイル）
+# のテスト専用ヘルパー。BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 を明示して実行する。
 run_bootstrap_with_profile() {
-  local vault="$1" profile_path="$2" settings_json="${3:-/nonexistent-dir/settings.json}"
-  local models_conf="${4:-$SHARED_MODELS_CONF}"
+  local vault="$1" profile_path="$2"
+  local models_conf="${3:-$SHARED_MODELS_CONF}"
   echo '{"session_id":"test-session-0000"}' \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
       VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
-      PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
       MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
-      AIENV_SETTINGS_JSON_FILE="$settings_json" \
       AIENV_MODEL_DEFS_FILE="$models_conf" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 
-# run_bootstrap_health4 <vault> <machine_role_line> [legacy_marker_content] [inv_dir] [proposals_dir] —
+# run_bootstrap_health4 <vault> <machine_role_line> [legacy_marker_content] [inv_dir] —
 # 外部脳ヘルス行④の機役割判定（配役表の能力軸`machine_role`由来）を検証する
 # 専用ヘルパー（配役表-能力軸整理-設計-2026-09-07.md §10.1・FX-M1/FX-M2）。
 # fake HOME配下に有効なschema 5の実体を置き、HOMEを切り替えてbootstrap-
@@ -307,7 +272,7 @@ run_bootstrap_with_profile() {
 # 統一する）。
 run_bootstrap_health4() {
   local vault="$1" machine_role_line="$2" legacy_marker="${3:-}"
-  local inv_dir="${4:-/nonexistent-dir/vault-inventory}" proposals_dir="${5:-/nonexistent-dir/preferences-proposals}"
+  local inv_dir="${4:-/nonexistent-dir/vault-inventory}"
   local fake_home profile_path
   fake_home="$(mktemp -d)"
   profile_path="$fake_home/.config/takumi009-ai-env/profile.md"
@@ -319,7 +284,7 @@ run_bootstrap_health4() {
     echo "team_mode:        configured value=full"
     echo "no_read_paths:    unavailable"
     echo "machine_role:     ${machine_role_line}"
-    echo "role.leader: configured model=opus-high"
+    echo "role.leader: configured model=t-opus-high"
     echo "---"
   } > "$profile_path"
   if [ -n "$legacy_marker" ]; then
@@ -329,7 +294,6 @@ run_bootstrap_health4() {
     | HOME="$fake_home" BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
       VAULT_INVENTORY_LOG_DIR="$inv_dir" \
-      PREFERENCES_PROPOSALS_DIR="$proposals_dir" \
       MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
@@ -351,7 +315,7 @@ profile_slug: authoring
 team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
-role.leader:      configured model=opus-high
+role.leader:      configured model=t-opus-high
 ---
 EOF
 }
@@ -362,13 +326,11 @@ run_bootstrap_worker() {
   local reads_log="${2:-/nonexistent-dir/vault-reads.tsv}"
   local recall_log="${3:-/nonexistent-dir/vault-recall.tsv}"
   local inv_log_dir="${4:-/nonexistent-dir/vault-inventory}"
-  local proposals_dir="${5:-/nonexistent-dir/preferences-proposals}"
-  local last_run_file="${6:-/nonexistent-dir/last-run.json}"
+  local last_run_file="${5:-/nonexistent-dir/last-run.json}"
   echo '{"session_id":"test-session-worker","agent_type":"worker"}' \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="$reads_log" VAULT_RECALL_LOG="$recall_log" \
       VAULT_INVENTORY_LOG_DIR="$inv_log_dir" \
-      PREFERENCES_PROPOSALS_DIR="$proposals_dir" \
       MAINTENANCE_LAST_RUN_FILE="$last_run_file" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
@@ -454,44 +416,47 @@ echo "=== 3b. 必須publicノート(core-conduct.md)だけが欠落 → private�
   rm -rf "$VAULT_DIR"
 }
 
-echo "=== 4. 外部脳ヘルス行①: 最新棚卸しレポートの日付+件数が表示される ==="
+echo "=== 4. 外部脳ヘルス行①: latest.json が正常なら report_path・要確認件数・日付が出る（0 件も出す） ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
   INV_DIR="$(mktemp -d)"
-  cat > "$INV_DIR/2026-06-01.md" <<'EOF'
----
-date: 2026-06-01
----
-
-# 外部脳 棚卸しレポート 2026-06-01
-
-自動生成。ノート 42 件を検査し、**要確認 3 件**。
-EOF
-  # 古い方のレポート（日付昇順でglobされるため最新判定に混ざらないことも確認）
-  cat > "$INV_DIR/2026-01-01.md" <<'EOF'
-自動生成。ノート 10 件を検査し、**要確認 99 件**。
-EOF
+  printf '{"date":"2026-06-01","report_path":"%s/2026-06-01.md","actionable":3,"n_notes":42,"sections":{"broken_links":3}}\n' "$INV_DIR" > "$INV_DIR/latest.json"
+  # 日付付き md は読まない（latest.json が正本）＝本文の件数が違っても影響しない。
+  echo "自動生成。ノート 42 件を検査し、**要確認 99 件**。" > "$INV_DIR/2026-06-01.md"
 
   ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
   assert_contains "ヘルス見出しが出る" "$ctx" "【外部脳ヘルス】"
-  assert_contains "最新(2026-06-01)のフルパスと件数(3件)が出る" "$ctx" "棚卸し最新: ${INV_DIR}/2026-06-01.md（要確認 3 件）"
-  assert_not_contains "古い方(2026-01-01/99件)は最新として出ない" "$ctx" "2026-01-01（要確認 99 件）"
+  assert_contains "report_path・件数・日付が出る" "$ctx" "棚卸し最新: ${INV_DIR}/2026-06-01.md（要確認 3 件・2026-06-01）"
+  assert_not_contains "md 本文の件数(99)は読まない" "$ctx" "要確認 99 件"
+  assert_not_contains "破損の警告は出ない" "$ctx" "棚卸しの状態記録が壊れています"
+
+  printf '{"date":"2026-06-02","report_path":"%s/2026-06-02.md","actionable":0}\n' "$INV_DIR" > "$INV_DIR/latest.json"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
+  assert_contains "要確認 0 件でも行が出る" "$ctx" "（要確認 0 件・2026-06-02）"
 
   rm -rf "$VAULT_DIR" "$INV_DIR"
 }
 
-echo "=== 5. 外部脳ヘルス行①: 件数が拾えない本文でも日付だけにフォールバックする ==="
+echo "=== 5. 外部脳ヘルス行①: latest.json が破損・必須キー欠落なら⚠️1行、不在なら行なし ==="
 {
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
   INV_DIR="$(mktemp -d)"
-  printf '# 外部脳 棚卸しレポート 2026-06-15\n\n本文に「要確認」の文言が無いフォーマット\n' \
-    > "$INV_DIR/2026-06-15.md"
 
+  printf 'not json' > "$INV_DIR/latest.json"
   ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
-  assert_contains "フルパスだけの表示にフォールバックする" "$ctx" "棚卸し最新: ${INV_DIR}/2026-06-15.md"
-  assert_not_contains "件数の丸括弧は付かない" "$ctx" "2026-06-15.md（"
+  assert_contains "JSON 破損は⚠️1行（パス付き）" "$ctx" "⚠️ 棚卸しの状態記録が壊れています（latest.json: ${INV_DIR}/latest.json）"
+  assert_not_contains "破損時に「棚卸し最新」の行は出ない" "$ctx" "棚卸し最新"
+
+  printf '{"date":"2026-06-15","report_path":"/tmp/x.md"}\n' > "$INV_DIR/latest.json"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
+  assert_contains "actionable 欠落も⚠️" "$ctx" "棚卸しの状態記録が壊れています"
+
+  rm -f "$INV_DIR/latest.json"
+  echo "**要確認 3 件**" > "$INV_DIR/2026-06-15.md"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
+  assert_not_contains "latest.json 不在なら行なし（md があっても読まない）" "$ctx" "棚卸し"
 
   rm -rf "$VAULT_DIR" "$INV_DIR"
 }
@@ -526,117 +491,6 @@ echo "=== 7. 外部脳ヘルス行②: reads/recallログが8日以上前で止�
   rm -rf "$VAULT_DIR" "$LOGDIR"
 }
 
-echo "=== 7b. Preferences提案: 提案ディレクトリに*.mdが1件以上あれば確認するまで毎起動で通知が出る（2026-07-18ハードニング・pendingマーカー層撤去） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  PROPOSALS_DIR="$(mktemp -d)"
-  echo "下書き本文" > "$PROPOSALS_DIR/sample-preference-note.md"
-  echo "下書き本文" > "$PROPOSALS_DIR/another-note.md"
-  # sidecarの.meta.jsonは件数に数えない（*.mdのみが正本）ことも同時に確認する。
-  echo '{}' > "$PROPOSALS_DIR/sample-preference-note.meta.json"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$PROPOSALS_DIR")"
-  assert_contains "未確認2件の通知が出る" "$ctx" "🆕 夜間バッチで運用ルールの昇格提案があります（未確認2件）"
-  assert_contains "1件目のslugが列挙される" "$ctx" "sample-preference-note"
-  assert_contains "2件目のslugも列挙される" "$ctx" "another-note"
-
-  rm -rf "$VAULT_DIR" "$PROPOSALS_DIR"
-}
-
-echo "=== 7b2. Preferences提案: slug列挙は先頭5件まで・6件目以降は「ほかN件」に畳む（tester2差し戻し対応・任意Minor。方式変更後も踏襲） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  PROPOSALS_DIR="$(mktemp -d)"
-  for i in 0 1 2 3 4 5 6; do
-    echo "下書き本文" > "$PROPOSALS_DIR/slug-$i.md"
-  done
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$PROPOSALS_DIR")"
-  assert_contains "総数7件はそのまま出る" "$ctx" "未確認7件"
-  assert_contains "先頭5件目(slug-4)までは列挙される" "$ctx" "slug-4"
-  assert_not_contains "6件目(slug-5)は列挙されない" "$ctx" "slug-5"
-  assert_not_contains "7件目(slug-6)は列挙されない" "$ctx" "slug-6"
-  assert_contains "6件目以降は「ほか2件」に畳まれる" "$ctx" "ほか2件"
-
-  rm -rf "$VAULT_DIR" "$PROPOSALS_DIR"
-}
-
-echo "=== 7c. Preferences提案: 提案ディレクトリが無ければ通知は出ない ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "/nonexistent-dir/preferences-proposals")"
-  assert_not_contains "ディレクトリが無ければ通知は出ない" "$ctx" "夜間バッチで運用ルールの昇格提案"
-
-  rm -rf "$VAULT_DIR"
-}
-
-echo "=== 7d. Preferences提案: ディレクトリが存在しても*.mdが0件なら通知は出ない ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  PROPOSALS_DIR="$(mktemp -d)"
-  echo '{}' > "$PROPOSALS_DIR/orphan-sidecar.meta.json"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$PROPOSALS_DIR")"
-  assert_not_contains "*.mdが0件（sidecarのみ）なら通知は出ない" "$ctx" "夜間バッチで運用ルールの昇格提案"
-
-  rm -rf "$VAULT_DIR" "$PROPOSALS_DIR"
-}
-
-echo "=== 7e. Preferences提案: 承認/却下でリーダーが.mdを削除すると通知件数が自然に追従する ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  PROPOSALS_DIR="$(mktemp -d)"
-  echo "下書き本文" > "$PROPOSALS_DIR/sample-preference-note.md"
-
-  ctx_before="$(run_bootstrap "$VAULT_DIR" "" "" "" "$PROPOSALS_DIR")"
-  assert_contains "削除前は未確認1件の通知が出る" "$ctx_before" "未確認1件"
-
-  rm -f "$PROPOSALS_DIR/sample-preference-note.md"
-  ctx_after="$(run_bootstrap "$VAULT_DIR" "" "" "" "$PROPOSALS_DIR")"
-  assert_not_contains ".md削除後は通知が出ない（マーカー同期処理が不要になった）" "$ctx_after" "夜間バッチで運用ルールの昇格提案"
-
-  rm -rf "$VAULT_DIR" "$PROPOSALS_DIR"
-}
-
-echo "=== 7f. Preferences提案: 提案ディレクトリの場所がファイル（ディレクトリでない）でもクラッシュせず通知は出ない(fail-open) ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  TMPBASE="$(mktemp -d)"
-  NOT_A_DIR="$TMPBASE/preferences-proposals"
-  echo "not a directory" > "$NOT_A_DIR"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$NOT_A_DIR")"
-  assert_not_contains "ディレクトリでない場合は通知を誤って出さない(fail-open)" "$ctx" "夜間バッチで運用ルールの昇格提案"
-  assert_contains "本文自体は壊れず出力される" "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
-
-  rm -rf "$VAULT_DIR" "$TMPBASE"
-}
-
-echo "=== 7f2. Preferences提案: 提案ディレクトリが存在するが読取権限が無い(scandir失敗)場合もクラッシュせず通知は出ない(fail-open。2026-07-18ハードニングCodexレビュー指摘Minor対応) ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  TMPBASE="$(mktemp -d)"
-  UNREADABLE_DIR="$TMPBASE/preferences-proposals"
-  mkdir -p "$UNREADABLE_DIR"
-  echo "下書き本文" > "$UNREADABLE_DIR/x.md"
-  chmod 0000 "$UNREADABLE_DIR"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$UNREADABLE_DIR")"
-  chmod 0700 "$UNREADABLE_DIR"
-  assert_not_contains "読取権限が無いディレクトリでも通知を誤って出さない(fail-open)" "$ctx" "夜間バッチで運用ルールの昇格提案"
-  assert_contains "本文自体は壊れず出力される" "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
-
-  rm -rf "$VAULT_DIR" "$TMPBASE"
-}
-
 echo "=== 7g. 外部脳ヘルス行④: last-run.jsonのstarted_atが直近(1日前)なら死活警告は出ない ==="
 {
   VAULT_DIR="$(mktemp -d)"
@@ -645,7 +499,7 @@ echo "=== 7g. 外部脳ヘルス行④: last-run.jsonのstarted_atが直近(1日
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_not_contains "直近実行なら死活警告は出ない" "$ctx" "週次メンテが"
 
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
@@ -659,7 +513,7 @@ echo "=== 7h. 外部脳ヘルス行④: last-run.jsonのstarted_atが8日以上�
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -10)" "$(d_ts -10)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "10日動いていない旨の死活警告が出る" "$ctx" "⚠️ 週次メンテが10日動いていません"
   # last-run.jsonのフルパスが末尾に文字化けせず出る（2026-08-10実測発見:
   # macOS標準bash 3.2は`$VAR）`（波括弧無し・直後に全角文字）で変数展開が
@@ -679,13 +533,13 @@ echo "=== 7h2. 外部脳ヘルス行④: 境界値（7日前は警告なし・�
   LAST_RUN_DIR7="$(mktemp -d)"
   LAST_RUN_FILE7="$LAST_RUN_DIR7/last-run.json"
   printf '{"started_at": "%s"}' "$(d_ts -7)" > "$LAST_RUN_FILE7"
-  ctx7="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE7")"
+  ctx7="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE7")"
   assert_not_contains "7日前(境界未満)では警告は出ない" "$ctx7" "週次メンテが"
 
   LAST_RUN_DIR8="$(mktemp -d)"
   LAST_RUN_FILE8="$LAST_RUN_DIR8/last-run.json"
   printf '{"started_at": "%s"}' "$(d_ts -8)" > "$LAST_RUN_FILE8"
-  ctx8="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE8")"
+  ctx8="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE8")"
   assert_contains "ちょうど8日前(境界)では警告が出る" "$ctx8" "⚠️ 週次メンテが8日動いていません"
 
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR7" "$LAST_RUN_DIR8"
@@ -696,7 +550,7 @@ echo "=== 7i. 外部脳ヘルス行④(b): last-run.json自体が無い/壊れ�
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
 
-  ctx1="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "/nonexistent-dir/last-run.json")"
+  ctx1="$(run_bootstrap "$VAULT_DIR" "" "" "" "/nonexistent-dir/last-run.json")"
   assert_not_contains "ファイルが無ければ「動いていません」ではなく" "$ctx1" "週次メンテが動いていません"
   assert_not_contains "「起動はするが」でもない" "$ctx1" "起動はするが"
   assert_contains "ファイルが無ければ状態記録なしの警告が出る" "$ctx1" "⚠️ 週次メンテの状態記録が無い/壊れています"
@@ -704,11 +558,11 @@ echo "=== 7i. 外部脳ヘルス行④(b): last-run.json自体が無い/壊れ�
   LAST_RUN_DIR="$(mktemp -d)"
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf 'not valid json{{{' > "$LAST_RUN_FILE"
-  ctx2="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx2="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "壊れたJSONでも状態記録なしの警告が出る(fail-openだが沈黙しない)" "$ctx2" "⚠️ 週次メンテの状態記録が無い/壊れています"
 
   printf '{"started_at": "not-a-timestamp"}' > "$LAST_RUN_FILE"
-  ctx3="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx3="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "started_atの時刻が壊れており他に手がかりが無ければ状態記録なしの警告が出る" "$ctx3" "⚠️ 週次メンテの状態記録が無い/壊れています"
   assert_contains "本文自体は壊れず出力される" "$ctx3" "【セッション開始ブートストラップ｜ハーネス強制注入】"
 
@@ -723,7 +577,7 @@ echo "=== 7j. 外部脳ヘルス行④(a): started_atは直近(1日前)でもlas
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -10)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "起動はするが10日成功していない旨の警告が出る" "$ctx" "⚠️ 週次メンテが起動はするが10日成功していません"
   assert_not_contains "「動いていません」（全停止）とは混同しない" "$ctx" "週次メンテが10日動いていません"
 
@@ -738,13 +592,13 @@ echo "=== 7k. 外部脳ヘルス行④(a): 境界値（last_success_atが7日前
   LAST_RUN_DIR7="$(mktemp -d)"
   LAST_RUN_FILE7="$LAST_RUN_DIR7/last-run.json"
   printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -7)" > "$LAST_RUN_FILE7"
-  ctx7="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE7")"
+  ctx7="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE7")"
   assert_not_contains "last_success_atが7日前(境界未満)では警告なし" "$ctx7" "成功していません"
 
   LAST_RUN_DIR8="$(mktemp -d)"
   LAST_RUN_FILE8="$LAST_RUN_DIR8/last-run.json"
   printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -8)" > "$LAST_RUN_FILE8"
-  ctx8="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE8")"
+  ctx8="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE8")"
   assert_contains "last_success_atがちょうど8日前(境界)では警告が出る" "$ctx8" "⚠️ 週次メンテが起動はするが8日成功していません"
 
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR7" "$LAST_RUN_DIR8"
@@ -758,7 +612,7 @@ echo "=== 7l. 外部脳ヘルス行④: last_success_atが未設定（初回相�
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_not_contains "last_success_at未設定・started_at直近では何も警告しない" "$ctx" "週次メンテ"
 
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
@@ -776,7 +630,7 @@ echo "=== 7l2. 外部脳ヘルス行④(b): last_success_atだけ値が壊れて
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s", "last_success_at": "not-a-timestamp"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "last_success_atのみ破損でも状態記録の警告が出る(沈黙しない)" "$ctx" "⚠️ 週次メンテの状態記録が無い/壊れています"
   assert_not_contains "「起動はするが」の誤判定にはならない(値を信用できないため)" "$ctx" "起動はするが"
   assert_not_contains "「動いていません」の誤判定にもならない" "$ctx" "週次メンテが1日動いていません"
@@ -792,7 +646,7 @@ echo "=== 7l3. 外部脳ヘルス行④(b): started_atだけ値が壊れてい�
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "not-a-timestamp", "last_success_at": "%s"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "started_atのみ破損でも状態記録の警告が出る(沈黙しない)" "$ctx" "⚠️ 週次メンテの状態記録が無い/壊れています"
 
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
@@ -809,7 +663,7 @@ echo "=== 7l4. 外部脳ヘルス行④(b): started_at・last_success_atが両�
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts 30)" "$(d_ts 30)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "両方未来日時でも状態記録の警告が出る(沈黙しない)" "$ctx" "⚠️ 週次メンテの状態記録が無い/壊れています"
   assert_not_contains "「動いていません」（負のage）の誤判定にはならない" "$ctx" "週次メンテが"
 
@@ -831,21 +685,21 @@ echo "=== 7l5. 外部脳ヘルス行④(b): last_success_atキーは実在する
   LAST_RUN_DIR_EMPTY="$(mktemp -d)"
   LAST_RUN_FILE_EMPTY="$LAST_RUN_DIR_EMPTY/last-run.json"
   printf '{"started_at": "%s", "last_success_at": ""}' "$(d_ts -1)" > "$LAST_RUN_FILE_EMPTY"
-  ctx_empty="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE_EMPTY")"
+  ctx_empty="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE_EMPTY")"
   assert_contains "last_success_atが空文字列(キーは実在)でも状態記録の警告が出る" \
     "$ctx_empty" "⚠️ 週次メンテの状態記録が無い/壊れています"
 
   LAST_RUN_DIR_NULL="$(mktemp -d)"
   LAST_RUN_FILE_NULL="$LAST_RUN_DIR_NULL/last-run.json"
   printf '{"started_at": "%s", "last_success_at": null}' "$(d_ts -1)" > "$LAST_RUN_FILE_NULL"
-  ctx_null="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE_NULL")"
+  ctx_null="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE_NULL")"
   assert_contains "last_success_atがnull(キーは実在)でも状態記録の警告が出る" \
     "$ctx_null" "⚠️ 週次メンテの状態記録が無い/壊れています"
 
   LAST_RUN_DIR_STARTED_EMPTY="$(mktemp -d)"
   LAST_RUN_FILE_STARTED_EMPTY="$LAST_RUN_DIR_STARTED_EMPTY/last-run.json"
   printf '{"started_at": "", "last_success_at": "%s"}' "$(d_ts -1)" > "$LAST_RUN_FILE_STARTED_EMPTY"
-  ctx_started_empty="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE_STARTED_EMPTY")"
+  ctx_started_empty="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE_STARTED_EMPTY")"
   assert_contains "started_atが空文字列(last_success_atは正常)でも状態記録の警告が出る" \
     "$ctx_started_empty" "⚠️ 週次メンテの状態記録が無い/壊れています"
 
@@ -856,25 +710,20 @@ echo "=== 7m. 外部脳ヘルス行④: 配役表のmachine_roleが\"sub\"かつ
 {
   # maintenance.sh(週次メンテ)・LaunchAgentはメイン機専用機能でサブ機には
   # 存在しないため、④の警告は毎セッション必ず出続けていた（実害）。machine_role
-  # が厳密に"sub"のときだけ④のみをスキップし、①②等の他セクションには影響しない
+  # が厳密に"sub"のときだけ④のみをスキップし、①等の他セクションには影響しない
   # ことも合わせて確認する。
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
   INV_DIR="$(mktemp -d)"
-  cat > "$INV_DIR/2026-06-01.md" <<'EOF'
-自動生成。ノート 42 件を検査し、**要確認 3 件**。
-EOF
-  PROPOSALS_DIR="$(mktemp -d)"
-  echo "下書き本文" > "$PROPOSALS_DIR/x.md"
+  printf '{"date":"2026-06-01","report_path":"%s/2026-06-01.md","actionable":3}\n' "$INV_DIR" > "$INV_DIR/latest.json"
 
-  ctx="$(run_bootstrap_health4 "$VAULT_DIR" "configured value=sub" "" "$INV_DIR" "$PROPOSALS_DIR")"
+  ctx="$(run_bootstrap_health4 "$VAULT_DIR" "configured value=sub" "" "$INV_DIR")"
   assert_not_contains "machine_role=sub・last-run.json不在では状態記録の警告が出ない" "$ctx" "週次メンテの状態記録が無い/壊れています"
   assert_not_contains "machine_role=sub・last-run.json不在では動いていない系の警告も出ない" "$ctx" "週次メンテが"
   assert_contains "④以外(①棚卸し)は影響を受けず出る" "$ctx" "棚卸し最新"
-  assert_contains "④以外(②Preferences提案)は影響を受けず出る" "$ctx" "夜間バッチで運用ルールの昇格提案"
-  assert_contains "ヘルス見出し自体は①②があるので出る" "$ctx" "【外部脳ヘルス】"
+  assert_contains "ヘルス見出し自体は①があるので出る" "$ctx" "【外部脳ヘルス】"
 
-  rm -rf "$VAULT_DIR" "$INV_DIR" "$PROPOSALS_DIR"
+  rm -rf "$VAULT_DIR" "$INV_DIR"
 }
 
 echo "=== 7m2. 外部脳ヘルス行④: 配役表のmachine_roleが\"main\"の場合は従来どおり警告が出る。同じ場所に置いた旧マーカー(\"sub\")は読まれない（FX-M1相当・読んでいないことの証明） ==="
@@ -920,7 +769,7 @@ echo "=== 7n. 外部脳ヘルス行: last_result=warnなら警告要旨つきで
   printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "warn", "last_result_summary": "Phase1check-drift.shがdriftを検知しました"}' \
     "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "前回結果warnの⚠️行が出る" "$ctx" "⚠️ 前回の週次メンテ結果: warn"
   assert_contains "警告要旨(last_result_summary)が併記される" "$ctx" "check-drift.shがdriftを検知しました"
   assert_not_contains "死活経過日数の警告(④の他分岐)は誤って出ない" "$ctx" "週次メンテが"
@@ -936,7 +785,7 @@ echo "=== 7n2. 外部脳ヘルス行: last_result=failなら⚠️1行が出る 
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s", "last_result": "fail", "last_result_summary": "backup-vault.sh failed"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "前回結果failの⚠️行が出る" "$ctx" "⚠️ 前回の週次メンテ結果: fail"
   assert_contains "警告要旨が併記される" "$ctx" "backup-vault.sh failed"
 
@@ -952,7 +801,7 @@ echo "=== 7n3. 外部脳ヘルス行: last_result=successなら⚠️行は出�
   printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "success", "last_result_summary": ""}' \
     "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_not_contains "successでは前回結果の⚠️行は出ない" "$ctx" "前回の週次メンテ結果"
 
   rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
@@ -966,7 +815,7 @@ echo "=== 7n4. 外部脳ヘルス行: last_resultキー自体が無い（旧last
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_not_contains "last_resultキー欠落では前回結果の⚠️行は出ない(fail-open)" "$ctx" "前回の週次メンテ結果"
   assert_contains "本文自体は壊れず末尾まで出る" "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
 
@@ -982,7 +831,7 @@ echo "=== 7n5. 外部脳ヘルス行: last_result=successかつlast_result_summa
   printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "success", "last_result_summary": "Phase1check-drift.sh2が未知キーを3件検出しました"}' \
     "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
   assert_contains "ℹ️1行が出る" "$ctx" "ℹ️ 前回の週次メンテ結果: success"
   assert_contains "summaryの中身が併記される" "$ctx" "未知キーを3件検出しました"
   assert_not_contains "⚠️（warn/fail用の記号）は使われない" "$ctx" "⚠️ 前回の週次メンテ結果"
@@ -1005,7 +854,7 @@ echo "=== 8. 外部脳ヘルス行: 棚卸し・ログとも無いが、last-run
   ctx="$(run_bootstrap "$VAULT_DIR")"
   assert_contains "ヘルス見出し自体はlast-run.json不在の警告(b)で出る" "$ctx" "【外部脳ヘルス】"
   assert_contains "last-run.json不在の状態記録警告が単独で出る" "$ctx" "⚠️ 週次メンテの状態記録が無い/壊れています"
-  assert_not_contains "棚卸し・フック死・提案通知など他の項目は出ない（無い情報を無理に出さない）" "$ctx" "棚卸し最新"
+  assert_not_contains "棚卸し・フック死など他の項目は出ない（無い情報を無理に出さない）" "$ctx" "棚卸し最新"
   assert_not_contains "本文自体は壊れず末尾まで出る" "$ctx" "見つかりません"
   # ctxが空文字のまま素通りする偽陽性を防ぐため、本文の固有見出しを積極的に
   # 確認する（Codexレビュー指摘・Minor: 否定アサーションのみだとctx自体が
@@ -1041,27 +890,22 @@ echo "=== 9. ワーカー(agent_type付き)には2026-09-03の軽量版撤去に
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
   INV_DIR="$(mktemp -d)"
-  cat > "$INV_DIR/2026-06-01.md" <<'EOF'
-自動生成。ノート 42 件を検査し、**要確認 3 件**。
-EOF
+  printf '{"date":"2026-06-01","report_path":"%s/2026-06-01.md","actionable":3}\n' "$INV_DIR" > "$INV_DIR/latest.json"
   LOGDIR="$(mktemp -d)"
   printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts -8)" > "$LOGDIR/vault-reads.tsv"
-  PROPOSALS_DIR="$(mktemp -d)"
-  echo "下書き本文" > "$PROPOSALS_DIR/x.md"
   LAST_RUN_DIR="$(mktemp -d)"
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s"}' "$(d_ts -10)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap_worker "$VAULT_DIR" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "$INV_DIR" "$PROPOSALS_DIR" "$LAST_RUN_FILE")"
+  ctx="$(run_bootstrap_worker "$VAULT_DIR" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "$INV_DIR" "$LAST_RUN_FILE")"
   assert_eq "ワーカー版のadditionalContextは完全に空（軽量版DIRECTIVEを撤去しexit 0のみ）" "" "$ctx"
   assert_not_contains "ワーカー版にはヘルス見出しが出ない" "$ctx" "【外部脳ヘルス】"
   assert_not_contains "ワーカー版には棚卸し情報も出ない" "$ctx" "棚卸し最新"
   assert_not_contains "ワーカー版にはフック死の疑いも出ない" "$ctx" "フック死の疑い"
-  assert_not_contains "ワーカー版にはPreferences提案通知も出ない（提案が実在しても）" "$ctx" "夜間バッチで運用ルールの昇格提案"
   assert_not_contains "ワーカー版には死活警告も出ない（last-run.jsonが古くても）" "$ctx" "週次メンテが"
   assert_not_contains "旧軽量版の見出し文言はもう出ない（撤去の回帰確認）" "$ctx" "【チームメイト用ブートストラップ｜軽量版】"
 
-  rm -rf "$VAULT_DIR" "$LOGDIR" "$INV_DIR" "$PROPOSALS_DIR" "$LAST_RUN_DIR"
+  rm -rf "$VAULT_DIR" "$LOGDIR" "$INV_DIR" "$LAST_RUN_DIR"
 }
 
 echo "=== 10. P1機構(ローカル実体プロファイル): ゲート無効(BOOTSTRAP_ENABLE_LOCAL_PROFILE=0明示。run_bootstrap()の固定値)では固定パスが必読リストに一切現れない（2026-09-02からコードの既定値は1・§9.0 A-1／rollout-runbook.md現行トラック§7） ==="
@@ -1136,7 +980,7 @@ profile_slug: authoring
 team_mode: configured value=<fill-in>
 no_read_paths: unavailable
 machine_role: configured value=main
-role.leader: configured model=opus-high
+role.leader: configured model=t-opus-high
 ---
 EOF
 
@@ -1162,7 +1006,7 @@ schema_version: 7
 profile_slug: authoring
 team_mode: configured value=full
 no_read_paths: unavailable
-role.leader: configured model=opus-high
+role.leader: configured model=t-opus-high
 ---
 EOF
 
@@ -1207,7 +1051,7 @@ profile_slug: authoring
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-role.leader: configured model=opus-high
+role.leader: configured model=t-opus-high
 future_new_key: 未来のスキーマが追加した値
 ---
 EOF
@@ -1218,7 +1062,7 @@ EOF
   assert_not_contains "T9': 機械側の解決失敗(MINIMAL)ではない" "$ctx" "を解決できません"
   assert_contains "T9': 未知キー名が警告に出る" "$ctx" "future_new_key"
   assert_contains "T9': AI向けには必読除外・最小能力の⚠️警告になる（U-8裁定）" "$ctx" "⚠️ ローカル実体プロファイルに未知のキーがあります"
-  assert_contains "T9': 秘匿優先の理由が明記される" "$ctx" "U-8裁定・秘匿優先"
+  assert_contains "T9': 取るべき行動（本人確認へ倒す）が明記される" "$ctx" "本人確認へ倒してください"
   assert_contains "T9': 「プロファイル利用不可＝最小能力」の文言が明示される（リーダー裁定・2026-09-01）" "$ctx" "プロファイル利用不可＝最小能力"
   assert_contains "T9': 「ワーカー起動は本人確認へ倒す」の文言が明示される（リーダー裁定・2026-09-01）" "$ctx" "ワーカー起動は本人確認へ倒してください"
   assert_not_contains "T9': 旧仕様のℹ️文言はもう出ない" "$ctx" "ℹ️ ローカル実体プロファイルに未知のキーがあります"
@@ -1328,8 +1172,8 @@ echo "=== 23. parser 4.1-a/4.1-b: ハイフンキー・コメント行・行末�
   P="$(mktemp -d)/comment.md"
   make_v2_profile "$P" \
     "# これはコメント行（無視される）" \
-    "role.leader: configured model=opus-high  # 行末コメントも無視" \
-    "role.requirements-analyst: configured model=opus-high"
+    "role.leader: configured model=t-opus-high  # 行末コメントも無視" \
+    "role.requirements-analyst: configured model=t-opus-high"
   out="$(resolve_v2 "$P")"  || true
   assert_contains "4.1-a: ハイフンを含むキー(role.requirements-analyst)がT6にならない" "$out" "OK"
   assert_not_contains "4.1-b: コメント行・行末コメントでT6にならない" "$out" "MINIMAL"
@@ -1339,7 +1183,7 @@ echo "=== 24. parser §3.1-7: 重複キー・重複属性・未許可属性は�
 {
   DUPKEY="$(mktemp -d)/dupkey.md"
   make_v2_profile "$DUPKEY" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.leader: unknown"
   out="$(resolve_v2 "$DUPKEY")"  || true
   assert_contains "重複キーはMINIMAL/T6になる" "$out" "MINIMAL"
@@ -1347,13 +1191,13 @@ echo "=== 24. parser §3.1-7: 重複キー・重複属性・未許可属性は�
 
   DUPATTR="$(mktemp -d)/dupattr.md"
   make_v2_profile "$DUPATTR" \
-    "role.leader: configured model=opus-high model=sonnet-high"
+    "role.leader: configured model=t-opus-high model=t-sonnet-high"
   out="$(resolve_v2 "$DUPATTR")"  || true
   assert_contains "重複属性はMINIMAL/T6になる" "$out" "MINIMAL	T6"
 
   UNKATTR="$(mktemp -d)/unkattr.md"
   make_v2_profile "$UNKATTR" \
-    "role.leader: configured model=opus-high mystery=1"
+    "role.leader: configured model=t-opus-high mystery=1"
   out="$(resolve_v2 "$UNKATTR")"  || true
   assert_contains "許可されない属性はMINIMAL/T6になる" "$out" "MINIMAL	T6"
 
@@ -1366,8 +1210,8 @@ echo "=== 25. validator V8-a: 状態4値と属性有無の組み合わせ ==="
 {
   NOTADOPT_ATTR="$(mktemp -d)/notadopt.md"
   make_v2_profile "$NOTADOPT_ATTR" \
-    "role.leader: configured model=opus-high" \
-    "role.researcher: not_adopted model=opus-high"
+    "role.leader: configured model=t-opus-high" \
+    "role.researcher: not_adopted model=t-opus-high"
   out="$(resolve_v2 "$NOTADOPT_ATTR")"  || true
   assert_contains "not_adoptedが属性を持つとV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
@@ -1379,7 +1223,7 @@ echo "=== 25. validator V8-a: 状態4値と属性有無の組み合わせ ==="
 
   UNAVAIL_OK="$(mktemp -d)/unavailok.md"
   make_v2_profile "$UNAVAIL_OK" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.researcher: unavailable model=bedrock-haiku"
   out="$(resolve_v2 "$UNAVAIL_OK")"  || true
   assert_contains "unavailableはprovider/modelを持ってよい（意図の記録）" "$out" "OK"
@@ -1393,41 +1237,41 @@ echo "=== 26. validate_model_def(): provider毎のmodel形式・execution既定�
   BADMODEL="$(mktemp -d)/badmodel.md"
   BADMODEL_CONF="$(mktemp -d)/badmodel.conf"
   make_model_defs "$BADMODEL_CONF" "[bad-model]" "provider=anthropic-api" "model=gpt-5"
-  make_v2_profile "$BADMODEL" "role.leader: configured model=opus-high"
+  make_v2_profile "$BADMODEL" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$BADMODEL_CONF" resolve_v2 "$BADMODEL")"  || true
   assert_contains "anthropic-apiでmodelがclaude-接頭辞でないとT12でMINIMAL" "$out" "MINIMAL	T12"
 
   BEDROCKARN="$(mktemp -d)/bedrockarn.md"
   BEDROCKARN_CONF="$(mktemp -d)/bedrockarn.conf"
   make_model_defs "$BEDROCKARN_CONF" "[bad-arn]" "provider=bedrock" "model=arn:aws:bedrock:foo"
-  make_v2_profile "$BEDROCKARN" "role.leader: configured model=opus-high"
+  make_v2_profile "$BEDROCKARN" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$BEDROCKARN_CONF" resolve_v2 "$BEDROCKARN")"  || true
   assert_contains "bedrockでarn:始まりのmodelはT12（別名限定）" "$out" "MINIMAL	T12"
 
   BEDROCKUS="$(mktemp -d)/bedrockus.md"
   BEDROCKUS_CONF="$(mktemp -d)/bedrockus.conf"
   make_model_defs "$BEDROCKUS_CONF" "[bad-us]" "provider=bedrock" "model=us.opus"
-  make_v2_profile "$BEDROCKUS" "role.leader: configured model=opus-high"
+  make_v2_profile "$BEDROCKUS" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$BEDROCKUS_CONF" resolve_v2 "$BEDROCKUS")"  || true
   assert_contains "bedrockでus.始まりのmodelもT12" "$out" "MINIMAL	T12"
 
   EXTNOEXEC="$(mktemp -d)/extnoexec.md"
   EXTNOEXEC_CONF="$(mktemp -d)/extnoexec.conf"
   make_model_defs "$EXTNOEXEC_CONF" "[bad-noexec]" "provider=external" "model=default"
-  make_v2_profile "$EXTNOEXEC" "role.leader: configured model=opus-high"
+  make_v2_profile "$EXTNOEXEC" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$EXTNOEXEC_CONF" resolve_v2 "$EXTNOEXEC")"  || true
   assert_contains "provider=externalでexecution未記載はT12" "$out" "MINIMAL	T12"
 
   NONSUBEXEC="$(mktemp -d)/nonsubexec.md"
   NONSUBEXEC_CONF="$(mktemp -d)/nonsubexec.conf"
   make_model_defs "$NONSUBEXEC_CONF" "[bad-nonsub]" "provider=anthropic-api" "model=claude-opus-5" "execution=external-cli"
-  make_v2_profile "$NONSUBEXEC" "role.leader: configured model=opus-high"
+  make_v2_profile "$NONSUBEXEC" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$NONSUBEXEC_CONF" resolve_v2 "$NONSUBEXEC")"  || true
   assert_contains "anthropic-apiでexecution!=subagentはT12" "$out" "MINIMAL	T12"
 
   DEFAULTEXEC="$(mktemp -d)/defaultexec.md"
   make_v2_profile "$DEFAULTEXEC" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   out="$(resolve_v2 "$DEFAULTEXEC")"  || true
   assert_contains "execution未記載はsubagent既定でOKになる" "$out" "OK"
 }
@@ -1436,14 +1280,14 @@ echo "=== 27. validator V9-d②: execution=external-apiは常にconfigured不可
 {
   EXTAPI="$(mktemp -d)/extapi.md"
   make_v2_profile "$EXTAPI" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=ext-api-bad"
   out="$(resolve_v2 "$EXTAPI")"  || true
   assert_contains "execution=external-apiはハンドラ未実装でconfigured不可(V9-d)" "$out" "MINIMAL	T8	V9-d"
 
   EXTAPI_UNAVAIL="$(mktemp -d)/extapiunavail.md"
   make_v2_profile "$EXTAPI_UNAVAIL" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: unavailable model=ext-api-bad"
   out="$(resolve_v2 "$EXTAPI_UNAVAIL")"  || true
   assert_contains "unavailableならexternal-apiでも構文上は許される(V9-d②はconfigured限定)" "$out" "OK"
@@ -1464,8 +1308,8 @@ profile_slug: authoring
 team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
-role.leader: configured model=opus-high
-fallback.verifier: configured model=opus-high # RETIRED-FIXTURE
+role.leader: configured model=t-opus-high
+fallback.verifier: configured model=t-opus-high # RETIRED-FIXTURE
 ---
 EOF
   out="$(resolve_v2 "$RESIDUAL_1")"  || true
@@ -1480,7 +1324,7 @@ profile_slug: authoring
 team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
-role.leader: configured model=opus-high
+role.leader: configured model=t-opus-high
 excluded_models: configured value=none # RETIRED-FIXTURE
 ---
 EOF
@@ -1491,9 +1335,9 @@ EOF
   echo "--- 廃止済みの複数候補あいまいコードは復活しない（AC-4の回帰） ---"
   AMBIG="$(mktemp -d)/ambig.md"
   make_v2_profile "$AMBIG" \
-    "role.leader: configured model=opus-high" \
-    "role.verifier: configured model=opus-high,sonnet-high"
-  err="$(python3 "$PROFILE_LIB" resolve-candidate "$AMBIG" --role verifier --model-def opus-high 2>&1 1>/dev/null)"  || true
+    "role.leader: configured model=t-opus-high" \
+    "role.verifier: configured model=t-opus-high,t-sonnet-high"
+  err="$(python3 "$PROFILE_LIB" resolve-candidate "$AMBIG" --role verifier --model-def t-opus-high 2>&1 1>/dev/null)"  || true
   assert_not_contains "候補が複数あってもFALLBACK_AMBIGUOUSは出ない" "$err" "FALLBACK_AMBIGUOUS"  # RETIRED-FIXTURE
 }
 
@@ -1508,12 +1352,12 @@ echo "=== 30. §3.5-L リーダー状態遷移: unknown/not_adopted/行が無い
   done
 
   NOLEADER="$(mktemp -d)/noleader.md"
-  make_v2_profile "$NOLEADER" "role.researcher: configured model=sonnet-high"
+  make_v2_profile "$NOLEADER" "role.researcher: configured model=t-sonnet-high"
   out="$(resolve_v2 "$NOLEADER")"  || true
   assert_contains "role.leader行が無ければfail(MINIMAL)になる" "$out" "MINIMAL"
 
   UNAVAIL="$(mktemp -d)/leaderunavail.md"
-  make_v2_profile "$UNAVAIL" "role.leader: unavailable model=opus-high"
+  make_v2_profile "$UNAVAIL" "role.leader: unavailable model=t-opus-high"
   out="$(resolve_v2 "$UNAVAIL")"  || true
   assert_contains "leader=unavailableはfail" "$out" "MINIMAL"
 
@@ -1536,10 +1380,10 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
 {
   MULTI_CAND="$(mktemp -d)/workermulticand.md"
   make_v2_profile "$MULTI_CAND" \
-    "role.leader: configured model=opus-high" \
-    "role.verifier: configured model=bedrock-haiku,sonnet-high"
+    "role.leader: configured model=t-opus-high" \
+    "role.verifier: configured model=bedrock-haiku,t-sonnet-high"
   # bedrock.envを与えない(ABSENT=disabled)のでverifierの1件目(bedrock)はV9-dで使用不可・
-  # 2件目(sonnet-high)は使用可。
+  # 2件目(t-sonnet-high)は使用可。
   out="$(resolve_v2 "$MULTI_CAND")"  || true
   assert_not_contains "1件目が使用不可でも2件目が使えれば空席にならない" "$out" "VACANT:verifier"
   assert_contains "resolve自体はOKのまま" "$out" "OK"
@@ -1547,7 +1391,7 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
   echo "--- 全候補が使用不可のときだけVACANT+VACANT_REASON、優先順はV1-b→V9-d→V12 ---"
   BOTH_BAD="$(mktemp -d)/bothbad.md"
   make_v2_profile "$BOTH_BAD" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=bedrock-haiku,bedrock-opus"
   out="$(resolve_v2 "$BOTH_BAD")"  || true
   assert_contains "全候補がbedrockで経路無効なら空席になる" "$out" "VACANT:verifier"
@@ -1556,8 +1400,8 @@ echo "=== 32. 候補評価§3.6: ワーカー職はV1-b/V9-d/V12単独では空�
   echo "--- unavailableな行は候補を1件も評価せず、良い候補を持っていてもVACANTになる（§3.6：状態は行単位） ---"
   UNAVAIL_LINE="$(mktemp -d)/unavailline.md"
   make_v2_profile "$UNAVAIL_LINE" \
-    "role.leader: configured model=opus-high" \
-    "role.verifier: unavailable model=sonnet-high"
+    "role.leader: configured model=t-opus-high" \
+    "role.verifier: unavailable model=t-sonnet-high"
   out="$(resolve_v2 "$UNAVAIL_LINE")"  || true
   assert_contains "unavailableな行は候補が良くてもVACANTになる（意図的な不使用）" "$out" "VACANT:verifier"
   assert_not_contains "評価しないので理由(VACANT_REASON)も付かない" "$out" "VACANT_REASON:verifier"
@@ -1572,7 +1416,7 @@ echo "=== 33. §3.7 判定不能: Bedrock経路の判定不能はワーカーな
 
   WORKER_UNKNOWN="$(mktemp -d)/workerunknown.md"
   make_v2_profile "$WORKER_UNKNOWN" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$WORKER_UNKNOWN" "$UNREADABLE_ENV")"  || true
   assert_not_contains "判定不能でもワーカーは空席にならない" "$out" "VACANT:verifier"
@@ -1613,14 +1457,14 @@ echo "=== 35. V15/T11: 禁止キー名はv1/v2どちらの分類でもpreflight�
 {
   V15_V2="$(mktemp -d)/v15v2.md"
   make_v2_profile "$V15_V2" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   echo "api_key: configured value=xyz" >> "$V15_V2"
   # frontmatter終端---の後ろに付けると構文が壊れるので、専用のfixtureを作り直す。
   cat > "$V15_V2" <<'EOF'
 ---
 schema_version: 7
 profile_slug: authoring
-role.leader: configured model=opus-high
+role.leader: configured model=t-opus-high
 api_key: configured value=xyz
 team_mode:        configured value=full
 no_read_paths:    unavailable
@@ -1655,7 +1499,7 @@ echo "=== 36. 結合（DIRECTIVE）: VACANT_UNKNOWN・VACANT_REASONが職種名�
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   make_v2_profile "$PROFILE_PATH" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=bedrock-haiku,bedrock-opus"
   # 静的検証: このprofile単体でVACANT_REASON:verifier=V9-dが出ることを確認済み(#32)。
   # ここではDIRECTIVEへの伝播だけを確認する。
@@ -1685,8 +1529,8 @@ echo "=== 37. FR-10対応: v2 OKでも全文Read指示は必読リストに載�
   PROFILE_DIR="$(mktemp -d)"
   PROFILE_PATH="$PROFILE_DIR/profile.md"
   make_v2_profile "$PROFILE_PATH" \
-    "role.leader: configured model=opus-high" \
-    "role.requirements-analyst: configured model=opus-high"
+    "role.leader: configured model=t-opus-high" \
+    "role.requirements-analyst: configured model=t-opus-high"
 
   ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$PROFILE_PATH")"
   occurrences="$(printf '%s' "$ctx" | grep -c -- "- $PROFILE_PATH  （全" || true)"
@@ -1703,9 +1547,9 @@ echo "=== 37. FR-10対応: v2 OKでも全文Read指示は必読リストに載�
   echo "--- フィールドが複数同時に出るケースで固定順を検証する（Codex一次レビュー指摘・Major対応: 従来は先頭がOKかしか見ていなかった） ---"
   MULTI="$(mktemp -d)/multi.md"
   make_v2_profile "$MULTI" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=bedrock-haiku,bedrock-opus" \
-    "role.researcher: configured model=sonnet-high"
+    "role.researcher: configured model=t-sonnet-high"
   multi_out="$(resolve_v2 "$MULTI")"  || true
   # 期待: OK -> VACANT:verifier -> VACANT_REASON:verifier=V9-d -> VACANT_UNKNOWN
   # (コアマニフェストの他職種) -> ADVISORY:V1-a の順で、この並びどおりに現れること。
@@ -1781,7 +1625,7 @@ echo "=== 39. §3.7 判定不能: ワーカーが判定不能で通ったこと�
 
   ADV_UNKNOWN="$(mktemp -d)/advunknown.md"
   make_v2_profile "$ADV_UNKNOWN" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$ADV_UNKNOWN" "$UNREADABLE_ENV2")"  || true
   assert_contains "判定不能で通した職種があることがADVISORY:JUDGEMENT_UNKNOWNとして出る" "$out" "ADVISORY:JUDGEMENT_UNKNOWN"
@@ -1797,8 +1641,8 @@ echo "=== 40. 代替配役の層の撤去の回帰: 職種の2件目の候補が
   retired_field_name="FALL""BACK:"
   MULTI_OK="$(mktemp -d)/multiok.md"
   make_v2_profile "$MULTI_OK" \
-    "role.leader: configured model=opus-high" \
-    "role.verifier: configured model=bedrock-haiku,sonnet-high"
+    "role.leader: configured model=t-opus-high" \
+    "role.verifier: configured model=bedrock-haiku,t-sonnet-high"
   out="$(resolve_v2 "$MULTI_OK")"  || true
   assert_not_contains "1件目が使用不可で2件目が採用されても撤去済みフィールドは出ない" "$out" "$retired_field_name"
 }
@@ -1831,7 +1675,7 @@ echo "=== 42. §3.4 T4'(実体の版>コードの版): 未知キーを無視しA
 {
   T4PRIME="$(mktemp -d)/t4prime.md"
   make_v2_profile "$T4PRIME" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   sed -i '' 's/schema_version: 7/schema_version: 8/' "$T4PRIME"
   # ---の直前に未知キーを挿入する。
 
@@ -1853,7 +1697,7 @@ echo "=== 44. V8-b共通規則（Codex一次レビュー指摘・Major対応） 
 {
   DUP_VALUE="$(mktemp -d)/dupvalue.md"
   make_v2_profile "$DUP_VALUE" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   sed -i '' 's/team_mode:        configured value=full/team_mode:        configured value=full,full/' "$DUP_VALUE"
   out="$(resolve_v2 "$DUP_VALUE")"  || true
   assert_contains "value内の重複要素はV8-bでMINIMALになる（共通規則）" "$out" "MINIMAL	T8	V8-b"
@@ -1944,16 +1788,16 @@ echo "=== 46. list-roles: state/定義名/execution既定値/not_adopted・unkno
 {
   LR="$(mktemp -d)/listroles.md"
   make_v2_profile "$LR" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.navi: unknown" \
     "role.researcher: not_adopted" \
-    "role.system-designer: configured model=opus-high" \
+    "role.system-designer: configured model=t-opus-high" \
     "role.verifier: unavailable model=bedrock-opus"
   out="$(python3 "$PROFILE_LIB" list-roles "$LR")"  || true
 
-  assert_contains "role.leaderの行がstate=configured・定義名=opus-highで出る" "$out" "leader	configured	opus-high	anthropic-api	claude-opus-5	subagent	"
+  assert_contains "role.leaderの行がstate=configured・定義名=t-opus-highで出る" "$out" "leader	configured	t-opus-high	anthropic-api	claude-opus-5	subagent	"
   assert_contains "executionが省略されていてもsubagentが補われて出る" "$out" "	subagent	"
-  assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "system-designer	configured	opus-high	anthropic-api	claude-opus-5	subagent	high"
+  assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "system-designer	configured	t-opus-high	anthropic-api	claude-opus-5	subagent	high"
   assert_contains "unknown状態は定義名以降が全て空文字になる（5フィールド）" "$out" "navi	unknown					"
   assert_contains "not_adopted状態も定義名以降が全て空文字になる（5フィールド）" "$out" "researcher	not_adopted					"
   assert_contains "unavailable状態は定義名・provider/modelを保持したまま出る（意図の記録）" "$out" "verifier	unavailable	bedrock-opus	bedrock	opus	subagent	"
@@ -1970,7 +1814,7 @@ echo "=== 47. list-roles: 失敗時（自己完結・resolve-leaderと同じコ�
 
   DUP="$(mktemp -d)/lrdup.md"
   make_v2_profile "$DUP" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.leader: unknown"
   out="$(python3 "$PROFILE_LIB" list-roles "$DUP" 2>/dev/null)"  || true
   err="$(python3 "$PROFILE_LIB" list-roles "$DUP" 2>&1 1>/dev/null)"  || true
@@ -2005,7 +1849,7 @@ echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8�
 
   WORKER_BAD_UTF8="$(mktemp -d)/workerbadutf8.md"
   make_v2_profile "$WORKER_BAD_UTF8" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=bedrock-haiku"
   out="$(resolve_v2 "$WORKER_BAD_UTF8" "$BAD_UTF8_ENV")"  || true
   err="$(python3 "$PROFILE_LIB" resolve "$WORKER_BAD_UTF8" --bedrock-env "$BAD_UTF8_ENV" --agents-dir "$AGENTS_DIR" 2>&1 1>/dev/null)"  || true
@@ -2030,19 +1874,19 @@ echo "=== 49. tester独立検証差し戻し(Major): bedrock.envに不正UTF-8�
 echo "=== 51. V14メタ構文の直接検証: schema_versionが正整数でない・profile_slugが規約に反する ==="
 {
   BADVER="$(mktemp -d)/badver.md"
-  make_v2_profile "$BADVER" "role.leader: configured model=opus-high"
+  make_v2_profile "$BADVER" "role.leader: configured model=t-opus-high"
   sed -i '' 's/schema_version: 7/schema_version: abc/' "$BADVER"
   out="$(resolve_v2 "$BADVER")"  || true
   assert_contains "schema_versionが数値でなければT3になる" "$out" "MINIMAL	T3"
 
   BADVER0="$(mktemp -d)/badver0.md"
-  make_v2_profile "$BADVER0" "role.leader: configured model=opus-high"
+  make_v2_profile "$BADVER0" "role.leader: configured model=t-opus-high"
   sed -i '' 's/schema_version: 7/schema_version: 0/' "$BADVER0"
   out="$(resolve_v2 "$BADVER0")"  || true
   assert_contains "schema_version=0(正整数でない)もT3になる" "$out" "MINIMAL	T3"
 
   BADSLUG="$(mktemp -d)/badslug.md"
-  make_v2_profile "$BADSLUG" "role.leader: configured model=opus-high"
+  make_v2_profile "$BADSLUG" "role.leader: configured model=t-opus-high"
   sed -i '' 's/profile_slug: authoring/profile_slug: Bad_Slug!/' "$BADSLUG"
   out="$(resolve_v2 "$BADSLUG")"  || true
   assert_contains "profile_slugが規約(^[a-z0-9][a-z0-9-]*\$)に反するとT14になる" "$out" "MINIMAL	T14"
@@ -2052,15 +1896,15 @@ echo "=== 52. V8-a 状態4値×属性有無の網羅補充: unavailableでmodel�
 {
   UNAVAIL_MISSING="$(mktemp -d)/unavailmissing.md"
   make_v2_profile "$UNAVAIL_MISSING" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: unavailable"
   out="$(resolve_v2 "$UNAVAIL_MISSING")"  || true
   assert_contains "unavailableでもmodel欠落はV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
   UNKNOWN_ATTR="$(mktemp -d)/unknownattr.md"
   make_v2_profile "$UNKNOWN_ATTR" \
-    "role.leader: configured model=opus-high" \
-    "role.verifier: unknown model=sonnet-high"
+    "role.leader: configured model=t-opus-high" \
+    "role.verifier: unknown model=t-sonnet-high"
   out="$(resolve_v2 "$UNKNOWN_ATTR")"  || true
   assert_contains "unknown状態で属性を持つとV8-aでMINIMALになる" "$out" "MINIMAL	T8	V8-a"
 
@@ -2074,7 +1918,7 @@ echo "=== 53. bedrock-mantle provider: 適合表(§3.3)の形式検査(モデル
 {
   MANTLE_OK="$(mktemp -d)/mantleok.md"
   make_v2_profile "$MANTLE_OK" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=mantle-haiku"
   # bedrock.envは渡すがCLAUDE_CODE_USE_BEDROCKだけ有効にする(ピンは無し)。
   MANTLE_ENV="$(mktemp -d)/bedrock.env"
@@ -2086,7 +1930,7 @@ echo "=== 53. bedrock-mantle provider: 適合表(§3.3)の形式検査(モデル
   MANTLE_BAD="$(mktemp -d)/mantlebad.md"
   MANTLE_BAD_CONF="$(mktemp -d)/mantlebad.conf"
   make_model_defs "$MANTLE_BAD_CONF" "[bad-mantle]" "provider=bedrock-mantle" "model=not-anthropic-prefixed"
-  make_v2_profile "$MANTLE_BAD" "role.leader: configured model=opus-high"
+  make_v2_profile "$MANTLE_BAD" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$MANTLE_BAD_CONF" resolve_v2 "$MANTLE_BAD")"  || true
   assert_contains "bedrock-mantleでanthropic.始まりでないmodelはT12でMINIMALになる" "$out" "MINIMAL	T12"
 }
@@ -2095,7 +1939,7 @@ echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex�
 {
   WORKER_MAX="$(mktemp -d)/workermax.md"
   make_v2_profile "$WORKER_MAX" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=sonnet-max"
   out="$(resolve_v2 "$WORKER_MAX")"  || true
   assert_contains "ワーカー行はmaxを書ける(V9-bのenumはEFFORT_CLAUDEでmaxを含む)" "$out" "OK"
@@ -2109,7 +1953,7 @@ echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex�
 
   CODEX_MINIMAL="$(mktemp -d)/codexminimal.md"
   make_v2_profile "$CODEX_MINIMAL" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=codex-review-minimal"
   out="$(resolve_v2 "$CODEX_MINIMAL")"  || true
   assert_contains "Codexハンドラ(external-cli/codex-review-default)はminimalを書ける" "$out" "OK"
@@ -2119,7 +1963,7 @@ echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex�
   CODEX_MINIMAL_ELSEWHERE_CONF="$(mktemp -d)/codexminimalelsewhere.conf"
   make_model_defs "$CODEX_MINIMAL_ELSEWHERE_CONF" "[bad-sonnet-minimal]" "provider=anthropic-api" "model=claude-sonnet-5" "effort=minimal"
   CODEX_MINIMAL_ELSEWHERE="$(mktemp -d)/codexminimalelsewhere.md"
-  make_v2_profile "$CODEX_MINIMAL_ELSEWHERE" "role.leader: configured model=opus-high"
+  make_v2_profile "$CODEX_MINIMAL_ELSEWHERE" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$CODEX_MINIMAL_ELSEWHERE_CONF" resolve_v2 "$CODEX_MINIMAL_ELSEWHERE")"  || true
   assert_contains "Claude系(anthropic-api)でminimalはT12でMINIMALになる(Codex方言はexternalハンドラ限定)" "$out" "MINIMAL	T12"
 }
@@ -2128,7 +1972,7 @@ echo "=== 55. V9-f直接検証: 既知の非対応モデル×xhigh はADVISORY�
 {
   V9F_KNOWN="$(mktemp -d)/v9fknown.md"
   make_v2_profile "$V9F_KNOWN" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=opus46-xhigh"
   out="$(resolve_v2 "$V9F_KNOWN")"  || true
   # ADVISORYフィールドはコードをソートして併記する(§5)ため"V1-a,V9-f"に
@@ -2138,164 +1982,27 @@ echo "=== 55. V9-f直接検証: 既知の非対応モデル×xhigh はADVISORY�
 
   V9F_BEDROCK="$(mktemp -d)/v9fbedrock.md"
   make_v2_profile "$V9F_BEDROCK" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.verifier: configured model=bedrock-opus-xhigh"
   out="$(resolve_v2 "$V9F_BEDROCK")"  || true
   assert_contains "bedrock別名は実モデル版を判別できないためEFFORT_COMPATIBILITY_UNVERIFIEDになる" "$out" "ADVISORY:EFFORT_COMPATIBILITY_UNVERIFIED"
 }
 
-echo "=== 56. check_leader_settings_drift(): S10/S11/S16対応（配役表解凍-設計-2026-09-01.md §6.2-B）。v2のリーダー行が解決できたセッションでsettings.jsonとの整合をSessionStartのたびに軽量比較する ==="
+echo "=== 56. BOOTSTRAP_ENABLE_LOCAL_PROFILE を指定しなければコードの既定値1でP1機構が有効になる ==="
 {
-  LEADER_PROFILE="$(mktemp -d)/leaderdrift.md"
-  make_v2_profile "$LEADER_PROFILE" \
-    "role.leader: configured model=opus-high"
-
-  echo "--- S10/S11/S16共通の検出信号: settings.jsonのmodelが配役表の解決値と食い違う(手で直した/旧ファイルを放置/生成失敗のいずれでも観測結果は同じ不一致になる) ---"
-  SETTINGS_MODEL_MISMATCH="$(mktemp -d)/settings-model-mismatch.json"
-  cat > "$SETTINGS_MODEL_MISMATCH" <<'EOF'
-{"model": "claude-sonnet-5", "effortLevel": "high"}
-EOF
-  out="$(BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$LEADER_PROFILE" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_MODEL_MISMATCH" AIENV_AGENTS_DIR="$AGENTS_DIR" \
-    AIENV_BEDROCK_ENV_FILE="/nonexistent-dir/bedrock.env" "$SCRIPT" < /dev/null)"
-  assert_contains "modelの不一致で⚠️が出る" "$out" "⚠️"
-  assert_contains "不一致フィールドとしてmodelが挙がる" "$out" "model"
-
-  echo "--- effortLevelの不一致(同じ検出信号の別バリエーション) ---"
-  SETTINGS_EFFORT_MISMATCH="$(mktemp -d)/settings-effort-mismatch.json"
-  cat > "$SETTINGS_EFFORT_MISMATCH" <<'EOF'
-{"model": "claude-opus-5", "effortLevel": "low"}
-EOF
-  out="$(BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$LEADER_PROFILE" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_EFFORT_MISMATCH" AIENV_AGENTS_DIR="$AGENTS_DIR" \
-    AIENV_BEDROCK_ENV_FILE="/nonexistent-dir/bedrock.env" "$SCRIPT" < /dev/null)"
-  assert_contains "effortLevelの不一致で⚠️が出る" "$out" "⚠️"
-  assert_contains "不一致フィールドとしてeffortLevelが挙がる" "$out" "effortLevel"
-
-  echo "--- 正常系: settings.jsonが配役表の解決値と一致していれば警告なし(S10/S11/S16のいずれの状態でもない) ---"
-  SETTINGS_MATCH="$(mktemp -d)/settings-match.json"
-  cat > "$SETTINGS_MATCH" <<'EOF'
-{"model": "claude-opus-5", "effortLevel": "high"}
-EOF
-  out="$(BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$LEADER_PROFILE" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_MATCH" AIENV_AGENTS_DIR="$AGENTS_DIR" \
-    AIENV_BEDROCK_ENV_FILE="/nonexistent-dir/bedrock.env" "$SCRIPT" < /dev/null)"
-  assert_eq "model/effortLevelとも一致していれば出力は空" "" "$out"
-
-  echo "--- effort未指定のleader行では、settings.jsonにeffortLevelキーが有るだけで不一致になる（§3.8の非対称） ---"
-  LEADER_NO_EFFORT="$(mktemp -d)/leadernoeffort.md"
-  make_v2_profile "$LEADER_NO_EFFORT" \
-    "role.leader: configured model=opus-noeffort"
-  SETTINGS_UNEXPECTED_EFFORT="$(mktemp -d)/settings-unexpected-effort.json"
-  cat > "$SETTINGS_UNEXPECTED_EFFORT" <<'EOF'
-{"model": "claude-opus-5", "effortLevel": "high"}
-EOF
-  out="$(BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$LEADER_NO_EFFORT" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_UNEXPECTED_EFFORT" AIENV_AGENTS_DIR="$AGENTS_DIR" \
-    AIENV_BEDROCK_ENV_FILE="/nonexistent-dir/bedrock.env" "$SCRIPT" < /dev/null)"
-  assert_contains "effort未指定なのにeffortLevelキーが存在すると不一致になる" "$out" "⚠️"
-
-  echo "--- 比較不能ケース(リーダー要件③): settings.jsonが存在しないなら「監視不能」として⚠️を出す(静かに素通りさせない) ---"
-  out="$(BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$LEADER_PROFILE" \
-    AIENV_SETTINGS_JSON_FILE="/nonexistent-dir/no-such-settings.json" AIENV_AGENTS_DIR="$AGENTS_DIR" \
-    AIENV_BEDROCK_ENV_FILE="/nonexistent-dir/bedrock.env" "$SCRIPT" < /dev/null)"
-  assert_contains "settings.json不在は監視不能として⚠️になる" "$out" "⚠️"
-
-  echo "--- settings.jsonがJSONとして壊れている場合も監視不能として⚠️を出す ---"
-  SETTINGS_BROKEN="$(mktemp -d)/settings-broken.json"
-  printf '{not valid json' > "$SETTINGS_BROKEN"
-  out="$(BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$LEADER_PROFILE" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_BROKEN" AIENV_AGENTS_DIR="$AGENTS_DIR" \
-    AIENV_BEDROCK_ENV_FILE="/nonexistent-dir/bedrock.env" "$SCRIPT" < /dev/null)"
-  assert_contains "settings.json破損は監視不能として⚠️になる" "$out" "⚠️"
-
-  echo "--- Codex一次レビュー指摘・Major対応の回帰: resolve-leaderが契約違反の不正effort(null/空文字列)を返しても『未指定』へ静かに丸めず監視不能になる ---"
-  # PROFILE_RESOLVE_LIBを差し替え可能なことを利用し、resolve-leaderが
-  # 契約(profile-resolve-contract §4)に反する形（キーはあるが値がnull・
-  # 空文字列）のJSONを返すケースを直接シミュレートする（本物のresolverが
-  # こう振る舞うことは想定していないが、防御的検証として固定する）。
-  STUB_LIB_DIR="$(mktemp -d)"
-  STUB_LIB="$STUB_LIB_DIR/profile_resolve.py"
-  cat > "$STUB_LIB" <<'EOF'
-import sys
-if sys.argv[1] == "resolve-leader":
-    print('{"model": "claude-opus-5", "effort": null}')
-    sys.exit(0)
-sys.exit(1)
-EOF
-  SETTINGS_ANY="$(mktemp -d)/settings-any.json"
-  cat > "$SETTINGS_ANY" <<'EOF'
-{"model": "claude-opus-5"}
-EOF
-  out="$(BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$LEADER_PROFILE" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_ANY" AIENV_AGENTS_DIR="$AGENTS_DIR" \
-    AIENV_BEDROCK_ENV_FILE="/nonexistent-dir/bedrock.env" PROFILE_RESOLVE_LIB="$STUB_LIB" "$SCRIPT" < /dev/null)"
-  # Codex一次レビュー2巡目指摘・Minor対応: 「⚠️」だけの検査だと、
-  # effortLevel欠落を理由にした通常の不一致検出（旧実装でも⚠️が出るパス）
-  # と区別できず、修正が効いていなくても偽陽性で通ってしまう。修正で
-  # 新設した専用メッセージ文言そのものを検査し、UNAVAILABLE分岐を通った
-  # ことを確認する。
-  assert_contains "不正な型のeffort(null)は一致と誤判定せず監視不能(effortが不正)の分岐になる" "$out" "配役表のリーダー実行値のeffortが不正です"
-
-  echo "--- 同上の別バリエーション: effortキーはあるが値が空文字列 ---"
-  cat > "$STUB_LIB" <<'EOF'
-import sys
-if sys.argv[1] == "resolve-leader":
-    print('{"model": "claude-opus-5", "effort": ""}')
-    sys.exit(0)
-sys.exit(1)
-EOF
-  out="$(BOOTSTRAP_CHECK_LEADER_SETTINGS_DRIFT_ONLY=1 AIENV_LOCAL_PROFILE_PATH="$LEADER_PROFILE" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_ANY" AIENV_AGENTS_DIR="$AGENTS_DIR" \
-    AIENV_BEDROCK_ENV_FILE="/nonexistent-dir/bedrock.env" PROFILE_RESOLVE_LIB="$STUB_LIB" "$SCRIPT" < /dev/null)"
-  assert_contains "空文字列のeffortも監視不能(effortが不正)の分岐になる" "$out" "配役表のリーダー実行値のeffortが不正です"
-  rm -rf "$STUB_LIB_DIR"
-
-  echo "--- ゲート無効(BOOTSTRAP_ENABLE_LOCAL_PROFILE=0を明示。run_bootstrap()の固定値)では、settings.jsonが不一致でもDIRECTIVEに一切現れない(P1導入前の挙動) ---"
   VAULT_DIR="$(mktemp -d)"
   make_full_vault "$VAULT_DIR"
-  ctx="$(run_bootstrap "$VAULT_DIR")"
-  assert_not_contains "ゲート無効時はsettings.json関連の文言が一切出ない" "$ctx" "settings.json"
-
-  echo "--- 2026-09-02 案A採用の回帰: BOOTSTRAP_ENABLE_LOCAL_PROFILEを一切指定しないと、コードの既定値(0→1へ変更済み)によりP1機構が有効になる ---"
   ctx="$(echo '{"session_id":"test-session-0000"}' \
     | env -u BOOTSTRAP_ENABLE_LOCAL_PROFILE \
         BOOTSTRAP_VAULT="$VAULT_DIR" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
         VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
         VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
-        PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
         MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
         AIENV_LOCAL_PROFILE_PATH="/nonexistent-dir/profile-for-default-gate-test.md" \
         "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext')"
-  # FR-10差し戻し（検証1巡目MINOR-4・2026-09-17）: T1の案内は必読リストの
-  # 専用文言ではなく🧭モード行の区分コードで確認する（旧仕様の「未作成。
-  # installerでサンプルから雛形を作成してください」は必読リストごと撤去）。
   mode_line_default_gate="$(printf '%s\n' "$ctx" | grep '^🧭 現在＝')"
   assert_contains "フラグ未指定でも既定値1でP1機構が動く(T1のモード行区分コードが出る)" "$mode_line_default_gate" "（T1）"
-
-  echo "--- 結合(SessionStart全体): ゲート有効・不一致プロファイルでDIRECTIVEの【ローカル実体プロファイル】ブロックに警告が注入される ---"
-  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$LEADER_PROFILE" "$SETTINGS_MODEL_MISMATCH")"
-  assert_contains "DIRECTIVEにsettings.json不一致の警告が出る" "$ctx" "settings.json(${SETTINGS_MODEL_MISMATCH})が配役表のリーダー行"
-  assert_not_contains "settings.jsonの実際のmodel値(claude-sonnet-5)そのものは再掲しない（不一致メッセージはフィールド名のみ）" "$ctx" "claude-sonnet-5"
-
-  echo "--- 結合(SessionStart全体): 一致していればDIRECTIVEにsettings.json関連の警告は出ない ---"
-  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$LEADER_PROFILE" "$SETTINGS_MATCH")"
-  assert_not_contains "一致していれば警告が出ない" "$ctx" "settings.json"
-
-  echo "--- 旧版(T4-LEGACY)はスコープ外: profile_kind=OK以外ではsettings.json比較を試みない（2026-09-08 モデル定義ファイルと候補指定対応でv1委譲は撤去したが、旧版が比較対象外という契約自体は同じ。週次drift=check-drift.shのV13が既に旧版をカバーする） ---"
-  LEGACY_PROFILE="$(mktemp -d)/legacyprofile.md"
-  cat > "$LEGACY_PROFILE" <<'EOF'
----
-team_mode: 本人
-no_read_paths: ~/work/old
-machine_role: 本人
----
-EOF
-  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "$LEGACY_PROFILE" "$SETTINGS_BROKEN")"
-  assert_contains "旧版の警告文言は出る" "$ctx" "旧版"
-  assert_not_contains "旧版ではsettings.json比較の監視不能メッセージは出ない(スコープ外)" "$ctx" "監視不能"
-
   rm -rf "$VAULT_DIR"
 }
 
@@ -2334,7 +2041,7 @@ echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行�
   # しない＝role_and_core_manifest_diff()はparsed.rolesのキーのみを見る）。
   COMPLETE_ROSTER="$(mktemp -d)/complete-roster.md"
   make_v2_profile "$COMPLETE_ROSTER" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.navi: unknown" \
     "role.ja-doc: unknown" \
     "role.adoption-critic: unknown" \
@@ -2365,7 +2072,7 @@ echo "=== 58b. V1-aマニフェスト(結合・回帰防止・対照実験): 完
   # 完全に同一。
   OLD_KEY_ROSTER="$(mktemp -d)/old-key-roster.md"
   make_v2_profile "$OLD_KEY_ROSTER" \
-    "role.leader: configured model=opus-high" \
+    "role.leader: configured model=t-opus-high" \
     "role.navi: unknown" \
     "role.ja-doc: unknown" \
     "role.adoption-critic: unknown" \
@@ -2420,7 +2127,7 @@ echo "=== 61. FX-P1〜P3: resolver単体・team_modeがsolo/lean/fullのときTE
   for v in solo lean full; do
     FXP="$(mktemp -d)/fxp-$v.md"
     make_v2_profile "$FXP" \
-      "role.leader: configured model=opus-high"
+      "role.leader: configured model=t-opus-high"
     sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=$v/" "$FXP"
     # ⚠️ `out="$(cmd)" || true`は`||`の右辺が常に成功するため直後の`$?`は
     # 常に0になり、resolve_v2自身の終了コードを検証できない（Codex一次
@@ -2441,7 +2148,7 @@ echo "=== 62. FX-P4〜P5: resolver単体・team_modeがunknown/unavailableなら
 {
   FXP4="$(mktemp -d)/fxp4.md"
   make_v2_profile "$FXP4" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unknown/" "$FXP4"
   if out="$(resolve_v2 "$FXP4")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P4(team_mode:unknown): TEAM_MODE:unknownが出る" "$out" "TEAM_MODE:unknown"
@@ -2451,7 +2158,7 @@ echo "=== 62. FX-P4〜P5: resolver単体・team_modeがunknown/unavailableなら
 
   FXP5="$(mktemp -d)/fxp5.md"
   make_v2_profile "$FXP5" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unavailable/" "$FXP5"
   if out="$(resolve_v2 "$FXP5")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P5(team_mode:unavailable): TEAM_MODE:unknownが出る" "$out" "TEAM_MODE:unknown"
@@ -2464,7 +2171,7 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
 {
   FXP6="$(mktemp -d)/fxp6.md"
   make_v2_profile "$FXP6" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=solo,lean/" "$FXP6"
   if out="$(resolve_v2 "$FXP6")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P6(カンマ列挙): MINIMALになる" "$out" "MINIMAL"
@@ -2473,7 +2180,7 @@ echo "=== 63. FX-P6〜P7: resolver単体・team_modeの値形式違反はMINIMAL
 
   FXP7="$(mktemp -d)/fxp7.md"
   make_v2_profile "$FXP7" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=quick/" "$FXP7"
   if out="$(resolve_v2 "$FXP7")"; then rc=0; else rc=$?; fi
   assert_contains "FX-P7(未知の語): MINIMALになる" "$out" "MINIMAL"
@@ -2528,7 +2235,7 @@ echo "=== 65. FX-I1〜I3: bootstrap結合・3モードの開幕1行がそれぞ�
     VD="$(mktemp -d)"; make_full_vault "$VD"
     FXI="$(mktemp -d)/fxi-$v.md"
     make_v2_profile "$FXI" \
-      "role.leader: configured model=opus-high"
+      "role.leader: configured model=t-opus-high"
     sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=$v/" "$FXI"
     ctx="$(run_bootstrap_with_profile "$VD" "$FXI")"
 
@@ -2555,7 +2262,7 @@ echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはre
   VD="$(mktemp -d)"; make_full_vault "$VD"
   FXI4="$(mktemp -d)/fxi4.md"
   make_v2_profile "$FXI4" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   sed -i '' "s/team_mode:        configured value=full/team_mode:        unknown/" "$FXI4"
   ctx="$(run_bootstrap_with_profile "$VD" "$FXI4")"
   # ⚠️ FX-I4はteam_mode自体が"unknown"状態なだけで、配役表全体の解決
@@ -2572,7 +2279,7 @@ echo "=== 66. FX-I4・FX-I6: bootstrap結合・team_modeがunknown、またはre
   VD2="$(mktemp -d)"; make_full_vault "$VD2"
   FXI6="$(mktemp -d)/fxi6.md"
   make_v2_profile "$FXI6" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   python3 - "$FXI6" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -2594,18 +2301,18 @@ echo "=== 67. FX-R1・FX-R2（AC-10）: 退役キー'primary-reviewer'はV1-bで
 {
   FXR1="$(mktemp -d)/fxr1.md"
   make_v2_profile "$FXR1" \
-    "role.leader: configured model=opus-high" \
-    "role.primary-reviewer: configured model=opus-high"
+    "role.leader: configured model=t-opus-high" \
+    "role.primary-reviewer: configured model=t-opus-high"
   out="$(resolve_v2 "$FXR1")"  || true
   assert_contains "FX-R1(陰性): VACANT:にprimary-reviewerが出る" "$out" "VACANT:primary-reviewer"
   assert_contains "FX-R1: VACANT_REASONがprimary-reviewer=V1-b" "$out" "VACANT_REASON:primary-reviewer=V1-b"
 
   FXR2="$(mktemp -d)/fxr2.md"
   make_v2_profile "$FXR2" \
-    "role.leader: configured model=opus-high" \
-    "role.verifier: configured model=bedrock-opus,opus-high"
+    "role.leader: configured model=t-opus-high" \
+    "role.verifier: configured model=bedrock-opus,t-opus-high"
   # bedrock.envを与えない(ABSENT=disabled)ので1件目(bedrock-opus)はV9-dで
-  # 使用不可・2件目(opus-high)はagents/verifier.mdが実在するので使用可。
+  # 使用不可・2件目(t-opus-high)はagents/verifier.mdが実在するので使用可。
   out="$(resolve_v2 "$FXR2")"  || true
   assert_not_contains "FX-R2(陽性): 1件目が使用不可でも2件目で採用されVACANT:に現れない" "$out" "VACANT:verifier"
   head_ok=0; case "$out" in OK*) head_ok=1 ;; esac
@@ -2649,7 +2356,7 @@ EOF
   VD3="$(mktemp -d)"; make_full_vault "$VD3"
   FXUE="$(mktemp -d)/fxue.md"
   make_v2_profile "$FXUE" \
-    "role.leader: configured model=opus-high"
+    "role.leader: configured model=t-opus-high"
   python3 - "$FXUE" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -2707,9 +2414,10 @@ echo "=== 71. AC-1②/NFR-1: SessionStart(schema6・正常分岐)が起こす外
 {
   SPY="$(mktemp -d)"
   BASE_WT=""
+  FAKE_HOME_71=""
   cleanup_71() {
     [ -n "$BASE_WT" ] && [ -d "$BASE_WT" ] && git -C "$REPO_ROOT" worktree remove --force "$BASE_WT" >/dev/null 2>&1
-    rm -rf "$SPY" "${BASE_WT:-}" 2>/dev/null
+    rm -rf "$SPY" "${BASE_WT:-}" "${FAKE_HOME_71:-}" 2>/dev/null
   }
   # ⚠️ ここは関数ではなく単なる{ }ブロックなので`trap ... RETURN`は発火しない。
   # EXIT trapを後始末の保険にしつつ、正常系ではブロック末尾で明示的に呼ぶ。
@@ -2726,14 +2434,12 @@ EOF
     chmod +x "$SPY/$cmd"
   done
 
-  # role.leader: model=opus-noeffort（effort未指定）と
-  # 一致するsettings.json（Codex一次レビュー指摘・MAJOR対応: 従来は
-  # /nonexistent-dir/settings.jsonを指定しており、check_leader_settings_drift()
-  # が「監視不能」警告を出す状態のまま「警告なし」と称していた。§10.5-5〜6の
-  # 「正常分岐（警告が出ていない）」を字義通り満たすため、実際に一致する
-  # settings.jsonを用意する＝テスト18番の「正常系」fixtureと同型）。
-  SETTINGS_MATCH_71="$(mktemp -d)/settings-match-71.json"
-  cat > "$SETTINGS_MATCH_71" <<'EOF'
+  # 変更前（旧コミット）の bootstrap は settings.json と配役表の整合を毎回比較していた（現行は撤去済み）。
+  # 旧側が「警告なし」の正常分岐を通るよう、role.leader: model=opus-noeffort（effort未指定）と一致する
+  # settings.json を偽 HOME の既定パス（$HOME/.claude/settings.json）に置く。
+  FAKE_HOME_71="$(mktemp -d)"
+  mkdir -p "$FAKE_HOME_71/.claude"
+  cat > "$FAKE_HOME_71/.claude/settings.json" <<'EOF'
 {"model": "claude-opus-5"}
 EOF
 
@@ -2758,9 +2464,7 @@ EOF
     BOOTSTRAP_VAULT="$VD" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
     VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
     VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
-    PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
     MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_MATCH_71" \
     BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$FXP1" \
     run_bootstrap_capture_rc "$AFTER_JSON" "$SCRIPT"
   after_bootstrap_rc=$?
@@ -2818,14 +2522,12 @@ EOF
   LEGACY_MARKER_71="/nonexistent-dir/machine-role"  # AC5-ALLOW:FXP0
   BEFORE_LOG="$(mktemp -d)/calls-before.log"; : > "$BEFORE_LOG"
   BEFORE_JSON="$(mktemp -d)/before.json"
-  PATH="$SPY" SPY_CALLS_LOG="$BEFORE_LOG" \
+  PATH="$SPY" SPY_CALLS_LOG="$BEFORE_LOG" HOME="$FAKE_HOME_71" \
     BOOTSTRAP_VAULT="$VD2" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
     VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
     VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
-    PREFERENCES_PROPOSALS_DIR="/nonexistent-dir/preferences-proposals" \
     MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
     AIENV_MACHINE_ROLE_MARKER="$LEGACY_MARKER_71" \
-    AIENV_SETTINGS_JSON_FILE="$SETTINGS_MATCH_71" \
     AIENV_AGENTS_DIR="$BASE_AGENTS" \
     BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$FXP0" \
     run_bootstrap_capture_rc "$BEFORE_JSON" "$BASE_SCRIPT"
@@ -2874,8 +2576,11 @@ EOF
   # ℹ️行の生成（`python3 profile_resolve.py list-roles`1回＋`awk`1回）が
   # 減った分の正当な減少（この判定式は「増加しない」だけを見るので、
   # NFR-1の趣旨どおり回帰扱いにしない）。
+  # 2026-09-19 着手順2 η（bootstrap 縮小）で26→23へ更新（実測）。settings.json 整合比較
+  # （python3 2回）と【使用率】ブロック（python3 1回）の撤去に対し、棚卸し①は
+  # latest.json 不在で jq を呼ばない＝net -3 の正当な減少。
   AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07=29
-  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=26
+  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=23
   if [ "$before_count" != "$AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07" ] || [ "$after_count" != "$AC1_2_REFERENCE_COUNT_AFTER_2026_09_07" ]; then
     echo "  info - 参考値: 変更前${AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07}・変更後${AC1_2_REFERENCE_COUNT_AFTER_2026_09_07}を記録していたが今回は変更前${before_count}・変更後${after_count}だった"
   fi
@@ -2896,7 +2601,7 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   # codeだけでは、fixture表（要件§6.2）が定めるTEAM_MODE:full・UNKNOWN_EXTRA:
   # 不在という残りの期待を固定していなかった。両方を明示的に検査する。
   FXP1_72="$(mktemp -d)/fxp1.md"
-  make_v2_profile "$FXP1_72" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP1_72" "role.leader: configured model=t-opus-high"
   rc=0; out="$(resolve_v2 "$FXP1_72")" || rc=$?
   assert_eq "FX-P1: OK<TAB>schema_version=7で始まる" "1" \
     "$([[ "$out" == $'OK\tschema_version=7'* ]] && echo 1 || echo 0)"
@@ -2905,7 +2610,7 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   assert_not_contains "FX-P1: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
 
   FXP2_72="$(mktemp -d)/fxp2.md"
-  make_v2_profile "$FXP2_72" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP2_72" "role.leader: configured model=t-opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=sub/" "$FXP2_72"
   rc=0; out="$(resolve_v2 "$FXP2_72")" || rc=$?
   assert_eq "FX-P2: OK<TAB>schema_version=7で始まる" "1" \
@@ -2915,14 +2620,14 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
   assert_not_contains "FX-P2: UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
 
   FXP3_72="$(mktemp -d)/fxp3.md"
-  make_v2_profile "$FXP3_72" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP3_72" "role.leader: configured model=t-opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     not_adopted/" "$FXP3_72"
   rc=0; out="$(resolve_v2 "$FXP3_72")" || rc=$?
   assert_contains "FX-P3: V7(machine_roleの状態が不正)を含む" "$out" "V7: machine_roleの状態が不正です"
   assert_eq "FX-P3: exit 1" "1" "$rc"
 
   FXP4_72="$(mktemp -d)/fxp4.md"
-  make_v2_profile "$FXP4_72" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP4_72" "role.leader: configured model=t-opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     configured value=primary/" "$FXP4_72"
   rc=0; out="$(resolve_v2 "$FXP4_72")" || rc=$?
   assert_contains "FX-P4: V8-b(machine_roleのvalue形式が不正)を含む" "$out" "V8-b: machine_roleのvalue形式が不正です"
@@ -2932,7 +2637,7 @@ echo "=== 72. AC-3(FR-1): machine_roleの状態enumの陽性2件(FX-P1・FX-P2)�
 echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・陰性2件(FX-P10・FX-P11) ==="
 {
   FXP9_73="$(mktemp -d)/fxp9.md"
-  make_v2_profile "$FXP9_73" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP9_73" "role.leader: configured model=t-opus-high"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old,~/Data/private#" "$FXP9_73"
   rc=0; out="$(resolve_v2 "$FXP9_73")" || rc=$?
   assert_eq "FX-P9: OKで始まる（大文字を含む実パスも受理）" "1" \
@@ -2940,7 +2645,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
   assert_eq "FX-P9: exit 0" "0" "$rc"
 
   FXP10_73="$(mktemp -d)/fxp10.md"
-  make_v2_profile "$FXP10_73" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP10_73" "role.leader: configured model=t-opus-high"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old, ~/tmp/x#" "$FXP10_73"
   rc=0; out="$(resolve_v2 "$FXP10_73")" || rc=$?
   assert_contains "FX-P10: T6を含む" "$out" "T6"
@@ -2948,7 +2653,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
   assert_eq "FX-P10: exit 1" "1" "$rc"
 
   FXP11_73="$(mktemp -d)/fxp11.md"
-  make_v2_profile "$FXP11_73" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP11_73" "role.leader: configured model=t-opus-high"
   sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=/work/old#" "$FXP11_73"
   rc=0; out="$(resolve_v2 "$FXP11_73")" || rc=$?
   assert_contains "FX-P11: V8-b(no_read_pathsのvalue形式が不正)を含む" "$out" "V8-b: no_read_pathsのvalue形式が不正です"
@@ -2958,7 +2663,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
 echo "=== 75. AC-9(FR-13): 廃止キー残存時のUNKNOWN_EXTRA契約の陽性1件(FX-P7)・陰性1件(FX-P1) ==="
 {
   FXP7_75="$(mktemp -d)/fxp7-ac9.md"
-  make_v2_profile "$FXP7_75" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP7_75" "role.leader: configured model=t-opus-high"
   # frontmatter終端(---)の直前に挿入する（末尾に追記すると frontmatter の
   # 外側になってしまうため）。AC5-ALLOW:FX-P7
   python3 - "$FXP7_75" <<'PYEOF'
@@ -2973,11 +2678,11 @@ PYEOF
   assert_contains "FX-P7: R=UNKNOWN_EXTRA:git_roleを含む（機械側は既知キーで解決）" "$out" "UNKNOWN_EXTRA:git_role"  # AC5-ALLOW:FX-P7
   assert_eq "FX-P7: R=exit 0" "0" "$rc"
   ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP7_75")"
-  assert_contains "FX-P7: I=必読から除外の文言を含む（AI側は降格）" "$ctx" "必読から除外"
+  assert_contains "FX-P7: I=プロファイル利用不可の文言を含む（AI側は降格）" "$ctx" "プロファイル利用不可"
   assert_contains "FX-P7: I=最小能力の文言を含む" "$ctx" "最小能力"
 
   FXP1_75="$(mktemp -d)/fxp1-ac9.md"
-  make_v2_profile "$FXP1_75" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP1_75" "role.leader: configured model=t-opus-high"
   out="$(resolve_v2 "$FXP1_75")"
   assert_not_contains "FX-P1: R=UNKNOWN_EXTRA:を含まない" "$out" "UNKNOWN_EXTRA:"
   ctx="$(run_bootstrap_with_profile "$(mktemp -d)" "$FXP1_75")"
@@ -3011,7 +2716,7 @@ echo "=== 76. AC-11(FR-9): machine_roleがunknownのときだけDIRECTIVEへ保�
   # （さもないとセグメント内の値変化そのものが2本目の差分として現れ、
   # AC-11が見たい「保留行の追加1行だけ」の判定を汚す）。
   FXP_76="$(mktemp -d)/fxp-ac11.md"
-  make_v2_profile "$FXP_76" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP_76" "role.leader: configured model=t-opus-high"
   ctx_p1="$(run_bootstrap_with_profile "$VD_76" "$FXP_76")"
 
   sed -i '' "s/machine_role:     configured value=main/machine_role:     unknown/" "$FXP_76"
@@ -3041,7 +2746,7 @@ echo "=== 76b. AC-11(FR-9)陰性・MAJOR-1対応: machine_roleがunavailableの�
   VD_76B="$(mktemp -d)"; make_full_vault "$VD_76B"
 
   FXP_76B="$(mktemp -d)/fxp-ac11-unavailable.md"
-  make_v2_profile "$FXP_76B" "role.leader: configured model=opus-high"
+  make_v2_profile "$FXP_76B" "role.leader: configured model=t-opus-high"
   sed -i '' "s/machine_role:     configured value=main/machine_role:     unavailable/" "$FXP_76B"
   ctx_unavail="$(run_bootstrap_with_profile "$VD_76B" "$FXP_76B")"
 
@@ -3057,8 +2762,8 @@ echo "=== 77. 設計§11.3新設2件の①: AIENV_MODEL_DEFS_FILEが相対パス
   UNCONFIRMED='🧭 現在＝モード未確定（配役表の team_mode が読めません）。委任の前に本人へ確認します。'
   VD77="$(mktemp -d)"; make_full_vault "$VD77"
   FXP77="$(mktemp -d)/fxp77.md"
-  make_v2_profile "$FXP77" "role.leader: configured model=opus-high"
-  ctx77="$(run_bootstrap_with_profile "$VD77" "$FXP77" "/nonexistent-dir/settings.json" "relative/models.conf")"
+  make_v2_profile "$FXP77" "role.leader: configured model=t-opus-high"
+  ctx77="$(run_bootstrap_with_profile "$VD77" "$FXP77" "relative/models.conf")"
   unconfirmed_t13="${UNCONFIRMED}$(mode_failure_segment T13)"
   n77="$(printf '%s' "$ctx77" | grep -Fx -c "$unconfirmed_t13" || true)"
   assert_eq "I(T13): AIENV_MODEL_DEFS_FILEが相対パスだと未確定行(失敗セグメント込み)がちょうど1行（resolve自体がT13でloud失敗する）" "1" "$n77"
@@ -3071,156 +2776,36 @@ echo "=== 78. 設計§11.3新設2件の②: 同じ絶対パスのAIENV_MODEL_DEF
 {
   VD78="$(mktemp -d)"; make_full_vault "$VD78"
   FXP78="$(mktemp -d)/fxp78.md"
-  make_v2_profile "$FXP78" "role.leader: configured model=opus-high"
-  ctx78_tmp="$(cd /tmp && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"
-  ctx78_repo="$(cd "$REPO_ROOT" && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"
-  ctx78_vd="$(cd "$VD78" && run_bootstrap_with_profile "$VD78" "$FXP78" "/nonexistent-dir/settings.json" "$SHARED_MODELS_CONF")"
+  make_v2_profile "$FXP78" "role.leader: configured model=t-opus-high"
+  ctx78_tmp="$(cd /tmp && run_bootstrap_with_profile "$VD78" "$FXP78" "$SHARED_MODELS_CONF")"
+  ctx78_repo="$(cd "$REPO_ROOT" && run_bootstrap_with_profile "$VD78" "$FXP78" "$SHARED_MODELS_CONF")"
+  ctx78_vd="$(cd "$VD78" && run_bootstrap_with_profile "$VD78" "$FXP78" "$SHARED_MODELS_CONF")"
   assert_eq "I(cwd不変性): /tmp とREPO_ROOTで同じ結果" "$ctx78_tmp" "$ctx78_repo"
   assert_eq "I(cwd不変性): /tmp とVault作業ディレクトリで同じ結果" "$ctx78_tmp" "$ctx78_vd"
   rm -rf "$VD78"
 }
 
-echo "=== 79. B1a「使用率の見える化」AC-91④⑤: 【使用率】ブロックが枠あたり1行で出る（正常キャッシュ） ==="
-{
-  VD79="$(mktemp -d)"; make_full_vault "$VD79"
-  UC79="$(mktemp -d)"
-  NOW79=1788858365
-  python3 -c "import json; open('$UC79/claude-cache.json','w').write(json.dumps({'fetched_at':$NOW79-60,'five_hour':{'used_percent':25.0,'resets_at_epoch':$NOW79+1000},'seven_day':{'used_percent':46.0,'resets_at_epoch':$NOW79+90000},'model_weekly':{'used_percent':34,'resets_at_epoch':$NOW79+90000,'label':'Fable'},'last_error':None}))"
-  python3 -c "import json; open('$UC79/codex-cache.json','w').write(json.dumps({'fetched_at':$NOW79-30,'five_hour':{'used_percent':66,'resets_at_epoch':$NOW79+2000},'seven_day':{'used_percent':10,'resets_at_epoch':$NOW79+90000},'reset_credits':{'available_count':1,'reset_scope':['five_hour','seven_day'],'credits':[{'id':'RateLimitResetCredit_abc123','status':'available','granted_at_epoch':1788539594,'expires_at_epoch':1791131594,'title':'Full reset (Weekly + 5 hr)'}]},'last_error':None}))"
-
-  ctx79="$(AIENV_USAGE_CACHE_DIR="$UC79" AIENV_USAGE_NOW="$NOW79" run_bootstrap "$VD79")"
-  assert_contains "79: 【使用率】見出しが出る" "$ctx79" "【使用率】"
-  n_claude79="$(printf '%s\n' "$ctx79" | grep -c '^Claude枠:' || true)"
-  n_codex79="$(printf '%s\n' "$ctx79" | grep -c '^Codex枠:' || true)"
-  n_unlimited79="$(printf '%s\n' "$ctx79" | grep -Fxc 'unlimited（Bedrock・ローカル）: 使用率なし' || true)"
-  assert_eq "79: Claude枠は枠あたり1行" "1" "$n_claude79"
-  assert_eq "79: Codex枠は枠あたり1行" "1" "$n_codex79"
-  assert_eq "79: unlimited行はちょうど1行" "1" "$n_unlimited79"
-  assert_contains "79: 委任前の同一口の案内が末尾に出る" "$ctx79" "委任の前に見直すときは同じ口＝usage_snapshot.py"
-
-  # 2026-09-08 worker-driven一次レビューMAJOR-4対応: 見出し・接頭辞だけで
-  # なく、5h/7d残量・リセット時刻・鮮度の実内容を厳密一致で検査する
-  # （python3 claude/hooks/lib/usage_snapshot.pyを同じfixture・同じNOW79で
-  # 直接実行し裏取り済みの期待値。tests/test-usage-snapshot.shのFX-1と
-  # 同一NOW値・同種fixtureで独立に検証済みの値と一致する）。
-  # ⚠️ B1-c（2026-09-09）: Codex枠の末尾にチケット句が付く。Claude行は
-  # チケット句を持たない固定契約（本人指示2026-09-09＝長い固定文言は載せ
-  # ない・範囲差の説明はVault資料側）ことも同時に固定する。
-  assert_contains "79: Claude枠の実内容（5h/7d/Fable週の残量・リセット・鮮度）が厳密一致" "$ctx79" \
-    "Claude枠: 5h 残75%（リセット 18:22）／7d 残54%（09-09 19:06）／Fable週 残66%・取得 1分前"
-  assert_contains "79: Codex枠の実内容（5h/7d/チケットの残量・リセット・鮮度）が厳密一致" "$ctx79" \
-    "Codex枠: 5h 残34%（リセット 18:39）／7d 残90%（09-09 19:06）・取得 0分前／チケット 1枚（10/05）"
-  claude_line79="$(printf '%s\n' "$ctx79" | grep '^Claude枠:')"
-  assert_not_contains "79: Claude行にはチケット句を足さない（B1-c本人指示）" "$claude_line79" "チケット"
-
-  rm -rf "$VD79" "$UC79"
-}
-
-echo "=== 80. B1a「使用率の見える化」AC-91④⑤: キャッシュ欠落（未導入）でも起動が止まらない ==="
-{
-  VD80="$(mktemp -d)"; make_full_vault "$VD80"
-  UC80="$(mktemp -d)"  # claude-cache.json/codex-cache.jsonのどちらも置かない
-
-  ctx80="$(AIENV_USAGE_CACHE_DIR="$UC80" run_bootstrap "$VD80")"
-  assert_contains "80: キャッシュ欠落でも必読ファイル案内は出る（起動は止まらない）" "$ctx80" "① タスクに着手する前に"
-  assert_contains "80: 【使用率】見出しは出る" "$ctx80" "【使用率】"
-  assert_contains "80: Claude枠は未導入の固定文言" "$ctx80" "Claude枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: scripts/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
-  assert_contains "80: Codex枠は未導入の固定文言" "$ctx80" "Codex枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: scripts/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
-  n_unlimited80="$(printf '%s\n' "$ctx80" | grep -Fxc 'unlimited（Bedrock・ローカル）: 使用率なし' || true)"
-  assert_eq "80: unlimited行はちょうど1行（欠落でも行数を変えない）" "1" "$n_unlimited80"
-
-  rm -rf "$VD80" "$UC80"
-}
-
-echo "=== 81. B1a「使用率の見える化」compute_usage_block()のfail-open3分岐: lib不在（worker-driven一次レビューMAJOR-3対応） ==="
-{
-  VD81="$(mktemp -d)"; make_full_vault "$VD81"
-  ctx81="$(USAGE_SNAPSHOT_LIB="/nonexistent-dir/usage_snapshot.py" run_bootstrap "$VD81")"
-  assert_contains "81: lib不在でも必読ファイル案内は出る（起動は止まらない）" "$ctx81" "① タスクに着手する前に"
-  n_line81="$(printf '%s\n' "$ctx81" | grep -Fxc '【使用率】取得口が使えません（usage_snapshot.py が見つかりません）' || true)"
-  assert_eq "81: 「見つかりません」の1行に縮退する（見出しと本文を分けない）" "1" "$n_line81"
-
-  rm -rf "$VD81"
-}
-
-echo "=== 82. B1a「使用率の見える化」compute_usage_block()のfail-open3分岐: 非ゼロ終了（stdout有り/無しの両方・worker-driven一次レビューMAJOR-3対応） ==="
-{
-  # (a) 非ゼロ終了・stdoutは空（usage_snapshot.py自身の契約どおりのクラッシュ）。
-  VD82A="$(mktemp -d)"; make_full_vault "$VD82A"
-  FAKE_LIB_82A="$(mktemp -d)/fake-usage-snapshot-empty.py"
-  cat > "$FAKE_LIB_82A" <<'EOF'
-import sys
-sys.exit(1)
-EOF
-  ctx82a="$(USAGE_SNAPSHOT_LIB="$FAKE_LIB_82A" run_bootstrap "$VD82A")"
-  n_line82a="$(printf '%s\n' "$ctx82a" | grep -Fxc '【使用率】取得口が使えません（usage_snapshot.py の実行に失敗しました）' || true)"
-  assert_eq "82a: 非ゼロ終了・stdout空なら「実行に失敗しました」の1行に縮退する" "1" "$n_line82a"
-
-  # (b) 非ゼロ終了・stdoutは非空（従来はexit codeを見ておらずstdoutが
-  # あれば正常ブロックとして注入してしまっていた＝MAJOR-3の指摘そのもの）。
-  VD82B="$(mktemp -d)"; make_full_vault "$VD82B"
-  FAKE_LIB_82B="$(mktemp -d)/fake-usage-snapshot-partial.py"
-  cat > "$FAKE_LIB_82B" <<'EOF'
-import sys
-print("Claude枠: 5h 残99%・取得 0分前")
-sys.exit(1)
-EOF
-  ctx82b="$(USAGE_SNAPSHOT_LIB="$FAKE_LIB_82B" run_bootstrap "$VD82B")"
-  n_line82b="$(printf '%s\n' "$ctx82b" | grep -Fxc '【使用率】取得口が使えません（usage_snapshot.py の実行に失敗しました）' || true)"
-  assert_eq "82b: 非ゼロ終了・stdout有りでも終了コードを見て失敗扱いにする（部分出力を正常ブロックとして注入しない）" "1" "$n_line82b"
-  assert_not_contains "82b: 部分出力（stdoutにあった偽のClaude枠行）がそのまま注入されていない" "$ctx82b" "残99%"
-
-  rm -rf "$VD82A" "$VD82B"
-}
-
-echo "=== 83. B1a「使用率の見える化」compute_usage_block()のfail-open3分岐: python3が真に不在（worker-driven一次レビューMAJOR-3対応） ==="
-{
-  # PATH上の全実行ファイルをsymlinkで複製し、python*系だけを除外した
-  # 制限PATHを作る（run_bootstrap()はBOOTSTRAP_ENABLE_LOCAL_PROFILE=0固定
-  # なのでprofile_resolve.py側のpython3呼び出しは発生しない＝
-  # compute_usage_block()だけがpython3を必要とする状態を作れる）。
-  NOPY_PATH_DIR="$(mktemp -d)"
-  IFS=':' read -ra _path_dirs <<< "$PATH"
-  for _pd in "${_path_dirs[@]}"; do
-    [ -d "$_pd" ] || continue
-    for _f in "$_pd"/*; do
-      [ -x "$_f" ] || continue
-      _base="$(basename "$_f")"
-      case "$_base" in python3|python3.*|python|python2*) continue ;; esac
-      [ -e "$NOPY_PATH_DIR/$_base" ] || ln -s "$_f" "$NOPY_PATH_DIR/$_base" 2>/dev/null
-    done
-  done
-
-  VD83="$(mktemp -d)"; make_full_vault "$VD83"
-  ctx83="$(PATH="$NOPY_PATH_DIR" USAGE_SNAPSHOT_LIB="$REPO_ROOT/claude/hooks/lib/usage_snapshot.py" run_bootstrap "$VD83")"
-  assert_contains "83: python3不在でも必読ファイル案内は出る（起動は止まらない）" "$ctx83" "① タスクに着手する前に"
-  n_line83="$(printf '%s\n' "$ctx83" | grep -Fxc '【使用率】取得口が使えません（python3 なし）' || true)"
-  assert_eq "83: 「python3 なし」の1行に縮退する" "1" "$n_line83"
-
-  rm -rf "$VD83" "$NOPY_PATH_DIR"
-}
-
-echo "=== 84. FR-48/AC-59: 起動注入文に宣言コマンドの呼び出しを促す⑥が1行追加される（cmux-session-todo設計v1.5 §17） ==="
+echo "=== 84. 注入本文: ③は欠番・④は vault-scribe の1行・⑥は宣言コマンドを含む1行・【使用率】無し・順序 ①②④⑤⑥ ==="
 {
   VD84="$(safe_mktemp_d)" || exit 1
   make_full_vault "$VD84"
   ctx84="$(run_bootstrap "$VD84")"
-  assert_contains "84: ⑥の行が含まれる" "$ctx84" \
-    "⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）"
-  n_line84="$(printf '%s\n' "$ctx84" | grep -Fxc '⑥ 最初の依頼からプロジェクトが確定したら、そのセッションのワークスペースを1回だけ宣言する: ~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>（Dock の Task 枠がこのセッションのタスクに追従する。宣言済みなら呼び直さない。⚠️ 実行するのはリーダーであってフックではない）' || true)"
-  assert_eq "84: ⑥はちょうど1行（改行を含まない）" "1" "$n_line84"
-
-  # 既存①〜⑤が全部残っていること（文面も並びも変えない＝FR-48）。
+  n_line84="$(printf '%s\n' "$ctx84" | grep -cE '^⑥ .*cmux-task-declare\.sh set <slug>' || true)"
+  assert_eq "84: ⑥は宣言コマンド(set <slug>)を含むちょうど1行" "1" "$n_line84"
+  assert_contains "84: ⑥は「宣言済みなら呼び直さない」を残す" "$ctx84" "宣言済みなら呼び直さない"
+  assert_contains "84: ⑥は「実行はリーダー」を残す" "$ctx84" "実行はリーダーであってフックではない"
+  n_line84_4="$(printf '%s\n' "$ctx84" | grep -cE '^④ .*vault-scribe' || true)"
+  assert_eq "84: ④は vault-scribe を含むちょうど1行" "1" "$n_line84_4"
+  n_line84_3="$(printf '%s\n' "$ctx84" | grep -c '^③ ' || true)"
+  assert_eq "84: ③は欠番（番号は詰めない）" "0" "$n_line84_3"
   assert_contains "84: ①が残る" "$ctx84" "① タスクに着手する前に"
   assert_contains "84: ②が残る" "$ctx84" "② 上記を読み終えるまで"
-  assert_contains "84: ③が残る" "$ctx84" "③ ユーザーの質問に関連するキーワードで"
-  assert_contains "84: ④が残る" "$ctx84" "④ 新たな知見・判断・好み・プロジェクト変化が出たら"
   assert_contains "84: ⑤が残る" "$ctx84" "⑤"
+  assert_not_contains "84: 【使用率】ブロックは出ない（発言ごとの usage-inject.sh が正）" "$ctx84" "【使用率】"
 
-  # 差分レビュー指摘#5: 存在だけでなく①→②→③→④→⑤→⑥の順序不変を検査する
-  # （行位置の比較。並べ替えるとここで落ちる）。
-  assert_ascending_line_positions "84: ①→②→③→④→⑤→⑥の順序が保たれる" "$ctx84" \
-    "①" "②" "③" "④" "⑤" "⑥"
+  # 行位置の比較で ①→②→④→⑤→⑥ の順序不変を検査する（並べ替えるとここで落ちる）。
+  assert_ascending_line_positions "84: ①→②→④→⑤→⑥の順序が保たれる" "$ctx84" \
+    "①" "②" "④" "⑤" "⑥"
 
   rm -rf "$VD84"
 }

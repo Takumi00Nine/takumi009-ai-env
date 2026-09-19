@@ -619,35 +619,33 @@ JSON
 # F群: 外部脳ログ fixture（棚卸し・週次メンテ）
 # ==========================================================================
 
-# 棚卸しレポート（正常。最新日付ファイルに「要確認 N 件」を含む）。
-# $1=INVENTORY_DIR $2=日付(YYYY-MM-DD) $3=件数
+# 棚卸しの正本 latest.json（design-step2 §3.1/§6.1・書き手=vault_inventory.py）
+# を模す。$1=INVENTORY_DIR $2=日付(YYYY-MM-DD) $3=actionable件数。
 mk_inventory_report() {
   local dir="$1" date="$2" count="$3"
   mkdir -p "$dir"
-  cat > "$dir/${date}.md" <<EOF
-# 棚卸しレポート ${date}
-要確認 ${count} 件
-EOF
+  printf '{"date":"%s","actionable":%s}\n' "$date" "$count" > "$dir/latest.json"
 }
 
-# 棚卸しレポート（データ源はあるが「要確認 N件」パターンが無い＝n/a）。
+# latest.json は存在するが actionable キーが無い（形式が変わり抽出できない
+# ＝棚卸し n/a・design-step2 §6.3）。
 mk_inventory_report_noparse() {
   local dir="$1" date="$2"
   mkdir -p "$dir"
-  cat > "$dir/${date}.md" <<EOF
-# 棚卸しレポート ${date}
-（形式が変わり件数を抽出できない）
-EOF
+  printf '{"date":"%s"}\n' "$date" > "$dir/latest.json"
 }
 
 # 週次メンテの実行記録（last-run.json）。
 # $1=出力先ファイル $2=last_success_at（ISO8601 UTC・"Z"付き）
+# $3=fragments_candidates（省略可・候補件数。design-step2 §3.2 S9 A-3）。
 mk_maintenance_state() {
-  local file="$1" ts="$2"
+  local file="$1" ts="$2" cand="${3:-}"
   mkdir -p "$(dirname "$file")"
-  cat > "$file" <<EOF
-{"last_success_at":"${ts}"}
-EOF
+  if [ -n "$cand" ]; then
+    printf '{"last_success_at":"%s","fragments_candidates":%s}\n' "$ts" "$cand" > "$file"
+  else
+    printf '{"last_success_at":"%s"}\n' "$ts" > "$file"
+  fi
 }
 
 # ==========================================================================

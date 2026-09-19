@@ -9,8 +9,10 @@
 Vaultへ直接書き込む方式へ移行したため、本スクリプトは検出専用へ縮小した:
   - 既存の `.md` レポート生成モードは撤去（設計書§3.1）。
   - `--json` で機械可読な検出結果（フラグメント本文全文・ソースファイルの
-    SHA-256）を標準出力へ返す。maintenance_apply.py がPhase2のヘッドレスClaude
-    へこのJSONを渡し、PROMOTE判断の材料にする。
+    SHA-256）を標準出力へ返す。maintenance.sh は `fragments` の件数
+    （len(fragments)・`truncated` は含めない）を last-run.json の
+    `fragments_candidates` に書き、Dock の週次行が「候補N件」と表示する
+    （無人昇格は 2026-09-19 に退役・昇格は在席時に vault-scribe が行う）。
   - `--since` を必須化（旧実装の「前回レポート日時をレポート自身から読み返す」
     仕組みが無くなったため、呼び出し元＝maintenance.shがlast-run.jsonの
     last_success_atを渡す設計。設計書§1.2 Phase1②）。
@@ -36,8 +38,8 @@ HEADING_RE = re.compile(r"^## (.+)$")
 BULLET_RE = re.compile(r"^- \*\*(.+?)\*\*")
 STATUS_RE = re.compile(r"status:\s*(promoted|published|生)")
 
-# サイズ上限（設計書§2.2）。超過したフラグメントはヘッドレスClaudeへの素材から
-# 除外し non_actionable: truncated として記録する（次回へ持ち越す・fail-open的に
+# サイズ上限（設計書§2.2）。超過したフラグメントは候補件数（fragments_candidates）
+# には数えず non_actionable: truncated として記録する（次回へ持ち越す・fail-open的に
 # 切り詰めて渡すことはしない）。
 MAX_FRAGMENT_CHARS = 2000
 

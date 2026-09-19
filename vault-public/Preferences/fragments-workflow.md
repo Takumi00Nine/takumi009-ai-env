@@ -49,7 +49,7 @@ tags: [fragments]
 - 状態マーク：`promoted`（昇格済）/ `published`（記事化済）の**2つだけを、該当時に付ける**。未確定は無印がデフォルト＝**「status: 生」とは書かない**（2026-07-12 本人指摘で明文化）。
 
 ## 4. 昇格・記事化
-- **週1昇格（完全自律・2026-07-11〜）**: 毎週月曜 03:30 に昇格候補リストが自動生成される（LaunchAgent `com.takumi009.fragments-log` → `~/.claude/logs/fragments-log/YYYY-MM-DD.md`・**Vault 外**。読まれない人間向け資料を Vault に置かないため）。**生成後の最初のセッションで、AI（リーダー）が昇格判断〜実行（昇格先作成＋`status: promoted`＋相互リンク）まで自律で行う。ユーザーの指示・確認・個別報告は不要**。Vault に残すのは Fragments 日次ファイルへの実施1行（例:「週次昇格: 3件昇格・12件見送り」）のみ。判断基準＝確定した知見のみ昇格・SSOT 矛盾チェック・フォルダ別ルール準拠。昇格しないエントリが多数派で正常。誤昇格は git で可逆。**処理完了の印＝レポートの frontmatter に `processed: YYYY-MM-DD` を1行追記**（frontmatter ブロック内のみ判定・未追記のレポートはセッション開始ヘルス行に「未処理」として表示される）。
+- **週1昇格（件数のみ表示・本人指示で実行・2026-09-19〜）**: 週次メンテは昇格候補の**件数だけ**を `last-run.json`（`fragments_candidates`）に記録し、cmux Dock の Project 枠の週次行に「候補N件」と表示する。AI へは注入しない。昇格は本人が『昇格して』と言ったときにリーダーが記録職（vault-scribe）へ渡して行う（無人ヘッドレスの自動昇格は 2026-09-19 に退役＝[[Decisions/2026-09-19-ai-env-optimization-rulings]]）。
 - 確定したら4フォルダへ昇格、記事の種は Blog へ（記事化は [[Preferences/note-canvas-workflow]]：Fragments を素材に Canvas → 下書き → ユーザー手直し）。
 - **append-only：元エントリは消さない**。昇格先と Fragments を相互リンクし、Fragments 側に `status: promoted`（＋昇格先リンク）を足すだけ。
 - 二重管理しない：**Fragments＝履歴/発生文脈／4フォルダ＝現在の確定版／Blog＝人間向け素材**、と役割を分ける。
