@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # scripts/lib/managed-symlink.sh
 #
-# install-main.sh・update-sub.shが共有する「管理配置先のsymlink同期」を
-# 1箇所に集約する（検証4巡目 BLOCKING-1対応・2026-09-14）。
+# install-main.sh の link() だけが呼ぶ「管理配置先のsymlink同期」を 1箇所に集約する
+# （呼び手は install-main.sh の link() のみ。サブ機・update-sub.sh は
+# install-sub.sh→install-main.sh 経由で同じ経路を通る。2026-09-14 導入・2026-09-19
+# update-sub.sh は install-sub.sh へ委譲する形に一本化され本ファイルを直接呼ばない）。
 #
 # ⚠️ 2026-09-17〜 effort-per-role v2（設計-v1.2.md §2）は本ファイルへ職種
 # 定義の生成実ファイル方式（frontmatterへeffort値を都度書き込む生成・判定
@@ -13,19 +15,9 @@
 #
 # --- sync_managed_symlink ---
 #
-# install-main.sh の link() と update-sub.sh の claude/agents/*.md直接
-# 配置（2c.）が共有していた「destが既存の通常ファイルなら安全に退避してから
-# symlink化する」処理。
-#
-# 経緯: 検証3巡目 BLOCKING-1で、install-main.sh の backup_once() に
-# --additional-on-diff というオプトイン引数を追加し、link() だけがこれを
-# 渡すよう限定した（既存の.pre-aienv.bakと内容が異なる通常ファイルへ
-# symlink化しようとした場合、そのままln -sfnすると内容が消えるため）。
-# しかし update-sub.sh は install-main.sh を呼ばず、claude/agents/*.md の
-# symlink化を自前で（同じ規則のつもりで）複製実装しており、この対応の
-# 適用漏れが検証4巡目 BLOCKING-1として再発した。同じ規則を2箇所に
-# コピペで持ち込むと再び分岐する（実際に再発した）ため、共有関数へ
-# 抽出し、install-main.sh・update-sub.sh の両方がこれを呼ぶ。
+# 退避規則（README「Setup」から 2026-09-19 に移設・原文）: Symlinked destinations
+# (`link()` in `install-main.sh`, built on `scripts/lib/managed-symlink.sh` — sub machines go through the same path via `install-sub.sh`) move any existing real file to `<dest>.pre-aienv.bak` the first time before replacing it with a symlink; if the destination gets replaced again by a real file whose content differs from that existing backup (e.g. external edits between runs), it's preserved to a further non-colliding backup (`<dest>.pre-aienv.bak.<UTC timestamp>`) rather than being deleted, so the original pre-install backup is never overwritten and no version is silently lost.
+# Generated/rewritten files instead (`codex/config.toml`, `claude/settings.json`, the local profile's `role.leader` line, etc.) keep the simpler "first run only" backup for a pre-existing real file that differs from what the generator produces — they're regenerated in place every run by design, so there's nothing further to reconcile once that first backup exists. Use `install-main.sh`'s `--dry-run` option to preview its plan only.
 #
 # sync_managed_symlink <src> <dest> <log_prefix>
 #   destが既存の通常ファイル（symlinkではない）の場合:

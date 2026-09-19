@@ -3,6 +3,7 @@
 # 全文は注入しない（大きいとハーネスがファイルへ退避し先頭しか見えない）＝「各ファイルを Read で全文読め」の短い指示だけを出す。
 # ワーカー（stdin JSON に agent_type が付く／他セッションがリーダーのチーム config.json に自分の session_id が載る）には何も注入しない。
 # 経緯＝[[Decisions/2026-09-19-ai-env-optimization-rulings]]
+# サブ機での挙動（README「Sub machine」から 2026-09-19 に移設・原文）: On sub machines, private notes such as `Personal/profile-personal.md` and `Knowledge/mistakes.md` don't exist, but since `bootstrap-vault.sh` (the SessionStart hook) is designed to only list **files that actually exist** as required reading, no "not found" warnings appear.
 VAULT="${BOOTSTRAP_VAULT:-$HOME/Data/obsidian}"
 TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 

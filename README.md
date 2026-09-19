@@ -31,37 +31,32 @@ If a case arises on a sub machine where a rule needs fixing, don't fix it there 
 ```
 takumi009-ai-env/
 ├── claude/
-│   ├── settings.json          # Template for ~/.claude/settings.json (generated, not a symlink; see below)
-│   ├── hooks/                 # bootstrap-vault.sh, usage-inject.sh, check-sub-update.sh, delegation-gate-v2.sh, bash-danger-gate.sh, next-pane-resolve.sh, task-pane-resolve.sh, vault-recall.sh, vault-read-log.sh
+│   ├── settings.json          # ~/.claude/settings.json template (generated)
+│   ├── hooks/                 # Claude Code hooks
 │   └── agents/                # Worker role definitions (7 roles)
-├── codex/
-│   ├── AGENTS.md               # ~/.codex/AGENTS.md (symlink target)
-│   ├── hooks.json               # ~/.codex/hooks.json (symlink target)
-│   └── config.toml              # Template for ~/.codex/config.toml (generated, not a symlink; see below)
+├── codex/                     # AGENTS.md, hooks.json (symlink targets), config.toml template (generated)
 ├── scripts/
-│   ├── install-main.sh          # Installer for the main environment (symlink setup; supports --with-dotfiles)
-│   ├── install-sub.sh           # Installer for the sub environment (sets up the Vault skeleton, then delegates to install-main.sh)
-│   ├── install-backup.sh        # Installer for the Vault-backup LaunchAgent
-│   ├── install-maintenance.sh   # Installer for the weekly maintenance-runner LaunchAgent (main only)
-│   ├── install-usage-fetch.sh   # Installer for the usage-fetch LaunchAgent (bootstrap+enable; run manually per machine)
-│   ├── codex-exec.sh            # The sole entry point for invoking Codex (wraps `codex exec`; replaces the old MCP registration)
-│   ├── claude-exec.sh            # The sole entry point for launching a worker as a separate `claude -p` process (mirrors codex-exec.sh's contract)
-│   ├── backup-vault.sh          # Periodically git commits (+pushes) the Vault
-│   ├── usage-fetch.sh           # Fetches Claude/Codex usage and writes the usage caches read by the dotfiles repo's cmux-usage-watch.sh display script (formerly claude-codex-usage, retired 2026-09-18)
-│   ├── maintenance.sh           # Weekly maintenance runner (backup snapshot + detection + summary; Fragments promotion is done by vault-scribe while the user is present; main only)
-│   ├── update-sub.sh            # Manually-run command that refreshes the sub's rules (sub only; invoked on demand from the check-sub-update.sh SessionStart hook's guidance)
-│   ├── export-public-vault.sh   # Exports the Vault's public folder to vault-public/
-│   ├── check-drift.sh           # Manual audit tool that detects "drift" in symlinks/config.toml/repo/vault-public/private repo visibility
-│   ├── audit.sh                 # One-shot pre-publish audit (NG words/username paths/secrets over full git history, tracked-file drift, completeness); `--quick` skips the (slow) history scan and only checks the current tree
-│   ├── vault-agents/            # Detectors driven by maintenance.sh (vault_inventory.py, fragments_log.py, maintenance_run_step.py, vault_lib.py) plus apply_aliases.py (manual CLI); main-only feature
-│   ├── ngwords.txt              # NG-word definitions (private data; **not included in this repository** — see "Setup" below)
-│   └── templates/               # README templates for the private skeleton folders
-├── launchagents/
-│   ├── com.takumi009.backup-vault.plist       # Runs the Vault backup every 6 hours (main only)
-│   └── com.takumi009.maintenance.plist        # Runs the weekly maintenance runner (main only)
-├── vault-public/                # Snapshot of the Vault's designated public folders (see below)
-├── Brewfile                     # Dependency formulae installed via `brew bundle` (see below)
-└── tests/                       # Unit tests for the scripts above
+│   ├── install-main.sh        # Main-environment installer
+│   ├── install-sub.sh         # Sub-environment installer
+│   ├── install-backup.sh      # Vault-backup LaunchAgent installer
+│   ├── install-maintenance.sh # Weekly-maintenance LaunchAgent installer (main only)
+│   ├── install-usage-fetch.sh # Usage-fetch LaunchAgent installer
+│   ├── codex-exec.sh          # Sole entry point for Codex (`codex exec` wrapper)
+│   ├── claude-exec.sh         # Sole entry point for a worker as a separate `claude -p` process
+│   ├── backup-vault.sh        # Git commits (+pushes) the Vault
+│   ├── usage-fetch.sh         # Claude/Codex usage → cache read by dotfiles' cmux-usage-watch.sh
+│   ├── maintenance.sh         # Weekly maintenance runner (main only)
+│   ├── update-sub.sh          # Refreshes the sub's rules (sub only, manual)
+│   ├── export-public-vault.sh # Vault public folder → vault-public/
+│   ├── check-drift.sh         # Manual "drift" report tool
+│   ├── audit.sh               # Pre-publish audit (`--quick` = current tree only)
+│   ├── vault-agents/          # Detectors driven by maintenance.sh (main only)
+│   ├── ngwords.txt            # NG words (private; **not in this repository**)
+│   └── templates/             # README templates for the private skeleton folders
+├── launchagents/              # backup-vault (every 6 hours) / maintenance (weekly) plists (main only)
+├── vault-public/              # Snapshot of the Vault's public folders (see below)
+├── Brewfile                   # `brew bundle` dependencies
+└── tests/                     # Unit tests
 ```
 
 ### Roles: Orchestrator / Worker / Codex
@@ -72,15 +67,13 @@ takumi009-ai-env/
 - **Worker**: A subagent launched from one of the 7 role definitions under `claude/agents/` — requirements-analyst, system-designer, implementer, verifier, researcher, operator, adoption-critic.
 - **Codex**: The default cast for the verifier role, invoked via `scripts/codex-exec.sh` (a Bash wrapper around `codex exec`; continuation of a review thread uses the wrapper's `--resume` flag). Workers don't invoke it themselves — the orchestrator starts verification once a stage's deliverable is complete, and workers only apply the resulting findings.
 
-Worker models are selected per spawn from profile candidates. Run `resolve-candidate` with the deployed `--agents-dir`; for subagent execution, pass the returned `AGENT_MODEL` value explicitly as `Agent.model`. Do not spawn on a nonzero exit or malformed output. The Agent guard rejects missing or invalid model arguments for the eight managed roles. Legacy Claude IDs and non-anthropic-api subagent providers are rejected; external-cli retains `CODEX_ARGS`.
-
-A role that has candidates in the local profile is not launched in-process via the `Agent` tool (a `PreToolUse` hook rejects that) — it's launched as a separate `claude -p` process through `scripts/claude-exec.sh` (a Bash wrapper mirroring `scripts/codex-exec.sh`'s contract; see "claude-exec.sh" below for the invocation form, how to read the worker's report, and how to recover from a stale lock).
+How a worker is launched (`resolve-candidate`, in-process `Agent` rejection, `claude-exec.sh`) — details = the comment at the top of `scripts/claude-exec.sh`.
 
 ### About vault-public/
 
 This repository's `vault-public/` is a full-copy snapshot of only the folders in the external brain (Obsidian Vault) that have been designated as "containing no personal information" (currently `Preferences/`). The remaining folders that may contain personal information (`Personal/` `Knowledge/` `Decisions/` `Projects/` `Fragments/` `Explorations/` `Blogs/`) are reproduced as **empty folders with just a README.md, no content** (so that a sub machine trying to write to them doesn't fail with "folder not found"). The export is triggered from two places: the weekly `maintenance.sh` Phase 0 and the close of each task on the main machine (`check-drift.sh` only reports a stale snapshot as informational).
 
-Generation/updating is done by `scripts/export-public-vault.sh`. NG words and leaked secrets are always fail-fast (even one detected fails the run and blocks the commit). For wiki links into private folders (accidental links), only links into `Personal/` are fail-fast; links into the other private folders (`Knowledge/` `Decisions/` `Projects/` `Fragments/` `Explorations/`) are allowed and only reported (exit 0) — see the comment at the top of the script for details. Note that links into private folders are, by design, intentionally broken on the public side (they're listed in the report): they point to notes that exist only in the maintainer's own private Vault, so opening them in Obsidian shows them as unresolved links, which is expected and not a bug. Only `Personal/` is fail-fast (rather than merely reported) because, unlike the other private folders, its note names themselves tend to reveal personal matters. None of the checks touch the real `vault-public/` until every check has passed — everything is built and verified in a temporary staging directory first, so if any check fails, `vault-public/` remains completely unchanged (a later failure, e.g. missing git commit identity, happens only after promotion and is a separate, non-security concern — see the comment at the top of the script).
+Generation/updating is done by `scripts/export-public-vault.sh` (details = the comment at the top of the script).
 
 ### Setup
 
@@ -90,9 +83,7 @@ Generation/updating is done by `scripts/export-public-vault.sh`. NG words and le
 brew bundle          # Reads the Brewfile and installs ripgrep, gitleaks, jq, gh, macmon
 ```
 
-Claude Code / Codex themselves are outside brew's management, so install them separately from their official sites.
-
-`install-main.sh` requires `python3` (used to generate `claude/settings.json`; also required separately by `check-drift.sh`'s `config.toml`/`settings.json` comparisons). macOS normally ships one via Xcode Command Line Tools, so this usually isn't an issue — if it's missing, `install-main.sh` fails fast at startup with a clear message (run `xcode-select --install`). Language runtimes including Python itself aren't managed via brew in this environment (see `anyenv-runtime-management` in the Vault), so it's intentionally not listed in the Brewfile.
+Claude Code / Codex themselves are outside brew's management, so install them separately from their official sites. `install-main.sh` requires `python3` (details = the comment at the top of `scripts/install-main.sh`).
 
 `scripts/ngwords.txt` (NG-word definitions used by `export-public-vault.sh` and `audit.sh`) is **not included in this repository** because it's private data. To run `export-public-vault.sh`/`audit.sh` as-is, either set `NGWORDS_FILE=/path/to/your/ngwords.txt` to point at your own file, or write your own NG-word list.
 
@@ -111,15 +102,9 @@ scripts/install-usage-fetch.sh --dry-run  # Preview the usage-fetch install (pri
 scripts/install-usage-fetch.sh            # Installs the usage-fetch LaunchAgent
 ```
 
-- `config/*.sample` is the source for these three local config files' real values. `config/profile.md.sample` and `config/models.conf.sample` ship with the real values used on the maintainer's main machine, so a fresh main machine can copy them as-is; a sub machine should copy them too and then edit at least `machine_role` (and, if it plays a different leader role, `role.leader`). `config/bedrock.env.sample` (→ `~/.config/takumi009-ai-env/bedrock.env`, permission 0600) is only for machines that actually use Bedrock — don't place it on a subscription-only machine; there is no auto-copy for it, you always copy it yourself. `config/models.conf.sample` likewise has no auto-copy — copy it yourself. `config/profile.md.sample` is different: if `~/.config/takumi009-ai-env/profile.md` doesn't exist yet, `install-main.sh` automatically copies `config/profile.md.sample` there for you the first time it runs (an existing skeleton-placement step from before `config/*.sample` existed; it never overwrites a profile that's already there). Copying it yourself beforehand has the same effect — either way you end up with this machine's real values, not a placeholder.
-- Symlinked destinations (`link()` in `install-main.sh`, built on `scripts/lib/managed-symlink.sh` — sub machines go through the same path via `install-sub.sh`) move any existing real file to `<dest>.pre-aienv.bak` the first time before replacing it with a symlink; if the destination gets replaced again by a real file whose content differs from that existing backup (e.g. external edits between runs), it's preserved to a further non-colliding backup (`<dest>.pre-aienv.bak.<UTC timestamp>`) rather than being deleted, so the original pre-install backup is never overwritten and no version is silently lost. Generated/rewritten files instead (`codex/config.toml`, `claude/settings.json`, the local profile's `role.leader` line, etc.) keep the simpler "first run only" backup for a pre-existing real file that differs from what the generator produces — they're regenerated in place every run by design, so there's nothing further to reconcile once that first backup exists. Use `install-main.sh`'s `--dry-run` option to preview its plan only.
-- `codex/config.toml` and `claude/settings.json` are generated as real files — not symlinks. `config.toml`'s placeholder (`__AIENV_HOME__`) is replaced by the actual home path (plain TOML doesn't support shell variable expansion). `settings.json`'s placeholder (`__AIENV_MODEL__`) is replaced by the model/effort actually resolved from the local profile's `role.leader` (via `profile_resolve.py resolve-leader`) — it does not depend on machine role or on `--sub-delegate`; if the profile is missing or `role.leader` can't be resolved, `settings.json` is not generated and the installer exits non-zero (there is no fallback default model). `install-main.sh --render-settings-json <path>` writes just that generated file to `<path>` without placing anything (this is what `check-drift.sh` compares the live file against). Generating rather than symlinking `settings.json` also avoids a side effect where running `/model` interactively rewrites the *repository's* `claude/settings.json` in place (Claude Code writes its saved model choice into the live user settings file, which used to be a symlink straight into this repo).
-- Role definitions (`~/.claude/agents/<role>.md`, one per role under `claude/agents/*.md` in the repo) are symlinks straight into the repo, like the other symlinked destinations above — there is no per-role frontmatter generation. Any role whose `tools:` frontmatter includes `Bash` can look up its own launch candidates (definition name, resolved route, pass/fail, and remaining usage) with `python3 ~/work/takumi009-ai-env/claude/hooks/lib/role_candidates.py [--role <role>]` — an AI-facing command, not meant for interactive use.
-- Both `install-backup.sh` and `install-maintenance.sh` only place the LaunchAgents (bootstrap+enable) — they do **not** trigger an immediate run (kickstart) (because initializing the Vault as a Git repository for the first time is meant to be a staged rollout. Either wait for the next scheduled run, or once you're ready, run `launchctl kickstart -k` manually).
-- Codex is invoked exclusively through `scripts/codex-exec.sh` (a wrapper around `codex exec`, i.e. the CLI, not an MCP server). There is no registration step for `install-main.sh` to run: as long as `codex` is on `PATH`, the wrapper works. The wrapper enforces reading the Vault's `Preferences/absolute-rules.md` note (it refuses to run — exit code 2 — if the request text doesn't reference it), which used to be enforced by a Claude Code PreToolUse hook on the old MCP tools; see `Preferences/codex-exec-worker.md` in the Vault for the invocation pattern.
-- **`claude-exec.sh`**: a role that has candidates in the local profile is launched as a separate `claude -p` process through `scripts/claude-exec.sh` rather than in-process via the `Agent` tool (a `PreToolUse` hook rejects the in-process form for those roles): `scripts/claude-exec.sh --role <role> --model-def <definition-name> --task-id <id> --prompt-file <absolute-path> --out <absolute-path> [--resume <session_id>] [--force] [--dry-run]`. Like the Codex wrapper it enforces reading `Preferences/absolute-rules.md` in the request text, and its own stdout is only 4 lines (`SESSION_ID:`/`OUT:`/`REASON:`/`EXIT:`) — it never surfaces the child's own output into the caller's context. **Reading the worker's report**: the worker's actual final report is the `result` field inside the JSON written to `--out` once the call has completed — read it with `jq -r '.result' <out>`, not the wrapper's own stdout. Any deliverable files the worker produces are written by the worker itself into its own working directory (the parent directory of `--out`, under a name the request text specifies) — the worker never writes to `--out` itself, since the wrapper only creates that file once, atomically, at the end of the run. **Recovering from a leftover lock**: while a call is in flight it reserves `--out` with a `<out>.lock` file; if a previous run was killed before it could release that reservation, the next call to the same `--out` fails until the stale lock is cleared — remove it manually (`rm <out>.lock`) before retrying. **Diagnosing a failed launch**: whenever a child is actually launched, its full stderr is saved next to the artifact as `<out>.stderr` (not created for `--dry-run`, and not used for classification) — when the artifact can't be parsed as JSON (`REASON:other`), this is the first place to look. **`effort:`**: the wrapper resolves `--effort` fresh on every call from the local profile's candidate (via `resolve-candidate`) and passes it straight to `claude -p` — role definitions under `~/.claude/agents/<role>.md` never carry an `effort:` frontmatter line (that per-role generation scheme was retired once the wrapper started resolving effort itself).
-- The weekly drift-notification LaunchAgent (`com.takumi009.drift-check.plist` / `scripts/drift-notify.sh`) that `install-main.sh` used to install, and the standalone Vault-cultivation LaunchAgents (`vault-inventory`/`fragments-log`/`knowledge-merge-detect`) formerly installed by `install-vault-agents.sh`, were all removed/consolidated on 2026-07-16 (see [[Decisions/2026-07-16-nightly-batch-direct-write]] in the Vault). `install-maintenance.sh` migrates any of these 4 retired LaunchAgent labels still loaded on the machine (bootout + remove) before installing the new `com.takumi009.maintenance` LaunchAgent. The unattended weekly path now lives entirely in the new `maintenance.sh` runner.
-- On the main environment, a **private patch (a separate private repository)** is layered on top of this base package. The private patch contains the Vault's substance (`~/Data/obsidian`) and settings that cannot be made public. See that repository's own documentation for its setup steps.
+Details = the comments at the top of `scripts/install-main.sh` (`config/*.sample`, generated files), `scripts/lib/managed-symlink.sh` (backups), `claude/hooks/lib/role_candidates.py`, `scripts/install-backup.sh`/`install-maintenance.sh` (no kickstart), `scripts/codex-exec.sh --help`, and `scripts/claude-exec.sh`.
+
+On the main environment, a **private patch (a separate private repository)** is layered on top of this base package. The private patch contains the Vault's substance (`~/Data/obsidian`) and settings that cannot be made public. See that repository's own documentation for its setup steps.
 
 #### Sub environment
 
@@ -132,18 +117,9 @@ cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # then trim
 scripts/install-sub.sh
 ```
 
-The sub environment is self-contained with just the base package and does not install the private patch (it also has no edit permission = pull only). As with the main environment, `models.conf` and `bedrock.env` have no auto-copy — copy `config/models.conf.sample` yourself before running `install-sub.sh` (and `config/bedrock.env.sample` too, if this machine uses Bedrock). `profile.md` is auto-copied from `config/profile.md.sample` on first run if it doesn't exist yet (same mechanism as the main environment, since `install-sub.sh` calls `install-main.sh` internally) — but for a sub machine you should copy it yourself first anyway, so you can edit `machine_role` to `value=sub` (and `role.leader` if this machine plays a different leader) before the installer runs. `install-sub.sh` does the following:
-
-1. If `$HOME/Data/obsidian` doesn't exist, copies the contents of `vault-public/` (public snapshot + private skeleton) to build the Vault skeleton (does not overwrite if it already exists).
-2. Symlinking of `claude/`/`codex/` and codex MCP registration are done by calling `install-main.sh` directly (shared logic).
-3. The Vault-cultivation and backup LaunchAgents are **not installed** (main-only features).
-4. **Rule-update check on every session start**: the source of truth for machine role is the local profile's `machine_role` capability axis (`$HOME/.config/takumi009-ai-env/profile.md`) — you write it yourself (`machine_role: configured value=main` or `value=sub`); the installers never rewrite an existing profile or its `machine_role` value (if `profile.md` doesn't exist yet, `install-main.sh` creates it fresh from `config/profile.md.sample` — see "Setup" above — but it never touches one that's already there). `claude/hooks/check-sub-update.sh`, `scripts/update-sub.sh`, `scripts/check-drift.sh`, and `claude/hooks/bootstrap-vault.sh` all read it via `profile_resolve.py resolve`'s `MACHINE_ROLE:` field. Only a value that resolves to exactly `sub` is treated as a sub machine — resolution failure, `unknown`, `unavailable`, or a missing line are all treated as *not* sub (fail-closed). `claude/hooks/check-sub-update.sh` (a SessionStart hook) checks this on every Claude Code session start; if it isn't `sub` it does nothing and exits silently (fail-closed). On an actual sub machine it does a time-boxed `git fetch` (fail-open: any failure/timeout/offline situation is silently ignored so it never blocks session startup, though failures are logged to `/tmp/check-sub-update.log`), and if the repository is behind `origin/main`, prints a notice telling you to run `scripts/update-sub.sh` yourself. `scripts/update-sub.sh` itself also checks the same `machine_role` at the very start and refuses to run (via `fail()`) if it isn't `sub` — this is the last line of defense against accidentally running it on the main machine, where its `rsync --delete` step would wipe out the main Vault's `Preferences/`. Beyond that check, `scripts/update-sub.sh` is a single straight-line run that does the same thing every time (no state file, idempotent): take the run lock → `git pull --ff-only` (if the pull fails it warns and exits 1 without changing anything) → run `scripts/install-sub.sh` (symlinks, `settings.json`, `codex/config.toml`, role-definition symlinks, Vault skeleton — this runs even when `HEAD` didn't move, so a newly shipped hook or role definition is picked up without a manual `install-sub.sh` re-run; a non-zero exit is reported as `FAIL` with the recovery command and propagated as the exit code) → re-sync `vault-public/Preferences/` into the Vault with `rsync --delete` (**touches nothing outside Preferences**, so local `Fragments` etc. on the sub machine are not deleted) → fill in any new skeleton folders. It takes no arguments (the old re-sync flag is gone — Preferences are synced on every run; use `scripts/install-sub.sh --dry-run` to preview the placement). Recovery on the sub machine itself: `git pull --ff-only && scripts/install-sub.sh`, then `scripts/update-sub.sh` again.
-
-On sub machines, private notes such as `Personal/profile-personal.md` and `Knowledge/mistakes.md` don't exist, but since `bootstrap-vault.sh` (the SessionStart hook) is designed to only list **files that actually exist** as required reading, no "not found" warnings appear.
+Details = the comments at the top of `scripts/install-sub.sh`, `claude/hooks/check-sub-update.sh`, and `scripts/update-sub.sh`.
 
 ##### Updating an existing sub machine (when a new schema/config lands)
-
-`scripts/update-sub.sh` reads the local profile's `machine_role` capability axis via the resolver and only proceeds when it resolves to exactly `sub` (resolution failure, a missing line, or an old schema are all treated as `unknown` — every one of these is rejected, fail-closed). With an outdated profile still in place it stops instead, so update in this order:
 
 1. `git pull --ff-only` (a plain pull, not `update-sub.sh` — with the old profile still in place, `update-sub.sh` itself would refuse to run).
 2. Only if the schema changed: copy the samples over the real files (`cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`, `cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`; back up the existing real file first, permission `0600`) and edit the profile for this sub machine — at least `machine_role: configured value=sub` (the samples carry the main machine's values), plus `role.leader`, `no_read_paths`, `team_mode` as needed. `scripts/install-sub.sh --check-profile` prints the resolve result as one line with no side effects.
@@ -155,47 +131,26 @@ On sub machines, private notes such as `Personal/profile-personal.md` and `Knowl
 
 ```sh
 scripts/install-main.sh --with-dotfiles   # or install-sub.sh --with-dotfiles
+cd ~/work/dotfiles && git pull --ff-only && ./install.sh   # refresh an existing dotfiles checkout
 ```
 
-**Show cmux Dock's "Project"/"Task" panes on a sub machine too (optional, dotfiles-installed machines only)**: since cmux-session-todo v3, the two panes are split across two repos — this repo (`takumi009-ai-env`) holds the *supply side* (`cmux/cmux-task-model.sh`, `cmux/cmux-next-model.sh`, `cmux/cmux-task-declare.sh`; builds the numbered table and per-tick frame from Vault/declaration/external-brain data), and `dotfiles` holds the *drawing side* (`cmux/cmux-task-watch/`, `cmux/cmux-next-watch/`; renders whatever the supply side hands it). Neither side reaches into `~/work/tools/` anymore.
-   - `scripts/install-main.sh` (main machine) or `scripts/install-sub.sh` (sub machine) places the three supply-side scripts above and `chmod +x`'s them as part of the normal repo checkout — no extra step is needed on the ai-env side.
-   - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh` (on a machine without dotfiles yet, use `scripts/install-sub.sh --with-dotfiles` instead). `dock.json`'s "Project"/"Task" panes launch the dotfiles drawing-side scripts directly by absolute path; if the supply side above isn't present or executable, the pane just shows the reason line `AI環境 未導入` and keeps running.
-   - Restart cmux → dock-guard re-seeds all four panes: Usage / Project / Task / System.
-   - The pane only shows content once the leader declares a project during the session with `~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>` (the target `Projects/<slug>.md` needs a `## Tasks` section; this declaration step is intentionally not hooked automatically).
-
-If `$HOME/work/dotfiles` doesn't exist, it `git clone`s it ([Takumi00Nine/dotfiles](https://github.com/Takumi00Nine/dotfiles)) and then calls `./install.sh` (if it already exists, skips the clone and just calls `install.sh`). Off by default (dotfiles are never touched unless this option is given). dotfiles are a "component" outside ai-env's scope, but the installer can call it as a subcontractor.
+cmux Dock's "Project"/"Task" panes — details = `Decisions/2026-09-15-cmux-dock-two-repo-split` in the Vault.
 
 ### Vault Backup Operations
 
-`scripts/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). It has locking to prevent concurrent runs (mutual exclusion via atomic file creation) and stale detection for `git index.lock`, and is meant to run unattended every 6 hours via `launchagents/com.takumi009.backup-vault.plist` (installed by `scripts/install-backup.sh`).
-
-The user creates and configures the remote for the Vault's backup destination (a private repo) themselves (the scripts in this repository never create a remote on their own).
+`scripts/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). Details = the comment at the top of the script.
 
 ### Weekly Maintenance Runner (main only)
 
-`scripts/maintenance.sh` is the single weekly runner (Monday 03:00, installed by `scripts/install-maintenance.sh`) that replaced the older separate Vault-cultivation LaunchAgents on 2026-07-16. The unattended headless-Claude apply step (Fragments promotion / Knowledge merge / Decision propagation) was retired on 2026-09-19 — the runner now only detects and counts; promotion happens while the user is present, via `vault-scribe`. It runs in 3 phases:
-
-- **Phase 0** — takes a pre-run snapshot via `backup-vault.sh`, acquires a Vault write-lock (PID file, held through Phase 3), and retries `export-public-vault.sh` if the `vault-public/Preferences` snapshot is behind.
-- **Phase 1 (detection only, read-only)** — runs, in order, `check-drift.sh` (environment health check; since 2026-08-10, a drift finding, execution error, or timeout no longer aborts the run — it's recorded as a warning and the run continues. The sole gate for Vault write safety is Phase 0's pre-run snapshot), `fragments_log.py`, and `vault_inventory.py`. The 3 steps are isolated from each other's failures. `vault_inventory.py` writes `~/.claude/logs/vault-inventory/latest.json` (`actionable` = number of fixable findings), which the SessionStart health line and the Dock read.
-- **Phase 3** — appends a one-line summary to today's Fragments file, updates `last-run.json` (`last_success_at` only on a fully clean run; `last_result` — success/warn/fail — is always recorded, and a warning or failure shows up as a ⚠️ line in the next session's startup health check; `fragments_candidates` = number of unprocessed Fragments since the last successful run, shown by the Dock's Project pane weekly line as "候補N件" — it is never injected into the AI, and nothing moves until the user says "昇格して"), takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
-
-All intermediate files and machine-readable status files for a given run live under `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/`, with `~/.claude/logs/maintenance/latest` always pointing at the most recent run.
+`scripts/maintenance.sh` is the single weekly runner (Monday 03:00, installed by `scripts/install-maintenance.sh`). Details = the comment at the top of the script.
 
 ### Usage Monitoring (usage_snapshot.py)
 
-The `UserPromptSubmit` hook injects a **【使用率・この発言時点】** block with one line per quota pool (`claude-subscription` / `codex-subscription` / `unlimited`) on every user prompt, so the orchestrator sees a fresh snapshot throughout the session. This is presentation-only: the mechanism never picks candidates based on usage, ranks pools against each other, or computes a "bias" — it just lays the remaining percentages side by side and lets the orchestrator decide.
-
-- **Prerequisite**: a usage fetcher (see "Usage fetcher" below) refreshes `~/.cache/claude-codex-usage/claude-cache.json` / `codex-cache.json` once a minute; `usage_snapshot.py` only reads those files and never touches the network itself.
-- **Manual check**: `python3 claude/hooks/lib/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot).
-- If the cache is missing (fetcher not installed) or stale, the block still shows exactly 3 lines with a plain-language explanation instead of failing silently.
-- **Codex "tickets"**: the Codex line ends with a ticket count and expiry (e.g. `／チケット 1枚（10/05）`) when Codex reports a banked rate-limit reset credit, or `チケット 0枚` / `チケット 取得不可` when there are none or the data is unavailable.
-- A ticket resets both the 5h and 7d windows. Claude's reset only covers the 5h window, and the fetcher does not attempt to fetch Claude ticket data at all — no confirmed machine-readable API for it is known, so the Claude pool's `reset_credits` in `--json` is a fixed placeholder (`note: "not_machine_readable"`), never live data. That scope difference lives in `--json`'s `reset_credits.reset_scope`, not in the short human-readable line.
+**Manual check**: `python3 claude/hooks/lib/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot). Details (the `UserPromptSubmit` block, prerequisite fetcher, Codex "tickets") = the docstring of `claude/hooks/lib/usage_snapshot.py`.
 
 ### Usage fetcher (scripts/usage-fetch.sh / scripts/install-usage-fetch.sh)
 
-`scripts/usage-fetch.sh` fetches Claude's OAuth usage percentages, Codex's `rateLimits`, and (since 2026-09-09) Codex's banked rate-limit reset credits (`reset_credits`, see "Codex tickets" above) once a minute (LaunchAgent `com.takumi009.usage-fetch`) and writes them atomically to `~/.cache/claude-codex-usage/{claude,codex}-cache.json` — the same paths and `schema_version` (1) that the Dock-rendering display script `cmux-usage-watch.sh` reads (bundled in the separate `dotfiles` repo). A rate-limited (429) response is a complete no-op (not a byte of the cache changes); any other failure (timeout, network error, malformed response, missing `codex` command) is recorded as `last_error` without touching `fetched_at`, so a display reading a stale-but-`ok` cache and a display reading a freshly-recorded failure are always distinguishable.
-Install it with `scripts/install-usage-fetch.sh` (a plain bootstrap+enable installer, same shape as `install-backup.sh`; `--dry-run` only prints the current state). If the retired `com.claude-codex-usage.refresh` job is still loaded on the machine, the installer stops without changing anything and prints the `launchctl bootout` command to run first (only one fetcher is ever meant to run). `check-drift.sh` reports `[USAGE-FETCH-*]` / `[USAGE-LOCK-STUCK]` if the job is not loaded, disabled, or stops updating.
-Sub machines are not given this LaunchAgent automatically (`install-sub.sh` never installs LaunchAgents, and `update-sub.sh` does not re-run this installer) — run `scripts/install-usage-fetch.sh` there yourself if you want usage tracking on that machine too.
+Install it with `scripts/install-usage-fetch.sh` (a plain bootstrap+enable installer, same shape as `install-backup.sh`; `--dry-run` only prints the current state). Details = the comments at the top of `scripts/usage-fetch.sh` and `scripts/install-usage-fetch.sh`.
 
 ### Drift Detection (check-drift.sh)
 
@@ -203,15 +158,7 @@ Sub machines are not given this LaunchAgent automatically (`install-sub.sh` neve
 scripts/check-drift.sh
 ```
 
-Checks the following 5 points and lists them (**it does not exit 1 even if drift is detected** — it's purely a report tool for manual checking):
-
-1. Whether the 23 symlink files (including one per role definition under `~/.claude/agents/`) point to the actual files in the repo, plus a check of the generated `~/.claude/settings.json`: the installer's own generation function re-renders it into a temporary file (`scripts/install-main.sh --render-settings-json`) and the result is diffed against the live file after JSON normalization, reporting differing top-level key names only (values are never printed; `model` is compared like any other key, so a mismatch after `/model` is drift too; if re-rendering fails, that is one `[SETTINGS-RENDER-FAILED]` drift item)
-2. Whether `~/.codex/config.toml` (a generated file) matches the repo's template with the placeholder expansion applied. The tables Codex Desktop rewrites on startup (`plugins`, `mcp_servers`, `desktop`) are treated as app-managed and excluded; what is monitored is the 7 keys the maintainer chose in the template (`service_tier`, `approval_policy`, `model`, `model_reasoning_effort`, `sandbox_workspace_write.network_access`, `features.hooks`, `features.js_repl`)
-3. Whether this repository has any uncommitted changes
-4. Whether `vault-public/Preferences` differs from the real Vault's `Preferences` (detects export omissions from `export-public-vault.sh`). This one is informational only: differences are shown as `ℹ️ INFO` and not counted as drift (the export is run in the weekly maintenance Phase 0 and at the close of each task; the count is still reported as `item4_drift` in `--json`)
-5. Whether the remote of the Vault backup / private-patch repo (`AIENV_PRIVATE_REPO`, default `~/work/takumi009-ai-env-private`) is still actually **private** on GitHub (`gh repo view --json visibility`). This is a standing check for whether a repository that should be private was accidentally made public. Not applicable if the remote isn't configured; if `gh` isn't installed/authenticated, it's shown only as a warning rather than counted as drift (the ai-env repo itself is "planned to go public," so it's excluded from this check)
-
-This script itself is a manually-run report tool. The former weekly unattended path (`scripts/drift-notify.sh` / `launchagents/com.takumi009.drift-check.plist`, Monday 09:30, macOS notification on drift>0) was removed on 2026-07-16; the unattended run now happens as check ① of the new `maintenance.sh` runner's Phase 1 (see above), with a `--json` mode added for that machine-readable use.
+Checks the following 5 points and lists them (**it does not exit 1 even if drift is detected** = a report tool for manual checking): ① managed symlinks and the generated `~/.claude/settings.json`, ② the generated `~/.codex/config.toml`, ③ uncommitted changes in this repository, ④ `vault-public/Preferences` vs. the real Vault (informational only), ⑤ the Vault-backup / private-patch remote is still **private** on GitHub. Details = the comment at the top of the script.
 
 ### Restore Runbook (Disaster Recovery / Main Migration)
 
@@ -238,7 +185,7 @@ cd ~/work/takumi009-ai-env && brew bundle
 mkdir -p ~/.config/takumi009-ai-env
 cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # local config isn't part of any backup — recreate it
 cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # (edit machine_role/model defs back to what this machine had)
-scripts/install-main.sh --with-dotfiles   # symlinks + dotfiles + codex MCP registration
+scripts/install-main.sh --with-dotfiles   # symlinks + dotfiles
 scripts/install-backup.sh                 # Resume periodic backups
 scripts/install-maintenance.sh            # Resume the weekly maintenance runner
 scripts/install-usage-fetch.sh --dry-run  # Resume usage tracking: print the current state first
@@ -247,8 +194,8 @@ scripts/install-usage-fetch.sh            # Resume usage tracking
 # 5. Log in to each app (manual): Claude Code / Codex / others
 ```
 
-- Scope of what's restored = **everything up to the pushed state**. Uncommitted work is lost (guarded against day-to-day via `scripts/check-drift.sh`'s uncommitted-changes detection)
-- The maximum backup delay depends on the Mac's sleep state (the LaunchAgent doesn't fire while asleep and catches up once on wake)
+- Scope of what's restored = **everything up to the pushed state** (uncommitted work is lost)
+- The maximum backup delay depends on the Mac's sleep state
 
 #### Main migration (planned move to a new Mac)
 
@@ -265,38 +212,15 @@ scripts/session-handoff.sh <path-to-resume-note> "<follow-up request>" [--cwd <d
 scripts/session-handoff.sh -h | --help
 ```
 
-- `<path-to-resume-note>` must exist and be readable (a leading `~/` is expanded to `$HOME`); it is embedded in the sent message as an absolute path.
-- `<follow-up request>` must be non-empty and must not contain a newline (LF/CR).
-- `--cwd` defaults to the caller's `$PWD`; it must be an existing directory.
-- `--name` defaults to "引き継ぎ `<resume note filename without .md>`".
-- Exit codes: `0` sent · `1` invalid arguments (cmux is never called) · `2` `new-workspace` failed · `3` timed out waiting for the prompt (the workspace is left open) · `4` sending failed.
-- Environment variables: `SESSION_HANDOFF_CMUX_BIN` (cmux binary, default `cmux`), `SESSION_HANDOFF_WAIT_SEC` (max wall-clock seconds to wait for the `❯` prompt, default `60`, non-negative integer; `0` is a special case meaning "poll exactly once, immediately"), `SESSION_HANDOFF_GRACE_SEC` (grace period after the prompt is detected, default `5`, non-negative integer), `SESSION_HANDOFF_SEND_GAP_SEC` (gap between `send` and `send-key Enter`, default `1`, non-negative integer), `SESSION_HANDOFF_CALL_TIMEOUT_SEC` (per-call timeout for each `read-screen` invocation, default `5`, **integer >= 1**; caps how long a single unresponsive `cmux` call can block, and is further capped to whatever time remains before the `SESSION_HANDOFF_WAIT_SEC` deadline so a slow call can never make the script overrun that deadline by more than roughly a second — see the note below). Only `SESSION_HANDOFF_WAIT_SEC`, `SESSION_HANDOFF_GRACE_SEC`, and `SESSION_HANDOFF_SEND_GAP_SEC` can be set to `0` to speed up testing. `SESSION_HANDOFF_CALL_TIMEOUT_SEC` rejects `0` outright (exit `1`) because a zero-second call timeout would race with the command's own completion; it is not part of the "safe to zero" group. A non-integer (or, for the first three, negative) value for any of the four is rejected (exit `1`, cmux is never called). `SESSION_HANDOFF_CMUX_BIN` is a command name/path, so setting it to `0` will not work.
-- `send` and `send-key Enter` are issued as two separate steps — a message with a trailing `\r` is not actually submitted.
-- The script waits a short grace period after the `❯` prompt appears, to let startup injection (e.g. the SessionStart hook) finish first.
-- `SESSION_HANDOFF_WAIT_SEC` is the wall-clock limit for waiting on the prompt. However, if `read-screen` itself ignores the `TERM` sent to end a timed-out call, that call can only be force-killed a further ~1 second later, so the actual overrun is bounded to about that one extra second, not the call's full duration.
+Arguments, exit codes, and environment variables = `scripts/session-handoff.sh -h`.
 
 ### Tests
 
 ```sh
-bash tests/test-export-public-vault.sh
-bash tests/test-backup-vault.sh
-bash tests/test-bootstrap-vault.sh
-bash tests/test-usage-inject.sh
-bash tests/test-install-sub.sh
-bash tests/test-install-backup.sh
-bash tests/test-install-maintenance.sh
-bash tests/test-usage-fetch.sh
-bash tests/test-install-usage-fetch.sh
-bash tests/test-with-dotfiles.sh
-bash tests/test-check-drift.sh
-bash tests/test-codex-exec.sh
-bash tests/test-update-sub.sh
-bash tests/test-check-sub-update.sh
-bash tests/test-audit.sh
-bash tests/test-session-handoff.sh
+for t in tests/test-*.sh; do bash "$t"; done
 ```
 
-None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). This list predates several `tests/test-*.sh` files added during the 2026-07-16 simplification project (e.g. `test-shell-lib.sh`, `test-vault-lib.sh`, `test-merge-checks.sh`, `test-maintenance-run-step.sh`, and others) — run `ls tests/test-*.sh` for the full, current set and suite count (intentionally not restated here as a fixed number, to avoid drifting out of sync again).
+None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run).
 
 ### License
 
@@ -330,37 +254,32 @@ None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the
 ```
 takumi009-ai-env/
 ├── claude/
-│   ├── settings.json          # ~/.claude/settings.json のテンプレ（symlinkではなく生成、後述）
-│   ├── hooks/                 # bootstrap-vault.sh・usage-inject.sh・check-sub-update.sh・delegation-gate-v2.sh・bash-danger-gate.sh・next-pane-resolve.sh・task-pane-resolve.sh・vault-recall.sh・vault-read-log.sh
+│   ├── settings.json          # ~/.claude/settings.json のテンプレ（生成）
+│   ├── hooks/                 # Claude Code のフック
 │   └── agents/                # ワーカー役割定義（7ロール）
-├── codex/
-│   ├── AGENTS.md               # ~/.codex/AGENTS.md （symlink先）
-│   ├── hooks.json               # ~/.codex/hooks.json （symlink先）
-│   └── config.toml              # ~/.codex/config.toml のテンプレ（symlinkではなく生成、後述）
+├── codex/                     # AGENTS.md・hooks.json（symlink先）・config.toml（生成）
 ├── scripts/
-│   ├── install-main.sh          # メイン環境用インストーラ（symlink化。--with-dotfiles対応）
-│   ├── install-sub.sh           # サブ環境用インストーラ（Vault骨格配置＋install-main.shへ委譲）
-│   ├── install-backup.sh        # Vaultバックアップ用LaunchAgentのインストーラ
-│   ├── install-maintenance.sh   # 週次メンテナンスランナー用LaunchAgentのインストーラ（メイン専用）
-│   ├── install-usage-fetch.sh   # 使用率取得器用LaunchAgentのインストーラ（bootstrap+enable・機ごとに手動実行）
-│   ├── codex-exec.sh            # Codexを呼び出す唯一の口（`codex exec`のラッパー。旧MCP登録に代わるもの）
-│   ├── claude-exec.sh            # ワーカーを別プロセスの`claude -p`として起動する唯一の口（codex-exec.shと同型の契約）
-│   ├── backup-vault.sh          # Vaultを定期的にgit commit（+push）するスクリプト
-│   ├── usage-fetch.sh           # Claude/Codexの使用率を取得し、dotfilesリポジトリのcmux-usage-watch.sh表示スクリプトが読むキャッシュへ書き出す（旧claude-codex-usageは2026-09-18退役）
-│   ├── maintenance.sh           # 週次メンテナンスランナー（バックアップ＋検出＋サマリ。Fragments昇格は在席時にvault-scribe。メイン専用）
-│   ├── update-sub.sh            # サブのルールを最新化する手動実行コマンド（サブ専用。check-sub-update.shの案内から本人が実行）
-│   ├── export-public-vault.sh   # Vaultのpublicフォルダを vault-public/ へエクスポートするスクリプト
-│   ├── check-drift.sh           # symlink/config.toml/repo/vault-public/private repo可視性の「ズレ」を検知する手動監査ツール
-│   ├── audit.sh                 # public公開前の総監査ツール（git履歴全体のNGワード/実ユーザー名パス/シークレット・追跡ファイル逸脱・完備性）。`--quick` で履歴スキャン（重い）を省き現在ツリーのみ実行
-│   ├── vault-agents/            # maintenance.shが起動する検出器群（vault_inventory.py・fragments_log.py・maintenance_run_step.py・vault_lib.py）＋apply_aliases.py（手動CLI）。メイン専用機能
-│   ├── ngwords.txt              # NGワード定義（私的データのため**このリポジトリには含まれない**。詳細は「導入手順」参照）
-│   └── templates/               # private骨格フォルダ用のREADMEテンプレ
-├── launchagents/
-│   ├── com.takumi009.backup-vault.plist       # Vaultバックアップを6時間ごとに実行（メイン専用）
-│   └── com.takumi009.maintenance.plist        # 週次メンテナンスランナーを実行（メイン専用）
-├── vault-public/                # Vaultのpublic指定フォルダのスナップショット（後述）
-├── Brewfile                     # `brew bundle` で導入する依存formula（後述）
-└── tests/                       # 上記スクリプト群のユニットテスト
+│   ├── install-main.sh        # メイン環境インストーラ
+│   ├── install-sub.sh         # サブ環境インストーラ
+│   ├── install-backup.sh      # バックアップ LaunchAgent 導入
+│   ├── install-maintenance.sh # 週次メンテ LaunchAgent 導入（メイン専用）
+│   ├── install-usage-fetch.sh # 使用率取得器 LaunchAgent 導入
+│   ├── codex-exec.sh          # Codex を呼ぶ唯一の口（`codex exec`）
+│   ├── claude-exec.sh         # ワーカー起動の唯一の口（`claude -p`）
+│   ├── backup-vault.sh        # Vault を git commit（+push）
+│   ├── usage-fetch.sh         # 使用率 → cmux-usage-watch.sh 用キャッシュ
+│   ├── maintenance.sh         # 週次メンテナンスランナー（メイン専用）
+│   ├── update-sub.sh          # サブのルール更新（サブ専用・手動）
+│   ├── export-public-vault.sh # public フォルダ → vault-public/
+│   ├── check-drift.sh         # 「ズレ」の手動レポート
+│   ├── audit.sh               # 公開前の総監査（`--quick`＝現在ツリーのみ）
+│   ├── vault-agents/          # maintenance.sh の検出器群（メイン専用）
+│   ├── ngwords.txt            # NGワード（私的データ・**リポジトリに含まれない**）
+│   └── templates/             # private 骨格フォルダの README テンプレ
+├── launchagents/              # backup-vault／maintenance の plist
+├── vault-public/              # public フォルダのスナップショット（後述）
+├── Brewfile                   # `brew bundle` の依存
+└── tests/                     # ユニットテスト
 ```
 
 ### 役割: リーダー／ワーカー／Codex
@@ -371,15 +290,13 @@ takumi009-ai-env/
 - **ワーカー（worker）**: `claude/agents/` 配下の7つの役割定義（要件定義・設計・実装・テスト・調査・運用・採用判定）で起動されるサブエージェントです。
 - **Codex**: 一次レビュアー専任（`scripts/codex-exec.sh`＝`codex exec`のBashラッパー経由。レビュースレッドの継続はラッパーの`--resume`で行う）。ワーカーがリーダーへ報告する前に、自分の成果物のレビューを依頼する相手です。
 
-ワーカーのモデルは配役表の候補から起動ごとに選びます。実配置の `--agents-dir` を渡して `resolve-candidate` を実行し、subagentでは返された `AGENT_MODEL` を `Agent.model` に明示します。非0・出力不正では起動しません。対象8職種の指定漏れ・不正値はガードが拒否します。旧世代IDと非anthropic-apiのsubagent経路は拒否し、external-cliの`CODEX_ARGS`は維持します。
-
-配役表に候補を持つ職種は、`Agent` ツールでの in-process 起動はできません（`PreToolUse` フックが拒否します）。代わりに `scripts/claude-exec.sh`（`codex-exec.sh` と同型の契約を持つ Bash ラッパー）経由で、別プロセスの `claude -p` として起動します。呼び出しの形・ワーカーの報告の読み方・ロック残りの回復手順は下記「claude-exec.sh」を参照してください。
+ワーカーの起動の仕組みの詳細＝`scripts/claude-exec.sh` 冒頭のコメント。
 
 ### vault-public/ について
 
 このリポジトリの `vault-public/` は、外部脳（Obsidian Vault）のうち「個人情報を含まない」と決めたフォルダ（現状 `Preferences/`）だけを丸ごとコピーしたスナップショットです。個人情報を含みうる残りのフォルダ（`Personal/` `Knowledge/` `Decisions/` `Projects/` `Fragments/` `Explorations/` `Blogs/`）は、**中身を含めず空フォルダ＋README.mdだけ**を再現しています（サブ機で書き込もうとした際に「フォルダが無い」で失敗しないようにするため）。export の起点は 2 つ＝週次 `maintenance.sh` の Phase 0 と、メイン機での案件の締め（`check-drift.sh` はスナップショットの遅れを informational として表示するだけ）。
 
-生成・更新は `scripts/export-public-vault.sh` が行います。NGワード・シークレット混入は常に fail-fast（1件でも検知したら実行を失敗させて commit させない）です。private フォルダへの wiki link（うっかりリンク）については、fail-fast 対象は `Personal/` への link のみで、それ以外の private フォルダ（`Knowledge/` `Decisions/` `Projects/` `Fragments/` `Explorations/`）への link は許容し、レポート表示のみ（exit 0）です（詳細はスクリプト冒頭のコメント参照）。なお、private フォルダへの link は public 側では意図的にリンク切れになります（レポートに一覧表示されます）: リンク先は本人の非公開Vaultにしか存在しないノートを指しているため、Obsidianで開くと未解決リンクとして表示されますが、これは正常な状態でありバグではありません。`Personal/` だけが（レポートに留めず）fail-fast の対象になっているのは、他の private フォルダと違い `Personal/` はノート名自体が私事を示す傾向があるためです。いずれのチェックも全項目が通過するまで本番の `vault-public/` には一切触れません（一時ステージング領域で生成・検証してから昇格するため、チェックが1つでも失敗すれば `vault-public/` は完全に無変更のままです。昇格より後の失敗＝例えば git commit 用の identity 未設定は、セキュリティ上の懸念とは別の話としてスクリプト冒頭のコメントを参照してください）。
+生成・更新は `scripts/export-public-vault.sh` が行います（詳細＝スクリプト冒頭のコメント）。
 
 ### 導入手順
 
@@ -389,9 +306,7 @@ takumi009-ai-env/
 brew bundle          # Brewfile を見て ripgrep・gitleaks・jq・gh・macmon を導入
 ```
 
-Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイトから別途インストールしてください。
-
-`install-main.sh` は `python3` を必要とします（`claude/settings.json` の生成に使用。`check-drift.sh` の `config.toml`/`settings.json` 比較でも別途必要）。macOSは通常Xcode Command Line Tools経由でpython3を持つため通常は問題になりません。無い場合は`install-main.sh`が起動直後に明確なメッセージ付きでfail-fastします（`xcode-select --install`で導入してください）。言語ランタイム（Python自身を含む）はこの環境ではbrew管理しない方針のため（Vaultの`anyenv-runtime-management`参照）、意図的にBrewfileには含めていません。
+Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイトから別途インストールしてください。`install-main.sh` は `python3` を必要とします（詳細＝同スクリプト冒頭のコメント）。
 
 `scripts/ngwords.txt`（`export-public-vault.sh`・`audit.sh` が使うNGワード定義）は私的データのため**このリポジトリには含まれません**。`export-public-vault.sh`/`audit.sh` をそのまま実行するには、`NGWORDS_FILE=/path/to/your/ngwords.txt` で自分のファイルを指定するか、自分のNGワード定義を作成してください。
 
@@ -410,15 +325,9 @@ scripts/install-usage-fetch.sh --dry-run  # 使用率取得器: まず状態だ�
 scripts/install-usage-fetch.sh            # 使用率取得器のLaunchAgentを導入
 ```
 
-- この3本のローカル設定ファイルの実値の入手元は `config/*.sample` です。`config/profile.md.sample`・`config/models.conf.sample` にはメンテナ本人のメイン機の実値がそのまま入っているため、新しいメイン機はそのままコピーして使えます。サブ機もコピーしたうえで、少なくとも `machine_role`（本人が別のリーダー配役を担うなら `role.leader` も）を書き換えます。`config/bedrock.env.sample`（コピー先＝`~/.config/takumi009-ai-env/bedrock.env`・パーミッション0600）は実際にBedrockを使う機だけが置くもので、サブスク本命機には置きません。自動コピーは無いので必ず自分でコピーします。`config/models.conf.sample` も同様に自動コピーは無く、自分でコピーします。`config/profile.md.sample` だけは別で、`~/.config/takumi009-ai-env/profile.md` がまだ無ければ `install-main.sh` が初回実行時に `config/profile.md.sample` を自動でそこへコピーします（`config/*.sample` 新設より前からある既存の雛形配置ステップで、既にある実体は上書きしません）。事前に自分でコピーしても結果は同じで、どちらの経路でも placeholder ではなくこのマシンの実値が入ります。
-- symlink化する配置先（`install-main.sh` の `link()`。`scripts/lib/managed-symlink.sh` を土台とし、サブ機も `install-sub.sh` 経由で同じ経路を通ります）は、既存の実ファイルを初回だけ `<dest>.pre-aienv.bak` へ退避してから symlink に置き換えます。実行の合間に外部要因（手動編集等）で配置先が再び実ファイルへ置き換わり、その内容が既存の `.pre-aienv.bak` と異なる場合は、削除せず衝突しない追加backup（`<dest>.pre-aienv.bak.<UTCタイムスタンプ>`）へ保存します（インストール前オリジナルの `.pre-aienv.bak` は上書きせず、どの版も消えません）。一方、生成・書換対象（`codex/config.toml`・`claude/settings.json`・ローカル実体プロファイルの`role.leader`行等）は、実ファイルとして既存のdestが差分を持つ場合に同じ退避規則を使いますが、以降は毎回その場で再生成する設計のため実質的には初回だけのbackupで足ります（初回backup後に突き合わせる対象が無いため）。`install-main.sh` の `--dry-run` オプションで計画だけを確認できます。
-- 職種定義（`~/.claude/agents/<職種>.md`。repo側の素材は `claude/agents/*.md`）は、上記の他の symlink化配置先と同じく repo へそのまま symlink されます — 職種ごとのfrontmatter生成はありません。`tools:` に `Bash` を持つ職種は、自分の起動候補（定義名・解決済みroute・可否・残枠）を `python3 ~/work/takumi009-ai-env/claude/hooks/lib/role_candidates.py [--role <職種>]` で照会できます（AI向けコマンドであり対話利用は想定していません）。
-- `codex/config.toml`・`claude/settings.json` は symlink ではなく実ファイルとして生成されます。`config.toml` はプレースホルダ（`__AIENV_HOME__`）を実ホームパスへ置換します（plain TOML はシェル変数展開されないため）。`settings.json` はプレースホルダ（`__AIENV_MODEL__`）を、ローカル実体プロファイルの `role.leader` から実際に解決された model/effort（`profile_resolve.py resolve-leader` 経由）へ置換します — 機役割にも `--sub-delegate` にも依存しません。実体が無い・`role.leader` が解決できない場合は `settings.json` を生成せず非0で終了します（既定モデルへの縮退はありません）。`install-main.sh --render-settings-json <path>` は、この生成物だけを `<path>` へ書いて何も配置しません（`check-drift.sh` が実ファイルとの比較に使う入力です）。symlinkではなく生成にしているのは、symlinkのままだとセッション内で `/model` を実行した際にClaude Code自身がユーザー設定ファイルへ保存した選択を書き込む仕様により、symlink先＝このリポジトリの `claude/settings.json` が直接書き換わってしまう副作用を避けるためでもあります。
-- `install-backup.sh`・`install-maintenance.sh` はどちらも LaunchAgent の配置（bootstrap+enable）までを行い、**即時実行（kickstart）はしません**（Vault の初回git化は段階的ロールアウトが前提のため。初回実行は次回の定期発火を待つか、準備が整ってから手動で `launchctl kickstart -k` してください）。
-- Codexは `scripts/codex-exec.sh`（`codex exec`＝CLIのラッパーであり、MCPサーバーではない）を通じてのみ呼び出します。`codex` がPATH上にありさえすれば動くため、`install-main.sh` 側に登録ステップはありません。ラッパー自身がVaultの `Preferences/absolute-rules.md` 参照を強制します（依頼文にその参照が無ければ実行せずexit code 2で終了する。旧MCPツールに対するClaude CodeのPreToolUseフックが担っていた検査をこちらへ移したもの）。起動の型はVaultの `Preferences/codex-exec-worker.md` を参照してください。
-- **`claude-exec.sh`**: 配役表に候補を持つ職種は、`Agent` ツールでの in-process 起動ではなく（`PreToolUse` フックがそちらを拒否します）、`scripts/claude-exec.sh` 経由で別プロセスの `claude -p` として起動します：`scripts/claude-exec.sh --role <職種> --model-def <定義名> --task-id <id> --prompt-file <絶対パス> --out <絶対パス> [--resume <session_id>] [--force] [--dry-run]`。Codexラッパーと同様に依頼文への `Preferences/absolute-rules.md` 参照を強制し、自身の標準出力は常に4行だけ（`SESSION_ID:`／`OUT:`／`REASON:`／`EXIT:`）です——子（起動されたワーカー）の出力を呼び出し元の文脈へそのまま持ち込みません。**報告の読み方**: ワーカーの最終報告は、呼び出し完了後に `--out` へ確定されたJSONの `result` フィールドです——`jq -r '.result' <out>` で読みます（ラッパー自身の標準出力ではありません）。ワーカーが作る成果物ファイルは、ワーカー自身が自分の作業ディレクトリ（`--out` の親ディレクトリ・依頼文が指定する名前）へ書きます——`--out` 自体には書きません（ラッパーが実行の最後に一度だけ、原子的にそのファイルを作るため）。**ロック残りの回復**: 実行中は `<out>.lock` で `--out` を予約しており、前回の呼び出しがこの予約を解除する前に強制終了されると、同じ `--out` への次回呼び出しはロックが残ったままだと失敗し続けます——再試行の前に手動で削除してください（`rm <out>.lock`）。**起動失敗の診断**: 子を実際に起動した呼び出しでは、子の標準エラー全文が `--out` の隣に `<out>.stderr` として常に残ります（`--dry-run` では作られず、分類にも使いません）——成果物がJSONとして解析できない（`REASON:other`）場合はまずここを確認してください。**`effort:` について**: ラッパーは呼び出しのたびに配役表の候補から `--effort` を新たに解決し（`resolve-candidate` 経由）、そのまま `claude -p` へ渡します——`~/.claude/agents/<職種>.md` の職種定義に `effort:` frontmatter行が乗ることはありません（その生成方式はラッパー自身がeffortを解決するようになったため退役しました）。
-- `install-main.sh` が配置していた**週次drift通知LaunchAgent**（`com.takumi009.drift-check.plist`／`scripts/drift-notify.sh`）と、`install-vault-agents.sh`（撤去済み）が配置していたVault育成系LaunchAgent3種（`vault-inventory`／`fragments-log`／`knowledge-merge-detect`）は、いずれも2026-07-16の簡素化で撤去・統合しました（Vault内 `Decisions/2026-07-16-nightly-batch-direct-write` 参照）。`install-maintenance.sh` はこの旧4ラベルがまだマシンに残っていれば移行（bootout＋削除）してから新設の `com.takumi009.maintenance` LaunchAgentを設置します。週次無人実行の経路は新設の `maintenance.sh` ランナーへ完全に移りました。
-- メイン環境では、この基本パッケージの上に**私的パッチ（別のprivateリポジトリ）**を重ねます。私的パッチには Vault の実体（`~/Data/obsidian`）や、公開できない設定が含まれます。私的パッチの導入手順は当該リポジトリ側のドキュメントを参照してください。
+詳細＝`scripts/install-main.sh`（`config/*.sample`・生成物）・`scripts/lib/managed-symlink.sh`（退避規則）・`claude/hooks/lib/role_candidates.py`・`scripts/install-backup.sh`／`install-maintenance.sh`・`scripts/codex-exec.sh --help`・`scripts/claude-exec.sh` の冒頭コメント。
+
+メイン環境では、この基本パッケージの上に**私的パッチ（別のprivateリポジトリ）**を重ねます。私的パッチには Vault の実体（`~/Data/obsidian`）や、公開できない設定が含まれます。私的パッチの導入手順は当該リポジトリ側のドキュメントを参照してください。
 
 #### サブ環境
 
@@ -431,18 +340,9 @@ cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # コピー
 scripts/install-sub.sh
 ```
 
-サブ環境は基本パッケージのみで完結し、私的パッチは導入しません（編集権限もありません＝pull専用）。メイン環境と同様、`models.conf`・`bedrock.env` に自動コピーは無いので、`install-sub.sh` の実行前に `config/models.conf.sample`（Bedrockを使う機なら `config/bedrock.env.sample` も）を自分でコピーしてください。`profile.md` は初回実行時に無ければ `config/profile.md.sample` から自動コピーされます（`install-sub.sh` は内部で `install-main.sh` を呼ぶため、メイン環境と同じ機構が働きます）——ただしサブ機では、installer が動く前に `machine_role` を `value=sub` へ（このマシンが別のリーダー配役を担うなら `role.leader` も）書き換えられるよう、事前に自分でコピーしておくことを推奨します。`install-sub.sh` は以下を行います:
-
-1. `$HOME/Data/obsidian` が無ければ `vault-public/` の中身（public スナップショット＋private骨格）をコピーして Vault の骨格を作る（既に存在する場合は上書きしません）。
-2. `claude/`・`codex/` の symlink 化・codex MCP登録は `install-main.sh` をそのまま呼び出して行う（ロジックは共通）。
-3. Vault育成系・バックアップの LaunchAgent は**インストールしません**（メイン専用機能）。
-4. **セッション開始のたびに更新有無を確認**: 機役割の正本はローカル実体プロファイル（`$HOME/.config/takumi009-ai-env/profile.md`）の能力軸`machine_role`です — 本人が自分で書きます（`machine_role: configured value=main` または `value=sub`）。インストーラは既存の実体プロファイルやその`machine_role`の値を書き換えることは一切ありません（`profile.md`がまだ無ければ`install-main.sh`が`config/profile.md.sample`から新規作成しますが＝上記「導入手順」参照、既にある実体には一切触れません）。`claude/hooks/check-sub-update.sh`・`scripts/update-sub.sh`・`scripts/check-drift.sh`・`claude/hooks/bootstrap-vault.sh` はいずれも `profile_resolve.py resolve` の `MACHINE_ROLE:` フィールドからこれを読みます。`sub` と読めたときだけサブ機として扱われます（解決失敗・`unknown`・`unavailable`・行の欠落はすべてサブ機として扱いません＝fail-closed）。`claude/hooks/check-sub-update.sh`（SessionStartフック）はセッション起動のたびにこれを確認し、`sub`でなければ何もせず静かにexitします（fail-closed）。実際のサブ機では時間上限つきの `git fetch` を実行し（fail-open＝失敗・タイムアウト・オフライン等は静かに無視してセッション起動をブロックしません。ただし失敗は `/tmp/check-sub-update.log` に記録されます）、`origin/main` より遅れていれば `scripts/update-sub.sh` を自分で実行するよう案内します。`scripts/update-sub.sh` 自体も冒頭で同じ`machine_role`を確認し、`sub`でなければ`fail()`で拒否します（メイン機で誤って実行された場合、`rsync --delete`でメインVaultの`Preferences/`が消えてしまうのを防ぐ最後の砦）。この確認を通った `scripts/update-sub.sh` は直列 1 本で、毎回同じことを行います（状態ファイル無し・冪等）: 実行ロック取得 → `git pull --ff-only`（失敗時は警告して exit 1・何も変えない）→ `scripts/install-sub.sh` の実行（symlink・`settings.json`・`codex/config.toml`・職種定義 symlink・Vault 骨格。`HEAD` が動かなくても走るので、新しいフックや職種定義が届いても `install-sub.sh` の手動再実行は不要。非0終了は `FAIL`＋復旧コマンドを表示し同じ終了コードで終わる）→ `vault-public/Preferences/` を Vault へ `rsync --delete` で再同期（**Preferences 以外には一切触れません**＝サブ機ローカルの `Fragments` 等は消えません）→ 新しい骨格フォルダの補充。引数は受け付けません（旧・再同期フラグは廃止＝Preferences は毎回同期されます。配置の計画だけ見るには `scripts/install-sub.sh --dry-run`）。サブ機での復旧: `git pull --ff-only && scripts/install-sub.sh` のあと、もう一度 `scripts/update-sub.sh`。
-
-サブ機では `Personal/profile-personal.md`・`Knowledge/mistakes.md` 等の private ノートが存在しませんが、`bootstrap-vault.sh`（SessionStartフック）は**存在するファイルだけ**を必読リストに載せる設計のため、「見つかりません」という警告は出ません。
+詳細＝`scripts/install-sub.sh`・`claude/hooks/check-sub-update.sh`・`scripts/update-sub.sh` 冒頭のコメント。
 
 ##### 既存サブ機の更新（新しい schema・設定が届いたとき）
-
-`scripts/update-sub.sh` は実体プロファイルの `machine_role` を resolver で読み、`sub` と解決できたときだけ動きます（解決失敗・行の欠落・旧 schema はすべて `unknown` 扱い＝いずれも拒否＝fail-closed）。プロファイルが旧版のままだと止まるので、順序は次のとおりです。
 
 1. `git pull --ff-only`（`update-sub.sh` ではなく素の pull。旧プロファイルのままでは `update-sub.sh` 自体が拒否するため）。
 2. schema が変わったときだけ: sample を実体へコピーし（`cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`。既存の実体は先に退避・権限 `0600`）、プロファイルをサブ機用に編集する——最低限 `machine_role: configured value=sub`（sample はメイン機の値のため）、必要に応じて `role.leader`・`no_read_paths`・`team_mode` も。`scripts/install-sub.sh --check-profile` が resolve 結果を1行で返す（副作用ゼロ）。
@@ -454,47 +354,26 @@ scripts/install-sub.sh
 
 ```sh
 scripts/install-main.sh --with-dotfiles   # または install-sub.sh --with-dotfiles
+cd ~/work/dotfiles && git pull --ff-only && ./install.sh   # 既存の dotfiles を更新
 ```
 
-**cmux Dock の「Project」／「Task」をサブ機でも出す（任意・dotfiles 導入機のみ）**: cmux-session-todo v3 以降、2枠は2つのリポジトリへ分かれている——本リポジトリ（`takumi009-ai-env`）が**供給側**（`cmux/cmux-task-model.sh`・`cmux/cmux-next-model.sh`・`cmux/cmux-task-declare.sh`。Vault・宣言記録・外部脳から対応表と1ティック分のフレームを作る）、`dotfiles` が**描画側**（`cmux/cmux-task-watch/`・`cmux/cmux-next-watch/`。供給側から受け取ったものを描くだけ）を持つ。どちらの側も `~/work/tools/` には一切触れない。
-   - `scripts/install-main.sh`（メイン機）／`scripts/install-sub.sh`（サブ機）が、上記の供給側3本の配置と `chmod +x` を通常の repo checkout の一部として行う。ai-env 側で追加の手作業は不要。
-   - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は代わりに `scripts/install-sub.sh --with-dotfiles`）。`dock.json` の「Project」／「Task」枠は dotfiles 側の描画側スクリプトを絶対パスで直接起動する。供給側（上記）が無い・実行不可のときは、枠は理由行 `AI環境 未導入` を出して常駐は生存し続ける。
-   - cmux を再起動 → dock-guard が Usage／Project／Task／System の4枠へ再シードする。
-   - セッション中にリーダーが `~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言は自動フック化しない）。
-
-`$HOME/work/dotfiles` が無ければ `git clone`（[Takumi00Nine/dotfiles](https://github.com/Takumi00Nine/dotfiles)）してから `./install.sh` を呼びます（既に存在する場合は clone をskipして `install.sh` だけ呼びます）。既定は OFF（このオプションを付けない限りdotfilesには一切触れません）。dotfiles は ai-env のスコープ外の「部品」ですが、インストーラが下請けとして呼び出せるようにしています。
+cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-09-15-cmux-dock-two-repo-split`。
 
 ### Vault バックアップの運用
 
-`scripts/backup-vault.sh` は `$HOME/Data/obsidian` を対象に、変更があれば `git add -A && git commit`（メッセージ: `backup: YYYY-MM-DD HH:MM`）し、remote `origin` が設定済みの場合のみ push します（未設定なら commit までで警告を出して終了）。多重起動防止のロック（原子的なファイル作成による排他制御）・`git index.lock` のstale検知つきで、`launchagents/com.takumi009.backup-vault.plist`（`scripts/install-backup.sh` が配置）から6時間ごとに無人実行される想定です。
-
-Vault のバックアップ先（private repo）の作成・remote設定は本人が行います（このリポジトリのスクリプトは remote を勝手に作成しません）。
+`scripts/backup-vault.sh` は `$HOME/Data/obsidian` を対象に、変更があれば `git add -A && git commit`（メッセージ: `backup: YYYY-MM-DD HH:MM`）し、remote `origin` が設定済みの場合のみ push します（未設定なら commit までで警告を出して終了）。詳細＝スクリプト冒頭のコメント。
 
 ### 週次メンテナンスランナー（メイン専用機能）
 
-`scripts/maintenance.sh` は、2026-07-16の簡素化で旧来の個別Vault育成系LaunchAgentを統合した単一の週次ランナーです（毎週月曜03:00・`scripts/install-maintenance.sh` が設置）。無人のヘッドレスClaude適用（Fragments昇格・Knowledgeマージ・Decision波及）は2026-09-19に退役し、ランナーは検出と件数の記録だけを行います。昇格は在席時に `vault-scribe` が行います。3フェーズで構成されます:
-
-- **Phase 0** — `backup-vault.sh` で直前スナップショットを取得し、Vault書込ロック（PIDファイル・Phase 3終了まで保持）を取得。`vault-public/Preferences` のスナップショットが遅れていれば `export-public-vault.sh` を再試行。
-- **Phase 1（検出のみ・読み取り専用）** — `check-drift.sh`（環境ヘルスの点検。2026-08-10からdrift検知・実行異常・timeoutを検知しても中断せず警告として記録し完走する。Vault書込み安全の門番はPhase 0の直前スナップショット取得のみに一本化されている）→ `fragments_log.py` → `vault_inventory.py` の3本を順に実行。3本は互いの失敗から隔離される。`vault_inventory.py` は `~/.claude/logs/vault-inventory/latest.json`（`actionable`＝対処可能な件数）を書き、SessionStartのヘルス行とDockがそれを読む。
-- **Phase 3** — 実施サマリをFragments当日ファイルへ1行追記、`last-run.json` を更新（`last_success_at`は完全正常終了時のみ・`last_result`はsuccess/warn/failの実行結果を毎回記録し、警告/失敗があれば翌セッションの起動ヘルス行に⚠️で表示される・`fragments_candidates`＝前回成功以降の未処理Fragments数をDock Project枠の週次行が「候補N件」と表示する。AIへは注入しない・本人が「昇格して」と言うまで動かない）、`backup-vault.sh` で最終スナップショットを取得、Vault書込ロックを解放、異常時のみmacOS通知、30日超過のログを削除。
-
-各回の中間ファイル・機械可読status-fileは `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/` 配下にまとまり、`~/.claude/logs/maintenance/latest` が常に最新の実行を指します。
+`scripts/maintenance.sh` は単一の週次ランナーです（毎週月曜03:00・`scripts/install-maintenance.sh` が設置。詳細＝スクリプト冒頭のコメント）。
 
 ### 使用率の見える化（usage_snapshot.py）
 
-`UserPromptSubmit` フックが本人の発言ごとに、枠（`claude-subscription`・`codex-subscription`・`unlimited`）あたり1行の**【使用率・この発言時点】**ブロックを注入するため、セッション中その瞬間の残量を確認できます。あくまで提示専用の仕組みで、使用率から候補を選んだり、枠どうしを比較・順位付けしたり「偏り」を計算したりはしません。残量を並べて出すだけで、判断はリーダーに委ねます。
-
-- **前提**: 使用率取得器（下記「使用率取得器」節）が毎分 `~/.cache/claude-codex-usage/claude-cache.json`・`codex-cache.json` を更新し、`usage_snapshot.py` はそのファイルを読むだけで通信は一切行いません。
-- **手動で見る口**: `python3 claude/hooks/lib/usage_snapshot.py` を実行すると同じ3行がその場で表示されます（`--json` を付けると機械可読の1行JSONになります）。
-- キャッシュが無い（取得器未導入）・古い場合でも、静かに失敗せず常に3行のまま平易な文言で理由を示します。
-- **Codexの「チケット」**: Codex 行の末尾に、Codex が持つ期限付きリセット権（banked rate-limit reset credit）の枚数と失効日が付きます（例＝`／チケット 1枚（10/05）`）。無ければ`チケット 0枚`、取得できなければ`チケット 取得不可`です。
-- チケットは5h窓と7d窓の両方をリセットします。Claude側のリセットは5h窓のみで、かつ取得器はClaude側のチケット相当データを一切取得しません（機械可読な取得口が確認できていないため）。そのためJSON側のClaude枠の`reset_credits`は常に固定値（`note:"not_machine_readable"`）で、実データにはなりません。この範囲差は`--json`の`reset_credits.reset_scope`にだけ持たせており、短い人可読行には書きません。
+**手動で見る口**: `python3 claude/hooks/lib/usage_snapshot.py` を実行すると同じ3行がその場で表示されます（`--json` を付けると機械可読の1行JSONになります）。詳細＝`claude/hooks/lib/usage_snapshot.py` の docstring。
 
 ### 使用率取得器（scripts/usage-fetch.sh／scripts/install-usage-fetch.sh）
 
-`scripts/usage-fetch.sh` は毎分（LaunchAgent `com.takumi009.usage-fetch`）Claude の OAuth 使用率・Codex の `rateLimits`・（2026-09-09以降）Codex のチケット（`reset_credits`。上記「Codexの『チケット』」参照）を取得し、`~/.cache/claude-codex-usage/{claude,codex}-cache.json` へ原子的に書き出します——パスと `schema_version`（1）は、Dock描画スクリプト`cmux-usage-watch.sh`（別リポジトリ`dotfiles`に同梱）が読んでいるものと同じです。429（レート制限）応答はキャッシュへの完全な no-op（1バイトも変わりません）で、それ以外の失敗（タイムアウト・通信エラー・壊れた応答・`codex` コマンド不在）は `fetched_at` を変えずに `last_error` へ記録するので、「古いが `ok`」なキャッシュと「取得直後に失敗を記録した」キャッシュを表示側が常に区別できます。
-導入は `scripts/install-usage-fetch.sh`（`install-backup.sh` と同型の素の bootstrap+enable インストーラ。`--dry-run` は現在の状態を表示するだけ）。退役済みの旧ジョブ `com.claude-codex-usage.refresh` がまだロードされている機では、何も変えずに中断し、先に実行すべき `launchctl bootout` コマンドを表示します（取得器は常に1つだけという方針）。ジョブが未ロード・disabled・取得停止のときは `check-drift.sh` が `[USAGE-FETCH-*]`／`[USAGE-LOCK-STUCK]` として報告します。
-サブ機には自動導入されません（`install-sub.sh` はLaunchAgentを一切設置せず、`update-sub.sh` もこのインストーラを再実行しません）。サブ機でも使用率を追いたい場合は本人が `scripts/install-usage-fetch.sh` をそのサブ機で直接実行してください。
+導入は `scripts/install-usage-fetch.sh`（`install-backup.sh` と同型の素の bootstrap+enable インストーラ。`--dry-run` は現在の状態を表示するだけ）。詳細＝`scripts/usage-fetch.sh`・`scripts/install-usage-fetch.sh` 冒頭のコメント。
 
 ### ズレの検知（check-drift.sh）
 
@@ -502,15 +381,7 @@ Vault のバックアップ先（private repo）の作成・remote設定は本�
 scripts/check-drift.sh
 ```
 
-以下5点を検査し、一覧表示します（**検知しても exit 1 にはしません**。あくまで手動確認用のレポートツールです）:
-
-1. symlink（`install-main.sh` が配置する集合。23件。`~/.claude/agents/` 配下の職種定義1本ずつを含む）が repo の実体を指しているか。加えて生成物 `~/.claude/settings.json` を、installer 自身の生成関数で一時ファイルへ再生成し（`scripts/install-main.sh --render-settings-json`）、JSON 正規化のうえ実ファイルと diff して、差分のあるトップレベルキー名だけを報告する（値は出さない。`model` も他のキーと同様に比較するので `/model` での切替後の不一致も drift。再生成に失敗したときは `[SETTINGS-RENDER-FAILED]` 1件を drift 計上）
-2. `~/.codex/config.toml`（生成物）が repo のテンプレとプレースホルダ展開込みで一致しているか。Codex Desktop が起動時に書き直すテーブル（`plugins`・`mcp_servers`・`desktop`）はアプリ管理として除外し、監視するのは本人がテンプレで決めた 7 キー（`service_tier`・`approval_policy`・`model`・`model_reasoning_effort`・`sandbox_workspace_write.network_access`・`features.hooks`・`features.js_repl`）
-3. このリポジトリに未commitの変更が無いか
-4. `vault-public/Preferences` と実Vaultの `Preferences` に差分が無いか（`export-public-vault.sh` のエクスポート漏れ検知）。この項目だけは informational＝差分は `ℹ️ INFO` として表示し drift には数えない（export は週次メンテの Phase 0 と案件の締めで行う。件数は `--json` の `item4_drift` に残る）
-5. Vaultバックアップ・私的パッチrepo（`AIENV_PRIVATE_REPO`、既定 `~/work/takumi009-ai-env-private`）の remote が GitHub上で実際に **private** のままか（`gh repo view --json visibility`）。private であるべきリポジトリが誤って public 化されていないかの恒久チェックです。remote未設定は対象外、`gh` 未導入・未認証時は drift にはせず警告表示のみ（ai-env 本体は「public化予定」のためこのチェックの対象外）
-
-このスクリプト自体は手動実行のレポートツールです。従来の週次無人実行経路（`scripts/drift-notify.sh`／`launchagents/com.takumi009.drift-check.plist`。毎週月曜09:30・drift1件以上でmacOS通知）は2026-07-16に撤去し、無人実行は新設の `maintenance.sh` ランナーのPhase 1①として行うようになりました（機械可読な `--json` モードもこの用途で追加。上記Vault決定参照）。
+以下5点を検査し、一覧表示します（**検知しても exit 1 にはしません**＝手動確認用のレポートツール）: ① symlink と生成物 `~/.claude/settings.json`、② 生成物 `~/.codex/config.toml`、③ 未commitの変更、④ `vault-public/Preferences` の差分（informational）、⑤ private repo の remote が **private** のままか。詳細＝スクリプト冒頭のコメント。
 
 ### 復元 Runbook（災害復旧・メインの移転）
 
@@ -537,7 +408,7 @@ cd ~/work/takumi009-ai-env && brew bundle
 mkdir -p ~/.config/takumi009-ai-env
 cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # ローカル設定はバックアップ対象外のため作り直す
 cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # （machine_role・モデル定義を旧機と同じ値へ戻す）
-scripts/install-main.sh --with-dotfiles   # symlink 化＋dotfiles＋codex MCP 登録
+scripts/install-main.sh --with-dotfiles   # symlink 化＋dotfiles
 scripts/install-backup.sh                 # 定期バックアップ再開
 scripts/install-maintenance.sh            # 週次メンテナンスランナー再開
 scripts/install-usage-fetch.sh --dry-run  # 使用率取得の再開: まず状態だけ確認
@@ -546,8 +417,8 @@ scripts/install-usage-fetch.sh            # 使用率取得を再開
 # 5. 各アプリのログイン（手動）: Claude Code / Codex / その他
 ```
 
-- 復元される範囲＝**push 済みの状態まで**。未 commit の作業は失われる（`scripts/check-drift.sh` の未 commit 検知で日常的に守る）
-- バックアップの最大遅延は Mac のスリープに依存する（LaunchAgent はスリープ中発火せず、復帰時に1回追いつく）
+- 復元される範囲＝**push 済みの状態まで**（未 commit の作業は失われる）
+- バックアップの最大遅延は Mac のスリープに依存する
 
 #### メインの移転（新しい Mac に計画的に乗り換えるとき）
 
@@ -564,38 +435,16 @@ scripts/session-handoff.sh <再開メモのパス> "<続きの依頼>" [--cwd <d
 scripts/session-handoff.sh -h | --help
 ```
 
-- `<再開メモのパス>` は存在し読める通常ファイルであること（先頭の `~/` は `$HOME` へ展開）。送信する依頼文には絶対パスへ正規化して埋め込む。
-- `<続きの依頼>` は空でない1行（改行(LF/CR)を含められない）。
-- `--cwd` の既定は呼び出し時の `$PWD`（存在するディレクトリであること）。
-- `--name` の既定は「引き継ぎ `<再開メモのファイル名（拡張子 .md なし）>`」。
-- 終了コード: `0`=送信完了 ／ `1`=引数不正（cmux は一切呼ばない）／ `2`=`new-workspace` 失敗 ／ `3`=プロンプト（❯）待ちタイムアウト（ワークスペースは閉じない）／ `4`=送信失敗。
-- 環境変数: `SESSION_HANDOFF_CMUX_BIN`（cmux コマンド・既定 `cmux`）・`SESSION_HANDOFF_WAIT_SEC`（❯ 待ちの実時間の上限秒・既定 60・非負整数。0は「即時に1回だけポーリングする」例外として扱う）・`SESSION_HANDOFF_GRACE_SEC`（❯ 検出後の猶予秒・既定 5・非負整数）・`SESSION_HANDOFF_SEND_GAP_SEC`（send と send-key Enter の間隔秒・既定 1・非負整数）・`SESSION_HANDOFF_CALL_TIMEOUT_SEC`（read-screen 1回あたりの呼出しタイムアウト秒・既定 5・**1以上の整数**。応答が無い cmux 呼出しが無期限にブロックしないための上限で、`SESSION_HANDOFF_WAIT_SEC` の残り時間でも上限を掛けるため、遅い呼出し1回のせいで実時間の上限を大きく超えることはない＝超過は概ね1秒程度に留まる。詳細は下の注記参照）。0 を指定できるのは `SESSION_HANDOFF_WAIT_SEC`・`SESSION_HANDOFF_GRACE_SEC`・`SESSION_HANDOFF_SEND_GAP_SEC` の3つだけ（テスト高速化用）。`SESSION_HANDOFF_CALL_TIMEOUT_SEC` は0を指定すると即時応答のコマンドとも競合しうるため0そのものを拒否する（「0指定可」には含めない）。4つのいずれかに非整数（前3つは負値も）を指定すると exit 1（cmux は一切呼ばない）。`SESSION_HANDOFF_CMUX_BIN` はコマンド名／パスなので 0 を指定しても動作しない。
-- `send` と `send-key Enter` を分けて送る（末尾に `\r` を付けても実際には送信されない）。
-- `❯` 検出後にひと呼吸置く（SessionStart フック等の起動注入の完了を待つため）。
-- `SESSION_HANDOFF_WAIT_SEC` は❯待ちの実時間の上限。ただし read-screen がタイムアウト終了用の `TERM` を無視した場合だけ、強制終了（KILL）までの猶予（1秒）分だけ超過しうる（呼出しの全所要時間ではなく、その1秒程度の超過に留まる）。
+引数・終了コード・環境変数＝`scripts/session-handoff.sh -h`。
 
 ### テスト
 
 ```sh
-bash tests/test-export-public-vault.sh
-bash tests/test-backup-vault.sh
-bash tests/test-bootstrap-vault.sh
-bash tests/test-usage-inject.sh
-bash tests/test-install-sub.sh
-bash tests/test-install-backup.sh
-bash tests/test-install-maintenance.sh
-bash tests/test-usage-fetch.sh
-bash tests/test-install-usage-fetch.sh
-bash tests/test-with-dotfiles.sh
-bash tests/test-check-drift.sh
-bash tests/test-codex-exec.sh
-bash tests/test-update-sub.sh
-bash tests/test-check-sub-update.sh
-bash tests/test-audit.sh
-bash tests/test-session-handoff.sh
+for t in tests/test-*.sh; do bash "$t"; done
 ```
 
-いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。このリストは2026-07-16簡素化プロジェクトで追加された複数の`tests/test-*.sh`（例: `test-shell-lib.sh`・`test-vault-lib.sh`・`test-merge-checks.sh`・`test-maintenance-run-step.sh`等）を反映できていません。現時点の全テスト・スイート数は`ls tests/test-*.sh`で確認してください（本節が最後に更新された時点より増えているため、ここに固定の件数は書きません＝また食い違う事故を避けるため）。
+いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。
 
 ### ライセンス
+
 [MIT](LICENSE)

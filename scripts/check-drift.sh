@@ -113,6 +113,10 @@
 #      穴になるため、ミューテックスディレクトリの新鮮度を直接読む（削除はしない＝
 #      読み取りのみ。解除はbackup-vault.sh自身の起動時ロジックに委ねる）。
 #
+# (README "Drift Detection" 2026-09-19・①②の補足) Whether the 23 symlink files (including one per role definition under `~/.claude/agents/`) point to the actual files in the repo, plus a check of the generated `~/.claude/settings.json`: the installer's own generation function re-renders it into a temporary file (`scripts/install-main.sh --render-settings-json`) and the result is diffed against the live file after JSON normalization, reporting differing top-level key names only (values are never printed; `model` is compared like any other key, so a mismatch after `/model` is drift too; if re-rendering fails, that is one `[SETTINGS-RENDER-FAILED]` drift item).
+# Whether `~/.codex/config.toml` (a generated file) matches the repo's template with the placeholder expansion applied. The tables Codex Desktop rewrites on startup (`plugins`, `mcp_servers`, `desktop`) are treated as app-managed and excluded; what is monitored is the 7 keys the maintainer chose in the template (`service_tier`, `approval_policy`, `model`, `model_reasoning_effort`, `sandbox_workspace_write.network_access`, `features.hooks`, `features.js_repl`).
+# ④ is informational only: differences are shown as `ℹ️ INFO` and not counted as drift (the export is run in the weekly maintenance Phase 0 and at the close of each task; the count is still reported as `item4_drift` in `--json`).
+#
 # **fail-fast はしない**（1件でも検知したらexitさせる export-public-vault.sh とは
 # 役割が違う。本ツール自体は常にexit 0の「一覧表示するだけ」の手動確認用レポート
 # ツールで、必要な時に手で実行する運用＝設計方針。

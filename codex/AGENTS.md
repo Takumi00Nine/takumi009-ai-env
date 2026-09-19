@@ -5,8 +5,7 @@
 
 ## Delegated-task tooling guard (Finalized 2026-06-22)
 
-- For delegated tasks (especially when invoked via MCP from the Claude orchestrator), **do NOT use Computer Use or browser-UI automation (e.g. `get_app_state`, clicking/typing in Chrome/in-app browser).** These can hang on macOS UI/permission waits and freeze the synchronous MCP call, leaving the orchestrator's session unusable.
-- **Get web information via `web_search`.** If a task genuinely cannot be done without UI control, stop and report back to the orchestrator/user instead of silently driving the UI. (Background: Vault `Knowledge/codex-computer-use-hang-blocks-mcp.md` — a private note, not included in this repository's `vault-public/`.)
+- Delegated tasks: do not use Computer Use / browser-UI automation; get web information via `web_search`. If UI control is unavoidable, stop and report back instead of driving the UI.
 
 ## Obsidian External Brain Role Assignment (Finalized 2026-06-14)
 

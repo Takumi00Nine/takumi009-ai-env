@@ -7,6 +7,13 @@
 # 出力: ~/.claude/logs/maintenance/<日付>/<時刻-pid>/（latest symlink）と last-run.json（契約＝design-step2 §6・読み手＝bootstrap-vault.sh ④・cmux-next-model.sh）
 # 環境変数で全パス・timeout を上書き可（テスト用）。経緯＝Decisions/2026-08-10-round6-rulings・2026-09-19-ai-env-optimization-rulings
 #
+# 補足（README「Weekly Maintenance Runner」から 2026-09-19 に移設・原文）:
+# Phase 0 — takes a pre-run snapshot via `backup-vault.sh`, acquires a Vault write-lock (PID file, held through Phase 3), and retries `export-public-vault.sh` if the `vault-public/Preferences` snapshot is behind.
+# Phase 1 (detection only, read-only) — runs, in order, `check-drift.sh` (environment health check; since 2026-08-10, a drift finding, execution error, or timeout no longer aborts the run — it's recorded as a warning and the run continues. The sole gate for Vault write safety is Phase 0's pre-run snapshot), `fragments_log.py`, and `vault_inventory.py`. The 3 steps are isolated from each other's failures. `vault_inventory.py` writes `~/.claude/logs/vault-inventory/latest.json` (`actionable` = number of fixable findings), which the SessionStart health line and the Dock read.
+# Phase 3 — appends a one-line summary to today's Fragments file, updates `last-run.json` (`last_success_at` only on a fully clean run; `last_result` — success/warn/fail — is always recorded, and a warning or failure shows up as a ⚠️ line in the next session's startup health check; `fragments_candidates` = number of unprocessed Fragments since the last successful run, shown by the Dock's Project pane weekly line as "候補N件" — it is never injected into the AI, and nothing moves until the user says "昇格して"), takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
+# `scripts/maintenance.sh` is the single weekly runner (Monday 03:00, installed by `scripts/install-maintenance.sh`) that replaced the older separate Vault-cultivation LaunchAgents on 2026-07-16. The unattended headless-Claude apply step (Fragments promotion / Knowledge merge / Decision propagation) was retired on 2026-09-19 — the runner now only detects and counts; promotion happens while the user is present, via `vault-scribe`.
+# All intermediate files and machine-readable status files for a given run live under `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/`, with `~/.claude/logs/maintenance/latest` always pointing at the most recent run.
+#
 # 実行方法: scripts/maintenance.sh
 
 set -uo pipefail  # -e は使わない（Phase1の1項目失敗で残りが止まらないようにする）

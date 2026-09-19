@@ -69,8 +69,7 @@ aliases:
 2. sample を実体へコピー: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は `profile.md.bak.v<旧版>-<日付>` に退避してから。権限 0600）
 3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-high`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
 4. `scripts/install-sub.sh --check-profile`（副作用ゼロの検査。OK を確認）
-5. `scripts/update-sub.sh`（引数なし・pull→install-sub→Preferences 同期を毎回行う）
-6. 新しいフック・職種定義が届いた版では `scripts/install-sub.sh` を再実行（symlink 配置・settings.json 再生成。既存プロファイルには触れない。`AGENTS: dangling` が出たら表示されたファイルを削除）
+5. `scripts/update-sub.sh`（引数なし。pull→`install-sub.sh`→Preferences 再同期を毎回行う）。`AGENTS: dangling` が出たら表示されたファイルを削除。
 7. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
 8. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/work/takumi009-ai-env/cmux/`、描画側（Dock 常駐）は dotfiles の `~/work/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。
    - `cd ~/work/takumi009-ai-env && git pull --ff-only && scripts/install-main.sh`（供給側の実体を配置。ai-env 未導入機は Dock 側が縮退表示）

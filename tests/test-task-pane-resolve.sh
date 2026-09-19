@@ -470,14 +470,8 @@ else
   fail_case "check-drift.shのSYMLINKS配列にtask-pane-resolve.shがある"
 fi
 
-# ④README.mdのhooks一覧2か所。
 README="$REPO_ROOT/README.md"
-readme_hits="$(grep -cF 'task-pane-resolve.sh' "$README" 2>/dev/null || true)"
-if [ "${readme_hits:-0}" -ge 2 ]; then
-  pass "README.mdのhooks一覧（英日）にtask-pane-resolve.shが2か所以上ある"
-else
-  fail_case "README.mdのhooks一覧にtask-pane-resolve.shが足りない (hits=$readme_hits)"
-fi
+# README樹形図の注釈1句化（2026-09-19 段3-4）で README静的結合ケースを退役
 
 # ②Q2-4の伝播＝READMEとcheck-drift.shのどちらにも「symlink [0-9]+ ?ファイル」の
 # 形が1つも残っていないこと。

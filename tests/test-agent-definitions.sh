@@ -98,8 +98,8 @@ echo "=== 2. AC-12②: verifier.md の tools: に SendMessage・Edit・Write・B
 
 echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）のagents/*.mdにsandboxの値が書かれ、§5.2の権限表の値と一致する ==="
 {
-  # 3モード体制-設計-2026-09-06.md §5.2の権限表を正本値としてハードコードする
-  # （Vaultのworker-role-prompts.mdへの依存を避け、この段階でも緑にできる）。
+  # 期待値をハードコードする（正本＝agents の権限行（2026-09-19 段3-4）。
+  # Vault の worker-role-prompts.md の表はリーダー向け一覧＝テストは読まない）。
   # ⚠️ macOS既定bash 3.2は連想配列(declare -A)を持たないため、
   # "職種:期待値"のスペース区切りリストで表現する（repo全体で徹底している
   # bash 3.2互換の既存作法）。
@@ -120,6 +120,26 @@ echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）
   assert_contains_file "verifier.md にworkspace-write経路が境界つきで書かれている" "$AGENTS_DIR/verifier.md" "\`--sandbox workspace-write\`"
   # vault-scribeはCodexが演じない＝「対象外」の1行があればよい。
   assert_contains_file "vault-scribe.md は「Codexは演じない/対象外」と書かれている" "$AGENTS_DIR/vault-scribe.md" "Codex はこの職種を演じない"
+}
+
+echo "=== 4b. 権限行の内蔵（2026-09-19 段3-4）: 各定義に「## 権限」見出しがちょうど1件・worker-role-prompts への参照が0件 ==="
+{
+  # 権限行の正本は agents/*.md の「## 権限」行（Vault の worker-role-prompts.md
+  # の表はその転記＝リーダー向け一覧）。定義側に旧正本への参照が残っていない
+  # こと、見出しの表記ゆれ（末尾の補足つき等）が無いことを見る。
+  # ⚠️ `grep -c`は0件一致のとき"0"を出力しつつ非0終了する（項目7と同じ扱い）
+  # ため、`|| echo 0`は付けない。
+  for role in adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier; do
+    f="$AGENTS_DIR/${role}.md"
+    if [ -f "$f" ]; then
+      n_head="$(grep -c '^## 権限' "$f")"
+      n_ref="$(grep -c 'worker-role-prompts' "$f")"
+    else
+      n_head="(file missing)"; n_ref="(file missing)"
+    fi
+    assert_eq "${role}.md: ## 権限 見出しが1件" "1" "$n_head"
+    assert_eq "${role}.md: worker-role-prompts 参照が0件" "0" "$n_ref"
+  done
 }
 
 # 廃止したMCP経路のexecution値を検査するための共有パターン。⚠️ このファイル

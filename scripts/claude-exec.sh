@@ -20,6 +20,15 @@
 # エラー全文。分類には使わない＝設計§2.8のまま）も隣に残す（DR1-M2）。
 # dry-runでは作らない。
 #
+# Spawn contract (moved from README "Roles" 2026-09-19, verbatim):
+# Worker models are selected per spawn from profile candidates. Run `resolve-candidate` with the deployed `--agents-dir`; for subagent execution, pass the returned `AGENT_MODEL` value explicitly as `Agent.model`. Do not spawn on a nonzero exit or malformed output. The Agent guard rejects missing or invalid model arguments for the eight managed roles. Legacy Claude IDs and non-anthropic-api subagent providers are rejected; external-cli retains `CODEX_ARGS`.
+# A role that has candidates in the local profile is not launched in-process via the `Agent` tool (a `PreToolUse` hook rejects that) — it's launched as a separate `claude -p` process through `scripts/claude-exec.sh` (a Bash wrapper mirroring `scripts/codex-exec.sh`'s contract; see "claude-exec.sh" below for the invocation form, how to read the worker's report, and how to recover from a stale lock).
+#
+# Reading the worker's report / recovering from a leftover lock / `effort:` (moved from README "claude-exec.sh" 2026-09-19, verbatim):
+# **Reading the worker's report**: the worker's actual final report is the `result` field inside the JSON written to `--out` once the call has completed — read it with `jq -r '.result' <out>`, not the wrapper's own stdout. Any deliverable files the worker produces are written by the worker itself into its own working directory (the parent directory of `--out`, under a name the request text specifies) — the worker never writes to `--out` itself, since the wrapper only creates that file once, atomically, at the end of the run.
+# **Recovering from a leftover lock**: while a call is in flight it reserves `--out` with a `<out>.lock` file; if a previous run was killed before it could release that reservation, the next call to the same `--out` fails until the stale lock is cleared — remove it manually (`rm <out>.lock`) before retrying.
+# **`effort:`**: the wrapper resolves `--effort` fresh on every call from the local profile's candidate (via `resolve-candidate`) and passes it straight to `claude -p` — role definitions under `~/.claude/agents/<role>.md` never carry an `effort:` frontmatter line (that per-role generation scheme was retired once the wrapper started resolving effort itself).
+#
 # 終了コード表（設計§2.9・要件requirements-v1.4.3.md §12に転記済み）:
 #   0成功/1想定外(予約)/2引数不正/3候補外の定義名/4配役表・定義の解決失敗/
 #   5モデル明示の強制違反/6依頼文が読めない・absolute-rules参照無し/

@@ -6,6 +6,7 @@
 # 導入した退役4ラベルの一度限りの移行コードは着手順3（2026-09-19）で撤去した。
 # bootstrap+enableのみを行い即時kickstartはしない（自動実行しない・ユーザーが
 # 内容を確認したうえで実行する）。
+# (README "Setup" 2026-09-19) Both `install-backup.sh` and `install-maintenance.sh` only place the LaunchAgents (bootstrap+enable) — they do **not** trigger an immediate run (kickstart) (because initializing the Vault as a Git repository for the first time is meant to be a staged rollout. Either wait for the next scheduled run, or once you're ready, run `launchctl kickstart -k` manually).
 #
 # 使い方: scripts/install-maintenance.sh [--dry-run]
 # テスト専用: SKIP_LAUNCHCTL=1 で launchctl の実操作だけをskip（plist配置は行う）。

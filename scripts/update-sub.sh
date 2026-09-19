@@ -32,6 +32,10 @@
 #   cd ~/work/takumi009-ai-env && git pull --ff-only && scripts/install-sub.sh
 #   scripts/update-sub.sh
 #
+# 0. の判定（README「Updating an existing sub machine」から 2026-09-19 に移設・原文。
+# 「this order」＝README の 3 ステップ）:
+# `scripts/update-sub.sh` reads the local profile's `machine_role` capability axis via the resolver and only proceeds when it resolves to exactly `sub` (resolution failure, a missing line, or an old schema are all treated as `unknown` — every one of these is rejected, fail-closed). With an outdated profile still in place it stops instead, so update in this order:
+#
 # パスは $HOME 相対（DIR・VAULT・LOCK_FILE は環境変数で上書き可＝ユニットテスト用。
 # 本番実行時は既定値のまま呼べば良い）。
 

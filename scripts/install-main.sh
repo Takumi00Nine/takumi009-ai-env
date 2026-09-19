@@ -58,6 +58,15 @@
 # 非0で終了する（対話で確定させる経路と既定モデルへの縮退は 2026-09-19 に
 # 退役した＝profile.md を直接編集して再実行する）。
 #
+# python3 requirement (moved from README "Setup" 2026-09-19): `install-main.sh` requires `python3` (used to generate `claude/settings.json`; also required separately by `check-drift.sh`'s `config.toml`/`settings.json` comparisons). macOS normally ships one via Xcode Command Line Tools, so this usually isn't an issue — if it's missing, `install-main.sh` fails fast at startup with a clear message (run `xcode-select --install`).
+# Language runtimes including Python itself aren't managed via brew in this environment (see `anyenv-runtime-management` in the Vault), so it's intentionally not listed in the Brewfile.
+#
+# Role definitions (moved from README "About vault-public/" 2026-09-19, verbatim): Role definitions (`~/.claude/agents/<role>.md`, one per role under `claude/agents/*.md` in the repo) are symlinks straight into the repo, like the other symlinked destinations above — there is no per-role frontmatter generation.
+#
+# config/*.sample (moved from README "Main environment" 2026-09-19): `config/*.sample` is the source for these three local config files' real values. `config/profile.md.sample` and `config/models.conf.sample` ship with the real values used on the maintainer's main machine, so a fresh main machine can copy them as-is; a sub machine should copy them too and then edit at least `machine_role` (and, if it plays a different leader role, `role.leader`).
+# `config/bedrock.env.sample` (→ `~/.config/takumi009-ai-env/bedrock.env`, permission 0600) is only for machines that actually use Bedrock — don't place it on a subscription-only machine; there is no auto-copy for it, you always copy it yourself. `config/models.conf.sample` likewise has no auto-copy — copy it yourself.
+# `config/profile.md.sample` is different: if `~/.config/takumi009-ai-env/profile.md` doesn't exist yet, `install-main.sh` automatically copies `config/profile.md.sample` there for you the first time it runs (an existing skeleton-placement step from before `config/*.sample` existed; it never overwrites a profile that's already there). Copying it yourself beforehand has the same effect — either way you end up with this machine's real values, not a placeholder.
+#
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 #       本スクリプトは既存の実ファイルをsymlinkへ置き換えるため、ユーザー本人が
 #       立ち会って実行すること。

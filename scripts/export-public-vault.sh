@@ -4,6 +4,8 @@
 #
 # 詳細は README.md「vault-public/ について」節を参照。
 # 方針: Git 履歴を Vault 側と共有しない「スナップショット・コピー」。
+# （2026-09-19: README 第 2 段落は本ヘッダへ集約。補足＝Note that links into private folders are, by design, intentionally broken on the public side (they're listed in the report): they point to notes that exist only in the maintainer's own private Vault, so opening them in Obsidian shows them as unresolved links, which is expected and not a bug. Only `Personal/` is fail-fast (rather than merely reported) because, unlike the other private folders, its note names themselves tend to reveal personal matters.
+#   None of the checks touch the real `vault-public/` until every check has passed — everything is built and verified in a temporary staging directory first, so if any check fails, `vault-public/` remains completely unchanged (a later failure, e.g. missing git commit identity, happens only after promotion and is a separate, non-security concern — see step 5 below and the identity check near the end of this script).）
 #
 # 実行順序（**チェック通過前は本番の vault-public/ を一切変更しない**。
 # 「最後の砦」である機械チェックに、汚染済み出力が漏れ残る穴を作らないため）:

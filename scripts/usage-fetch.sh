@@ -34,6 +34,9 @@
 # main を呼ばない）・AIENV_USAGE_CONFIG_FILE（config.sh の読み元を差し替え）・
 # XDG_CACHE_HOME/XDG_CONFIG_HOME/HOME（キャッシュ・キーチェーンの読み元を
 # 差し替え）・AIENV_USAGE_TEST_NOTIFY_LOG（scripts/lib/usage-notify.sh 側）。
+#
+# (README "Usage fetcher" 2026-09-19) `scripts/usage-fetch.sh` fetches Claude's OAuth usage percentages, Codex's `rateLimits`, and (since 2026-09-09) Codex's banked rate-limit reset credits (`reset_credits`, see "Codex tickets" in claude/hooks/lib/usage_snapshot.py) once a minute (LaunchAgent `com.takumi009.usage-fetch`) and writes them atomically to `~/.cache/claude-codex-usage/{claude,codex}-cache.json` — the same paths and `schema_version` (1) that the Dock-rendering display script `cmux-usage-watch.sh` reads (bundled in the separate `dotfiles` repo).
+# A rate-limited (429) response is a complete no-op (not a byte of the cache changes); any other failure (timeout, network error, malformed response, missing `codex` command) is recorded as `last_error` without touching `fetched_at`, so a display reading a stale-but-`ok` cache and a display reading a freshly-recorded failure are always distinguishable.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 

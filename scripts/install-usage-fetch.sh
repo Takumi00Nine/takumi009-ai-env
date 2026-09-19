@@ -21,6 +21,9 @@
 #
 # テスト専用: SKIP_LAUNCHCTL=1 にすると plist 配置だけ行い launchctl を一切
 # 呼ばない（旧ラベル検知も行わない。scripts/install-backup.sh と同名・同意味）。
+#
+# (README "Usage fetcher" 2026-09-19) If the retired `com.claude-codex-usage.refresh` job is still loaded on the machine, the installer stops without changing anything and prints the `launchctl bootout` command to run first (only one fetcher is ever meant to run). `check-drift.sh` reports `[USAGE-FETCH-*]` / `[USAGE-LOCK-STUCK]` if the job is not loaded, disabled, or stops updating.
+# Sub machines are not given this LaunchAgent automatically (`install-sub.sh` never installs LaunchAgents, and `update-sub.sh` does not re-run this installer) — run `scripts/install-usage-fetch.sh` there yourself if you want usage tracking on that machine too.
 
 set -euo pipefail
 

@@ -23,6 +23,8 @@ enum・`AGENT_MODEL` の別名表・拒否条件・`execution` の既定）は�
 置き場: `claude/hooks/lib/` は元から symlink されない場所（repo 実体パスを
 直接叩く）。したがって check-drift.sh の管理symlink集合にも載らない
 （設計§4.1）。
+
+呼び方（README 2026-09-19）: Any role whose `tools:` frontmatter includes `Bash` can look up its own launch candidates (definition name, resolved route, pass/fail, and remaining usage) with `python3 ~/work/takumi009-ai-env/claude/hooks/lib/role_candidates.py [--role <role>]` — an AI-facing command, not meant for interactive use.
 """
 
 from __future__ import annotations

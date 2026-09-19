@@ -40,6 +40,13 @@ FR-104の生の列挙との**全差分**として明記＝「予約系フィー�
 外部ライブラリに依存しない（標準ライブラリのみ）。exit codeは常に0
 （提示専用。壊れていても行を出す＝静かな失敗にしない。キャッシュJSONの
 解析失敗・必須キー欠落は usage_state=error として表す）。
+
+Codex "tickets" (moved from README "Usage Monitoring" 2026-09-19): the Codex line ends with a ticket count and expiry (e.g. `／チケット 1枚（10/05）`) when Codex reports a banked rate-limit reset credit, or `チケット 0枚` / `チケット 取得不可` when there are none or the data is unavailable.
+A ticket resets both the 5h and 7d windows. Claude's reset only covers the 5h window, and the fetcher does not attempt to fetch Claude ticket data at all — no confirmed machine-readable API for it is known, so the Claude pool's `reset_credits` in `--json` is a fixed placeholder (`note: "not_machine_readable"`), never live data. That scope difference lives in `--json`'s `reset_credits.reset_scope`, not in the short human-readable line.
+The `UserPromptSubmit` hook injects a **【使用率・この発言時点】** block with one line per quota pool (`claude-subscription` / `codex-subscription` / `unlimited`) on every user prompt, so the orchestrator sees a fresh snapshot throughout the session. This is presentation-only: the mechanism never picks candidates based on usage, ranks pools against each other, or computes a "bias" — it just lays the remaining percentages side by side and lets the orchestrator decide.
+- **Prerequisite**: a usage fetcher (see "Usage fetcher" below) refreshes `~/.cache/claude-codex-usage/claude-cache.json` / `codex-cache.json` once a minute; `usage_snapshot.py` only reads those files and never touches the network itself.
+- **Manual check**: `python3 claude/hooks/lib/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot).
+- If the cache is missing (fetcher not installed) or stale, the block still shows exactly 3 lines with a plain-language explanation instead of failing silently.
 """
 
 from __future__ import annotations

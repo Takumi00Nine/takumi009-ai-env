@@ -2,6 +2,8 @@
 # Vault($HOME/Data/obsidian) を git commit（＋remote設定済みならpush）でバックアップする。
 #
 # 詳細は README.md「Vault バックアップの運用」節を参照。
+# （2026-09-19: README 側は 1 文に縮小＝運用の詳細の正本は本ヘッダの「処理順序」。
+#   remote の作成・設定は本人が行う＝下記 5.）
 #
 # launchagents/com.takumi009.backup-vault.plist から6時間おき（2026-07-24に
 # 毎時から変更）に無人実行される
