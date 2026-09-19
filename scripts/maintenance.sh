@@ -587,14 +587,11 @@ else
     "OK 0")
       # 消した対はcmux-task-declare.sh側の契約どおり<UUID><TAB><slug>の行
       # のみをstdoutへ出す（設計書§3.3）。空行は数えない（grep -c .）。
+      # サマリ行には件数のみを載せる（UUID一覧は${TASK_PRUNE_OUT}に残る＝
+      # サマリ末尾の「（詳細: ${RUN_DIR}）」が場所を示す・D-1）。
       N_PRUNED="$(grep -c . "$TASK_PRUNE_OUT" 2>/dev/null || echo 0)"
       [[ "$N_PRUNED" =~ ^[0-9]+$ ]] || N_PRUNED=0
-      if [[ "$N_PRUNED" -gt 0 ]]; then
-        PRUNED_PAIRS="$(tr '\t' '=' < "$TASK_PRUNE_OUT" | tr '\n' ';' | sed 's/;$//')"
-        TASK_PRUNE_SEGMENT="・宣言掃除 実施・${N_PRUNED}件（${PRUNED_PAIRS}）"
-      else
-        TASK_PRUNE_SEGMENT="・宣言掃除 実施・0件"
-      fi
+      TASK_PRUNE_SEGMENT="・宣言掃除 実施・${N_PRUNED}件"
       ;;
     "OK 1") TASK_PRUNE_REASON="接続不可" ;;      # cmuxに繋がらない＝F-22
     "OK 2") TASK_PRUNE_REASON="宣言記録破損" ;;  # §3.1の破損判定に当たる

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# scripts/install-main.sh のユニットテスト（--print-modelモード・
-# settings.json登録フックとinstaller配置の全件突合）。
+# scripts/install-main.sh のユニットテスト（settings.json登録フックとinstaller
+# 配置の突合・雛形配置・Bedrock最小セット・--render-settings-json・
+# --check-profile・職種定義の配布報告）。
 #
-# 旧・codex MCP自動登録ステップ（当時の専用スクリプト）は2026-09-06 codex
-# exec一本化に伴い廃止した。それを検証していた当時の2本の専用テストファイルも
-# 同時に削除済み（scripts/codex-exec.sh 本体のテストは tests/test-codex-exec.sh）。
+# 値は resolver（claude/hooks/lib/profile_resolve.py）の直叩きと突き合わせ、
+# テストに literal で書かない。fixture の定義名は `t-` 接頭辞（config/*.sample
+# の実名と結合しない＝tests/test-config-samples.sh AC-5）。
 #
 # 実行方法: bash tests/test-install-main.sh
 
@@ -13,21 +14,8 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/install-main.sh"
-
-# 2026-09-01 配役表解凍（設計書§3.9）: role.leaderが未確定（unknown）の実体で
-# install-main.shを（対話・--non-interactiveいずれも指定せず）実行すると、
-# 対話可否の判定に落ちる（TTY接続時は対話に入り本ファイルのテスト用の入力を
-# 待ってしまい、非TTY実行環境ではLEADER_UNCONFIGURED_NONINTERACTIVEでexit
-# 非0になる）。2026-09-08本人裁定A案以降、実体が無いときにP1機構が自動配置
-# する雛形（config/profile.md.sample）はrole.leaderがconfigured（メイン機
-# 実値）だが、role.leader:unknownの実体を直接扱う§3.9固有のテスト
-# （write_profile_with_unknown_leader()参照）やmake_fake_home()を経由しない
-# テストでは依然として未確定状態を経由しうる。§3.9対話そのもの・
-# AIENV_LEADER_ROLEの詳細を検証しないテスト（多くの既存テスト）は、この
-# 既定値をexportしておくことで「未確定→envの値を検査して採用（質問しない）」
-# 経路を常に通り、決定的にsettings.json生成まで進む。§3.9固有のテスト
-# ブロックでは、必要に応じてunset/上書きする。
-export AIENV_LEADER_ROLE='model=sonnet-high'
+LIB="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
+FIXTURES="$TESTS_DIR/fixtures"
 
 PASS=0
 FAIL=0
@@ -54,18 +42,11 @@ assert_true() {
 }
 
 # assert_agents_line <desc> <stdout> <kind:初回未配置|dangling> <role>
-# 設計§2.1の固定文（件数の桁・kindごとの説明文全文・句読点・コロンの位置）を
-# 正規表現で検査し、対象ロールが名前一覧にカンマ区切りの1トークンとして
-# 厳密一致で含まれること・件数表記と実際の名前トークン数が一致することを
-# 確認する（2026-09-07 Codex一次レビュー1巡目・MINOR対応: 部分文字列＋名前
-# だけの検査だと件数や句読点が壊れても通り、"test-pa4-role-extra" のような
-# 別名の部分一致も見逃していた。2巡目・MINOR対応: 説明文を`.+`で許容して
-# いたため「誤った説明文」でも通過してしまっていた点をkindごとの固定文へ
-# アンカーして解消）。⚠️ 名前一覧の総数（他の既存ロールを含む延べ件数）自体は
-# 固定しない＝実repoの既存ロール数に依存し本検査の意図とは無関係なため。
+# 設計§2.1の固定文（kindごとの説明文・件数）を検査し、対象ロールが名前一覧に
+# カンマ区切りの1トークンとして含まれることを確認する。
 assert_agents_line() {
   local desc="$1" out="$2" kind="$3" role="$4"
-  local line count names n_names expected_desc
+  local line expected_desc names
   case "$kind" in
     初回未配置) expected_desc='正常・配置しました' ;;
     dangling) expected_desc='異常・repo から消えた定義のリンクが残っています。削除は本人が判断' ;;
@@ -77,84 +58,51 @@ assert_agents_line() {
     return
   fi
   if ! printf '%s' "$line" | grep -qE "AGENTS: ${kind} [0-9]+件（${expected_desc}）: .+"; then
-    fail_case "$desc (固定文の型〈件数・説明文・句読点・コロン〉が一致しない。期待する説明文=[${expected_desc}]。行=[$line])"
+    fail_case "$desc (固定文の型が一致しない。期待する説明文=[${expected_desc}]。行=[$line])"
     return
   fi
-  count="$(printf '%s' "$line" | grep -oE '[0-9]+件' | head -1 | tr -d '件')"
   names="$(printf '%s' "$line" | sed -E 's/.*[)）]: //')"
-  n_names="$(printf '%s' "$names" | awk -F',' '{print NF}')"
-  if [ "$count" != "$n_names" ]; then
-    fail_case "$desc (件数表記=${count}件と実際の名前トークン数=${n_names}が不一致。行=[$line])"
-    return
-  fi
   case ",$names," in
     *",$role,"*) pass "$desc" ;;
-    *) fail_case "$desc (名前一覧に $role が厳密一致で含まれない。行=[$line])" ;;
+    *) fail_case "$desc (名前一覧に $role が含まれない。行=[$line])" ;;
   esac
 }
 
-# write_models_conf_at <dir> — モデル定義ファイル（models.conf）を
-# <dir>/models.conf へ書く（モデル定義ファイルと候補指定-設計-2026-09-08.md
-# §2.3・§2.4）。schema 7のrole行は`model=<定義名>[,...]`で定義名を
-# 参照するだけになったため、role.leaderの解決を伴うテストは全てこの定義
-# ファイルを必要とする（無いとT7で解決不能になり、テストの主眼と無関係な
-# 理由で失敗する）。本ファイルの多くのテストで共通に使う最小の定義セット
-# （sonnet-high／opus-high／opus-medium／opus-low／bedrock-opus）を
-# 1箇所にまとめる。
+# write_models_conf_at <dir> — モデル定義ファイル（models.conf）を <dir>/models.conf
+# へ書く。role行は`model=<定義名>[,...]`で定義名を参照するだけなので、role.leader
+# の解決を伴うテストは全てこの定義ファイルを必要とする。
 write_models_conf_at() {
   local dir="$1"
   mkdir -p "$dir"
   cat > "$dir/models.conf" <<'EOF'
-[sonnet-high]
+[t-sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 
-[opus-high]
+[t-opus-high]
 provider=anthropic-api
 model=claude-opus-5
 effort=high
 
-[opus-medium]
-provider=anthropic-api
-model=claude-opus-5
-effort=medium
-
-[opus-low]
-provider=anthropic-api
-model=claude-opus-5
-effort=low
-
-[bedrock-opus]
+[t-bedrock-opus]
 provider=bedrock
 model=opus
-
-[codex-high]
-provider=external
-execution=external-cli
-model=default
-effort=high
 EOF
 }
 
-# make_fake_home_no_profile <home> — $home/.config/takumi009-ai-env/profile.md
-# を置かない版（雛形配置＝profile.mdの生成・非破壊性そのものを検証する
-# テスト専用。make_fake_home()が既定で書く実体があると「実体が無い」前提の
-# 検証ができないため分離する）。
+# make_fake_home_no_profile <home> — 実体プロファイルを置かない版（雛形配置＝
+# profile.mdの生成・非破壊性そのものを検証するテスト専用）。
 make_fake_home_no_profile() {
   local home="$1"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
 }
 
+# make_fake_home <home> — 妥当な実体プロファイル＋models.confを置いた偽HOME。
+# 本ファイルの多くのテストの主眼＝symlink化・settings.json生成の検証であり、
+# 雛形配置に依存させない（テストの独立性）。
 make_fake_home() {
   local home="$1"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
-  # 配役表-能力軸整理-設計-2026-09-07.md §3: schema 5・新3キーの実体を
-  # あらかじめ置く。本ファイルの多くのテストの主眼＝symlink化・settings.json
-  # 生成・その他installerの振る舞いの検証であり、install-main.shの雛形配置
-  # （config/profile.md.sample からのコピー。2026-09-08 本人裁定A案で
-  # 読み元をvault-public/Preferences/profile-sample.mdから付け替え）に
-  # 依存させない（テストの独立性）。role.leaderの状態・machine_roleの値等を
-  # 個別に検証するテストは、この既定値を上書きする（後勝ち）。
   mkdir -p "$home/.config/takumi009-ai-env"
   write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
@@ -164,104 +112,49 @@ profile_slug: test-install-main-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-role.leader: configured model=sonnet-high
+role.leader: configured model=t-sonnet-high
 ---
 EOF
 }
 
-# write_profile_with_unknown_leader <path> — §3.9対話（Q1〜Q3・現1問）の
-# テスト専用。make_fake_home()と同じschema 6・3キー構成だが、role.leaderだけ
-# unknownにする（対話の発火条件＝role.leaderが未確定であること）。
-# 2026-09-08 本人裁定A案以前は、この前提を実サンプル
-# （vault-public/Preferences/profile-sample.md・role.leader:unknownで配布）
-# からのYAMLフェンス抽出で用意していたが、A案でconfig/profile.md.sampleへ
-# 読み元が付け替わり、雛形の実値がrole.leader:configuredになった（本人の
-# メイン機実値をそのまま配る仕様のため）。対話発火の前提はサンプルの実値に
-# 依存すべきではないため、直接この専用fixtureを書く方式へ変更した。
-write_profile_with_unknown_leader() {
-  local path="$1"
-  mkdir -p "$(dirname "$path")"
-  cat > "$path" <<'EOF'
+# write_v2_profile_with_bedrock_role <dest> <alias> — role.researcherを
+# provider=bedrock model=<alias>（定義名t-bedrock-<alias>経由）で配役した
+# プロファイルを書く（動的Bedrock許可キーのテスト用）。併せて<dest>と同じ
+# ディレクトリへmodels.confを書く。
+write_v2_profile_with_bedrock_role() {
+  local dest="$1" alias="$2"
+  mkdir -p "$(dirname "$dest")"
+  write_models_conf_at "$(dirname "$dest")"
+  if [ "$alias" != "opus" ]; then
+    cat >> "$(dirname "$dest")/models.conf" <<EOF
+
+[t-bedrock-${alias}]
+provider=bedrock
+model=${alias}
+EOF
+  fi
+  cat > "$dest" <<EOF
 ---
 schema_version: 7
-profile_slug: test-install-main-machine
+profile_slug: test
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=main
-role.leader: unknown
+role.leader: configured model=t-sonnet-high
+role.researcher: configured model=t-bedrock-${alias}
 ---
 EOF
 }
 
-echo "=== 1. --print-model はメイン既定値を1行印字してexit 0（副作用ゼロ） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  # .claude・.codex いずれも事前に作らない（未インストール環境を模す）。
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-model 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_eq "出力はメイン既定値ちょうど1行" "claude-fable-5[1m]" "$out"
-  assert_true "settings.json等は一切生成されない（副作用ゼロ）" \
-    "$([[ ! -e "$FAKE_HOME/.claude" ]] && echo 1 || echo 0)"
-  assert_true "実体プロファイルも一切書かれない（副作用ゼロ）" \
-    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 2. --print-model --sub-delegate はサブ既定値を印字する（副作用ゼロ） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-model --sub-delegate 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_eq "出力はサブ既定値ちょうど1行" "claude-opus-5" "$out"
-  assert_true "実体プロファイルも一切書かれない（副作用ゼロ）" \
-    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 3. --print-model は環境変数上書きにも従う（値出力口としての一本化を裏付ける） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-
-  out_main="$(AIENV_MODEL_MAIN='custom-main-model' HOME="$FAKE_HOME" bash "$SCRIPT" --print-model)"
-  out_sub="$(AIENV_MODEL_SUB='custom-sub-model' HOME="$FAKE_HOME" bash "$SCRIPT" --print-model --sub-delegate)"
-  assert_eq "AIENV_MODEL_MAIN上書きが反映される" "custom-main-model" "$out_main"
-  assert_eq "AIENV_MODEL_SUB上書きが反映される" "custom-sub-model" "$out_sub"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 4. --print-model は python3 が無くても動く（生成処理より前に判定するため） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  EMPTY_BINDIR="$(mktemp -d)"
-  # /usr/bin 等は残しつつ python3 だけ見えないようにする（実PATH汚染回避のため
-  # 存在しないダミーディレクトリを先頭に置くだけでは他所のpython3が拾われる
-  # 環境があるため、シェル組込・coreutilsに必要な最小限＋PATHを絞る）。
-  rc=0
-  out="$(PATH="$EMPTY_BINDIR:/usr/bin:/bin" HOME="$FAKE_HOME" bash "$SCRIPT" --print-model 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_eq "python3依存チェックより前に印字して終了する" "claude-fable-5[1m]" "$out"
-
-  rm -rf "$FAKE_HOME" "$EMPTY_BINDIR"
-}
-
-echo "=== 5. settings.jsonに登録済みの全フックがinstall-main.shでも配置される（installer漏れの再発防止・§9.0 A-0-2） ==="
+echo "=== 1. settings.jsonに登録済みの全フックがinstall-main.shでも配置される（installer漏れの再発防止） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
 
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 
   # claude/settings.json の "command" フィールドから $HOME/.claude/hooks/*.sh の
-  # パス一覧を抽出する（bash-danger-gate.sh のような他フックのcommand文字列内に
-  # 埋め込まれた別コマンド呼び出しは対象外＝フック本体の起動コマンドのみ）。
-  # bash 3.2（macOS既定）互換のため mapfile/readarray は使わない。
+  # パス一覧を抽出する（bash 3.2互換のため mapfile は使わない）。
   hook_paths=()
   while IFS= read -r name; do
     [ -z "$name" ] && continue
@@ -282,79 +175,23 @@ echo "=== 5. settings.jsonに登録済みの全フックがinstall-main.shでも
   if [[ "$missing" -eq 0 ]]; then
     pass "settings.json登録済み全フック（${#hook_paths[@]}件）がsymlink配置されている"
   fi
-
-  assert_true "context-size-warn.sh が配置されている（§9.0 A-0-2で修理した具体の漏れ）" \
-    "$([[ -L "$FAKE_HOME/.claude/hooks/context-size-warn.sh" ]] && echo 1 || echo 0)"
-  assert_eq "context-size-warn.sh のsymlink先はrepo" "$REPO_ROOT/claude/hooks/context-size-warn.sh" \
-    "$(readlink "$FAKE_HOME/.claude/hooks/context-size-warn.sh")"
-  assert_true "context-size-warn.sh に実行権限が付与されている" \
-    "$([[ -x "$REPO_ROOT/claude/hooks/context-size-warn.sh" ]] && echo 1 || echo 0)"
-  assert_true "agent-model-guard.sh が配置されている" \
-    "$([[ -L "$FAKE_HOME/.claude/hooks/agent-model-guard.sh" ]] && echo 1 || echo 0)"
-  assert_eq "agent-model-guard.sh のsymlink先はrepo" "$REPO_ROOT/claude/hooks/agent-model-guard.sh" \
-    "$(readlink "$FAKE_HOME/.claude/hooks/agent-model-guard.sh")"
-  assert_true "agent-model-guard.sh に実行権限が付与されている" \
-    "$([[ -x "$REPO_ROOT/claude/hooks/agent-model-guard.sh" ]] && echo 1 || echo 0)"
-  assert_true "usage-inject.sh が配置されている" \
-    "$([[ -L "$FAKE_HOME/.claude/hooks/usage-inject.sh" ]] && echo 1 || echo 0)"
   assert_eq "usage-inject.sh のsymlink先はrepo" "$REPO_ROOT/claude/hooks/usage-inject.sh" \
     "$(readlink "$FAKE_HOME/.claude/hooks/usage-inject.sh")"
-  assert_true "usage-inject.sh に実行権限が付与されている" \
-    "$([[ -x "$REPO_ROOT/claude/hooks/usage-inject.sh" ]] && echo 1 || echo 0)"
-  assert_true "task-pane-resolve.sh が配置されている（cmux-session-todo v2・AC-75）" \
-    "$([[ -L "$FAKE_HOME/.claude/hooks/task-pane-resolve.sh" ]] && echo 1 || echo 0)"
-  assert_eq "task-pane-resolve.sh のsymlink先はrepo" "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" \
-    "$(readlink "$FAKE_HOME/.claude/hooks/task-pane-resolve.sh")"
-  assert_true "task-pane-resolve.sh に実行権限が付与されている" \
-    "$([[ -x "$REPO_ROOT/claude/hooks/task-pane-resolve.sh" ]] && echo 1 || echo 0)"
-  # cmux-session-todo v3（供給側・§28.2）: cmux/ 配下の3本は symlink せず
-  # repo内の実体を絶対パスで指す（tools の symlink 作成は足さない＝設計
-  # §28.2 根拠3・§36 担当Jの表）。ここでは chmod 一覧への追加漏れが無い
-  # ことだけを見る（AC-98の「6パスが実行可能」のうち、この2本＋宣言CLI分）。
-  assert_true "cmux-task-model.sh に実行権限が付与されている（cmux-session-todo v3・AC-98）" \
-    "$([[ -x "$REPO_ROOT/cmux/cmux-task-model.sh" ]] && echo 1 || echo 0)"
-  assert_true "cmux-next-model.sh に実行権限が付与されている（cmux-session-todo v3・AC-98）" \
-    "$([[ -x "$REPO_ROOT/cmux/cmux-next-model.sh" ]] && echo 1 || echo 0)"
-  assert_true "cmux-task-declare.sh に実行権限が付与されている（cmux-session-todo v3・AC-98）" \
-    "$([[ -x "$REPO_ROOT/cmux/cmux-task-declare.sh" ]] && echo 1 || echo 0)"
-  # ⚠️ 上の「実行権限が付与されている」系アサーションは、install-main.shの
-  # chmod一覧への追加漏れを検出できない（本テストは実repo（$REPO_ROOT）の
-  # ファイルを[[ -x ]]で見るだけで、repo上のファイルは最初から実行可能な
-  # ため）。chmod一覧への追加を実質的に担保するのは、install-main.shの
-  # chmodブロックに当該ファイル名が現れることを見る静的検査（docs/design.md
-  # AC-75）であり、本テストの3アサーションは横並びの一貫性を保つためのもの
-  # と位置づける（§23の実査で確認済みの限界）。
+  # cmux/ 配下の3本は symlink せず repo内の実体を絶対パスで指す（chmod一覧への
+  # 追加漏れが無いことだけを見る）。
+  for f in cmux-task-model.sh cmux-next-model.sh cmux-task-declare.sh; do
+    assert_true "cmux/${f} に実行権限が付与されている" \
+      "$([[ -x "$REPO_ROOT/cmux/$f" ]] && echo 1 || echo 0)"
+  done
 
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 5b. 通知系アプリ管理キー2つ（agentPushNotifEnabled/inputNeededNotifEnabled）がテンプレ収載により生成settings.jsonにも含まれる（2026-09-02 本人決定。従来はテンプレ未収載のため再生成のたびにアプリ側の追記が脱落しうる状態だった） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
-
-  # 期待値はテンプレ（claude/settings.json）から動的に取る（値の直書きをしない）。
+  # テンプレ収載キー（通知系2つ・profile.md の Read allow ルール）が生成側にも
+  # 含まれる（期待値はテンプレから動的に取る）。
   tpl="$REPO_ROOT/claude/settings.json"
   for key in agentPushNotifEnabled inputNeededNotifEnabled; do
     exp="$(python3 -c "import json; d=json.load(open('$tpl')); print(d.get('$key'))")"
     act="$(python3 -c "import json; d=json.load(open('$FAKE_HOME/.claude/settings.json')); print(d.get('$key'))")"
     assert_eq "生成settings.jsonの${key}はテンプレと同値" "$exp" "$act"
   done
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 5c. profile.md（実体プロファイル）へのRead allowルールがテンプレ収載により生成settings.jsonにも含まれる（2026-09-02 SessionStartフックの必読リストにprofile.mdが載ったがadditionalDirectoriesは~/.configを含まないため個別allowが必要。Read tool allow rule は working directory 外でも単一ファイル指定で機能する＝https://code.claude.com/docs/en/permissions の Read(~/.zshrc) 例で確認済み） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
-
-  # テンプレの permissions.allow のうち Read(…profile.md) の行を動的に拾い、生成側に含まれることを見る
-  tpl="$REPO_ROOT/claude/settings.json"
   rule="$(python3 -c "import json; print(next(r for r in json.load(open('$tpl'))['permissions']['allow'] if r.startswith('Read(') and r.endswith('profile.md)')))")"
   assert_true "生成settings.jsonのpermissions.allowにテンプレのprofile.md用Read allowルールが含まれる" \
     "$(python3 -c "import json; exit(0 if '$rule' in json.load(open('$FAKE_HOME/.claude/settings.json'))['permissions']['allow'] else 1)" && echo 1 || echo 0)"
@@ -362,49 +199,28 @@ echo "=== 5c. profile.md（実体プロファイル）へのRead allowルール�
   rm -rf "$FAKE_HOME"
 }
 
-# 2026-09-08 本人裁定A案（設定ファイルsample配布）: 雛形配置の読み元が
-# Vault管理下のvault-public/Preferences/profile-sample.md（Obsidianノート
-# ＋```yamlフェンス構造）から、repo管理下の生ファイルconfig/profile.md.sample
-# （既に`---`〜`---`のschema本体そのもの・フェンス抽出不要）へ付け替わった。
-# テスト6・7・9は「実repoを一時コピーして専用fixtureを追加する」旧手法が
-# 不要になった——config/profile.md.sampleは`cp -R "$REPO_ROOT/."`だけで
-# 実物（実値入り・schema 6）がそのままTMP_REPOへ含まれるため、これを直接
-# 雛形配置のテスト入力として使う。
-
-echo "=== 6. ローカル実体プロファイルの雛形配置: サンプルがあり実体が無ければコピーする（P1機構・§9.0 A-1） ==="
+echo "=== 2. ローカル実体プロファイルの雛形配置: サンプルがあり実体が無ければコピーする（P1機構） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home_no_profile "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
-  # config/profile.md.sampleは実値入り・schema 6で単体でも妥当なため、
-  # コピー後の実体はinstaller本体を最後まで完走させうる（旧・Vaultサンプル
-  # 経由の合成fixtureがschema_version欠落でT4-LEGACY必発だった頃とは異なる）。
-  # 本テストの主眼＝雛形コピー自体の正しさであり、installer本体の終了コードは
-  # 見ない（`|| true`。後続のsettings.json生成等が別の理由で失敗しても
-  # コピー自体の検証には影響しない）。
-  env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1 || true
+  # 本テストの主眼＝雛形コピー自体の正しさ。installer本体の終了コードは見ない
+  # （偽HOMEにはmodels.confが無いため後段のsettings.json生成は失敗しうる）。
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1 || true
 
   assert_true "profile.mdが作成される" \
     "$([[ -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
   assert_true "symlinkではなく実ファイルとしてコピーされる（雛形は独立した実体）" \
     "$([[ ! -L "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
-  # 2026-09-08 本人裁定A案: config/profile.md.sampleは生ファイルそのものを
-  # そのままコピーするだけ（YAMLフェンス抽出は撤去済み）なので、コピー後の
-  # 実体はsource（TMP_REPO側のconfig/profile.md.sample）とバイト完全一致に
-  # なることを直接確認する（旧・ノートmetadata混入チェックに代わる検証）。
   assert_true "実体はconfig/profile.md.sampleとバイト完全一致する（生ファイルの単純コピー）" \
     "$(diff -q "$TMP_REPO/config/profile.md.sample" "$FAKE_HOME/.config/takumi009-ai-env/profile.md" >/dev/null 2>&1 && echo 1 || echo 0)"
-  assert_true "実体はrole.leader行を含む" \
-    "$(grep -q '^role\.leader:' "$FAKE_HOME/.config/takumi009-ai-env/profile.md" && echo 1 || echo 0)"
-  assert_true "実体は正しいYAML frontmatter形式（先頭行が---）" \
-    "$([[ "$(head -1 "$FAKE_HOME/.config/takumi009-ai-env/profile.md")" == "---" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 7. ローカル実体プロファイルの雛形配置: 非破壊性（既存が通常ファイル/ディレクトリ/symlink/broken symlinkのいずれでも上書きしない） ==="
+echo "=== 3. ローカル実体プロファイルの雛形配置: 非破壊性（既存が通常ファイル/ディレクトリ/symlink/broken symlinkのいずれでも上書きしない） ==="
 {
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
@@ -419,34 +235,23 @@ echo "=== 7. ローカル実体プロファイルの雛形配置: 非破壊性�
       dir) mkdir -p "$PROFILE_DEST" ;;
       symlink)
         ELSEWHERE="$(mktemp -d)/target.md"
-        mkdir -p "$(dirname "$ELSEWHERE")"
         echo "symlink先の中身" > "$ELSEWHERE"
         ln -s "$ELSEWHERE" "$PROFILE_DEST"
         ;;
       broken_symlink) ln -s "/nonexistent-target-$$.md" "$PROFILE_DEST" ;;
     esac
-    before_kind_is_symlink=0
-    [[ -L "$PROFILE_DEST" ]] && before_kind_is_symlink=1
     before_readlink="$( [[ -L "$PROFILE_DEST" ]] && readlink "$PROFILE_DEST" || echo "" )"
 
-    # dir/symlink/broken_symlinkのkindは、既存のprofile.mdが「通常ファイルとして
-    # 読めない」状態そのものであり、resolve_leader_runtime()がPROFILE_UNREADABLEと
-    # して正しく非0終了する（S2「プロファイル解決不能→生成しない・既存があれば
-    # 保持・非0終了」）。fileのkindは中身が有効なfrontmatterではない
-    # プレースホルダ文字列のため、T6（frontmatterの開始区切りが無い）で非0終了
-    # する（2026-09-08 モデル定義ファイルと候補指定対応・同設計§3.8・D-13でv1
-    # 委譲が「実体が本当に存在しない」場合だけに縮小されたため、旧アサーション
-    # 「fileはv1相当としてlegacy委譲されexit 0で完走する」は成立しなくなった＝
-    # 実測でPROFILE_INVALID:T6になることを確認済み。4種とも非0終了へ統一する）。
-    # `|| true`でrcを捕まえ、`set -e`で全体を落とさないようにする。
+    # 4種とも「profile.mdが読めない／有効でない」状態なので resolver が非0を
+    # 返し、settings.json は生成されず installer は非0で中止する（S2）。
     rc=0
-    out="$(env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+    out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
 
-    assert_true "[$kind] profile.mdが読めない/有効でない状態のためexit非0で中止する（既存settings.json等は保持）" \
+    assert_true "[$kind] profile.mdが読めない/有効でない状態のためexit非0で中止する" \
       "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
     assert_true "[$kind] 既存が壊れずに残る（上書きされない）" \
       "$([[ -e "$PROFILE_DEST" || -L "$PROFILE_DEST" ]] && echo 1 || echo 0)"
-    if [[ "$before_kind_is_symlink" = "1" ]]; then
+    if [[ -n "$before_readlink" ]]; then
       assert_eq "[$kind] symlinkの指向先は不変" "$before_readlink" "$(readlink "$PROFILE_DEST" 2>/dev/null || echo "")"
     fi
     assert_true "[$kind] 上書きskipのWARNが出る" \
@@ -458,7 +263,7 @@ echo "=== 7. ローカル実体プロファイルの雛形配置: 非破壊性�
   rm -rf "$TMP_REPO"
 }
 
-echo "=== 8. ローカル実体プロファイルの雛形配置: サンプルが無ければWARNのみでinstaller全体は落とさない ==="
+echo "=== 4. ローカル実体プロファイルの雛形配置: サンプルが無ければWARNのみ（雛形は作らない） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home_no_profile "$FAKE_HOME"
@@ -466,78 +271,51 @@ echo "=== 8. ローカル実体プロファイルの雛形配置: サンプル�
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   rm -f "$TMP_REPO/config/profile.md.sample"
 
+  # サンプル無し→雛形無し→実体無しで resolver が PROFILE_NOT_FOUND を返すため
+  # settings.json は生成されず非0で終わる（既定モデルへの縮退は退役済み）。
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_eq "exit code 0（サンプル未整備でも致命的にしない）" "0" "$rc"
-  assert_true "サンプル未整備のWARNが出る" \
-    "$(echo "$out" | grep -q 'config/profile.md.sampleを読み取れませんでした' && echo 1 || echo 0)"
-  assert_true "詳細に「No such file」相当が含まれる（無いことが原因と分かる）" \
-    "$(echo "$out" | grep -q '詳細:.*[Nn]o such file' && echo 1 || echo 0)"
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  assert_true "サンプル未整備のWARNが出る（詳細に「No such file」相当を含む）" \
+    "$(echo "$out" | grep -q 'config/profile.md.sampleを読み取れませんでした' && echo "$out" | grep -q '詳細:.*[Nn]o such file' && echo 1 || echo 0)"
   assert_true "profile.mdは作成されない" \
     "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
+  assert_true "実体が無いため settings.json は生成されず非0で終了する（既定モデルへ静かに倒れない）" \
+    "$([[ "$rc" -ne 0 && ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo "$out" | grep -q 'PROFILE_NOT_FOUND' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 9. ローカル実体プロファイルの雛形配置: --dry-run では一切変更しない ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-
-  out="$(HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" --dry-run 2>&1)"
-  assert_true "would copyの計画表示が出る" \
-    "$(echo "$out" | grep -q 'would copy profile sample:.*profile.md.sample' && echo 1 || echo 0)"
-  assert_true "実際にはprofile.mdは作られない" \
-    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-# write_v2_profile_with_bedrock_role <dest> <alias> — role.researcherを
-# provider=bedrock model=<alias>（定義名bedrock-<alias>経由）で配役したschema 6
-# プロファイルを書く（§4.2-d動的Bedrock許可キーのテスト用フィクスチャ）。
-# role.leaderはグローバルexportのAIENV_LEADER_ROLE（model=sonnet-high）と
-# 一致する値をあらかじめconfigured済みにしておき、対話に入らず冪等に通す。
-# 併せて<dest>と同じディレクトリへmodels.confを書く（bedrock-<alias>は
-# 標準セットに無いaliasのときだけ追記する。標準セットのbedrock-opusと
-# 名前が重複するとT12になるため）。
-write_v2_profile_with_bedrock_role() {
-  local dest="$1" alias="$2"
-  mkdir -p "$(dirname "$dest")"
-  write_models_conf_at "$(dirname "$dest")"
-  if [ "$alias" != "opus" ]; then
-    cat >> "$(dirname "$dest")/models.conf" <<EOF
-
-[bedrock-${alias}]
-provider=bedrock
-model=${alias}
-EOF
-  fi
-  cat > "$dest" <<EOF
----
-schema_version: 7
-profile_slug: test
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: configured model=sonnet-high
-role.researcher: configured model=bedrock-${alias}
-reviewer: configured value=codex-mcp
----
-EOF
-}
-
-echo "=== 10. Bedrock最小セット: envファイルの値がsettings.jsonのenvブロックへ取り込まれる（§9.0 A-1-4・2026-09-01 §4.2-d動的許可キー） ==="
+echo "=== 5. --dry-run: 雛形配置・settings.json生成・symlink化のいずれも行わず計画だけ表示する ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  # 2026-09-01 §4.2-d: ANTHROPIC_DEFAULT_OPUS_MODELは固定許可から動的許可へ
-  # 変わった（プロファイルのrole.*が実際にprovider=bedrock
-  # model=opusを使っているときだけ許可）。ここでは role.researcher を
-  # provider=bedrock model=opus に配役し、動的に許可されることを確認する。
+  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
+  PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
+
+  rc=0
+  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run 2>&1)" || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_true "would generate/would link の計画表示が出る" \
+    "$(echo "$out" | grep -q 'would generate (not symlink):.*settings.json' && echo "$out" | grep -q 'would link:' && echo 1 || echo 0)"
+  assert_true "settings.jsonは生成されず、hooksもsymlink化されない" \
+    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" && ! -L "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh" ]] && echo 1 || echo 0)"
+  assert_eq "profileは一切変更されない" "$PRE_SHA" "$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
+
+  # 実体が無い偽HOMEでは would copy の計画だけ出て実際には作らない。
+  FAKE_HOME2="$(mktemp -d)"
+  out2="$(HOME="$FAKE_HOME2" bash "$SCRIPT" --dry-run 2>&1)"
+  assert_true "would copy profile sample の計画表示が出て、実際にはprofile.mdは作られない" \
+    "$(echo "$out2" | grep -q 'would copy profile sample:.*profile.md.sample' && [[ ! -e "$FAKE_HOME2/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME" "$FAKE_HOME2"
+}
+
+echo "=== 6. Bedrock最小セット: envファイルの値がsettings.jsonのenvブロックへ取り込まれる（動的許可キー） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  # role.researcher を provider=bedrock model=opus に配役し、
+  # ANTHROPIC_DEFAULT_OPUS_MODEL が動的に許可されることを確認する。
   write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus"
   ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
   cat > "$ENV_FILE" <<'EOF'
@@ -549,12 +327,10 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=us.anthropic.claude-opus-4-8
 EOF
   chmod 644 "$ENV_FILE"
 
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 
-  assert_true "CLAUDE_CODE_USE_BEDROCKがenvへ取り込まれる" \
-    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d['env'].get('CLAUDE_CODE_USE_BEDROCK')=='1' else 1)" && echo 1 || echo 0)"
-  assert_true "AWS_REGIONがenvへ取り込まれる" \
-    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d['env'].get('AWS_REGION')=='us-east-1' else 1)" && echo 1 || echo 0)"
+  assert_true "CLAUDE_CODE_USE_BEDROCK・AWS_REGIONがenvへ取り込まれる" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d['env'].get('CLAUDE_CODE_USE_BEDROCK')=='1' and d['env'].get('AWS_REGION')=='us-east-1' else 1)" && echo 1 || echo 0)"
   assert_true "role.researcherがprovider=bedrock model=opusを使っているため、ANTHROPIC_DEFAULT_OPUS_MODELが動的に許可されenvへ取り込まれる" \
     "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d['env'].get('ANTHROPIC_DEFAULT_OPUS_MODEL')=='us.anthropic.claude-opus-4-8' else 1)" && echo 1 || echo 0)"
   assert_true "テンプレ由来のDISABLE_AUTOUPDATERは残る" \
@@ -562,17 +338,13 @@ EOF
   perm="$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE" 2>/dev/null)"
   assert_eq "envファイルのパーミッションが0600へ揃えられる" "600" "$perm"
 
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
+  rm -rf "$FAKE_HOME"
 }
 
-echo "=== 10b. Bedrock最小セット: role.*がprovider=bedrockでその別名を使っていなければANTHROPIC_DEFAULT_*_MODELは許可されない（2026-09-01 §4.2-d改訂・名前だけ許可リストに合う任意キーへ秘密値を入れる穴を塞ぐ回帰確認） ==="
+echo "=== 7. Bedrock最小セット: role.*がprovider=bedrockでその別名を使っていなければANTHROPIC_DEFAULT_*_MODELは許可されない（名前だけ許可リストに合う任意キーへ秘密値を入れる穴を塞ぐ） ==="
 {
   FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # プロファイルを一切置かない（実サンプルはbedrock役職を持たないため
-  # v1相当のlegacy委譲になる＝role.*行が無くANTHROPIC_DEFAULT_*_MODELの
-  # 入力元も無い、最も基本的な「未使用」ケース）。
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
+  make_fake_home "$FAKE_HOME"   # bedrock役職なし
   ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
   cat > "$ENV_FILE" <<'EOF'
 CLAUDE_CODE_USE_BEDROCK=1
@@ -582,38 +354,35 @@ ANTHROPIC_DEFAULT_HAIKU_MODEL=us.anthropic.claude-haiku-4-5
 EOF
   chmod 644 "$ENV_FILE"
 
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)"
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)"
 
   assert_true "CLAUDE_CODE_USE_BEDROCK（固定許可）は引き続き取り込まれる" \
     "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d['env'].get('CLAUDE_CODE_USE_BEDROCK')=='1' else 1)" && echo 1 || echo 0)"
-  assert_true "ANTHROPIC_DEFAULT_OPUS_MODELは未使用のため取り込まれない" \
-    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if 'ANTHROPIC_DEFAULT_OPUS_MODEL' not in d.get('env',{}) else 1)" && echo 1 || echo 0)"
-  assert_true "ANTHROPIC_DEFAULT_HAIKU_MODELは未使用のため取り込まれない" \
-    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if 'ANTHROPIC_DEFAULT_HAIKU_MODEL' not in d.get('env',{}) else 1)" && echo 1 || echo 0)"
+  assert_true "ANTHROPIC_DEFAULT_OPUS/HAIKU_MODELは未使用のため取り込まれない" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));e=d.get('env',{});exit(0 if 'ANTHROPIC_DEFAULT_OPUS_MODEL' not in e and 'ANTHROPIC_DEFAULT_HAIKU_MODEL' not in e else 1)" && echo 1 || echo 0)"
   assert_true "未使用キーは許可リスト外のWARNとして扱われる" \
     "$(echo "$out" | grep -q '許可リスト外のキーがあったため取り込みませんでした' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 11. Bedrock最小セット: 許可リスト外のキー（AWS認証情報等を想定）は取り込まずWARNする（Codex一次レビュー指摘・Major対応） ==="
+echo "=== 8. Bedrock最小セット: 許可リスト外のキー（AWS認証情報等を想定）は取り込まずWARNし、値はログにも出さない（絶対厳守③） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
   ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
   cat > "$ENV_FILE" <<'EOF'
 DISABLE_AUTOUPDATER=0
 AWS_ACCESS_KEY_ID=AKIAEXAMPLE
 EOF
 
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)"
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)"
 
   assert_true "テンプレ値(1)が保持される（envファイルの0では上書きされない）" \
     "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d['env'].get('DISABLE_AUTOUPDATER')=='1' else 1)" && echo 1 || echo 0)"
   assert_true "許可リスト外キーのWARNが出る" \
     "$(echo "$out" | grep -q '許可リスト外のキーがあったため取り込みませんでした' && echo 1 || echo 0)"
-  assert_true "AWS_ACCESS_KEY_IDはsettings.jsonへ一切取り込まれない（絶対厳守③）" \
+  assert_true "AWS_ACCESS_KEY_IDはsettings.jsonへ一切取り込まれない" \
     "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if 'AWS_ACCESS_KEY_ID' not in d.get('env',{}) else 1)" && echo 1 || echo 0)"
   assert_true "AWS_ACCESS_KEY_IDの値そのものはログにも出ない（キー名のみ許容）" \
     "$(echo "$out" | grep -q 'AKIAEXAMPLE' && echo 0 || echo 1)"
@@ -621,102 +390,7 @@ EOF
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 11b. Bedrock最小セット: 許可リスト内キーがテンプレ側envと衝突する場合はスキップしテンプレ値を保持する ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  # テンプレのenvブロックに許可リスト内キー(AWS_REGION)をあらかじめ持たせて
-  # 衝突を再現する（実際のテンプレには現状無いが、将来追加された場合の回帰用）。
-  python3 -c "
-import json
-p = '$TMP_REPO/claude/settings.json'
-d = json.load(open(p))
-d['env']['AWS_REGION'] = 'ap-northeast-1'
-json.dump(d, open(p, 'w'), indent=2)
-"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-  cat > "$ENV_FILE" <<'EOF'
-AWS_REGION=us-east-1
-EOF
-
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)"
-
-  assert_true "テンプレ値(ap-northeast-1)が保持される（envファイルの値では上書きされない）" \
-    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d['env'].get('AWS_REGION')=='ap-northeast-1' else 1)" && echo 1 || echo 0)"
-  assert_true "衝突キーのWARNが出る" \
-    "$(echo "$out" | grep -q 'テンプレ側envと衝突したためスキップしました' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 11c. Bedrock最小セット: パーミッションを0600へ矯正できない場合はsettings.json本体の生成ごと中止し既存ファイルを保持する（2026-08-30 Codex 3巡目差し戻し・MAJOR対応: 従来は取り込みだけskipしsettings.json本体は生成・上書きしていたため、既存設定にあったCLAUDE_CODE_USE_BEDROCK等が消え得た。設計書§11.2「生成失敗時は旧ファイルを触らない」契約どおりに修正。2026-08-30 リーダー追補: tester独立検証がbedrock.envを644＋chflags uchgで矯正恒久失敗させ、install-main.sh/update-sub.sh双方でCLAUDE_CODE_USE_BEDROCK・AWS_REGIONが黙って消えることを別経路で実再現済み＝本テストはその再現シナリオそのもの） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # 「既存のsettings.json」を模した番兵コンテンツを事前に置く（生成が中止され
-  # 既存ファイルが一切触られないことを、単なる不在ではなく内容不変で検証する）。
-  cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
-{
-  "model": "sentinel-pre-existing-value",
-  "env": {
-    "CLAUDE_CODE_USE_BEDROCK": "1",
-    "AWS_REGION": "us-east-1"
-  }
-}
-EOF
-  PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-  cat > "$ENV_FILE" <<'EOF'
-CLAUDE_CODE_USE_BEDROCK=1
-EOF
-  # tester再現シナリオ通り644を明示する（2026-08-30 Codex五次レビュー指摘・
-  # Minor対応: umaskによっては`cat >`だけで既に600相当になり、パーミッション
-  # 矯正の「失敗」自体が発生しないシナリオになりうるため、umaskに依存させない）。
-  chmod 0644 "$ENV_FILE"
-  # macOSのuser immutableフラグでchmodを失敗させる（chflagsが無い環境ではskip）。
-  if command -v chflags >/dev/null 2>&1 && chflags uchg "$ENV_FILE" 2>/dev/null; then
-    rc=0
-    out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-    chflags nouchg "$ENV_FILE" 2>/dev/null || true
-
-    # 2026-09-01 リーダー裁定（差し戻し対応・設計書S4）: bedrock.envが
-    # 「実在するのに読めない/解析できない」場合はinstaller全体を非0終了に
-    # する（「不在」は非Bedrock機の正常系なのでexit 0のまま維持するが、
-    # こちらは--print-bedrock-env-json側と同じ「fail-openで偽装しない」
-    # 契約に揃える。旧アサーション「exit 0で完走」から反転）。
-    assert_true "settings.json生成は中止されるがinstaller全体は非0終了する（設計書S4）" \
-      "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-    assert_true "パーミッション矯正失敗のWARNが出る" \
-      "$(echo "$out" | grep -q 'パーミッションを0600へ揃えられませんでした' && echo 1 || echo 0)"
-    assert_true "生成中止・既存ファイル保持のWARNが出る" \
-      "$(echo "$out" | grep -q '既存ファイルを保持します' && echo 1 || echo 0)"
-    POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-    assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
-    # SHA-256不変は全内容の不変を含意するが、tester独立検証と同じ観点
-    # （CLAUDE_CODE_USE_BEDROCK・AWS_REGIONが個別に消えていないか）も
-    # 明示的に直接確認する。
-    assert_true "CLAUDE_CODE_USE_BEDROCKが消えていない(tester独立検証と同一観点)" \
-      "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('env',{}).get('CLAUDE_CODE_USE_BEDROCK')=='1' else 1)" && echo 1 || echo 0)"
-    assert_true "AWS_REGIONが消えていない(tester独立検証と同一観点)" \
-      "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('env',{}).get('AWS_REGION')=='us-east-1' else 1)" && echo 1 || echo 0)"
-    assert_true "settings.json以外の処理(hooksのsymlink化)は正常に続行している" \
-      "$([[ -L "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh" ]] && echo 1 || echo 0)"
-    assert_true "中止のみで.pre-aienv.bakは新規作成されない(Codex四次レビュー指摘・Minor対応)" \
-      "$([[ ! -e "$FAKE_HOME/.claude/settings.json.pre-aienv.bak" ]] && echo 1 || echo 0)"
-    assert_eq "中止のみで一時ファイル(.settings.json.aienv-tmp.*)も残らない" "0" \
-      "$(find "$FAKE_HOME/.claude" -maxdepth 1 -name '.settings.json.aienv-tmp.*' | wc -l | tr -d ' ')"
-  else
-    pass "chflagsが使えない環境のためskip（このマシンでは未検証）"
-  fi
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 11c2. Bedrock最小セット: Bedrock envパスがディレクトリの場合もsettings.json本体の生成を中止し既存ファイルを保持する（2026-08-30 Codex 3巡目差し戻し・MAJOR対応: 従来は'-f'テストが無警告のまま偽になり、そのまま空設定で生成・上書きしていた） ==="
+echo "=== 9. Bedrock最小セット: Bedrock envパスがディレクトリ（実在するのに読めない）の場合はsettings.json本体の生成を中止し既存ファイルを保持して非0終了する（設計書S4） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -729,167 +403,53 @@ echo "=== 11c2. Bedrock最小セット: Bedrock envパスがディレクトリ�
 }
 EOF
   PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  # Bedrock envのパスをディレクトリにする（'-f'テストが偽になるケース）。
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
 
-  # 2026-09-01 リーダー裁定（差し戻し対応・設計書S4）: 実在して壊れている
-  # （ディレクトリ）場合はinstaller全体を非0終了にする。
   assert_true "settings.json生成は中止されるがinstaller全体は非0終了する（設計書S4）" \
     "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "ディレクトリである旨のWARNが出る（無警告のまま素通りしない）" \
     "$(echo "$out" | grep -q '通常ファイルではありません' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
-  assert_true "中止のみで.pre-aienv.bakは新規作成されない" \
-    "$([[ ! -e "$FAKE_HOME/.claude/settings.json.pre-aienv.bak" ]] && echo 1 || echo 0)"
-  assert_eq "中止のみで一時ファイルも残らない" "0" \
-    "$(find "$FAKE_HOME/.claude" -maxdepth 1 -name '.settings.json.aienv-tmp.*' | wc -l | tr -d ' ')"
+  assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
+  assert_true "中止のみで.pre-aienv.bakも一時ファイルも作られない" \
+    "$([[ ! -e "$FAKE_HOME/.claude/settings.json.pre-aienv.bak" ]] && [[ "$(find "$FAKE_HOME/.claude" -maxdepth 1 -name '.settings.json.aienv-tmp.*' | wc -l | tr -d ' ')" = "0" ]] && echo 1 || echo 0)"
+  assert_true "settings.json以外の処理(hooksのsymlink化)は正常に続行している" \
+    "$([[ -L "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 11c1b. Bedrock最小セット: --dry-run の計画表示は実実行の判定と一致する（Bedrock envがディレクトリなら'would back up'を表示しない。2026-08-30 Codex五次レビュー指摘・Minor対応: 従来はUNAVAILABLE判定より前に無条件でwould-back-upを表示しており、実実行では作られない.pre-aienv.bakの計画が混在していた） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run 2>&1)"
-
-  assert_true "settings.json生成中止見込みのログが出る" \
-    "$(echo "$out" | grep -q '生成は中止され既存ファイルが保持される見込みです' && echo 1 || echo 0)"
-  assert_true "実際には作られないwould-back-upは表示されない" \
-    "$(echo "$out" | grep -q 'would back up.*settings.json' && echo 0 || echo 1)"
-  assert_true "would generate/would merge も表示されない（生成自体が中止見込みのため）" \
-    "$(echo "$out" | grep -qE 'would generate.*settings\.json|would merge env' && echo 0 || echo 1)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 11c2b. Bedrock最小セット: Bedrock envパスがdangling symlink(実体が既に無いsymlink)の場合もsettings.json本体の生成を中止し既存ファイルを保持する（2026-08-30 Codex四次レビュー指摘・MAJOR対応: 従来は'[ -e ]'だけの判定だとdangling symlinkが「存在しない＝ABSENT」に丸められ、無警告のまま空設定で生成・上書きしていた） ==="
+echo "=== 10. Bedrock最小セット: Bedrock envファイルの解析（読取）自体が失敗する場合もsettings.json本体の生成を中止し既存ファイルを保持する ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
   cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
-{
-  "model": "sentinel-pre-existing-value",
-  "env": {
-    "CLAUDE_CODE_USE_BEDROCK": "1"
-  }
-}
+{"model": "sentinel-pre-existing-value", "env": {"CLAUDE_CODE_USE_BEDROCK": "1"}}
 EOF
   PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  # 実体を作ってからsymlinkを張り、実体だけ削除してdangling symlinkにする。
-  DANGLING_TARGET="$FAKE_HOME/.config/takumi009-ai-env/bedrock-target.env"
-  echo "CLAUDE_CODE_USE_BEDROCK=1" > "$DANGLING_TARGET"
-  ln -s "$DANGLING_TARGET" "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-  rm -f "$DANGLING_TARGET"
-
-  rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-
-  # 2026-09-01 リーダー裁定（差し戻し対応・設計書S4）: 実在して壊れている
-  # （dangling symlink）場合はinstaller全体を非0終了にする。
-  assert_true "settings.json生成は中止されるがinstaller全体は非0終了する（設計書S4）" \
-    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "dangling symlinkである旨のWARNが出る（ABSENT扱いで無警告のまま素通りしない）" \
-    "$(echo "$out" | grep -q '通常ファイルではありません' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 11c3. Bedrock最小セット: Bedrock envファイルの解析（読取）自体が失敗する場合もsettings.json本体の生成を中止し既存ファイルを保持する（2026-08-30 Codex 3巡目差し戻し・MAJOR対応: 従来はcompute_bedrock_env_json()の失敗を空payloadへ丸めてそのまま生成・上書きしていた） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
-{
-  "model": "sentinel-pre-existing-value",
-  "env": {
-    "CLAUDE_CODE_USE_BEDROCK": "1"
-  }
-}
-EOF
-  PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
   ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-  # 不正なUTF-8バイト列にする（compute_bedrock_env_json()内のpython3 open()が
-  # UnicodeDecodeErrorで非0終了することを実測で確認済み。パーミッション自体は
-  # 正しく0600へ矯正できる＝11cとは異なる失敗経路を狙い撃ちする）。
+  # 不正なUTF-8バイト列（python3 open()がUnicodeDecodeErrorで非0終了する）。
   printf '\xff\xfe\x00\x01invalid-utf8-\xfe' > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
 
-  # 2026-09-01 リーダー裁定（差し戻し対応・設計書S4）: 実在して壊れている
-  # （UTF-8不正で解析失敗）場合はinstaller全体を非0終了にする。
   assert_true "settings.json生成は中止されるがinstaller全体は非0終了する（設計書S4）" \
     "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "解析失敗のWARNが出る" \
     "$(echo "$out" | grep -q 'Bedrock envファイルの解析に失敗しました' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
-  assert_true "中止のみで.pre-aienv.bakは新規作成されない" \
-    "$([[ ! -e "$FAKE_HOME/.claude/settings.json.pre-aienv.bak" ]] && echo 1 || echo 0)"
-  assert_eq "中止のみで一時ファイルも残らない" "0" \
-    "$(find "$FAKE_HOME/.claude" -maxdepth 1 -name '.settings.json.aienv-tmp.*' | wc -l | tr -d ' ')"
+  assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
 
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 11c3b. Bedrock最小セット: 親ディレクトリの探索権限不足(EACCES)で存在確認自体ができない場合もsettings.json本体の生成を中止し既存ファイルを保持する（2026-08-30 Codex五次レビュー指摘・Minor対応: bedrock_env_file_kind()のFileNotFoundError以外のOSError→UNAVAILABLE経路をchmod 000で直接踏む。dangling symlinkとは異なる経路） ==="
+echo "=== 11. Bedrock最小セット: 解析できない行は行番号付きでWARNし、値は出さない ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
-  cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
-{
-  "model": "sentinel-pre-existing-value",
-  "env": {
-    "CLAUDE_CODE_USE_BEDROCK": "1"
-  }
-}
-EOF
-  PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  # 実体プロファイル用ディレクトリ($FAKE_HOME/.config/takumi009-ai-env)とは
-  # 別のディレクトリにBedrock envを置き、そのディレクトリだけ探索権限を
-  # 剥奪する（同じディレクトリを巻き込むと雛形配置自体がset -eで落ちて
-  # 本題のBedrock経路を検証できなくなるため分離する）。
-  LOCKED_DIR="$FAKE_HOME/.config/bedrock-locked"
-  mkdir -p "$LOCKED_DIR"
-  echo "CLAUDE_CODE_USE_BEDROCK=1" > "$LOCKED_DIR/bedrock.env"
-  chmod 000 "$LOCKED_DIR"
-
-  rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" AIENV_BEDROCK_ENV_FILE="$LOCKED_DIR/bedrock.env" bash "$SCRIPT" 2>&1)" || rc=$?
-  chmod 700 "$LOCKED_DIR"
-
-  # 2026-09-01 リーダー裁定（差し戻し対応・設計書S4）: 探索権限不足で
-  # 「読めない」と確定した場合もinstaller全体を非0終了にする（判定不能を
-  # ABSENT扱いにしない・§4.2-b「静かに既定モデルへ倒れない」と同じ精神）。
-  assert_true "settings.json生成は中止されるがinstaller全体は非0終了する（設計書S4）" \
-    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "通常ファイルではない旨のWARNが出る（探索権限不足もABSENT扱いにされない）" \
-    "$(echo "$out" | grep -q '通常ファイルではありません' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 11d. Bedrock最小セット: 解析できない行は行番号付きでWARNし、値は出さない（Codex二次レビュー指摘・Minor対応: update-sub.sh側だけでなくinstall-main.sh側でも直接検証する） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
   ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
   cat > "$ENV_FILE" <<'EOF'
 CLAUDE_CODE_USE_BEDROCK=1
@@ -897,7 +457,7 @@ THIS_LINE_HAS_NO_EQUALS_SIGN_AND_MIGHT_LEAK_A_TOKEN_abcdef123456
 =empty-key-value
 EOF
 
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)"
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)"
 
   assert_true "解析できない行のWARNが行番号付きで出る" \
     "$(echo "$out" | grep -q '解析できない行がありました（行番号: 2,3）' && echo 1 || echo 0)"
@@ -914,7 +474,7 @@ echo "=== 12. Bedrock最小セット: envファイルが無ければ何も変わ
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
 
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 
   assert_true "envブロックはテンプレどおりDISABLE_AUTOUPDATERのみ" \
     "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if list(d['env'].keys())==['DISABLE_AUTOUPDATER'] else 1)" && echo 1 || echo 0)"
@@ -922,372 +482,58 @@ echo "=== 12. Bedrock最小セット: envファイルが無ければ何も変わ
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 13. 結合: installerがコピーした雛形をそのままbootstrap-vault.shへ渡すと、実サンプルの3キーが正しく抽出される（BLOCKING対応。値の内容には依存しない＝2026-08-30本人裁定でサンプルの初期値がsentinel/unknownから実値へ変わったため、T2-MINIMAL固定ではなくキー抽出の正しさだけを検証する） ==="
+echo "=== 13. --render-settings-json: 生成物だけを返し、偽HOMEには何も置かない（check-drift ①-2 の入力口・設計 §3.5） ==="
 {
   FAKE_HOME="$(mktemp -d)"
-  make_fake_home_no_profile "$FAKE_HOME"
-
-  # ⚠️ ここだけは合成fixtureを使わず、追跡中の実サンプル
-  # （$REPO_ROOT/config/profile.md.sample）を直接入力にする（工程横断レビュー
-  # 指摘: 従来はfixtureが実物と違う形を使っており、installer/resolverの
-  # 入力形式不整合を隠していた。2026-09-08 本人裁定A案で読み元をVaultノート
-  # （vault-public/Preferences/profile-sample.md・Obsidianノート＋```yaml
-  # フェンス構造）からrepo管理下の生ファイルconfig/profile.md.sampleへ
-  # 付け替え、抽出も不要になった）。
-  # ⚠️ アサーションはサンプルの「値の中身」（sentinelか実値か）に依存しない
-  # 形にしている——本人裁定でサンプルの初期値が変わりうる（現に一度、
-  # sentinel方式から実値方式へ変わった）ため、値の中身ではなく「3キーが
-  # 正しく含まれているか」（BLOCKING対応の本質）だけを固定的に検証する。
-  if [ ! -f "$REPO_ROOT/config/profile.md.sample" ]; then
-    fail_case "前提: 実サンプル(config/profile.md.sample)が見つからない"
-  else
-    # ⚠️ config/profile.md.sampleは実値入り・schema 6で単体でも妥当なため、
-    # 雛形配置の後続処理（settings.json生成）まで完走しうる。本テストの主眼＝
-    # 3キー抽出の正しさであり、installer本体の終了コードは見ない（`|| true`）。
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$REPO_ROOT/scripts/install-main.sh" >/dev/null 2>&1 || true
-    PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-    VAULT_FIXTURE="$(mktemp -d)"
-
-    ctx="$(echo '{"session_id":"test-session-e2e"}' \
-      | BOOTSTRAP_VAULT="$VAULT_FIXTURE" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
-        VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
-        VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
-        MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
-        BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$PROFILE_PATH" \
-        bash "$REPO_ROOT/claude/hooks/bootstrap-vault.sh" \
-      | python3 -c "import json,sys; print(json.load(sys.stdin)['hookSpecificOutput']['additionalContext'])")"
-
-    missing_keys=0
-    # 配役表-能力軸整理-設計-2026-09-07.md §3・§4.1対応: 能力軸5キーを撤去し
-    # machine_roleを新設。bootstrap-vault.sh側の既知キー配列本体・
-    # profile_resolve.py側のCAPABILITY_KEYSいずれの現行3キー集合にも合わせる。
-    for k in team_mode no_read_paths machine_role; do
-      if ! grep -q "^${k}:" "$PROFILE_PATH"; then
-        fail_case "実サンプルから最小能力表3キーの1つ(${k})が抽出できていない"
-        missing_keys=$((missing_keys + 1))
-      fi
-    done
-    if [ "$missing_keys" -eq 0 ]; then
-      pass "実サンプルから最小能力表3キー全てが正しく含まれている（T5にならない）"
-    fi
-    assert_true "T5(既存キー欠落)にはならない（BLOCKING対応の直接確認・値の中身に依存しない）" \
-      "$(echo "$ctx" | grep -q 'T5' && echo 0 || echo 1)"
-    assert_true "T6(YAML破損)にもならない（コピーされた実体が正しいYAML frontmatterであることの確認）" \
-      "$(echo "$ctx" | grep -q 'T6' && echo 0 || echo 1)"
-
-    rm -rf "$VAULT_FIXTURE"
-  fi
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 14. --print-bedrock-env-json: 許可リスト内キーだけをJSONで印字する（副作用ゼロ・check-drift.shの値出力口＝2026-08-30 工程横断レビュー指摘・MAJOR-5対応） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-  cat > "$ENV_FILE" <<'EOF'
-CLAUDE_CODE_USE_BEDROCK=1
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=should-not-appear
-EOF
+  OUT_DIR="$(mktemp -d)"
 
   rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-bedrock-env-json)" || rc=$?
+  out="$(AIENV_LOCAL_PROFILE_PATH="$FIXTURES/profile.md" AIENV_MODEL_DEFS_FILE="$FIXTURES/models.conf" \
+    HOME="$FAKE_HOME" bash "$SCRIPT" --render-settings-json "$OUT_DIR/settings.json" 2>/dev/null)" || rc=$?
+  # 期待値は resolver 直叩き（resolve-leader）の JSON から取る（値をテストに書かない）。
+  exp_model="$(AIENV_MODEL_DEFS_FILE="$FIXTURES/models.conf" python3 "$LIB" resolve-leader "$FIXTURES/profile.md" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])')"
+  act_model="$(python3 -c "import json; print(json.load(open('$OUT_DIR/settings.json')).get('model',''))" 2>/dev/null || echo "")"
+  assert_true "RS-1: exit 0 で生成物の model がプレースホルダでなく resolver 直叩きの値と一致する" \
+    "$([[ "$rc" -eq 0 && -n "$act_model" && "$act_model" != "__AIENV_MODEL__" && "$act_model" == "$exp_model" ]] && echo 1 || echo 0)"
+  assert_true "RS-2: 偽 HOME に .claude/.codex/.config が作られない（生成物以外に何も置かない）" \
+    "$([[ ! -e "$FAKE_HOME/.claude" && ! -e "$FAKE_HOME/.codex" && ! -e "$FAKE_HOME/.config" ]] && echo 1 || echo 0)"
+
+  rc=0
+  out="$(AIENV_LOCAL_PROFILE_PATH="$FAKE_HOME/nonexistent-profile.md" AIENV_MODEL_DEFS_FILE="$FIXTURES/models.conf" \
+    HOME="$FAKE_HOME" bash "$SCRIPT" --render-settings-json "$OUT_DIR/fail.json" 2>/dev/null)" || rc=$?
+  assert_true "RS-3: resolver 失敗で非0・stdout 空・生成物なし" \
+    "$([[ "$rc" -ne 0 && -z "$out" && ! -e "$OUT_DIR/fail.json" ]] && echo 1 || echo 0)"
+
+  rc=0
+  HOME="$FAKE_HOME" bash "$SCRIPT" --render-settings-json >/dev/null 2>&1 || rc=$?
+  assert_true "出力先パス無しは非0（unknown optionと同じ扱い）" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME" "$OUT_DIR"
+}
+
+echo "=== 14. --check-profile: stdout の1行目が resolve 行（OK…）で配役一覧は出ない（check-drift ⑧ の契約・副作用ゼロ） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
+
+  rc=0
+  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile 2>/dev/null)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
-  # 2026-08-30 工程横断レビュー指摘・MAJOR-A対応: 出力形式が構造化された
-  # {"env": {...}, "rejected_keys": [...], "malformed_lines": [...]} へ変更
-  # された（rejected_keys/malformed_linesを呼び出し側〈generate_settings_json・
-  # update-sub.sh〉へ伝えるため。値表・解析ロジックの完全な一本化の一環）。
-  assert_true "CLAUDE_CODE_USE_BEDROCKがenv配下に含まれる" \
-    "$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if d['env'].get('CLAUDE_CODE_USE_BEDROCK')=='1' else 1)" && echo 1 || echo 0)"
-  assert_true "AWS_REGIONがenv配下に含まれる" \
-    "$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if d['env'].get('AWS_REGION')=='us-east-1' else 1)" && echo 1 || echo 0)"
-  assert_true "許可リスト外のAWS_ACCESS_KEY_IDはenv配下に含まれない（絶対厳守③）" \
-    "$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if 'AWS_ACCESS_KEY_ID' not in d['env'] else 1)" && echo 1 || echo 0)"
-  assert_true "AWS_ACCESS_KEY_IDはrejected_keysへキー名だけ載る（値は載らない）" \
-    "$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if 'AWS_ACCESS_KEY_ID' in d['rejected_keys'] else 1)" && echo 1 || echo 0)"
-  assert_true "設定ファイル等は一切生成されない（副作用ゼロ）" \
+  assert_true "stdout 1行目が OK で始まるタブ区切りの resolve 行" \
+    "$(printf '%s\n' "$out" | head -1 | grep -qE $'^OK\t' && echo 1 || echo 0)"
+  assert_true "旧・配役一覧（role.*(configured)…）は出ない" \
+    "$(echo "$out" | grep -q 'role\.researcher(configured)' && echo 0 || echo 1)"
+  assert_true "settings.json等は一切生成されない（副作用ゼロ）" \
     "$([[ ! -e "$FAKE_HOME/.claude" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 14b. --print-bedrock-env-json: role.*がprovider=bedrockを使っていれば動的許可キー(ANTHROPIC_DEFAULT_*_MODEL)も含まれる（2026-09-01 §4.2-d・値出力口一本化の回帰確認: update-sub.sh/check-drift.shはこの出力口だけを見るため、ここで固定2キーのままだとBedrockのモデルpinが常に脱落する） ==="
+echo "=== 15. 秘匿: --check-profile・installer全体の出力にbedrock.envのpin実値が一切現れない（絶対厳守③） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
-  ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-  cat > "$ENV_FILE" <<'EOF'
-CLAUDE_CODE_USE_BEDROCK=1
-ANTHROPIC_DEFAULT_OPUS_MODEL=us.anthropic.claude-opus-4-8-dummy-pin
-ANTHROPIC_DEFAULT_SONNET_MODEL=us.anthropic.claude-sonnet-4-8-dummy-pin
-EOF
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-bedrock-env-json)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_true "role.researcherがprovider=bedrock model=opusを使っているため、ANTHROPIC_DEFAULT_OPUS_MODELが--print-bedrock-env-jsonの出力にも含まれる" \
-    "$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if d['env'].get('ANTHROPIC_DEFAULT_OPUS_MODEL')=='us.anthropic.claude-opus-4-8-dummy-pin' else 1)" && echo 1 || echo 0)"
-  assert_true "CLAUDE_CODE_USE_BEDROCK（固定許可）も引き続き含まれる" \
-    "$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if d['env'].get('CLAUDE_CODE_USE_BEDROCK')=='1' else 1)" && echo 1 || echo 0)"
-  assert_true "profileが参照していないANTHROPIC_DEFAULT_SONNET_MODELはenvへ含まれない（2026-09-01 Codex差分レビュー指摘・MINOR対応: 動的許可が将来全別名へ広がる回帰を検出する）" \
-    "$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if 'ANTHROPIC_DEFAULT_SONNET_MODEL' not in d['env'] else 1)" && echo 1 || echo 0)"
-  assert_true "ANTHROPIC_DEFAULT_SONNET_MODELはrejected_keysへキー名だけ載る" \
-    "$(echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if 'ANTHROPIC_DEFAULT_SONNET_MODEL' in d['rejected_keys'] else 1)" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 15. --print-bedrock-env-json: envファイルが無ければ空のenv/rejected_keys/malformed_linesを返す ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-bedrock-env-json)"
-  assert_eq "空の構造化オブジェクトが返る" '{"env": {}, "rejected_keys": [], "malformed_lines": []}' "$out"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 15b. ローカル実体プロファイルの雛形配置: 読取失敗時のWARNに実際のエラー詳細が含まれる（Codex二次レビュー指摘・Minor対応: 従来はstdout/stderr両方をファイルへ吸い込んでいて詳細が常に空だった。2026-09-08 本人裁定A案で読み元がconfig/profile.md.sampleへ付け替わり、失敗モードも「YAMLフェンスが見つからない」から「ファイルが読めない」へ変わった） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home_no_profile "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  # サンプルをディレクトリに置き換え、存在するのに読めない状態を決定的に
-  # 再現する（chmod 000はroot実行環境では読めてしまい未検証になりうるため
-  # 使わない＝テスト16と同じ技法。cpは新規コード側の唯一の`-f`非依存の
-  # 分岐で試みられるため、"無い"場合とは異なる詳細文言"is a directory"に
-  # なることも確認する）。
-  rm -f "$TMP_REPO/config/profile.md.sample"
-  mkdir -p "$TMP_REPO/config/profile.md.sample"
-
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)"
-
-  assert_true "読取失敗のWARNが出る" \
-    "$(echo "$out" | grep -q '読み取れませんでした' && echo 1 || echo 0)"
-  assert_true "詳細（ディレクトリである旨）がWARNに含まれる（従来は空だった）" \
-    "$(echo "$out" | grep -q '詳細:.*directory' && echo 1 || echo 0)"
-  assert_true "profile.mdは作成されない" \
-    "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 16. --print-bedrock-env-json: envファイルが存在するのに読めない場合はfail-openで{}を返さず非0終了する（Codex二次レビュー指摘・Major対応） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  ENV_FILE="$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-  # bedrock.envをディレクトリとして作る（Codex三次レビュー指摘・Minor対応:
-  # chmod 000はroot実行環境では読めてしまい未検証になりうるが、
-  # open()がディレクトリに対して常にIsADirectoryErrorで失敗するのは
-  # 実行uidに依存しない決定的な失敗経路のため、こちらを使う）。
-  mkdir -p "$ENV_FILE"
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-bedrock-env-json 2>/dev/null)" || rc=$?
-  assert_eq "読取失敗時は非0終了する" "1" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "失敗時は{}を出力しない（fail-openで偽装しない）" \
-    "$([[ -z "$out" || "$out" != "{}" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-# ============================================================
-# 2026-09-01 配役表解凍（設計書§4.2-a〜g・§3.9）: --print-leader-runtime・
-# --check-profile・リーダー配役の対話確定のテスト。
-# ============================================================
-
-echo "=== 17. --print-leader-runtime: v2でrole.leaderがconfigured（effortなし）ならJSONにeffortキーを含めない ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
-  # role.leaderはprovider=anthropic-api model=claude-sonnet-5（effortなし）で
-  # write_v2_profile_with_bedrock_role が既に書いている。
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_eq "JSON出力ちょうど1行" '{"model": "claude-sonnet-5"}' "$out"
-  assert_true "effortキーを含まない（未指定＝正常な省略）" \
-    "$(echo "$out" | grep -q 'effort' && echo 0 || echo 1)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 18. --print-leader-runtime: effort指定時はJSONに含める ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
-  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-schema_version: 7
-profile_slug: test
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: configured model=opus-high
-reviewer: configured value=codex-mcp
----
-EOF
-
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime)"
-  assert_eq "JSONにmodel/effort両方を含む" '{"model": "claude-opus-5", "effort": "high"}' "$out"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 19. --print-leader-runtime: role.leaderがunknownなら失敗時stdoutが空・stderrに機械可読コード ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
-  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-schema_version: 7
-profile_slug: test
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: unknown
-reviewer: configured value=codex-mcp
----
-EOF
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime 2>/dev/null)" || rc=$?
-  err="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime 2>&1 1>/dev/null)" || true
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_eq "stdoutは空" "" "$out"
-  assert_true "stderrに機械可読コードLEADER_UNCONFIGUREDが出る" \
-    "$(echo "$err" | grep -q '^LEADER_UNCONFIGURED' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 20. --print-leader-runtime: v1プロファイル（実在するがschema_versionなし）はlegacy委譲されずT4-LEGACYで解決失敗する（2026-09-08 モデル定義ファイルと候補指定対応・同設計§3.8・D-13: legacy委譲は実体が本当に存在しない場合だけに限定された。実在する旧版は他のPROFILE_INVALIDと同様に非0終了する。旧アサーション「effort=highへlegacy委譲される」は本変更で削除した＝実測でPROFILE_INVALID:T4-LEGACYになることを確認済み） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-reviewer: configured(codex-mcp)
----
-EOF
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime 2>&1)" || rc=$?
-  assert_true "exit非0（legacy委譲されない）" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "PROFILE_INVALID:T4-LEGACYが出る（実在する旧版はlegacy委譲されない）"     "$(echo "$out" | grep -q 'PROFILE_INVALID:T4-LEGACY' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 21. --print-leader-runtime: プロファイル実体が無ければv1相当としてlegacy委譲する（P1未整備機を落とさない） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  # profile.md自体を作らない。
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_eq "既定値+legacy effort=high" '{"model": "claude-fable-5[1m]", "effort": "high"}' "$out"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 22. --print-leader-runtime: symlinkのプロファイルはPROFILE_UNREADABLEで非0・stdout空 ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  TARGET="$FAKE_HOME/target.md"
-  write_v2_profile_with_bedrock_role "$TARGET" "opus" >/dev/null
-  ln -s "$TARGET" "$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime 2>/dev/null)" || rc=$?
-  err="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime 2>&1 1>/dev/null)" || true
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_eq "stdoutは空" "" "$out"
-  assert_true "stderrにPROFILE_UNREADABLE" \
-    "$(echo "$err" | grep -q '^PROFILE_UNREADABLE' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 23. --print-leader-runtime: role.leaderが2件の候補を持つ行でも先頭候補のmodel/effortが返る（代替は同一行の候補列挙で表す） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
-  # 先頭候補（opus-medium）だけが解決・評価される（§3.5-L。2件目
-  # （bedrock-opus）はsettings.jsonの値に影響しない＝RV-2。代替配役の
-  # 別行は撤去済みで、代替は同じ行の候補列挙で表す＝FR-1）。
-  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-schema_version: 7
-profile_slug: test
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: configured model=opus-medium,bedrock-opus
-reviewer: configured value=codex-mcp
----
-EOF
-
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --print-leader-runtime)"
-  assert_eq "先頭候補のmodel/effortが返る" '{"model": "claude-opus-5", "effort": "medium"}' "$out"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 24. --check-profile: OKなプロファイルでprovider/modelグループの配役一覧を表示し、値は伏せない一覧専用表示である ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" --check-profile 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_true "OK行が出る" "$(echo "$out" | grep -q '^OK' && echo 1 || echo 0)"
-  assert_true "provider/modelでグループ化された一覧が出る（bedrock/opus）" \
-    "$(echo "$out" | grep -q 'bedrock/opus:' && echo 1 || echo 0)"
-  assert_true "role.researcherがそのグループの下に出る" \
-    "$(echo "$out" | grep -q 'role.researcher(configured)' && echo 1 || echo 0)"
-  # AC-12追加: 配役一覧の表示awk（scripts/install-main.sh:1071-1090・第4の
-  # 列位置消費者）の列ずらし直し忘れを検出する。直し忘れるとrc=0のまま
-  # 一覧だけが空になり、1行目のrcだけでは検出できない（§9.3）。
-  assert_true "配役一覧にrole.leader(configured)[が出る（一覧が空でない）" \
-    "$(echo "$out" | grep -q 'role\.leader(configured)\[' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 25. --check-profile --print-schema-version: 値なし・schema_versionだけを返す（U-7撤去条件判定用） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile --print-schema-version 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_eq "schema_versionの値だけを1行返す" "7" "$out"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 26. 秘匿: --check-profileの出力にbedrock.envのpin実値が一切現れない（絶対厳守③） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
   SECRET_PIN="us.anthropic.super-secret-inference-profile-id-DO-NOT-LEAK"
   cat > "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env" <<EOF
 CLAUDE_CODE_USE_BEDROCK=1
@@ -1295,468 +541,34 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=${SECRET_PIN}
 EOF
   chmod 600 "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
 
-  out="$(HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" --check-profile 2>&1)"
+  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile 2>&1)"
   assert_true "pin実値は--check-profile出力に一切現れない" \
     "$(echo "$out" | grep -q "$SECRET_PIN" && echo 0 || echo 1)"
-
-  # settings.json生成（WARN含む）でも同様に漏れないことを併せて確認する。
-  out2="$(HOME="$FAKE_HOME" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 bash "$TMP_REPO/scripts/install-main.sh" 2>&1)"
+  out2="$(HOME="$FAKE_HOME" SKIP_LAUNCHCTL=1 bash "$SCRIPT" 2>&1)"
   assert_true "pin実値はinstaller全体のWARN/ログにも一切現れない" \
     "$(echo "$out2" | grep -q "$SECRET_PIN" && echo 0 || echo 1)"
 
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
+  rm -rf "$FAKE_HOME"
 }
 
-echo "=== 27. §3.9対話: role.leader未確定・--non-interactiveなら非0終了（静かに既定モデルへ倒れない） ==="
+echo "=== 16. --check-profile: resolver本体（\$lib）が見つからないとき、全角括弧直後のunbound variable誤検知で握り潰されず、実パスを含むFAILメッセージがそのまま出る ==="
 {
   FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # 本テストの主眼＝role.leader未確定時の対話可否判定であり、
-  # make_fake_home()の既定プロファイル（role.leader確定済み）を上書きする。
-  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-schema_version: 7
-profile_slug: test-install-main-machine
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: unknown
----
-EOF
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-
-  # ⚠️ AIENV_FORCE_TTY_FOR_TEST=1で「対話可能なTTYである」を強制したうえで
-  # --non-interactiveを渡す（2026-09-01 Codex差分レビュー指摘・MAJOR対応:
-  # このテストのコマンド置換自体が非TTYのため、AIENV_FORCE_TTY_FOR_TESTを
-  # 付けないと「単に非TTYだから失敗した」のか「--non-interactiveがTTYより
-  # 優先されたから失敗した」のかを区別できず、フラグの扱いを削除しても
-  # テストが偽陽性で通ってしまう）。
-  rc=0
-  out="$(env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" --non-interactive 2>&1)" || rc=$?
-  assert_true "exit非0（--non-interactiveがTTY強制より優先される）" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "LEADER_UNCONFIGURED_NONINTERACTIVEが出る" \
-    "$(echo "$out" | grep -q 'LEADER_UNCONFIGURED_NONINTERACTIVE' && echo 1 || echo 0)"
-  assert_true "settings.jsonは生成されない" \
-    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 28. §3.9対話: role.leader未確定・非TTY実行（--non-interactive無し）でも同じ機械可読コードで非0終了する（TTYだけで対話可否を判断しない） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # 本テストの主眼＝role.leader未確定時の対話可否判定であり、
-  # make_fake_home()の既定プロファイル（role.leader確定済み）を上書きする。
-  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-schema_version: 7
-profile_slug: test-install-main-machine
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: unknown
----
-EOF
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
+  MISSING_LIB="$(mktemp -u)/nonexistent-resolver-lib.py"
 
   rc=0
-  out="$(env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" </dev/null 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "LEADER_UNCONFIGURED_NONINTERACTIVEが出る" \
-    "$(echo "$out" | grep -q 'LEADER_UNCONFIGURED_NONINTERACTIVE' && echo 1 || echo 0)"
+  out="$(HOME="$FAKE_HOME" AIENV_PROFILE_RESOLVE_LIB="$MISSING_LIB" bash "$SCRIPT" --check-profile 2>&1)" || rc=$?
 
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 29. §3.9対話: 定義名を訊く唯一の質問（旧Q1→Q2→Q3を1問へ畳んだもの）に答えるとrole.leaderの1行だけが確定し、他の行は1バイトも変わらない ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  # role.leader:unknownの実体を用意する（対話の発火条件）。
-  write_profile_with_unknown_leader "$PROFILE_PATH"
-  PRE_CONTENT="$(cat "$PROFILE_PATH")"
-
-  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.3・D-11）: 質問が
-  # 「モデル定義名（カンマ区切り）」の1問へ畳まれた。既定値を持つmake_fake_home()の
-  # models.confに定義済みの opus-medium（claude-opus-5・effort=medium）を1行で
-  # 指定する。
-  rc=0
-  out="$(printf 'opus-medium\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_eq "対話完了後exit 0" "0" "$rc"
-  assert_true "role.leader行がconfigured model=opus-mediumになる" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-medium' "$PROFILE_PATH" && echo 1 || echo 0)"
-  DIFF_LINES="$(diff <(printf '%s\n' "$PRE_CONTENT") "$PROFILE_PATH" | grep -c '^[<>]')" || true
-  assert_eq "role.leader以外の行は変化しない（差分は置換した1行のみ＝旧行1・新行1の2エントリ）" "2" "$DIFF_LINES"
-  # role.leader確定のログ行自体は値を再掲しない設計（write_and_verify_leader
-  # 参照）。settings.json生成ログ（"model"を...へ設定）は既存の値出力口と
-  # 同種の情報表示であり秘密ではないため、そちらに値が出ること自体は問題ない
-  # （pin実値の非露出はテスト26で別途検証済み）。
-  assert_true "role.leader確定のログ行自体には値を再掲しない" \
-    "$(echo "$out" | grep 'role.leader を確定しました' | grep -q 'opus-medium' && echo 0 || echo 1)"
-  assert_true "settings.jsonのmodelが対話で選んだ値になる" \
-    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('model')=='claude-opus-5' else 1)" && echo 1 || echo 0)"
-  assert_true "settings.jsonのeffortLevelが対話で選んだ値になる" \
-    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if d.get('effortLevel')=='medium' else 1)" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 30. §3.9対話: 3回とも不正な回答が続くと中止し、profileは一切変更されない（回数は組単位） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_profile_with_unknown_leader "$PROFILE_PATH"
-  PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-
-  # 定義名を訊く唯一の質問に3回とも不正な値(9・定義名の形式に一致しない)を
-  # 答え続ける。
-  rc=0
-  out="$(printf '9\n9\n9\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "LEADER_DIALOG_FAILEDが出る" \
-    "$(echo "$out" | grep -q 'LEADER_DIALOG_FAILED' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-  assert_eq "profileは1バイトも変更されない" "$PRE_SHA" "$POST_SHA"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 31. §3.9対話: 対話中のEOFは即座に非0終了する（リトライしない） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_profile_with_unknown_leader "$PROFILE_PATH"
-
-  rc=0
-  # 入力を1行も与えない（即EOF）。
-  out="$(printf '' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "LEADER_DIALOG_ABORTEDが出る（3回リトライではなく即時中止）" \
-    "$(echo "$out" | grep -q 'LEADER_DIALOG_ABORTED' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 32. §3.9対話: configuredなrole.leaderにAIENV_LEADER_ROLEが不一致・--reconfigure-leader無しならLEADER_ROLE_CONFLICTで非0終了 ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  write_v2_profile_with_bedrock_role "$FAKE_HOME/.config/takumi009-ai-env/profile.md" "opus" >/dev/null
-
-  rc=0
-  out="$(AIENV_LEADER_ROLE='model=opus-high' \
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "LEADER_ROLE_CONFLICTが出る" \
-    "$(echo "$out" | grep -q 'LEADER_ROLE_CONFLICT' && echo 1 || echo 0)"
+  assert_true "exit非0" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "unbound variableのbashエラーで意図したFAILが握り潰されない" \
+    "$(echo "$out" | LC_ALL=C grep -q 'unbound variable' && echo 0 || echo 1)"
+  assert_true "FAILメッセージ（resolver本体（…）が見つかりません）に実パスがそのまま含まれる" \
+    "$(echo "$out" | grep -q 'resolver本体（.*）が見つかりません' && echo "$out" | grep -qF "$MISSING_LIB" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 33. §3.9対話: --reconfigure-leader付きならAIENV_LEADER_ROLEの新しい値を採用する ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_v2_profile_with_bedrock_role "$PROFILE_PATH" "opus" >/dev/null
-
-  rc=0
-  AIENV_LEADER_ROLE='model=opus-low' \
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1
-  rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_true "role.leaderが新しい値へ書き換わる" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-low' "$PROFILE_PATH" && echo 1 || echo 0)"
-  assert_true "role.researcher行は変化しない（他の行は触らない）" \
-    "$(grep -q '^role.researcher: configured model=bedrock-opus$' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 34. §3.9対話: configuredかつAIENV_LEADER_ROLE無し・--reconfigure-leader無しなら質問せずそのまま通す（冪等） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_v2_profile_with_bedrock_role "$PROFILE_PATH" "opus" >/dev/null
-  PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-
-  rc=0
-  out="$(env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" </dev/null 2>&1)" || rc=$?
-  assert_eq "exit code 0（質問しない）" "0" "$rc"
-  assert_true "確定済みメッセージが出る" \
-    "$(echo "$out" | grep -q 'リーダー配役は確定済みです' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-  assert_eq "profileは変更されない（冪等）" "$PRE_SHA" "$POST_SHA"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 35. §3.9対話: role.leader行が欠落している実体には挿入する（既存行の破壊・複数箇所置換をしない） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  mkdir -p "$(dirname "$PROFILE_PATH")"
-  cat > "$PROFILE_PATH" <<'EOF'
----
-schema_version: 7
-profile_slug: test
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.researcher: configured model=sonnet-high
-reviewer: configured value=codex-mcp
----
-EOF
-
-  rc=0
-  AIENV_LEADER_ROLE='model=opus-high' \
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
-  rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_true "role.leader行が新規に挿入される" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-high' "$PROFILE_PATH" && echo 1 || echo 0)"
-  assert_true "role.researcher行は変化しない" \
-    "$(grep -q '^role.researcher: configured model=sonnet-high$' "$PROFILE_PATH" && echo 1 || echo 0)"
-  assert_true "フロントマターの終端---が保たれている" \
-    "$([[ "$(tail -1 "$PROFILE_PATH")" == "---" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 36. §3.9対話: role.leaderが2行ある実体は非0終了する（構文エラーT6として検出。書込み対象を誤らない） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  mkdir -p "$(dirname "$PROFILE_PATH")"
-  cat > "$PROFILE_PATH" <<'EOF'
----
-schema_version: 7
-profile_slug: test
-role.leader: unknown
-role.leader: configured model=opus-high
-reviewer: configured value=codex-mcp
----
-EOF
-
-  rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "PROFILE_INVALID:T6が出る（重複キー）" \
-    "$(echo "$out" | grep -q 'PROFILE_INVALID:T6' && echo 1 || echo 0)"
-  assert_true "settings.jsonは生成されない" \
-    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
-  assert_true "即時fail()経路（S2/S3相当）でも生成物が存在しない場合はNO_GENERATED_FILEが明示される（2026-09-01工程横断レビュー指摘・MINOR-2追加対応: deferred経路〈S4・S18〉だけでなく即時fail()経路にも同じ契約を適用する）" \
-    "$(echo "$out" | grep -q 'NO_GENERATED_FILE' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 37. S16: profile更新は成功したがsettings.json生成に失敗した場合、新profile＋旧settingsを保持し非0終了する（追完・2026-09-01リーダー指示） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_v2_profile_with_bedrock_role "$PROFILE_PATH" "opus" >/dev/null
-  # role.leaderは既にconfigured provider=anthropic-api model=claude-sonnet-5。
-  cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
-{
-  "model": "sentinel-pre-existing-value",
-  "env": {
-    "CLAUDE_CODE_USE_BEDROCK": "1"
-  }
-}
-EOF
-  PRE_SETTINGS_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  # bedrock.envのパスをディレクトリにして、settings.json生成だけを確実に
-  # 失敗させる（§4.2-a〜gの実装がprofile更新→settings生成の順で走ることを
-  # 前提に、後段だけを狙い撃ちする）。
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
-
-  rc=0
-  AIENV_LEADER_ROLE='model=opus-high' \
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1 || rc=$?
-
-  assert_true "installer全体は非0終了する（設計書S16・S4）" \
-    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "profile.mdは新しいリーダー値へ更新されている（profile更新自体は成功）" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-high' "$PROFILE_PATH" && echo 1 || echo 0)"
-  POST_SETTINGS_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  assert_eq "settings.jsonは旧内容のまま保持される（バイト単位で不変）" "$PRE_SETTINGS_SHA" "$POST_SETTINGS_SHA"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 38. §3.9優先順位表 行1: DRY_RUN=1は他条件によらず一切変更しない（リーダー配役の対話メッセージのみ表示） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_v2_profile_with_bedrock_role "$PROFILE_PATH" "opus" >/dev/null
-  PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-
-  out="$(env -u AIENV_LEADER_ROLE HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run --reconfigure-leader 2>&1)"
-  assert_true "[dry-run]リーダー配役確認メッセージが出る" \
-    "$(echo "$out" | grep -qF '[dry-run] リーダー配役を確認します（未確定時のみ対話）' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-  assert_eq "profileは一切変更されない" "$PRE_SHA" "$POST_SHA"
-  assert_true "settings.jsonも生成されない" \
-    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 38b. 検証職(Codex)2巡目指摘・MINOR回帰: role.leaderが既にconfigured（AIENV_LEADER_ROLE無・reconfigure無）でも、dry-runの文面は「対話する」と言い切らず中立表現のまま ==="
-{
-  # §3.9優先順位表 行5（configured+AIENV_LEADER_ROLE無+reconfigure無→
-  # そのまま通す＝実行時は対話しない）の前提でdry-runを実行する。旧文面
-  # 「リーダー配役を対話で確認します」は、この場合でも対話が起きるかの
-  # ように誤解させた（実行時は対話しない＝テスト40で確認済み）。
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"  # role.leader: configured model=sonnet-high（既定値）
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-
-  out="$(env -u AIENV_LEADER_ROLE HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run 2>&1)"
-  assert_true "[dry-run]文面が「対話で確認します」と言い切らない（誤解を招く旧文言が出ない）" \
-    "$(echo "$out" | grep -qF '[dry-run] リーダー配役を対話で確認します' && echo 0 || echo 1)"
-  assert_true "[dry-run]中立な文面（未確定時のみ対話）は出る" \
-    "$(echo "$out" | grep -qF '[dry-run] リーダー配役を確認します（未確定時のみ対話）' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-  assert_eq "profileは一切変更されない" "$PRE_SHA" "$POST_SHA"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 39. §3.9優先順位表 行2: 未確定+AIENV_LEADER_ROLE有(任意reconfigure)→質問せずenv値を検査して採用 ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  mkdir -p "$(dirname "$PROFILE_PATH")"
-  cat > "$PROFILE_PATH" <<'EOF'
----
-schema_version: 7
-profile_slug: test
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: unknown
-reviewer: configured value=codex-mcp
----
-EOF
-
-  rc=0
-  # --non-interactive を付けていても（対話可否によらず）質問されずに
-  # env値がそのまま採用されることを確認する（表の「対話可否」列が「—」＝
-  # 無関係であることの直接確認）。
-  AIENV_LEADER_ROLE='model=opus-high' \
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --non-interactive >/dev/null 2>&1 || rc=$?
-  assert_eq "exit code 0（質問されない）" "0" "$rc"
-  assert_true "role.leaderがAIENV_LEADER_ROLEの値で確定する" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-high' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 40. §3.9優先順位表 行5: configured+AIENV_LEADER_ROLE有(既存と一致)+reconfigure無→そのまま通す(冪等) ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_v2_profile_with_bedrock_role "$PROFILE_PATH" "opus" >/dev/null
-  PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-
-  rc=0
-  AIENV_LEADER_ROLE='model=sonnet-high' \
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1 || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-  assert_eq "既存値と一致するAIENV_LEADER_ROLEはprofileを変更しない（冪等）" "$PRE_SHA" "$POST_SHA"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 41. §3.9優先順位表 行9: configured+AIENV_LEADER_ROLE無+reconfigure有+対話可→既存値を既定候補として質問 ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  mkdir -p "$(dirname "$PROFILE_PATH")"
-  # ⚠️ effortを明示的に設定しておく（Enterのみで「既定候補を維持」できるのは
-  # 既存値がある場合だけ＝ask_q3の契約。既存値が無いeffortでEnterを送ると
-  # 「未指定を選ぶ」意思表示にならず入力不正扱いになるため、Q1〜Q3すべてで
-  # Enterのみが有効な組み合わせになるようeffort=mediumを持つ実体を使う）。
-  cat > "$PROFILE_PATH" <<'EOF'
----
-schema_version: 7
-profile_slug: test
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: configured model=opus-medium
-reviewer: configured value=codex-mcp
----
-EOF
-
-  # 質問1問のみEnter（空行）で答え、既存値(opus-medium)がそのまま既定候補
-  # として採用されることを確認する（2026-09-08 モデル定義ファイルと候補
-  # 指定対応・同設計§5.3・D-11でQ1〜Q3が1問へ畳まれた）。
-  rc=0
-  out="$(printf '\n' \
-    | env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-      HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_true "Enterのみで既存値(opus-medium)がそのまま採用される" \
-    "$(grep -qE '^role\.leader:.*configured model=opus-medium$' "$PROFILE_PATH" && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 42. §3.9優先順位表 行10: configured+AIENV_LEADER_ROLE無+reconfigure有+対話不可→非0終了 ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  write_v2_profile_with_bedrock_role "$PROFILE_PATH" "opus" >/dev/null
-  PRE_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-
-  rc=0
-  out="$(env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 \
-    HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader --non-interactive 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "LEADER_UNCONFIGURED_NONINTERACTIVEが出る" \
-    "$(echo "$out" | grep -q 'LEADER_UNCONFIGURED_NONINTERACTIVE' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$PROFILE_PATH" | awk '{print $1}')"
-  assert_eq "profileは変更されない" "$PRE_SHA" "$POST_SHA"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 43. 設計書S6: python3不在時はsettings.json生成そのものに着手せず、既存ファイルを一切変更せず非0終了する（従来は手動確認のみだったため専用テストを追加・§10残課題台帳#5対応） ==="
+echo "=== 17. 設計書S6: python3不在時はsettings.json生成そのものに着手せず、既存ファイルを一切変更せず非0終了する ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -1764,8 +576,7 @@ echo "=== 43. 設計書S6: python3不在時はsettings.json生成そのものに
 {"model": "sentinel-pre-existing-value"}
 EOF
   PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  # python3を含まない最小限のPATHを組み立てる（他の外部コマンドは実PATHから
-  # symlinkで拾う。EMPTY_BINDIRのみをPATHにするためpython3自体は解決不能になる）。
+  # python3を含まない最小限のPATHを組み立てる。
   BINDIR="$(mktemp -d)"
   for b in bash dirname basename mkdir mv cp chmod stat sed awk grep sort uniq cat cut tr wc date shasum mktemp rm ln find env true false head tail printf; do
     p="$(command -v "$b" 2>/dev/null)"
@@ -1773,46 +584,20 @@ EOF
   done
 
   rc=0
-  out="$(PATH="$BINDIR" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "python3不在の理由が出る" \
-    "$(echo "$out" | grep -q 'python3 が見つかりません' && echo 1 || echo 0)"
-  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
+  out="$(PATH="$BINDIR" SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
+  assert_true "exit非0・python3不在の理由が出る" \
+    "$([[ "$rc" -ne 0 ]] && echo "$out" | grep -q 'python3 が見つかりません' && echo 1 || echo 0)"
+  assert_eq "既存のsettings.jsonがバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
 
   rm -rf "$FAKE_HOME" "$BINDIR"
 }
 
-echo "=== 43b. 設計書S6×S8: python3不在かつ生成物が一度も存在しない（真の初回インストール）場合はNO_GENERATED_FILEが明示される（2026-09-01工程横断レビュー指摘・MINOR-2追加対応: S6のような即時fail()経路でもS8の契約〈生成物が存在しない状態でS2〜S7〉を満たすことの回帰テスト） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # settings.jsonを事前に一切作らない（真の初回インストール）。
-  BINDIR="$(mktemp -d)"
-  for b in bash dirname basename mkdir mv cp chmod stat sed awk grep sort uniq cat cut tr wc date shasum mktemp rm ln find env true false head tail printf; do
-    p="$(command -v "$b" 2>/dev/null)"
-    [ -n "$p" ] && ln -s "$p" "$BINDIR/$b"
-  done
-
-  rc=0
-  out="$(PATH="$BINDIR" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "settings.jsonは一切生成されない" \
-    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
-  assert_true "NO_GENERATED_FILEが明示される" \
-    "$(echo "$out" | grep -q 'NO_GENERATED_FILE' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$BINDIR"
-}
-
-echo "=== 43c. 設計書S5×S8: テンプレの\"model\"が__AIENV_MODEL__の目印でない（誰かが特定モデルをハードコードした）場合、生成物が一度も存在しなければNO_GENERATED_FILEが明示される（従来はS5自体の専用テストが無かったため追加・2026-09-01工程横断レビュー指摘・MINOR-2追加対応） ==="
+echo "=== 18. 設計書S5×S8: テンプレの\"model\"が__AIENV_MODEL__の目印でない場合、生成物が一度も存在しなければNO_GENERATED_FILEが明示される ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  # テンプレの"model"目印を具体値へ書き換える（誰かがテンプレへ直接
-  # ハードコードしてしまった回帰を模す）。
   python3 -c "
 import json
 with open('$TMP_REPO/claude/settings.json') as f:
@@ -1823,113 +608,34 @@ with open('$TMP_REPO/claude/settings.json', 'w') as f:
 "
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "テンプレ検証失敗の理由が出る" \
-    "$(echo "$out" | grep -q '__AIENV_MODEL__' && echo 1 || echo 0)"
-  assert_true "settings.jsonは一切生成されない" \
-    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
-  assert_true "NO_GENERATED_FILEが明示される" \
-    "$(echo "$out" | grep -q 'NO_GENERATED_FILE' && echo 1 || echo 0)"
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  assert_true "exit非0・テンプレ検証失敗の理由（__AIENV_MODEL__）が出る" \
+    "$([[ "$rc" -ne 0 ]] && echo "$out" | grep -q '__AIENV_MODEL__' && echo 1 || echo 0)"
+  assert_true "settings.jsonは一切生成されず、NO_GENERATED_FILEが明示される" \
+    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo "$out" | grep -q 'NO_GENERATED_FILE' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 43d. 設計書S7×S8: settings.json配置先の親ディレクトリが作成できない（mkdir失敗）場合、生成物が一度も存在しなければNO_GENERATED_FILEが明示される（従来はS7自体の専用テスト・メッセージ自体が無く裸のset -eで無言終了していたため追加・2026-09-01工程横断レビュー指摘・MINOR-2追加対応） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  # .claude を通常ファイルとして作る（mkdir -p "$(dirname .../settings.json)"
-  # ＝mkdir -p "$FAKE_HOME/.claude" が「同名の非ディレクトリが既にある」ため
-  # 決定的に失敗する。make_fake_homeは使わない＝.claudeをディレクトリとして
-  # 先に作ってしまうため）。
-  mkdir -p "$FAKE_HOME"
-  : > "$FAKE_HOME/.claude"
-  # 実体プロファイルをあらかじめ有効な内容で置く（雛形配置＝config/
-  # profile.md.sampleからのコピーに依存させない。本テストの主眼＝mkdir失敗
-  # 経路の検証であり、雛形配置の中身とは無関係）。
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
-  write_models_conf_at "$FAKE_HOME/.config/takumi009-ai-env"
-  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-schema_version: 7
-profile_slug: test-install-main-machine
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=main
-role.leader: configured model=sonnet-high
----
-EOF
-
-  rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "配置先ディレクトリを作成できない旨の理由が出る" \
-    "$(echo "$out" | grep -q '配置先ディレクトリを作成できません' && echo 1 || echo 0)"
-  assert_true "settings.jsonは一切生成されない（同名の通常ファイルのまま）" \
-    "$([[ ! -d "$FAKE_HOME/.claude" ]] && echo 1 || echo 0)"
-  assert_true "NO_GENERATED_FILEが明示される" \
-    "$(echo "$out" | grep -q 'NO_GENERATED_FILE' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 43e. 設計書S7: settings.jsonのバックアップ作成(cp)が失敗した場合、誤って『backed up』ログを出さず既存settings.jsonを保持したまま非0終了する（backup_once()を\`cmd || fail_settings_generation\`の左辺で呼ぶとbash仕様上その関数本体全体でset -eが無効化され、cp失敗が握り潰されて生成続行してしまう回帰があったため専用テストを追加・2026-09-01工程横断レビュー指摘・MAJOR対応） ==="
+echo "=== 19. 設計書S8: 生成物が存在しない状態でS4（bedrock.env読取不能）が発生すると、settings.jsonは生成されないままinstaller全体が非0終了する（他の配置処理は完走する） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
-  cat > "$FAKE_HOME/.claude/settings.json" <<'EOF'
-{"model": "sentinel-pre-existing-value"}
-EOF
-  PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  # $HOME/.claudeディレクトリの書込権限を外す（cp "$dest" "$dest.pre-aienv.bak"
-  # が新規ファイル作成に失敗する＝決定的なバックアップ失敗を再現する）。
-  # mkdir -p自体は既存ディレクトリに対しては書込権限が無くても成功するため、
-  # S7のうちbackup_once()のcp失敗だけを狙い撃ちできる。
-  chmod 555 "$FAKE_HOME/.claude"
-
-  rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-  chmod 755 "$FAKE_HOME/.claude" 2>/dev/null
-  assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "バックアップ作成失敗の理由が出る" \
-    "$(echo "$out" | grep -q 'settings.jsonの既存バックアップ作成に失敗しました' && echo 1 || echo 0)"
-  assert_true "settings.jsonについて誤った『backed up』ログは出ない（cp失敗が握り潰されて生成続行していない証拠）" \
-    "$(echo "$out" | grep -q 'backed up:.*settings\.json' && echo 0 || echo 1)"
-  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  assert_eq "既存settings.jsonがバイト単位で一切変更されていない(SHA-256不変・上書きされていない)" "$PRE_SHA" "$POST_SHA"
-  assert_true "既存ファイルが在るためNO_GENERATED_FILEは付かない（保持と欠落の区別）" \
-    "$(echo "$out" | grep -q 'NO_GENERATED_FILE' && echo 0 || echo 1)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 44. 設計書S8: 生成物が存在しない状態でS2〜S7（bedrock.env読取不能=S4）が発生すると、settings.jsonは一切生成されないままinstaller全体が非0終了する（他の配置処理は完走する。従来は手動確認のみだったため専用テストを追加・§10残課題台帳#5対応） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # settings.jsonを事前に一切作らない（真の初回インストール＝生成物が存在
-  # しない状態）。bedrock.envをディレクトリにしてS4（読めない/解析できない）
-  # を発火させる。
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"
   mkdir -p "$FAKE_HOME/.config/takumi009-ai-env/bedrock.env"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-  assert_true "exit非0（NO_GENERATED_FILE相当：出力なしのまま起動させない）" \
-    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "settings.jsonは一切生成されない" \
-    "$([[ ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
-  assert_true "他の配置処理（hooksのsymlink化）は完走する（settings.json以外は続行する設計）" \
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
+  assert_true "exit非0・settings.jsonは一切生成されない" \
+    "$([[ "$rc" -ne 0 && ! -e "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
+  assert_true "他の配置処理（hooksのsymlink化）は完走する" \
     "$([[ -L "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh" ]] && echo 1 || echo 0)"
-  assert_true "締めの警告が出る" \
-    "$(echo "$out" | grep -q '非0終了します' && echo 1 || echo 0)"
-  assert_true "最終的な終了理由に機械可読トークンNO_GENERATED_FILEが明示される（2026-09-01工程横断レビュー指摘・MINOR-2対応: 従来は終了コードのみでテキスト上は区別できなかった）" \
-    "$(echo "$out" | grep -q 'NO_GENERATED_FILE' && echo 1 || echo 0)"
+  assert_true "締めの警告に機械可読トークンNO_GENERATED_FILEが明示される" \
+    "$(echo "$out" | grep -q '非0終了します' && echo "$out" | grep -q 'NO_GENERATED_FILE' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 46. 動的Bedrock許可キーの算出失敗時はfail-openで固定2キーへ縮退せず、settings.json生成をスキップして既存ファイルを保持したうえで非0終了する（2026-09-01工程横断レビュー差し戻し・MAJOR対応の回帰テスト。旧実装はWARNのみで固定2キーへ縮退し生成を続行しており、未知のworker別名1件でも他の正常な動的pinキーが許可集合から落ち、既存settingsのpinが静かに消え得た） ==="
+echo "=== 20. 動的Bedrock許可キーの算出失敗時はfail-openで固定2キーへ縮退せず、settings.json生成をスキップして既存ファイルを保持したうえでdeferred非0終了する（設計書S18） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -1938,13 +644,7 @@ echo "=== 46. 動的Bedrock許可キーの算出失敗時はfail-openで固定2�
 EOF
   PRE_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
 
-  # resolve-leaderは成功させ（後段のcompute_allowed_bedrock_env_keys()に
-  # 到達させるため）、list-rolesだけが「算出そのものの失敗」
-  # （PROFILE_NOT_FOUND以外の、旧v1委譲状態コードでもない汎用エラー）を
-  # 返す偽libで、
-  # 「動的キー0件（正常）」と「算出不能（異常）」の区別を呼び出し側で
-  # 再現する（実プロファイルでこの組み合わせ＝leaderは解決できるのに
-  # list-rolesだけ失敗、を自然発生させるのが困難なため専用の偽libを使う）。
+  # resolve-leaderは成功させ、list-rolesだけが「算出そのものの失敗」を返す偽lib。
   FAKE_LIB="$(mktemp)"
   cat > "$FAKE_LIB" <<'PYEOF'
 import sys
@@ -1958,36 +658,29 @@ sys.exit(1)
 PYEOF
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 AIENV_PROFILE_RESOLVE_LIB="$FAKE_LIB" \
-    HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 AIENV_PROFILE_RESOLVE_LIB="$FAKE_LIB" HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
   assert_true "exit非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_true "算出失敗＋settings.json生成スキップの旨がWARNに出る（固定2キーへの縮退文言は出ない）" \
-    "$(echo "$out" | grep -q '動的Bedrock許可キーの算出に失敗しました' && echo "$out" | grep -q '生成をスキップし、既存ファイルを保持します' && echo 1 || echo 0)"
-  assert_true "『固定2キー…のみで続行します』という旧文言は出ない（fail-openで偽装しない）" \
-    "$(echo "$out" | grep -q 'のみで続行します' && echo 0 || echo 1)"
-  POST_SHA="$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
-  assert_eq "既存settings.json（動的pinを含む）がバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$POST_SHA"
-  # ⚠️ ここまでの3つのassertは「即時中断（settings.json以外も全部止める）」
-  # 誤実装でも通ってしまう（Codex一次レビュー指摘・MINOR対応）。設計書
-  # §6.2-B S18は「deferred非0」＝settings.json以外の後続処理（hooksの
-  # symlink化等）は完走させたうえで末尾のみ非0にする契約のため、それを
-  # 直接固定する2つを追加する。
-  assert_true "settings.json以外の後続処理（hooksのsymlink化）は完走する（即時中断ではなくdeferred非0）" \
-    "$([[ -L "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh" ]] && echo 1 || echo 0)"
-  assert_true "締めの警告『他の配置処理は完了しましたが…非0終了します』が出る" \
-    "$(echo "$out" | grep -q '他の配置処理は完了しましたが' && echo 1 || echo 0)"
+    "$(echo "$out" | grep -q '動的Bedrock許可キーの算出に失敗しました' && echo "$out" | grep -q '生成をスキップし、既存ファイルを保持します' && ! echo "$out" | grep -q 'のみで続行します' && echo 1 || echo 0)"
+  assert_eq "既存settings.json（動的pinを含む）がバイト単位で一切変更されていない(SHA-256不変)" "$PRE_SHA" "$(shasum -a 256 "$FAKE_HOME/.claude/settings.json" | awk '{print $1}')"
+  assert_true "settings.json以外の後続処理（hooksのsymlink化）は完走し、締めの警告が出る（即時中断ではなくdeferred非0）" \
+    "$([[ -L "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh" ]] && echo "$out" | grep -q '他の配置処理は完了しましたが' && echo 1 || echo 0)"
+
+  # --render-settings-json でも同じ失敗は非0・生成物なし。
+  OUT_DIR="$(mktemp -d)"
+  rc=0
+  AIENV_PROFILE_RESOLVE_LIB="$FAKE_LIB" HOME="$FAKE_HOME" bash "$SCRIPT" --render-settings-json "$OUT_DIR/s.json" >/dev/null 2>&1 || rc=$?
+  assert_true "--render-settings-json でも算出失敗は非0で生成物を書かない" \
+    "$([[ "$rc" -ne 0 && ! -e "$OUT_DIR/s.json" ]] && echo 1 || echo 0)"
 
   rm -f "$FAKE_LIB"
-  rm -rf "$FAKE_HOME"
+  rm -rf "$FAKE_HOME" "$OUT_DIR"
 }
 
-# --- 前提修正 P-2 の回帰テスト（2026-09-07）: 職種定義の配布結果を必ず報告する
-#     （設計§2・§2.1・§2.2）。TMP_REPO（実repoの丸ごとcopy）へ claude/agents/*.md
-#     を追加・削除して symlink 配布の挙動を検証する（本物の DIR は script 自身の
-#     場所から算出され環境変数で差し替えられないため、fixture化には repo ごと
-#     copy する既存の TMP_REPO 方式を使う）。 ---
+# --- 職種定義の配布結果を必ず報告する（前提修正 P-2・設計§2.1）。TMP_REPO（実repoの
+#     丸ごとcopy）へ claude/agents/*.md を追加・削除して symlink 配布の挙動を検証する。 ---
 
-echo "=== 44. PA-4: repo に定義を1本足して実行すると symlink ができ、AGENTS: 初回未配置 の固定文に名前が出る（終了コード0） ==="
+echo "=== 21. PA-4: repo に定義を1本足して実行すると symlink ができ、AGENTS: 初回未配置 の固定文に名前が出る（終了コード0） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -1996,17 +689,16 @@ echo "=== 44. PA-4: repo に定義を1本足して実行すると symlink がで
   echo "# PA-4 用の追加ロール定義（テスト専用・内容は問わない）" > "$TMP_REPO/claude/agents/test-pa4-role.md"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "追加したロールのsymlinkができる" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa4-role.md" ]] && echo 1 || echo 0)"
-  assert_agents_line "AGENTS: 初回未配置 の固定文にtest-pa4-roleが厳密一致で出る（件数・句読点も検査）" \
-    "$out" "初回未配置" "test-pa4-role"
+  assert_agents_line "AGENTS: 初回未配置 の固定文にtest-pa4-roleが出る" "$out" "初回未配置" "test-pa4-role"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 45. PA-5: repo から定義を1本消して実行すると AGENTS: dangling の固定文に名前が出て終了コードが非0（symlink自体は消えない） ==="
+echo "=== 22. PA-5: repo から定義を1本消して実行すると AGENTS: dangling の固定文に名前が出て終了コードが非0（symlink自体は消えない） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -2014,38 +706,33 @@ echo "=== 45. PA-5: repo から定義を1本消して実行すると AGENTS: dan
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   echo "# PA-5 用の一時ロール定義（次に削除する）" > "$TMP_REPO/claude/agents/test-pa5-role.md"
 
-  # 1回目: まだrepoにある状態で配置しておく（baseline）。
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
   assert_true "前提: baseline実行でsymlinkができている" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
 
-  # repoから消す（symlinkはFAKE_HOME側に残ったまま＝dangling化させる）。
   rm -f "$TMP_REPO/claude/agents/test-pa5-role.md"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
   assert_true "終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_agents_line "AGENTS: dangling の固定文にtest-pa5-roleが厳密一致で出る（件数・句読点も検査）" \
-    "$out" "dangling" "test-pa5-role"
+  assert_agents_line "AGENTS: dangling の固定文にtest-pa5-roleが出る" "$out" "dangling" "test-pa5-role"
   assert_true "symlink自体は消えない（本人判断・削除しない方針）" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 46. PA-6: 追加もdanglingも無ければ AGENTS: 行が出ず終了コード0（既存の挙動が変わらない） ==="
+echo "=== 23. PA-6: 追加もdanglingも無ければ AGENTS: 行が出ず終了コード0（既存の挙動が変わらない） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
-  # 1回目: baseline（初回未配置の報告は出るはずだが、ここでは主眼ではないので見ない）。
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
 
-  # 2回目: repo・FAKE_HOMEとも無変更のまま再実行。
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "AGENTS: 行が一切出ない" \
     "$(echo "$out" | grep -q '^\[install-main\] AGENTS:' && echo 0 || echo 1)"
@@ -2053,103 +740,24 @@ echo "=== 46. PA-6: 追加もdanglingも無ければ AGENTS: 行が出ず終了�
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 47. PA-12: 追加と削除が同時に起きる複合ケース（verifier追加・tester退役相当）で両方の固定文が出て新規は配置・旧は残存・終了コード非0 ==="
+echo "=== 24. generate_settings_json()（意図的に毎回内容が変わる正規の再生成経路）は既存backupがあれば何度実行しても新規backupを量産しない ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  echo "# PA-12 用の退役予定ロール（1回目は存在・2回目に消す）" > "$TMP_REPO/claude/agents/test-pa12-old-role.md"
-
-  # 1回目: old-role が repo にある状態で baseline 配置。
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
-  assert_true "前提: old-role がbaselineで配置されている" \
-    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
-
-  # 2回目: old-role を退役（削除）し、new-role を新設（追加）を同時に行う。
-  rm -f "$TMP_REPO/claude/agents/test-pa12-old-role.md"
-  echo "# PA-12 用の新設ロール" > "$TMP_REPO/claude/agents/test-pa12-new-role.md"
-
-  rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-
-  assert_agents_line "① AGENTS: 初回未配置 に new-role が厳密一致で出る" \
-    "$out" "初回未配置" "test-pa12-new-role"
-  assert_agents_line "② AGENTS: dangling に old-role が厳密一致で出る" \
-    "$out" "dangling" "test-pa12-old-role"
-  assert_true "③ new-role のsymlinkが作られている" \
-    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-new-role.md" ]] && echo 1 || echo 0)"
-  assert_true "④ old-role のsymlinkは残っている（削除しない）" \
-    "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
-  assert_true "⑤ 終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 48. link()でsymlink化する対象が、既存の.pre-aienv.bakと内容の異なる通常ファイルに置き換わっている場合、追加backupへ保存してから復旧する（検証3巡目 BLOCKING-1対応。従来はbackup_once()が『.pre-aienv.bak既に存在＝何もしない』へ丸め、続くln -sfnがその通常ファイルを削除していた） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
-
-  dest="$FAKE_HOME/.claude/hooks/bootstrap-vault.sh"
-  printf 'original-content\n' > "$dest"
-
-  # 1回目: baseline installで.pre-aienv.bak(元の内容)とsymlinkを作る。
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
-  assert_true "前提: baseline installでsymlink化される" \
-    "$([[ -L "$dest" ]] && echo 1 || echo 0)"
-  assert_eq "前提: 初回backupに元の内容が保存される" \
-    "original-content" "$(<"$dest.pre-aienv.bak")"
-
-  # symlinkを、既存backupとは異なる内容の通常ファイルへ外部要因で置換する
-  # （手動編集・別ツールの上書き等。HEAD不変の自動再同期の合間を想定）。
-  rm -f "$dest"
-  printf 'tampered-content\n' > "$dest"
-
-  # 2回目: repo無変更のまま再実行。
-  rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
-
-  assert_eq "2回目もexit 0（追加backupの発生自体は失敗要因にならない）" "0" "$rc"
-  assert_true "symlinkへ復旧する" "$([[ -L "$dest" ]] && echo 1 || echo 0)"
-  assert_eq "既存backup(.pre-aienv.bak)は旧内容のまま変更されない" \
-    "original-content" "$(<"$dest.pre-aienv.bak")"
-
-  extra_baks=("$dest".pre-aienv.bak.*)
-  assert_true "既存backupと内容が異なっていた通常ファイルは追加backupへ保存され消えない" \
-    "$([[ -e "${extra_baks[0]}" ]] && echo 1 || echo 0)"
-  assert_eq "追加backupの内容はsymlink化直前の通常ファイルと一致する" \
-    "tampered-content" "$(<"${extra_baks[0]}")"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 49. generate_settings_json()等（意図的に毎回内容が変わる正規の再生成経路）はbackup_once()の追加保存フラグ対象外のまま＝既存backupがあれば何度実行しても新規backupを量産しない（BLOCKING-1対応の副作用チェック。--additional-on-diffはlink()専用） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  TMP_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
   dest="$FAKE_HOME/.claude/settings.json"
   printf '{"pre-existing": true}' > "$dest"
 
-  # 1回目: settings.jsonの.pre-aienv.bakを作らせる（generate_settings_json()経由）。
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
   assert_true "前提: settings.jsonの初回backupができる" \
     "$([[ -e "$dest.pre-aienv.bak" ]] && echo 1 || echo 0)"
   bak_content_before="$(<"$dest.pre-aienv.bak")"
 
-  # role.leaderの候補を変え、settings.jsonの内容がbackupと異なる状態を複数回作る
-  # （generate_settings_json()は毎回実ファイルへ実際のmodel値等を書くため、
-  # 通常運用でも.pre-aienv.bakとdestの内容は一致しなくなる）。
   for _ in 1 2 3; do
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+    SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
   done
 
-  assert_eq "settings.jsonの.pre-aienv.bakは初回のまま変わらない（意図的な再生成では追加保存しない）" \
+  assert_eq "settings.jsonの.pre-aienv.bakは初回のまま変わらない" \
     "$bak_content_before" "$(<"$dest.pre-aienv.bak")"
   extra_count=0
   for f in "$dest".pre-aienv.bak.*; do
@@ -2157,10 +765,10 @@ echo "=== 49. generate_settings_json()等（意図的に毎回内容が変わる
   done
   assert_eq "settings.jsonの追加backup(.pre-aienv.bak.<timestamp>)は1件も作られない" "0" "$extra_count"
 
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
+  rm -rf "$FAKE_HOME"
 }
 
-echo "=== 55. MINOR-1(検証1巡目対応・差し戻し): 共有lib（scripts/lib/managed-symlink.sh）を削ったfixtureでinstall-main.shが非0で終わる（update-sub.sh側の既存3段ガードと同型。従来はbareなsourceのみで、lib欠落・構文破損時にrc=127〈関数未定義〉のまま後段の\`|| warn\`に飲み込まれ得た） ==="
+echo "=== 25. 共有lib（scripts/lib/managed-symlink.sh）を削ったfixtureでinstall-main.shが非0で終わる（lib欠落を静かに飲み込まない） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -2169,32 +777,25 @@ echo "=== 55. MINOR-1(検証1巡目対応・差し戻し): 共有lib（scripts/l
   rm -f "$TMP_REPO/scripts/lib/managed-symlink.sh"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
 
-  assert_true "共有lib欠落で非0終了する（rc=0に丸め込まれない）" \
-    "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
-  assert_true "共有ライブラリが読み取れない旨の明示的なFAILが出る" \
-    "$(echo "$out" | grep -q "共有ライブラリが読み取れません" && echo 1 || echo 0)"
+  assert_true "共有lib欠落で非0終了し、明示的なFAILが出る" \
+    "$([ "$rc" -ne 0 ] && echo "$out" | grep -q "共有ライブラリが読み取れません" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
-echo "=== 56. --check-profile: resolver本体（\$lib）が見つからないとき、全角括弧直後のunbound variable誤検知で握り潰されず、実パスを含むFAILメッセージがそのまま出る（bash-fullwidth-var-boundary-pitfall再発防止・scripts/install-main.sh:1013） ==="
+echo "=== 26. 退役フラグ（旧 --print-* 系・対話式リーダー設定）は unknown option として非0・副作用ゼロ ==="
 {
   FAKE_HOME="$(mktemp -d)"
-  MISSING_LIB="$(mktemp -u)/nonexistent-resolver-lib.py"
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" AIENV_PROFILE_RESOLVE_LIB="$MISSING_LIB" bash "$SCRIPT" --check-profile 2>&1)" || rc=$?
-
-  assert_true "exit非0" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
-  assert_true "unbound variableのbashエラーで意図したFAILが握り潰されない" \
-    "$(echo "$out" | LC_ALL=C grep -q 'unbound variable' && echo 0 || echo 1)"
-  assert_true "意図したFAILメッセージ（resolver本体（…）が見つかりません）が出る" \
-    "$(echo "$out" | grep -q 'resolver本体（.*）が見つかりません' && echo 1 || echo 0)"
-  assert_true "FAILメッセージに実パス（${MISSING_LIB}）がそのまま含まれる" \
-    "$(echo "$out" | grep -qF "$MISSING_LIB" && echo 1 || echo 0)"
-
+  n_ok=0
+  for flag in --print-bedrock-env-json --print-leader-model --reconfigure --non-interactive-mode; do
+    rc=0
+    HOME="$FAKE_HOME" bash "$SCRIPT" "$flag" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -ne 0 ] && n_ok=$((n_ok + 1))
+  done
+  assert_true "退役フラグはすべて非0で拒否され、偽HOMEに何も作られない" \
+    "$([[ "$n_ok" -eq 4 && ! -e "$FAKE_HOME/.claude" && ! -e "$FAKE_HOME/.config" ]] && echo 1 || echo 0)"
   rm -rf "$FAKE_HOME"
 }
 

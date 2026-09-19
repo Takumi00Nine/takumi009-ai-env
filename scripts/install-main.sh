@@ -5,108 +5,58 @@
 # 冪等（再実行安全）: 既存の「実ファイル」（symlinkでないもの）は初回だけ
 # "<dest>.pre-aienv.bak" へ退避してから symlink に置き換える。バックアップは
 # 既に存在すれば上書きしない（2回目以降の実行や、symlinkでなく実ファイルを
-# 生成し続ける config.toml でも、初回のオリジナルだけを守り続ける。
-# Codexレビュー指摘・Major＝旧実装は generate_config_toml() が毎回 backup を
-# 上書きし、2回目実行でオリジナルが失われる不具合があった）。
+# 生成し続ける config.toml でも、初回のオリジナルだけを守り続ける）。
 #
 # 例外: codex/config.toml は symlink しない。plain TOML は（hooks.json の
 # "command" 文字列と違い）シェル変数展開が行われないため、__AIENV_HOME__
 # プレースホルダを実ホームパスへ置換した実ファイルとして生成する
 # （詳細は codex/config.toml 冒頭のコメント参照）。
 #
-# 例外その2: claude/settings.json も symlink しない（2026-08-21 リーダー承認・
-# 機役割対応）。理由は2つ: ① JSONもTOML同様シェル変数展開されないため、
-# "model" フィールドをマシン別（メイン=Fable 5・サブ=Opus 5。サブはPro プランで
-# Fable非対応）に出し分けるには値の置き換えが必要。② symlinkのままだと、
-# セッション内で `/model` を実行した際にClaude Code自身がユーザー設定ファイルの
-# "model" フィールドを書き換える仕様があり、symlink先＝このリポジトリの
-# claude/settings.json が意図せず直接書き換わってしまう副作用があった
-# （config.tomlのnotify等がCodexアプリに自動書き換えられる問題と同型）。
-# generate_settings_json() が実ファイルとして生成することで両方を解消する
-# （config.tomlはsedでのテキスト置換だが、settings.jsonはpython3のjson moduleで
-# トップレベル"model"キーへ直接代入する＝Codex一次レビュー指摘Minor対応。
-# テンプレの__AIENV_MODEL__値はscripts/check-drift.sh①-2が比較に使う目印として
-# 残す）。値は --sub-delegate の有無（＝呼び出し経路）から直接決定する（後述の
-# AIENV_MODEL_MAIN/AIENV_MODEL_SUB）。配役表の`machine_role`の読み返しには
-# 依存しない＝実体の状態に関わらず出し分けが一意に決まる。
+# 例外その2: claude/settings.json も symlink しない。理由は2つ: ① JSONもTOML
+# 同様シェル変数展開されないため、"model"/"effortLevel" をローカル実体
+# プロファイルの role.leader から解決した値へ置き換える必要がある。
+# ② symlinkのままだと、セッション内で `/model` を実行した際にClaude Code自身が
+# ユーザー設定ファイルの "model" フィールドを書き換える仕様があり、symlink先＝
+# このリポジトリの claude/settings.json が直接書き換わる副作用があった。
+# generate_settings_json() が python3 の json module でトップレベルの
+# "model"/"effortLevel" キーへ代入した実ファイルを生成する（テンプレの
+# __AIENV_MODEL__／__AIENV_EFFORT__ は置換対象の目印として残す）。値は機役割
+# にも呼び出し経路（--sub-delegate）にも依存せず、role.leader からだけ決まる。
 #
 # 使い方:
-#   scripts/install-main.sh                   # 実行（symlink化 / config.toml生成）
-#   scripts/install-main.sh --dry-run         # 置換計画だけ表示（何もしない）
-#   scripts/install-main.sh --with-dotfiles   # 上記に加え、dotfiles（部品・下請け）も導入する
-#   scripts/install-main.sh --print-model [--sub-delegate]
-#                                              # model値を1行印字して即終了（副作用ゼロ）
+#   scripts/install-main.sh                          # 実行（symlink化 / config.toml・settings.json生成）
+#   scripts/install-main.sh --dry-run                # 置換計画だけ表示（何もしない）
+#   scripts/install-main.sh --with-dotfiles          # 上記に加え、dotfiles（部品・下請け）も導入する
+#   scripts/install-main.sh --check-profile          # ローカル実体プロファイルの resolve 結果を1行返す（副作用ゼロ）
+#   scripts/install-main.sh --render-settings-json <path>
+#                                                     # settings.json の生成物だけを <path> へ書いて終了（配置は行わない）
 #
-# --print-model（2026-08-30 共通コア分離 §9.0 A-0-1 新設）: claude/settings.json の
-# "model" 値の**唯一の出力口**。値を標準出力へ1行印字するだけで、生成・配置など
-# 一切の副作用を持たない（他の全オプションより先に判定し、python3依存
-# チェックより前に exit する）。
-# scripts/update-sub.sh・scripts/check-drift.sh はこのモードだけを呼び、model値を
-# 独自の値表として重複保持しない（設計書§9.0 A-0-1/A-0-3・§11.2 項目1「値出力口を
-# 1本に絞る」の実装）。--sub-delegate を同時に付けるとサブ機向けの値
-# （AIENV_MODEL_SUB）を、付けなければメイン機向けの値（AIENV_MODEL_MAIN）を返す
-# （値の決め方自体は下記「claude/settings.json の model 値を確定する」ブロックと
-# 完全に同じロジックを再利用する＝分岐を2箇所に増やさない）。
-# ⚠️ **--sub-delegate 本体（symlink化・config.toml生成等を実際に行う経路）を
-# 診断（check-drift.sh）から呼んではいけない**——診断中に実システムの状態が
-# 変わってしまう。--print-model はこの問題が起きない（副作用ゼロ）ため診断から
-# 呼んでよい。
+# --check-profile: resolver（claude/hooks/lib/profile_resolve.py resolve）の
+# 結果行（OK/MINIMAL/PROFILE_NOT_FOUND 等・タブ区切り）を stdout の1行目に
+# そのまま出し、resolver の終了コードで exit する。scripts/check-drift.sh ⑧が
+# stdout 1行目を機械可読行として読む契約のため、案内ログは stdout へ出さない。
+#
+# --render-settings-json <path>（2026-09-19 着手順3・設計 §3.5）: check-drift ①-2
+# の唯一の入力口。雛形配置・symlink化・config.toml生成・dotfiles には一切進まず、
+# resolver→動的Bedrock許可キー→generate_settings_json() を <path> を dest に
+# して1回だけ実行して exit する。読むものは実 profile／models.conf／bedrock.env
+# だけ（インストール本番と同じ環境変数の既定値を同じように読む＝揃える処理は
+# 不要）。resolver 失敗・テンプレ欠落・python3 不在は非0で終了し stdout へは
+# 何も出さない。
+#
+# --sub-delegate（内部専用・install-sub.sh がこのスクリプトへ委譲する際に付ける
+# 目印）: 受理するが settings.json の値には影響しない。
 #
 # --with-dotfiles（既定OFF・明示オプション時のみ）: $HOME/work/dotfiles が無ければ
 # `git clone` し、その後 dotfiles/install.sh を呼ぶ（既に存在する場合は clone を
-# skipして install.sh だけ呼ぶ＝dotfiles側のinstall.shは再実行しても安全な設計のため。
-# 相談資料§3-5「dotfilesは独立のまま部品として下請け」の実装）。
+# skipして install.sh だけ呼ぶ＝dotfiles側のinstall.shは再実行しても安全な設計）。
 #
-# --sub-delegate（内部専用・install-sub.sh がこのスクリプトへ委譲する際に常に付ける
-# フラグ。手動指定は想定しない）: symlink化・config.toml生成・codex MCP登録は
-# メイン/サブ共通で行うが、週次drift通知LaunchAgent（com.takumi009.drift-check.plist）
-# の設置は**メイン専用機能**のためskipする（2026-07-08 設計決定H-2「メイン専用」の
-# 実装。install-backup.sh・install-vault-agents.sh を別スクリプトに分離しているのと
-# 同じ意図だが、drift-check はinstall-main.sh本体に統合する指示だったため、
-# install-sub.shからの委譲経路だけをこのフラグで区別する）。
-# ⚠️ 配役表解凍（2026-09-01・設計書§4.2-f）以降、--sub-delegateはv2プロファイル
-# ベースのmodel/effort解決（後述--print-leader-runtime・実インストール時の
-# リーダー実行値決定）には一切使わない（受理はするが無視する）。v1委譲期間中の
-# --print-modelの出し分け（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）にだけ引き続き効く。
-#
-# --print-leader-runtime（2026-09-01 設計書§4.2-a 新設・値出力口の一本化）:
-# ローカル実体プロファイル（$AIENV_LOCAL_PROFILE_PATH）を解決し、実効リーダー
-# 候補（§3.5-L・role.leader）の model・effort を1行のJSON
-# （例 {"model": "claude-opus-5", "effort": "high"}）で標準出力へ印字して
-# 即終了する（副作用ゼロ）。effort未指定時はキー自体を出さない（正常な省略と
-# 解決失敗を混同しない）。プロファイルがv1（旧7キーのみ・schema_versionが
-# 無い/1）と分類された場合は現行実装（AIENV_MODEL_MAIN/AIENV_MODEL_SUBを
-# --sub-delegateの有無で選ぶ）へ委譲し、effortはlegacy値"high"を返す
-# （v1委譲期間の後方互換・§3.5）。実体が全く存在しない場合もv1委譲と同じ扱いに
-# する（P1ロールアウト未完了機を落とさないため）。解決に失敗した場合は
-# 標準出力へ1文字も出さず非0終了し、機械可読コード＋短い理由を標準エラーへ
-# 1行(`<コード>\t<理由>`)返す（4.2-b。理由は値を含まない）。install-main.sh・
-# update-sub.sh・check-drift.shの3者は今後この出力口だけを使う。--print-modelは
-# v1委譲期間のみ互換として残す（その後廃止）。
-#
-# --check-profile（2026-09-01 設計書§4.2-e 新設・副作用ゼロの検査口）:
-# ローカル実体プロファイルの整合性を検査し、provider/modelごとに職種を
-# グループ化した配役一覧を表示する。手編集を前提にする設計への「編集直後に
-# 確かめる口」。`--check-profile --print-schema-version`を付けると一覧表示を
-# 省略しschema_versionの値だけを1行返す（値なし・副作用ゼロ・U-7の撤去条件
-# 判定に使う）。
-#
-# --reconfigure-leader / --non-interactive（2026-09-01 設計書§3.9 新設）:
-# 前者は既に確定済みのrole.leaderを対話で変更したいときに付ける（未指定なら
-# 確定済みの値はそのまま通す＝冪等）。後者は対話を一切行わない（CI・バック
-# グラウンド実行での正しい運用。付いていれば`[ -t 0 ]`より常に優先する）。
-#
-# 機役割（配役表の能力軸`machine_role`）: 本スクリプトは既存の実体プロファイル
-# の内容（machine_role を含む）を一切書き換えない（配役表-能力軸整理-設計-
-# 2026-09-07.md §5.2・FR-15＝実体を編集するのは本人だけ）。⚠️ 実体が無い
-# ときだけ、雛形配置ブロック（後述）がconfig/profile.md.sampleから新規に
-# 作成することはある（2026-09-08本人裁定A案）が、その後の値の書き換えは
-# 行わない。settings.jsonの"model"はv2実体では配役表の
-# `role.leader`から決まり（--print-leader-runtime）、機役割にも
-# --sub-delegateにも依存しない。--sub-delegateが効くのは実体が本当に存在
-# しない場合に縮退したときのlegacy値選択（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）
-# だけである（2026-09-08モデル定義ファイルと候補指定対応・D-13: 実在する
-# 旧版はlegacy委譲されずPROFILE_INVALID:T4-LEGACYで解決失敗する）。
+# 機役割（配役表の `machine_role`）: 本スクリプトは既存の実体プロファイルの
+# 内容を一切書き換えない（実体を編集するのは本人だけ）。実体が無いときだけ、
+# 雛形配置ブロック（後述）が config/profile.md.sample から新規に作成する。
+# リーダー配役（role.leader）が未確定・解決不能なら settings.json は生成せず
+# 非0で終了する（対話で確定させる経路と既定モデルへの縮退は 2026-09-19 に
+# 退役した＝profile.md を直接編集して再実行する）。
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 #       本スクリプトは既存の実ファイルをsymlinkへ置き換えるため、ユーザー本人が
@@ -117,58 +67,26 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${DOTFILES_DIR:=$HOME/work/dotfiles}"
 : "${DOTFILES_REPO_URL:=https://github.com/Takumi00Nine/dotfiles}"
-# テスト専用: "1" にすると launchctl への実操作（bootout/bootstrap/enable）だけを
-# skipし、plist生成（プレースホルダ置換）はそのまま行う（週次drift通知LaunchAgentの
-# 設置に使用。scripts/install-sub.sh の SKIP_LAUNCHCTL と同じ考え方・同じ変数名。
-# 実launchd＝gui/$(id -u) はHOMEを差し替えても隔離できないため、テストで誤って
-# 実システムのlaunchdへ登録してしまう事故を防ぐ。本番運用では常に既定値=0のまま）。
+# テスト専用: "1" にすると launchctl への実操作だけを skip する（scripts/install-sub.sh
+# と同じ考え方・同じ変数名。実launchd＝gui/$(id -u) はHOMEを差し替えても隔離
+# できないため、テストで誤って実システムのlaunchdへ登録する事故を防ぐ。本番は
+# 常に既定値=0のまま）。
 : "${SKIP_LAUNCHCTL:=0}"
-# claude/settings.json の "model" 値（マシン別出し分け・2026-08-21）。環境変数で
-# 上書き可（ユニットテスト用。本番は既定値のままでよい）。サブ機はProプラン・
-# Fable 5非対応のためOpus 5をpinする（aliasの"opus"は将来の指す先変更に追従して
-# しまうため使わない＝Web裏取り済み）。[1m]（1M context）サフィックスはメインの
-# Fable 5専用（リーダー指示・サブには付けない）。
-: "${AIENV_MODEL_MAIN:=claude-fable-5[1m]}"
-: "${AIENV_MODEL_SUB:=claude-opus-5}"
-# ローカル実体プロファイル（2026-08-30 共通コア分離 §9.0 A-1 P1機構）の配置先。
-# claude/hooks/bootstrap-vault.sh と同じ環境変数名・既定値（実体は機ごとの
-# ローカル・repo管理外のまま＝§11.2 source of truth定義。推奨経路は repo の
-# config/profile.md.sample を手でコピーして作ること＝実値入り。
-# 2026-09-08 本人裁定A案（設定ファイルsample配布）: 実体が無いときだけ動く
-# 既存の雛形自動生成（下記「雛形配置」ブロック）は、読み元を
-# vault-public/Preferences/profile-sample.md から repo の
-# config/profile.md.sample へ付け替えた（挙動＝「実体が無いときだけ雛形を
-# 置く・既存を壊さない」は変えていない）。本人が事前にconfig/profile.md.
-# sampleをコピーしておけば、雛形配置は非破壊性によりそれを上書きしない。
+# ローカル実体プロファイルの配置先（claude/hooks/bootstrap-vault.sh と同じ
+# 環境変数名・既定値。実体は機ごとのローカル・repo管理外。推奨経路は repo の
+# config/profile.md.sample を手でコピーして作ること。実体が無いときだけ後述の
+# 「雛形配置」ブロックが同サンプルをコピーする＝既存は上書きしない）。
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
-# Bedrock最小セット（2026-08-30 共通コア分離 §9.0 A-1-4）: ピン留めの実値
-# （推論プロファイルID・リージョン・CLAUDE_CODE_USE_BEDROCK等）の正本となる
-# マシンローカルenvファイル。§11.2「ピン留めの実値の置き場」の裁定どおり
-# publicなプロファイルには書かず、repo管理外のこのファイルへ分離する。
-# AWSの認証情報そのもの（AWS_ACCESS_KEY_ID等）はここに置かない
-# （専用の資格情報機構＝AWS CLI/SSO/Bedrock APIキーのままとする。本ファイルが
-# 持つのは「どのモデルを指すか」の値のみ）。存在しない（Bedrock未導入機）の
-# 場合は何もしない＝既存の全マシンの挙動を変えない。
+# Bedrock最小セット: ピン留めの実値（推論プロファイルID・リージョン・
+# CLAUDE_CODE_USE_BEDROCK等）の正本となるマシンローカルenvファイル。AWSの
+# 認証情報そのもの（AWS_ACCESS_KEY_ID等）はここに置かない（専用の資格情報
+# 機構のまま）。存在しない（Bedrock未導入機）場合は何もしない。
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
-# 共有lib（claude/hooks/lib/profile_resolve.py・2026-09-01 配役表解凍 §4.1-g）と
-# コア職種マニフェスト（claude/agents/）の場所。bootstrap-vault.shと同じ
-# 「自身の実体パスから同梱libを解決する」方式（U-5）。
+# 共有lib（claude/hooks/lib/profile_resolve.py）とコア職種マニフェスト
+# （claude/agents/）の場所。bootstrap-vault.shと同じ「自身の実体パスから
+# 同梱libを解決する」方式。
 : "${AIENV_PROFILE_RESOLVE_LIB:=$DIR/claude/hooks/lib/profile_resolve.py}"
 : "${AIENV_AGENTS_DIR:=$DIR/claude/agents}"
-# §3.9対話確定の直列化に使う専用ロック（scripts/lib/pid-lock.shを再利用・
-# 新規ロック機構は作らない）。プロファイル本体とは別ファイルにする
-# （プロファイル自体をロックファイルに転用すると書込み時の原子的置換
-# （mktemp+mv）と衝突するため）。
-: "${AIENV_LEADER_LOCK_FILE:=$AIENV_LOCAL_PROFILE_PATH.leader.lock}"
-: "${AIENV_LEADER_LOCK_STALE_SECONDS:=300}"
-# §3.9対話の1問あたりの入力待ちタイムアウト（秒）。TTYが「人が応答する」証明で
-# ない（擬似TTYの自動化がありうる）ことへの対策＝タイムアウトで必ず抜ける。
-: "${AIENV_LEADER_DIALOG_TIMEOUT:=60}"
-# テスト専用: "1" にすると `[ -t 0 ]` の判定結果によらず対話可能とみなす
-# （§3.9の対話フローを実TTY無しで決定的に検証するためのテスト用エスケープ
-# ハッチ。SKIP_LAUNCHCTLと同じ「テスト専用変数」の流儀。
-# --non-interactiveが指定されていれば引き続きそちらが優先する）。
-: "${AIENV_FORCE_TTY_FOR_TEST:=0}"
 # Bedrock env ファイルから settings.json の "env" ブロックへ取り込んでよい
 # キーの許可リスト（2026-08-25 Codex一次レビュー指摘・Major対応: 当初は
 # テンプレと衝突しないキーを無条件で取り込んでいたため、誤ってAWS認証情報
@@ -176,8 +94,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 穴があった）。許可するのは「どのモデルを指すか」の値だけで、AWSへの
 # 認証情報は対象外（専用の資格情報機構のまま＝絶対厳守③）。
 # ⚠️ この配列を唯一の値表とする——check-drift.sh は自前でこの一覧を複製せず、
-# 下記 compute_bedrock_env_json() ／ --print-bedrock-env-json を呼んで
-# 期待値を得る（2026-08-30 工程横断レビュー指摘・MAJOR-5対応。§9.0 A-0-1の
+# check-drift ①-2 は `--render-settings-json` の生成物と diff する
+# （2026-08-30 工程横断レビュー指摘・MAJOR-5対応。§9.0 A-0-1の
 # 「値出力口の一本化」と同じ設計思想の横展開＝値表を3箇所に増やさない）。
 # 2026-09-01 配役表解凍 §4.2-d 改訂: 固定で許可するのは以下2キーだけへ縮小。
 # 旧版はANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODELも無条件固定で許可していたが、
@@ -367,14 +285,15 @@ log() { echo "[install-main] $*"; }
 warn() { echo "[install-main] WARN: $*" >&2; }
 fail() { echo "[install-main] FAIL: $*" >&2; exit 1; }
 
-# link()（下記）とupdate-sub.shのclaude/agents/*.md直接配置が共有する
-# sync_managed_symlink()を読み込む（検証4巡目 BLOCKING-1対応・2026-09-14。
-# 詳細はscripts/lib/managed-symlink.sh側のコメント参照）。
+# install-main.sh の link()（下記）が使う sync_managed_symlink()を読み込む
+# （update-sub は install-sub 経由でこの link() を呼ぶ＝直接配置はしない。
+# 検証4巡目 BLOCKING-1対応・2026-09-14。詳細はscripts/lib/managed-symlink.sh
+# 側のコメント参照）。
 # 2026-09-17検証1巡目差し戻し MINOR-1対応: 従来はbareな`source`のみで、
 # lib欠落・構文破損時にrc=127（関数未定義）のまま後段の`|| warn`に
 # 飲み込まれ得た（MAJOR-1と合流して「配置しました」報告のまま静かに壊れる）。
-# update-sub.sh L383〜393と同じ3段のガード（-r・bash -n・declare -F）を
-# 先に置く。
+# install-main.sh の link() が使う（update-sub は install-sub 経由）ため、
+# 3段のガード（-r・bash -n・declare -F）はここにだけ置く。
 if [ ! -r "$DIR/scripts/lib/managed-symlink.sh" ]; then
   fail "共有ライブラリが読み取れません（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
 fi
@@ -417,825 +336,86 @@ fail_settings_generation() {
 PROFILE_SAMPLE_SRC="$DIR/config/profile.md.sample"
 
 # ============================================================
-# 配役表解凍（2026-09-01・設計書§4.2-a〜g・§3.9）: リーダー実行値の解決と
-# リーダー配役の対話確定。
+# リーダー実行値の解決と検査口
 # ============================================================
 
-# resolve_leader_runtime — §3.5-Lの実効リーダー候補のmodel/effortを1行JSON
-# （例 {"model": "claude-opus-5", "effort": "high"}）で標準出力へ書く
-# （成功時・4.2-a）。失敗時は標準出力へ1文字も出さず、標準エラーへ
-# `<機械可読コード>\t<短い理由（値を含まない）>`を1行書いてreturn 1
-# （4.2-b）。--print-leader-runtime とメイン実行フロー(settings.json生成)の
-# 両方がこの1つの関数だけを使う（値出力口の一本化。update-sub.sh・
-# check-drift.shも同じ契約の`--print-leader-runtime`だけを呼ぶ設計）。
-#
-# 2026-09-01 契約更新（担当A確定）: `resolve-leader`は**自己完結**
-# （存在確認・symlink拒否・preflight(V15)・parse・全validatorをlib内部で
-# 行う）。呼び出し側（本関数）は事前チェックを一切重複させず、そのまま
-# 呼ぶだけでよい（判定式を2箇所に増やさない・BLOCKING対応：従来はここで
-# 独自にsymlink/存在/版判定を行っており、V6/V7/V8/V16等leader以外の
-# validator違反が有ってもsettings生成へ進みうる欠陥があった）。
-# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）: 旧版
-# （schema 6未満・schema_versionの行が無い実体を含む）をP1ロールアウト
-# 未完了機として現行実装へ委譲する経路（v1委譲）を撤去した——schema 6の
-# コードは旧版を`PROFILE_INVALID:T4-LEGACY`として一律解決失敗にするため
-# （no-backward-compat）。実体が本当に存在しない`PROFILE_NOT_FOUND`の
-# 場合だけ、現行実装（AIENV_MODEL_MAIN/AIENV_MODEL_SUBを--sub-delegateの
-# 有無で選ぶ）へ委譲し、effortはlegacy値"high"を返す（こちらはP1導入前の
-# 機体を落とさないための別の委譲で、本案件の対象外）。それ以外の失敗
-# （PROFILE_UNREADABLE・PROFILE_INVALID:*・LEADER_*等）はそのまま非0で
-# 伝播する。
-# _print_legacy_leader_runtime_json <model> — v1委譲時のJSON
-# {"model": "<model>", "effort": "high"}を安全に組み立てて標準出力へ書く。
-# ⚠️ printfでの生文字列埋め込みは、値に`"`・`\`が含まれると不正JSONになる
-# （2026-09-01 実測: tests/test-install-sub.sh 4fの`weird"model\value`で
-# 再現・AIENV_MODEL_MAIN/SUBは環境変数なので任意の文字列を持ちうる）。
-# generate_settings_json()と同じくpython3のjson moduleで組み立てる。
-_print_legacy_leader_runtime_json() {
-  python3 -c 'import json, sys; print(json.dumps({"model": sys.argv[1], "effort": "high"}))' "$1"
-}
-
+# resolve_leader_runtime — 実効リーダー候補のmodel/effortを1行JSON
+# （例 {"model": "claude-opus-5", "effort": "high"}）で標準出力へ書く。
+# `resolve-leader`は自己完結（存在確認・symlink拒否・preflight・全validatorを
+# lib内部で行う契約）なので、ここでは事前チェックを重複させない。失敗時は
+# 標準出力へ1文字も出さず、libの標準エラー（`<機械可読コード>\t<理由>`・値を
+# 含まない）をそのまま流してreturn 1。実体が無い（PROFILE_NOT_FOUND）場合も
+# 失敗として扱う（旧・既定モデルへのlegacy委譲は2026-09-19に退役）。
 resolve_leader_runtime() {
-  local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB"
-
+  local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB" out
   if [ ! -f "$lib" ]; then
     printf 'PROFILE_RESOLVER_MISSING\tresolver本体が見つかりません\n' >&2
     return 1
   fi
-
-  local out err_file
-  err_file="$(mktemp 2>/dev/null)" || {
-    printf 'PROFILE_RESOLVER_ERROR\t一時ファイルを作成できません\n' >&2
-    return 1
-  }
   if out="$(python3 "$lib" resolve-leader "$path" \
-        --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" \
-        2>"$err_file")"; then
-    rm -f "$err_file"
+        --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR")"; then
     printf '%s\n' "$out"
     return 0
-  fi
-  local errline
-  errline="$(cat "$err_file" 2>/dev/null)"
-  rm -f "$err_file"
-  case "$errline" in
-    PROFILE_NOT_FOUND*)
-      # ⚠️ libは「存在しない」と「存在するが通常ファイルではない
-      # （ディレクトリ等）」の両方をPROFILE_NOT_FOUNDへ丸める。前者だけを
-      # legacy委譲（P1ロールアウト未完了機を落とさない）とし、後者は実体が
-      # 壊れているため非0のまま伝播する（ensure_leader_configuredと同じ
-      # 判定式・§3.1の対象外を混同しない）。
-      # ⚠️ U-7撤去条件（v1互換モードの撤去・両機がschema_version:2確認済み）
-      # 成立後は、「実体が本当に存在しない」場合もlegacy委譲(exit 0)ではなく
-      # 設計書S2どおり非0終了へ引き上げること（2026-09-01 リーダー裁定・
-      # 却下希望1(a)は条件付き承認＝v1互換期間中に限る）。
-      if [ -e "$path" ]; then
-        printf 'PROFILE_UNREADABLE\tプロファイル実体が壊れています（通常ファイルではありません）\n' >&2
-        return 1
-      fi
-      _print_legacy_leader_runtime_json "$AIENV_MODEL_VALUE"
-      return 0
-      ;;
-    *)
-      if [ -n "$errline" ]; then
-        printf '%s\n' "$errline" >&2
-      else
-        printf 'PROFILE_RESOLVER_ERROR\tresolve-leaderが予期せず失敗しました\n' >&2
-      fi
-      return 1
-      ;;
-  esac
-}
-
-# list_roles_rows <path> — 共有libのlist-rolesを呼び、成功時はTSV行
-# （name\tstate\t定義名\tprovider\tmodel\texecution\teffort）をそのまま標準
-# 出力へ流す。list-rolesは自己完結（存在確認・symlink拒否・preflight・
-# 分類・全validatorをlib側が内部で行う契約＝担当A確定）なので、呼び出し側は
-# これ以上の事前チェックを重複させない。失敗時は標準出力へ何も出さず、
-# 標準エラーへ`<コード>\t<理由>`を1行書いてreturn 1。
-list_roles_rows() {
-  local path="$1" lib="$AIENV_PROFILE_RESOLVE_LIB" out err_file
-  if [ ! -f "$lib" ]; then
-    printf 'PROFILE_RESOLVER_MISSING\tresolver本体が見つかりません\n' >&2
-    return 1
-  fi
-  err_file="$(mktemp 2>/dev/null)" || {
-    printf 'PROFILE_RESOLVER_ERROR\t一時ファイルを作成できません\n' >&2
-    return 1
-  }
-  if out="$(python3 "$lib" list-roles "$path" 2>"$err_file")"; then
-    rm -f "$err_file"
-    printf '%s\n' "$out"
-    return 0
-  fi
-  local errline
-  errline="$(cat "$err_file" 2>/dev/null)"
-  rm -f "$err_file"
-  if [ -n "$errline" ]; then
-    printf '%s\n' "$errline" >&2
-  else
-    printf 'PROFILE_RESOLVER_ERROR\tlist-rolesが予期せず失敗しました\n' >&2
   fi
   return 1
 }
 
-# find_leader_line_position <path> — role.leader行（フロントマター内・
-# 最初の出現）の行番号と、frontmatter終端行番号を
-# `LINENO=<n>`/`END_LINENO=<n>`の2行で標準出力へ書く（write_and_verify_leader
-# の書込み位置決定専用・状態や属性値は一切読まない）。LINENO=0は「行が存在
-# しない（挿入が必要）」を表す。⚠️ 呼び出し時点でlist_roles_rowsが既に成功
-# している（＝重複キー等の構文エラーが無いことを確認済み）前提で使う位置
-# 特定だけの軽量スキャン——値・状態の正本はlist-rolesのまま。
-find_leader_line_position() {
-  python3 -c "
-import sys
-path = sys.argv[1]
-try:
-    with open(path, encoding='utf-8') as f:
-        lines = f.read().splitlines()
-except OSError:
-    print('LINENO=0'); print('END_LINENO=0'); sys.exit(0)
-if not lines or lines[0].strip() != '---':
-    print('LINENO=0'); print('END_LINENO=0'); sys.exit(0)
-end_idx = None
-for i in range(1, len(lines)):
-    if lines[i].strip() == '---':
-        end_idx = i
-        break
-if end_idx is None:
-    print('LINENO=0'); print('END_LINENO=0'); sys.exit(0)
-found = 0
-for i in range(1, end_idx):
-    if lines[i].strip().startswith('role.leader:'):
-        found = i + 1
-        break
-print(f'END_LINENO={end_idx + 1}')
-print(f'LINENO={found}')
-" "$1"
-}
-
-# model_defs_display_path — resolverの model_defs_path() と同じ判定
-# （AIENV_MODEL_DEFS_FILE未設定なら既定値・絶対パスか~/始まりでなければ
-# 不正）をシェル側で複製し、表示専用の展開後パスを返す（2026-09-08 モデル
-# 定義ファイルと候補指定対応・同設計§5.2・§5.3）。⚠️ これは表示専用の
-# 複製であり、実際の解決可否はpython3側のmodel_defs_path()が唯一の正本の
-# まま判定する（本関数はゲートに使わない）。
-model_defs_display_path() {
-  local raw="${AIENV_MODEL_DEFS_FILE:-$HOME/.config/takumi009-ai-env/models.conf}"
-  case "$raw" in
-    /*) printf '%s\n' "$raw" ;;
-    "~/"*) printf '%s\n' "${raw/#\~/$HOME}" ;;
-    *) printf '(不正なAIENV_MODEL_DEFS_FILE: %s。絶対パスか~/始まりで指定してください)\n' "$raw" ;;
-  esac
-}
-
-# parse_leader_role_env <value> — AIENV_LEADER_ROLE（形式:
-# "model=<定義名>[,<定義名>...]"）をデータとして解析する（⚠️ evalしない・
-# §3.9注記）。2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.3）:
-# 役割の行が`model=<定義名>[,…]`だけになったため、受理する属性を`model`だけへ
-# 畳んだ（`provider=`・`effort=`は形式エラー）。成功時はENV_MODEL_DEFS
-# （カンマ区切りの生の並び）を設定してreturn 0。不正な形式・model欠落・
-# 属性重複はreturn 1。
-parse_leader_role_env() {
-  local raw="$1" tok name val rc=0
-  ENV_MODEL_DEFS=""
-  local seen_model=0
-  # ⚠️ `for tok in $raw`は単語分割に加えpathname展開(globbing)も行う
-  # （evalではないため直接のコード実行には至らないが、カレントディレクトリの
-  # ファイル名次第でトークンが変わりうる＝純粋なデータ解析ではなくなる。
-  # Codexレビュー指摘・Minor対応）。一時的に`set -f`でglobを無効化する。
-  # ⚠️ 呼び出し元が既に`set -f`（noglob）だった場合に`set +f`で誤って有効化
-  # しないよう、元の状態を`$-`から復元する（Codex二次レビュー指摘・Minor対応）。
-  local restore_glob=0
-  case "$-" in *f*) : ;; *) restore_glob=1 ;; esac
-  set -f
-  for tok in $raw; do
-    case "$tok" in
-      *=*) : ;;
-      *) rc=1; break ;;
-    esac
-    name="${tok%%=*}"
-    val="${tok#*=}"
-    if ! [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || [ -z "$val" ]; then
-      rc=1
-      break
-    fi
-    case "$name" in
-      model) [ "$seen_model" = "1" ] && { rc=1; break; }; ENV_MODEL_DEFS="$val"; seen_model=1 ;;
-      *) rc=1; break ;;
-    esac
-  done
-  [ "$restore_glob" = "1" ] && set +f
-  [ "$rc" -eq 0 ] || return 1
-  [ -n "$ENV_MODEL_DEFS" ] || return 1
-  return 0
-}
-
-# leader_attrs_match <既存の定義名の並び> <env指定の定義名の並び> —
-# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.3）: 定義名の生の
-# 並びを文字列比較するだけにする（属性はmodelだけになったため）。
-leader_attrs_match() {
-  [ "$1" = "$2" ]
-}
-
-# write_and_verify_leader <定義名の並び> <preimage> — §3.9の書込み手順
-# （2026-09-08 モデル定義ファイルと候補指定対応で§5.3のとおり改訂）:
-# ①並びを分解し全定義をcheck-candidate --model-def … --for-leader
-# --role-name leaderで検査（1件でも落ちたら中止）②role.leader:
-# configured model=<生の並び>を一時ファイルへ書く③その一時ファイルに対して
-# resolve-leaderを1回走らせ、先頭候補が実際に解決できることを確認する
-# （check-candidateは1定義の形式とリーダー専用規則しか見ず、「先頭候補で
-# settings.jsonを作れるか」はresolve-leaderでしか確かめられない）④preimage
-# 一致確認⑤原子的place。
-# 既存のファイルmode・所有者を維持し、書換前にbackup_once()でbackupを取る。
-# 他の行には一切触れない。
-write_and_verify_leader() {
-  # $2=preimage: 呼び出し元（ensure_leader_configured）がロック取得後・
-  # 「未確定かどうかを読む」その時点で採取したSHA-256を必ず渡す
-  # （2026-09-01 Codex二次レビュー指摘・BLOCKING対応: 従来はこの関数の冒頭で
-  # 都度再計算しており、「読取→対話→再検証→書込み」の間に他プロセス／本人が
-  # profileを編集していても、対話終了後にここで“今の”内容を新たなpreimageと
-  # して受理してしまい、commit直前の一致確認が意味を持たなくなっていた。
-  # ロック取得後の最初の読取り時点を正本のpreimageとして固定する）。
-  local model_defs="$1" preimage="$2" path="$AIENV_LOCAL_PROFILE_PATH"
-
-  [ -n "$preimage" ] || fail "role.leaderの書込み準備に失敗しました（プロファイルのpreimageがありません）: $path"
-  [ -n "$model_defs" ] || fail "role.leaderの書込み準備に失敗しました（定義名が指定されていません）: $path"
-
-  local _wavl_d
-  IFS=',' read -r -a _wavl_defs <<< "$model_defs"
-  for _wavl_d in "${_wavl_defs[@]}"; do
-    [ -z "$_wavl_d" ] && continue
-    if ! python3 "$AIENV_PROFILE_RESOLVE_LIB" check-candidate           --model-def "$_wavl_d" --for-leader --role-name leader           --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR"           >/dev/null 2>&1; then
-      fail "LEADER_CANDIDATE_INVALID: 指定された定義（${_wavl_d}）の検証(check-candidate)に失敗しました"
-    fi
-  done
-
-  local pos_out leader_lineno=0 leader_end_lineno=0 k v
-  pos_out="$(find_leader_line_position "$path")"
-  while IFS='=' read -r k v; do
-    case "$k" in
-      LINENO) leader_lineno="$v" ;;
-      END_LINENO) leader_end_lineno="$v" ;;
-    esac
-  done <<EOF_POS
-$pos_out
-EOF_POS
-
-  local newline="role.leader:               configured model=${model_defs}"
-
-  backup_once "$path"
-
-  local orig_mode orig_uid orig_gid
-  orig_mode="$(stat -f '%Lp' "$path" 2>/dev/null || stat -c '%a' "$path" 2>/dev/null || echo '')"
-  orig_uid="$(stat -f '%u' "$path" 2>/dev/null || stat -c '%u' "$path" 2>/dev/null || echo '')"
-  orig_gid="$(stat -f '%g' "$path" 2>/dev/null || stat -c '%g' "$path" 2>/dev/null || echo '')"
-
-  local tmp
-  tmp="$(mktemp "$(dirname "$path")/.$(basename "$path").aienv-tmp.XXXXXX")"
-  # ⚠️ この関数は他の関数（ensure_leader_configured・run_leader_dialog）の
-  # 内側から呼ばれる（トップレベルからの直接呼び出しではない）。bash 3.2では
-  # `trap ... RETURN`がこの関数のreturnで消えず、呼び出し元の後続return
-  # まで漏れて「$tmpが無い」unbound variableを起こす実挙動を確認済み
-  # （関数のネストが無いgenerate_settings_json等の既存箇所では問題にならない
-  # パターンだが、ここでは踏む）。そのためRETURN trapは使わず、失敗パスは
-  # fail()の即時exitに任せる（既存のgenerate_settings_json等と同じく、
-  # 異常系でのtmpファイル残置は許容する）。
-
-  if [ "$leader_lineno" -gt 0 ] 2>/dev/null; then
-    awk -v n="$leader_lineno" -v newline="$newline" 'NR==n{print newline; next} {print}' "$path" > "$tmp"
-  else
-    if ! [ "$leader_end_lineno" -gt 0 ] 2>/dev/null; then
-      fail "role.leader行を挿入する位置（frontmatter終端）が特定できません: $path"
-    fi
-    python3 -c "
-import sys
-path, newline, outpath, end_lineno = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
-with open(path, encoding='utf-8') as f:
-    lines = f.readlines()
-lines.insert(end_lineno - 1, newline + '\n')
-with open(outpath, 'w', encoding='utf-8') as f:
-    f.writelines(lines)
-" "$path" "$newline" "$tmp" "$leader_end_lineno" || fail "role.leader行の挿入に失敗しました: $path"
-  fi
-
-  # ⚠️ ベストエフォート（既存モード/所有者の維持は§3.9の望ましい振る舞いで
-  # あって必須要件ではない）。`A && B`は`B`が失敗すると複合コマンド全体の
-  # 終了ステータスが非0になり、素の文として書くと`set -e`でここが即終了して
-  # しまう（2026-09-01 実測: `chown`は`/usr/sbin/`にありPATHが絞られたテスト
-  # 環境ではcommand not found=127になり、role.leaderの書込み自体が中断して
-  # いた）。`|| true`で必ず後続へ進める。
-  if [ -n "$orig_mode" ]; then
-    chmod "$orig_mode" "$tmp" 2>/dev/null || true
-  fi
-  if [ -n "$orig_uid" ] && [ -n "$orig_gid" ]; then
-    chown "$orig_uid:$orig_gid" "$tmp" 2>/dev/null || true
-  fi
-
-  if ! python3 "$AIENV_PROFILE_RESOLVE_LIB" resolve-leader "$tmp" \
-        --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" \
-        >/dev/null 2>&1; then
-    rm -f "$tmp"
-    fail "LEADER_CANDIDATE_INVALID: 先頭候補（${model_defs%%,*}）でリーダー配役を解決できませんでした"
-  fi
-
-  local now_hash
-  now_hash="$(shasum -a 256 "$path" 2>/dev/null | awk '{print $1}')" || true
-  if [ "$now_hash" != "$preimage" ]; then
-    rm -f "$tmp"
-    fail "並行installerを検出しました（書込み直前にプロファイルが変更されていました）。中止します: $path"
-  fi
-
-  mv "$tmp" "$path"
-  log "role.leader を確定しました（値はログに出しません）: $path"
-}
-
-can_interact() {
-  [ "$NON_INTERACTIVE" = "1" ] && return 1
-  [ "$AIENV_FORCE_TTY_FOR_TEST" = "1" ] && return 0
-  [ -t 0 ] || return 1
-  return 0
-}
-
-# _read_with_timeout <varname> <timeout> — タイムアウト付きで1行読む。
-# 成功時varnameへ設定してreturn 0。タイムアウト・EOFはいずれもreturn 2
-# （§3.9「EOF・端末切断・タイムアウトはいずれも非0終了として扱う」。
-# 呼び出し側でこれ以上区別する必要が無いため単一のコードにまとめている）。
-_read_with_timeout() {
-  local __var="$1" __timeout="$2" __val=""
-  if ! IFS= read -r -t "$__timeout" __val; then
-    return 2
-  fi
-  printf -v "$__var" '%s' "$__val"
-  return 0
-}
-
-# ask_leader_models <default_defs> — Q（唯一の質問。2026-09-08 モデル定義
-# ファイルと候補指定対応・同設計§5.3・D-11）: 役割の行が`model=<定義名>[,…]`
-# だけになったので、旧Q1(provider)・Q2(model候補)・Q3(effort)の3問を
-# 「モデル定義名（カンマ区切りで複数可）」の1問へ畳む。⚠️
-# 旧サンプル候補生成関数（配布サンプルからの候補生成）は廃止した——
-# 定義名は本人が定義ファイルへ書いた任意の名前であり、配布サンプルから
-# 機械的に提示できる候補ではないため。プロンプトに定義ファイルのパスを
-# 出す（model_defs_display_path()）。
-ask_leader_models() {
-  local default_defs="$1" input
-  {
-    echo "リーダーに使うモデル定義名を指定してください（カンマ区切りで複数可・先頭がsettings.json用に使われます）"
-    echo "定義ファイル: $(model_defs_display_path)"
-    [ -n "$default_defs" ] && echo "  (Enterで既存値を維持: ${default_defs})"
-    printf '定義名> '
-  } >&2
-  _read_with_timeout input "$AIENV_LEADER_DIALOG_TIMEOUT" || return 2
-  if [ -z "$input" ] && [ -n "$default_defs" ]; then
-    echo "$default_defs"
-    return 0
-  fi
-  [ -z "$input" ] && return 1
-  echo "$input"
-}
-
-# run_leader_dialog <default_model_defs> <preimage> — 質問1組（ask_leader_
-# models）を検査し、3回失敗したら中止する（§3.9「回数はこの組単位で数える」。
-# 2026-09-08 モデル定義ファイルと候補指定対応で質問が1つへ畳まれたのに
-# 合わせて簡素化）。EOF・タイムアウト・端末切断は即時非0（リトライしない）。
-# <preimage>はensure_leader_configuredがロック取得後の最初の読取り時点で
-# 採取した値をそのままwrite_and_verify_leaderへ引き継ぐ。
-run_leader_dialog() {
-  local default_model_defs="$1" preimage="$2"
-  local attempt model_defs rc
-
-  for attempt in 1 2 3; do
-    # ⚠️ `x="$(f)"; rc=$?`は`set -e`下で危険（`f`が非0を返すとこの代入文
-    # 自体の終了コードが非0になり、`rc=$?`へ辿り着く前にerrexitで即終了する）。
-    # 必ず`|| rc=$?`で代入コマンドそのものをガードする。
-    rc=0
-    model_defs="$(ask_leader_models "$default_model_defs")" || rc=$?
-    if [ "$rc" -eq 2 ]; then fail "LEADER_DIALOG_ABORTED: 対話が中断されました（EOF/タイムアウト/端末切断）"; fi
-    if [ "$rc" -ne 0 ]; then warn "定義名の入力が不正でした（${attempt}/3回目）。もう一度お答えください。"; continue; fi
-
-    local _rld_d _rld_ok=1
-    IFS=',' read -r -a _rld_defs <<< "$model_defs"
-    for _rld_d in "${_rld_defs[@]}"; do
-      [ -z "$_rld_d" ] && continue
-      if ! python3 "$AIENV_PROFILE_RESOLVE_LIB" check-candidate \
-           --model-def "$_rld_d" --for-leader --role-name leader \
-           --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" \
-           >/dev/null 2>&1; then
-        _rld_ok=0
-        break
-      fi
-    done
-    if [ "$_rld_ok" = "1" ]; then
-      write_and_verify_leader "$model_defs" "$preimage"
-      return 0
-    fi
-    warn "入力された定義の検証に失敗しました（${attempt}/3回目）。もう一度お答えください。"
-  done
-  fail "LEADER_DIALOG_FAILED: リーダー配役の対話が3回とも検証に失敗したため中止しました"
-}
-
-# ensure_leader_configured — §3.9の入力優先順位表（10行）どおりにrole.leader
-# を確定させる。DRY_RUN・実体不在・lib不在ではv2のときだけ動く対話には
-# 踏み込まない（それぞれ理由は各分岐のコメント参照）。2026-09-08 モデル
-# 定義ファイルと候補指定対応（同設計§3.8・D-13）: 旧版（v1委譲）への特別
-# 分岐を撤去した——schema 6のコードは旧版をPROFILE_INVALID:T4-LEGACYとして
-# 一律解決失敗にするため、その他の実体エラーと同じ扱いになる。
-ensure_leader_configured() {
-  local path="$AIENV_LOCAL_PROFILE_PATH"
-
-  if [ "$DRY_RUN" = "1" ]; then
-    # 2026-09-08 検証職(Codex)2巡目指摘・MINOR対応: role.leaderが既に
-    # configured（かつAIENV_LEADER_ROLE不一致・--reconfigure-leaderの
-    # いずれも無い）なら実行時は対話しない（§3.9優先順位表 行5）。
-    # dry-runは§3.9の対話判定ロジック自体には踏み込まない設計のため、
-    # 「対話で確認します」と無条件に言い切らず、未確定時だけ対話が
-    # 起こりうる中立な文面にする。
-    log "[dry-run] リーダー配役を確認します（未確定時のみ対話）"
-    return 0
-  fi
-
-  # list-rolesは自己完結（存在確認・symlink拒否・preflight・全validatorを
-  # lib内部で行う契約）。ここでの独自の事前チェックは重複させない。
-  # PROFILE_NOT_FOUND（実体無し・P1未整備機）は対話しない（legacy委譲は
-  # resolve_leader_runtime側の責務）。それ以外の失敗（PROFILE_INVALID:*
-  # 〈旧版=T4-LEGACYを含む〉等＝実体そのものが壊れている）も、ここでは
-  # 書き込みを試みず、後段のresolve_leader_runtimeが同じエラーを検出して
-  # settings生成を中止する（判定式を2箇所に増やさない）。
-  #
-  # ⚠️ BLOCKING対応（2026-09-01 Codex一次レビュー指摘）: ロックは「未確定
-  # かどうかを読む」時点から取得し、settings生成完了まで（プロセス終了時の
-  # EXIT trapで自動解放されるまで）保持する。読取りをロック外で行うと、
-  # 2つのinstallerが別々に「未確定」を読んで別々の回答を確定させたあと、
-  # ロックが直列化するのは書込みの機械的な部分だけになり、後勝ちが前者の
-  # 回答を静かに上書きするlost updateを防げない（§3.9「読取→対話→再検証→
-  # profile更新→settings生成を専用ロックで直列化する」の「読取」を含む）。
-  # ロックはこの1箇所だけで取得し、write_and_verify_leader側では再取得
-  # しない（pid-lock.shは同一プロセスからの再取得を「別プロセスが実行中」
-  # と誤認し、即exit 0でスクリプト全体を打ち切ってしまうため）。
-  # ⚠️ pid-lock.sh自体はスクリプル冒頭（トップレベル）で既にsourceして
-  # ある——関数の中でsourceすると、pid-lock.sh側の`declare -a
-  # _PID_LOCK_ACQUIRED_FILES=()`がbashの仕様でこの関数にlocal化されてしまい
-  # （2026-09-01 実測: `source`をこの関数内で行っていたところ、成功時も
-  # 失敗時もEXIT trapによるロックファイルの自動削除が一切起きない実害を
-  # 確認した＝関数return時にlocal配列が消え、EXIT trap発火時には空配列を
-  # 見てcleanupが何もしない）、EXIT trapでの解放が機能しなくなる。
-  acquire_pid_lock "$AIENV_LEADER_LOCK_FILE" "$AIENV_LEADER_LOCK_STALE_SECONDS" "install-main-leader"
-
-  # ⚠️ preimageはロック取得後・最初の読取り（list_roles_rows）と同じ時点で
-  # 採取する（2026-09-01 Codex二次レビュー指摘・BLOCKING対応: 対話の後・
-  # write_and_verify_leader内で採り直すと、「読取った時点」ではなく「対話が
-  # 終わった時点」の内容を正当なpreimageとして受理してしまい、対話中に
-  # 本人・他プロセスがprofileを編集していても検出できない）。write_and_
-  # verify_leaderへは常にこの値を渡す。
-  local leader_preimage
-  leader_preimage="$(shasum -a 256 "$path" 2>/dev/null | awk '{print $1}')" || true
-
-  local rows rows_rc=0 rows_err_tmp rows_err
-  rows_err_tmp="$(mktemp 2>/dev/null)" || return 0
-  if ! rows="$(list_roles_rows "$path" 2>"$rows_err_tmp")"; then
-    rows_rc=1
-  fi
-  rows_err="$(cat "$rows_err_tmp" 2>/dev/null)"
-  rm -f "$rows_err_tmp"
-
-  if [ "$rows_rc" -ne 0 ]; then
-    case "$rows_err" in
-      PROFILE_NOT_FOUND*)
-        # ⚠️ libは「存在しない」と「存在するが通常ファイルではない
-        # （ディレクトリ等）」の両方をPROFILE_NOT_FOUNDへ丸める
-        # （_load_and_validate_v2_self_containedはos.path.isfile()のみで
-        # 判定）。前者はP1ロールアウト未完了機の正常な状態（AIENV_LEADER_ROLE
-        # を指定していても、書き込み先のv2実体が無いだけなので単に無視して
-        # legacy委譲へ進む）だが、後者は実体が壊れている（§3.1の対象外）ので
-        # 混在させず区別する。
-        if [ -e "$path" ]; then
-          fail "プロファイル実体が壊れています（通常ファイルではありません）: $path"
-        fi
-        return 0
-        ;;
-      *)
-        return 0
-        ;;
-    esac
-  fi
-
-  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.1 B-6）: list-roles
-  # が7列（name,state,定義名,provider,model,execution,effort）・
-  # 1候補1行になったので`break`をやめてrole/leaderの全行を走査し、定義名を
-  # 記述順に`,`で連結してLEADER_MODEL_DEFSにする（1候補1行になったので、
-  # breakすると候補列の2件目以降が消える）。LEADER_STATEは最初の行から取る。
-  # 旧provider/model/effort別変数は廃止（比較・対話・書込みが
-  # 使うのは定義名の並びだけ）。
-  LEADER_STATE=""
-  local name state model_def provider model execution effort
-  local _elc_defs=()
-  while IFS=$'	' read -r name state model_def provider model execution effort; do
-    if [ "$name" = "leader" ]; then
-      [ -z "$LEADER_STATE" ] && LEADER_STATE="$state"
-      [ -n "$model_def" ] && _elc_defs+=("$model_def")
-    fi
-  done <<EOF_ROWS
-$rows
-EOF_ROWS
-  # 行そのものが無い＝§3.1規約6「未記載・空はunknown」と同じ扱い（挿入が
-  # 必要な状態としてwrite_and_verify_leaderが処理する）。
-  [ -n "$LEADER_STATE" ] || LEADER_STATE="unknown"
-  LEADER_MODEL_DEFS=""
-  local _elc_d
-  for _elc_d in "${_elc_defs[@]:-}"; do
-    [ -z "$_elc_d" ] && continue
-    if [ -z "$LEADER_MODEL_DEFS" ]; then
-      LEADER_MODEL_DEFS="$_elc_d"
-    else
-      LEADER_MODEL_DEFS="$LEADER_MODEL_DEFS,$_elc_d"
-    fi
-  done
-
-  if [ -n "${AIENV_LEADER_ROLE:-}" ]; then
-    parse_leader_role_env "$AIENV_LEADER_ROLE" \
-      || fail "AIENV_LEADER_ROLE の形式が不正です（'model=<定義名>[,<定義名>...]' の形で指定してください）"
-  fi
-
-  case "$LEADER_STATE" in
-    configured)
-      if [ -n "${AIENV_LEADER_ROLE:-}" ]; then
-        if [ "$RECONFIGURE_LEADER" = "1" ]; then
-          write_and_verify_leader "$ENV_MODEL_DEFS" "$leader_preimage"
-          return 0
-        fi
-        if leader_attrs_match "$LEADER_MODEL_DEFS" "$ENV_MODEL_DEFS"; then
-          return 0
-        fi
-        fail "LEADER_ROLE_CONFLICT: AIENV_LEADER_ROLE が既存の role.leader と一致しません（変えるには --reconfigure-leader を付けてください）"
-      fi
-      if [ "$RECONFIGURE_LEADER" != "1" ]; then
-        log "リーダー配役は確定済みです（変更するには --reconfigure-leader）"
-        return 0
-      fi
-      if can_interact; then
-        run_leader_dialog "$LEADER_MODEL_DEFS" "$leader_preimage"
-      else
-        fail "LEADER_UNCONFIGURED_NONINTERACTIVE: 非対話環境のため --reconfigure-leader でのリーダー変更はできません（AIENV_LEADER_ROLE を指定するか、対話可能な端末から実行してください）"
-      fi
-      ;;
-    unavailable)
-      # §3.5-L: unavailableは本命を評価しない。空席判定は
-      # resolve_leader_runtime側の責務（§3.9の対話対象＝「未確定」は
-      # unknown/not_adopted/行が無いの3種のみで、unavailableは含まれない。
-      # 設計に無い対話分岐を追加しない）。
-      return 0
-      ;;
-    unknown|not_adopted)
-      if [ -n "${AIENV_LEADER_ROLE:-}" ]; then
-        write_and_verify_leader "$ENV_MODEL_DEFS" "$leader_preimage"
-        return 0
-      fi
-      if can_interact; then
-        run_leader_dialog "" "$leader_preimage"
-      else
-        fail "LEADER_UNCONFIGURED_NONINTERACTIVE: リーダー配役が未確定です（role.leader: ${LEADER_STATE}）。対話できない環境のため中止しました（AIENV_LEADER_ROLE を指定するか、対話可能な端末から実行してください）"
-      fi
-      ;;
-    *)
-      fail "role.leader の状態を判定できません（想定外の値）: $path"
-      ;;
-  esac
-}
-
-# check_profile_cmd — 4.2-e。副作用ゼロの検査口。provider/modelごとに職種を
-# グループ化した配役一覧を表示する。list-roles（担当A確定・自己完結契約）で
-# 構造を取得し、resolve()でVACANT/ADVISORY等の状態を補う。
+# check_profile_cmd — --check-profile。resolver の `resolve` 結果行を stdout の
+# 1行目にそのまま出し、その終了コードで exit する（副作用ゼロ）。
+# ⚠️ stdout 1行目＝機械可読行の契約（scripts/check-drift.sh ⑧ が head -1 を
+# タブ分割で判定する）。案内ログを stdout に足さない。
 check_profile_cmd() {
-  local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB"
-
+  local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB" rc=0
   command -v python3 >/dev/null 2>&1 || fail "python3 が見つかりません（--check-profile の実行に必要です）"
   [ -f "$lib" ] || fail "resolver本体（${lib}）が見つかりません"
-
-  if [ "$CHECK_PROFILE_SCHEMA_VERSION_ONLY" = "1" ]; then
-    # print-schema-versionは自己完結ではない既存契約（§6）のため、
-    # 呼び出し前チェックをここでだけ維持する。
-    [ -L "$path" ] && fail "プロファイルがsymlinkです（--check-profile非対応）: $path"
-    [ -e "$path" ] || fail "プロファイル実体が見つかりません: $path"
-    local ver
-    if ver="$(python3 "$lib" print-schema-version "$path" 2>/dev/null)"; then
-      printf '%s\n' "$ver"
-      exit 0
-    fi
-    exit 1
-  fi
-
-  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.2・FR-19①）:
-  # list-rolesの前に定義ファイルの状態を1行出す。⚠️ 表示するパスは
-  # resolve-candidate等が実際に見に行くパスと同じもの（model_defs_display_
-  # path()＝model_defs_path()の表示専用複製）。専用の検査コマンドは
-  # 足さない——list-roles/resolveがT7/T12を返すので、既存のエラー表示経路が
-  # そのまま定義ファイルの検査になっている。雛形は自動生成しない（D-12）。
-  # ⚠️ この案内行は`log`（stdout）ではなく必ずstderrへ出す（2026-09-08
-  # Codexレビュー指摘・Major対応: check-drift.shはstdoutの1行目を機械可読行
-  # として`head -1`する契約（§4.2-e・契約書§4）のため、--check-profileの
-  # stdoutは常にOK/MINIMAL/PROFILE_NOT_FOUND等の機械可読行から始まる必要が
-  # ある。この案内行がstdoutの1行目に出ると、check-driftが誤ってPROFILE-
-  # VALIDATION-FAILEDと判定してしまう＝実装記録の担当C所見）。
-  local _cpc_defs_path _cpc_defs_state
-  _cpc_defs_path="$(model_defs_display_path)"
-  case "$_cpc_defs_path" in
-    /*)
-      if [ -f "$_cpc_defs_path" ]; then _cpc_defs_state="存在する"; else _cpc_defs_state="ありません"; fi
-      if [ -n "${AIENV_MODEL_DEFS_FILE:-}" ]; then
-        log "モデル定義ファイル: ${_cpc_defs_path}（${_cpc_defs_state}）[環境変数の生の値: ${AIENV_MODEL_DEFS_FILE}]" >&2
-      else
-        log "モデル定義ファイル: ${_cpc_defs_path}（${_cpc_defs_state}）" >&2
-      fi
-      if [ "$_cpc_defs_state" = "ありません" ]; then
-        log "  雛形は自動生成しません。repoの config/models.conf.sample をコピーして本人が作成してください。" >&2
-      fi
-      ;;
-    *)
-      log "モデル定義ファイル: ${_cpc_defs_path}" >&2
-      ;;
-  esac
-
-  # list-rolesは自己完結（存在確認・symlink拒否・preflight・全validatorを
-  # lib内部で行う契約＝担当A確定）。成功すればそれだけでv2かつ妥当と分かる
-  # ため、独自の事前チェックを重複させない。
-  local roles_tsv roles_rc=0 roles_err_tmp roles_err
-  roles_err_tmp="$(mktemp 2>/dev/null)" || fail "一時ファイルを作成できません"
-  if ! roles_tsv="$(python3 "$lib" list-roles "$path" 2>"$roles_err_tmp")"; then
-    roles_rc=1
-  fi
-  roles_err="$(cat "$roles_err_tmp" 2>/dev/null)"
-  rm -f "$roles_err_tmp"
-
-  if [ "$roles_rc" -ne 0 ]; then
-    printf '%s\n' "$roles_err"
-    exit 1
-  fi
-
-  local resolve_line rc=0
-  resolve_line="$(python3 "$lib" resolve "$path" --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR")" || rc=$?
-  printf '%s\n' "$resolve_line"
-
-  # ⚠️ resolveが非0（V9-d③のBedrock有効性・V12のピン留め等・list-rolesの
-  # 全validatorだけでは検出できない候補評価の失敗）のときは配役一覧の表示を
-  # 省略し、resolveの結果（機械可読な状態）だけで終了する（2026-09-01 Codex
-  # 二次レビュー指摘・MAJOR対応：list-roles成功後でもresolveが失敗しうる
-  # ため、一覧を無条件に出すと「検証に失敗した実体の値」を見せてしまう）。
-  if [ "$rc" -ne 0 ]; then
-    exit "$rc"
-  fi
-
-  log "配役一覧（provider/modelでグループ化。値は再掲であり§4.1-f一般則の例外＝人が手編集を確認するための唯一の非AI向け表示）:"
-  # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§5.1）: list-rolesが
-  # 7列（name,state,定義名,provider,model,execution,effort）になった
-  # ので3箇所すべての列を1つずつ後ろへずらす。⚠️ effortが実行値になるのは
-  # role.leader（実効候補）だけで、ワーカー行は「参考値（実行値ではない）」
-  # （§3.8）。leader行にはこの注記を付けない（2026-09-01 Codex二次レビュー
-  # 指摘・MAJOR対応）。グループ見出しの行に定義名（$3）を足す。
-  printf '%s\n' "$roles_tsv" \
-    | awk -F'\t' '
-        $2=="configured" || $2=="unavailable" {
-          line = "role."$1"("$2")[" $3 "]"
-          if ($7 != "") {
-            if ($1 == "leader") {
-              line = line " effort=" $7
-            } else {
-              line = line " effort=" $7 "（参考値・実行値ではない）"
-            }
-          }
-          print $4"/"$5"\t" line
-        }' \
-    | sort \
-    | awk -F'\t' '{
-        key=$1
-        if (key != prev) { if (prev != "") print ""; print key ":"; prev = key }
-        print "  - " $2
-      }'
-
-  exit 0
+  python3 "$lib" resolve "$path" --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" || rc=$?
+  exit "$rc"
 }
 
-# AIENV_DEFERRED_EXIT_CODE — 2026-09-01 リーダー裁定（差し戻し対応）:
-# 「settings.json以外の処理は続行させたいが、最終的な終了コードは非0にする
-# 必要がある」状態（例＝bedrock.envが実在するのに読めない/解析できない・
-# 設計書§6.2-B S4／動的Bedrock許可キーの算出失敗・S18）を記録する。
-# generate_settings_json()内（S4等）、または動的Bedrock許可キーの算出直後の
-# 生成前判定ブロック（S18）で立て、スクリプト末尾でこれを見て最終exit code
-# へ反映する（他の処理を中断させない・値を再掲しないWARNは各所で既に
-# 出している前提）。
+# AIENV_DEFERRED_EXIT_CODE — 「settings.json以外の処理は続行させたいが、最終的な
+# 終了コードは非0にする必要がある」状態（bedrock.envが実在するのに読めない／
+# 動的Bedrock許可キーの算出失敗／職種定義のdangling）を記録し、スクリプト
+# 末尾で最終exit codeへ反映する（他の処理を中断させない・値を再掲しないWARNは
+# 各所で既に出している前提）。
 AIENV_DEFERRED_EXIT_CODE=0
 DRY_RUN=0
 WITH_DOTFILES=0
+# --sub-delegate は受理するだけ（install-sub.sh 経由の目印。settings.json の
+# 値の出し分けには使わない）。
 IS_SUB_DELEGATE=0
-PRINT_MODEL=0
-PRINT_BEDROCK_ENV_JSON=0
-PRINT_LEADER_RUNTIME=0
 CHECK_PROFILE=0
-CHECK_PROFILE_SCHEMA_VERSION_ONLY=0
-RECONFIGURE_LEADER=0
-NON_INTERACTIVE=0
-for arg in "$@"; do
-  case "$arg" in
+RENDER_SETTINGS_JSON=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --with-dotfiles) WITH_DOTFILES=1 ;;
     --sub-delegate) IS_SUB_DELEGATE=1 ;;
-    --print-model) PRINT_MODEL=1 ;;
-    --print-bedrock-env-json) PRINT_BEDROCK_ENV_JSON=1 ;;
-    --print-leader-runtime) PRINT_LEADER_RUNTIME=1 ;;
     --check-profile) CHECK_PROFILE=1 ;;
-    # --print-schema-version は --check-profile のサブモード（4.2-e）。
-    # 単独では意味を持たない（--check-profileが無ければ無視される）。
-    --print-schema-version) CHECK_PROFILE_SCHEMA_VERSION_ONLY=1 ;;
-    --reconfigure-leader) RECONFIGURE_LEADER=1 ;;
-    --non-interactive) NON_INTERACTIVE=1 ;;
-    *) echo "unknown option: $arg" >&2; exit 1 ;;
+    --render-settings-json)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then
+        echo "--render-settings-json には出力先パスが必要です" >&2
+        exit 1
+      fi
+      RENDER_SETTINGS_JSON="$2"
+      shift
+      ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
+  shift
 done
 
-# --- claude/settings.json の model 値を確定する ---
-# --sub-delegate の有無（＝install-sub.sh経由か、直接実行か）だけで決まる。
-# 配役表の`machine_role`の読み返しには依存しない（本値はどちらのインストーラ
-# 経路で呼ばれたかから直接決まる一次情報のため。⚠️ この値の決め方が効くのは
-# 実体が本当に存在しない場合に縮退したときのlegacy値選択だけであり（実在する
-# 旧版はD-13によりlegacy委譲されずT4-LEGACYで解決失敗する）、schema 6の
-# 実体ではsettings.jsonの"model"は配役表の`role.leader`から決まる＝§5.2の実測）。
-if [ "$IS_SUB_DELEGATE" = "1" ]; then
-  AIENV_MODEL_VALUE="$AIENV_MODEL_SUB"
-else
-  AIENV_MODEL_VALUE="$AIENV_MODEL_MAIN"
-fi
-
-# --print-model: 値を1行印字して即終了する（副作用ゼロ）。python3依存チェック・
-# symlink化等の実処理より前に判定する（値の出力口が「読むだけ」であることを
-# 保証するため。§9.0 A-0-1）。
-if [ "$PRINT_MODEL" = "1" ]; then
-  printf '%s\n' "$AIENV_MODEL_VALUE"
-  exit 0
-fi
-
-# --print-bedrock-env-json: Bedrock envファイルの内容（許可リスト適用済み）を
-# JSONで1行印字して即終了する（副作用ゼロ）。check-drift.shが「期待する
-# settings.json」を計算する際に呼ぶ値出力口（2026-08-30 §9.0 A-0-1と同じ
-# 設計思想の横展開・MAJOR-5対応）。
-if [ "$PRINT_BEDROCK_ENV_JSON" = "1" ]; then
-  # 2026-09-01 配役表解凍 §4.2-d: 許可リストは固定2キー＋動的キー
-  # （compute_allowed_bedrock_env_keys()）の和集合にしてから解析する
-  # （settings.json生成側と同じ値表を使う＝check-drift.shの期待値計算が
-  # 実際にsettings.jsonへ反映される集合と一致し続けるようにするため）。
-  command -v python3 >/dev/null 2>&1 || fail "python3 が見つかりません（--print-bedrock-env-json の実行に必要です）"
-  # ⚠️ 動的キー算出（compute_allowed_bedrock_env_keys）の失敗はfail-openで
-  # 固定2キーへ丸めない（2026-09-01 Codexレビュー指摘・MAJOR対応）。
-  # --print-bedrock-env-jsonはupdate-sub.sh/check-drift.shの唯一の値出力口
-  # であり、「算出不能」を「Bedrock役職なし」と混同すると動的pinが欠けた
-  # 不完全な集合をexit 0で返してしまう（test 16と同じ「fail-openで偽装
-  # しない」契約をここにも揃える）。
-  _bedrock_keys_tmp="$(mktemp 2>/dev/null)" || fail "一時ファイルを作成できません"
-  _bedrock_keys_err="$(compute_allowed_bedrock_env_keys 2>&1 1>"$_bedrock_keys_tmp")" || {
-    rm -f "$_bedrock_keys_tmp"
-    fail "動的Bedrock許可キーの算出に失敗しました（${_bedrock_keys_err:-不明なエラー}）"
-  }
-  AIENV_ALLOWED_BEDROCK_ENV_KEYS=()
-  while IFS= read -r _bedrock_allowed_key; do
-    [ -n "$_bedrock_allowed_key" ] && AIENV_ALLOWED_BEDROCK_ENV_KEYS+=("$_bedrock_allowed_key")
-  done < "$_bedrock_keys_tmp"
-  rm -f "$_bedrock_keys_tmp"
-  # compute_bedrock_env_json()の終了コードをそのまま呼び出し元へ伝える
-  # （ファイルが存在するのに読取・解析に失敗した場合は非0終了する。
-  # 2026-08-30 Codex二次レビュー指摘・Major対応: fail-openで{}を返して
-  # しまうと呼び出し側が「監視できていないのに一致」と誤判定しうる）。
-  bedrock_env_json_rc=0
-  compute_bedrock_env_json "$AIENV_BEDROCK_ENV_FILE" || bedrock_env_json_rc=$?
-  exit "$bedrock_env_json_rc"
-fi
-
-# --print-leader-runtime: 実効リーダー候補のmodel/effortを1行JSONで印字して
-# 即終了する（副作用ゼロ・4.2-a）。resolve_leader_runtime()の戻り値を
-# そのまま伝播する（成功時stdoutにJSON・失敗時stdoutは空でstderrに機械可読
-# コード）。install-main・update-sub.sh・check-drift.shの3者が今後この
-# 出力口だけを使う。
-if [ "$PRINT_LEADER_RUNTIME" = "1" ]; then
-  command -v python3 >/dev/null 2>&1 || fail "python3 が見つかりません（--print-leader-runtime の実行に必要です）"
-  leader_runtime_rc=0
-  resolve_leader_runtime || leader_runtime_rc=$?
-  exit "$leader_runtime_rc"
-fi
-
-# --check-profile: 副作用ゼロの検査口（4.2-e）。check_profile_cmd()が
-# 自身でexitする。
+# --check-profile: 副作用ゼロの検査口。check_profile_cmd()が自身でexitする。
 if [ "$CHECK_PROFILE" = "1" ]; then
   check_profile_cmd
 fi
 
-# python3依存の早期チェック（Codex二次レビュー指摘・Minor対応: generate_settings_json()が
-# claude/settings.json生成にpython3のjson moduleを必須で使うようになった＝2026-08-21。
-# マーカー書込・symlink化等の実処理が始まってから中途半端な状態でpython3不在に
-# 気付くより、着手前に明確な指示を出す方が親切。--dry-run は実際には何も生成
-# しない＝python3を必要としないため対象外にする）。macOSは通常システムpython3
-# （またはXcode Command Line Tools経由）を持つため通常は問題にならない想定。
+# python3依存の早期チェック: generate_settings_json()がclaude/settings.json生成に
+# python3のjson moduleを必須で使う。マーカー書込・symlink化等の実処理が始まって
+# から中途半端な状態でpython3不在に気付くより、着手前に明確な指示を出す。
+# --dry-run は実際には何も生成しない＝python3を必要としないため対象外。
 if [ "$DRY_RUN" != "1" ]; then
   command -v python3 >/dev/null 2>&1 || fail_settings_generation "python3 が見つかりません（claude/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
 fi
-
 # バックアップは「.pre-aienv.bak がまだ無いときだけ」作る（何度実行しても
 # 常にインストール前オリジナルを保持する。symlink化後は dest が symlink に
 # なるため自然と対象外になるが、generate_config_toml() のように毎回実ファイルを
@@ -1244,8 +424,7 @@ fi
 # 対応（衝突しない追加backupへの保存）が別途必要なため、この単純な
 # backup_once()ではなく scripts/lib/managed-symlink.sh の
 # sync_managed_symlink() を使う（検証3巡目 BLOCKING-1・検証4巡目 BLOCKING-1
-# 対応。generate_config_toml()・generate_settings_json()・
-# write_and_verify_leader()は意図的に毎回内容が変わる正規の再生成・書換
+# 対応。generate_config_toml()・generate_settings_json()は意図的に毎回内容が変わる正規の再生成・書換
 # 経路であり、この単純なbackup_once()のままでよい＝最初の1回だけ保持）。
 backup_once() {
   local dest="$1"
@@ -1282,8 +461,8 @@ would_backup() {
 # link <repo-relative-source> <destination>
 # dotfiles/install.sh の link() と同方式。実際の退避＋symlink化は
 # scripts/lib/managed-symlink.sh の sync_managed_symlink() へ委譲する
-# （update-sub.shのclaude/agents/*.md直接配置と共有＝検証4巡目 BLOCKING-1
-# 対応。同ファイルのコメント参照）。
+# （install-main.sh の link() が使う＝update-sub は install-sub 経由。
+# 検証4巡目 BLOCKING-1対応。同ファイルのコメント参照）。
 # source が無い場合は「このリポジトリの必須構成が壊れている」ことを意味するため
 # skip扱いにせず fail する（Codexレビュー指摘・Minor：黙って進むと壊れた
 # checkoutでも "done" と表示されてしまう）。
@@ -1348,8 +527,7 @@ generate_config_toml() {
 # Bedrock env取り込みの許可リスト（AIENV_ALLOWED_BEDROCK_ENV_KEYS）は
 # スクリプト冒頭（引数解析より前）で既に宣言済み——ここでは再宣言しない
 # （値表を複数箇所に増やさないため。2026-08-30 工程横断レビュー指摘・MAJOR-5
-# 対応で --print-bedrock-env-json を新設した際に、宣言をこの関数より前へ
-# 移動した）。
+# 対応で、宣言をこの関数より前へ移動した）。
 # 4番目の引数（bedrock-env-file）は2026-08-30 §9.0 A-1-4追加: 存在すれば
 # KEY=VALUE形式で読み、上記許可リストに載っていて、かつテンプレ由来のenvキー
 # （DISABLE_AUTOUPDATER等）と衝突しないキーだけを"env"ブロックへ追加する
@@ -1430,8 +608,8 @@ generate_settings_json() {
       else
         # Bedrock envファイルの解析は compute_bedrock_env_json() だけが行う
         # （2026-08-30 工程横断レビュー指摘・MAJOR-A対応: 以前はここで生
-        # ファイルを直接読む処理を複製していた。update-sub.shも同じ関数を
-        # 呼ぶ経路へ揃えた＝値表・解析ロジックとも複製箇所は増やさない）。
+        # ファイルを直接読む処理を複製していた。update-sub.shは install-sub
+        # 経由でこの関数を呼ぶ経路へ揃えた＝値表・解析ロジックとも複製箇所は増やさない）。
         if bedrock_payload="$(compute_bedrock_env_json "$bedrock_env_file")"; then
           bedrock_status="OK"
         else
@@ -1451,9 +629,8 @@ generate_settings_json() {
     # ⚠️ ただし設計書S4「bedrock.envが実在するのに読めない/解析できない場合
     # は非0終了」の要件があるため（2026-09-01 リーダー裁定・差し戻し対応:
     # 「不在」は非Bedrock機で常に起きる正常系なのでexit 0のまま維持するが、
-    # 「実在するのに壊れている」は--print-bedrock-env-json側は既にfail-open
-    # せず非0を返す設計になっており、installer本体だけexit 0のままだと
-    # 「check-driftは落ちるのにinstallerは成功する」非対称が残る）、
+    # 「実在するのに壊れている」を exit 0 のままにすると監視側〈check-drift〉
+    # と非対称になる）、
     # AIENV_DEFERRED_EXIT_CODEを立てて他の処理（hooksのsymlink化等）は
     # そのまま続行させつつ、スクリプト末尾で最終的な終了コードへ反映する。
     AIENV_DEFERRED_EXIT_CODE=1
@@ -1522,7 +699,7 @@ if payload.get('malformed_lines'):
   # ⚠️ 値（model/effort）はログへ再掲しない（設計§6.2-B S1「ログは
   # `model updated`〈値を出さない〉」・値出力口の一本化。2026-09-01 Codex
   # 二次レビュー指摘・MAJOR対応）。値を確認したい場合は
-  # `--print-leader-runtime`（値出力口）を使う。
+  # `--render-settings-json`（生成物）を見る。
   log "generated: $dest <- $src (\"model\"/\"effortLevel\" updated)"
   while IFS= read -r py_out_line; do
     case "$py_out_line" in
@@ -1540,6 +717,85 @@ if payload.get('malformed_lines'):
 $PY_OUT
 EOF
 }
+
+# resolve_settings_inputs — settings.json 生成の入力を確定する:
+#   AIENV_SETTINGS_MODEL／AIENV_SETTINGS_EFFORT＝resolve_leader_runtime() の
+#   JSON から（解決できなければ fail_settings_generation で即時非0＝設計書S2）。
+#   AIENV_ALLOWED_BEDROCK_ENV_KEYS＝固定2キー＋動的キー（compute_allowed_
+#   bedrock_env_keys()）。算出に失敗した場合は fail-open で固定2キーへ縮退せず、
+#   AIENV_SKIP_SETTINGS_GENERATION=1・AIENV_DEFERRED_EXIT_CODE=1 を立てる
+#   （設計書§6.2-B S18＝生成をスキップして既存ファイルを保持し、他の処理は
+#   完走させたうえで末尾で非0。「動的キー0件」という正常な結果〈exit 0契約〉
+#   と「算出そのものの失敗」〈exit 1契約〉の区別を呼び出し側でも維持する）。
+# インストール本番と --render-settings-json の両方がこの1つの関数だけを使う。
+resolve_settings_inputs() {
+  AIENV_SETTINGS_MODEL=""
+  AIENV_SETTINGS_EFFORT=""
+  AIENV_SKIP_SETTINGS_GENERATION=0
+  local err_tmp json fields errline
+  # ⚠️ 裸の代入のままだと、mktemp失敗時に`set -e`で即座に終了するが
+  # fail_settings_generation()を経由しないためNO_GENERATED_FILEが付かない。
+  err_tmp="$(mktemp)" || fail_settings_generation "リーダー実行値確認用の一時ファイルを作成できません"
+  if json="$(resolve_leader_runtime 2>"$err_tmp")"; then
+    rm -f "$err_tmp"
+    # 2つのpython3呼び出しに分けず1回で両方抽出する。
+    fields="$(printf '%s' "$json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d["model"])
+print(d.get("effort", ""))
+')" || fail_settings_generation "リーダー実行値のJSON解析に失敗しました（resolve-leaderの出力契約違反の可能性）"
+    AIENV_SETTINGS_MODEL="$(printf '%s\n' "$fields" | sed -n '1p')"
+    AIENV_SETTINGS_EFFORT="$(printf '%s\n' "$fields" | sed -n '2p')"
+  else
+    errline="$(head -1 "$err_tmp" 2>/dev/null)"
+    rm -f "$err_tmp"
+    # 「既存ファイルを保持します」は旧ファイルが実在するときだけ正しい表現。
+    # 真の初回インストール等では保持ではなく欠落（NO_GENERATED_FILE）であり、
+    # fail_settings_generation()がその区別を末尾へ付加する。
+    fail_settings_generation "リーダー実行値を解決できませんでした（${errline:-不明なエラー}）。settings.jsonの生成を中止します。"
+  fi
+
+  AIENV_ALLOWED_BEDROCK_ENV_KEYS=("CLAUDE_CODE_USE_BEDROCK" "AWS_REGION")
+  local keys_tmp keys_rc=0 keys_err key
+  keys_tmp="$(mktemp 2>/dev/null)" || keys_tmp=""
+  if [ -z "$keys_tmp" ]; then
+    warn "動的Bedrock許可キーの算出に失敗しました（一時ファイルを作成できません）。settings.jsonの生成をスキップし、既存ファイルを保持します。"
+    AIENV_SKIP_SETTINGS_GENERATION=1
+    AIENV_DEFERRED_EXIT_CODE=1
+    return 0
+  fi
+  keys_err="$(compute_allowed_bedrock_env_keys 2>&1 1>"$keys_tmp")" || keys_rc=$?
+  if [ "$keys_rc" -eq 0 ]; then
+    AIENV_ALLOWED_BEDROCK_ENV_KEYS=()
+    while IFS= read -r key; do
+      [ -n "$key" ] && AIENV_ALLOWED_BEDROCK_ENV_KEYS+=("$key")
+    done < "$keys_tmp"
+  else
+    warn "動的Bedrock許可キーの算出に失敗しました（${keys_err:-不明なエラー}）。settings.jsonの生成をスキップし、既存ファイルを保持します。"
+    AIENV_SKIP_SETTINGS_GENERATION=1
+    AIENV_DEFERRED_EXIT_CODE=1
+  fi
+  rm -f "$keys_tmp"
+}
+
+# --- --render-settings-json <path>: 生成物だけを書いて終了する（check-drift ①-2 の入力口）---
+# 雛形配置・symlink化・config.toml・dotfiles には進まない。<path> は呼び出し側が
+# 用意した一時ディレクトリ内を想定（backup_once は dest 不在で no-op・mktemp/mv
+# も <path> と同じディレクトリ）。実 $HOME/.claude 配下には何も作らない。
+# 既知の残余＝bedrock env ファイルが実在する機では generate_settings_json() の
+# chmod 600（冪等）。
+if [ -n "$RENDER_SETTINGS_JSON" ]; then
+  resolve_settings_inputs
+  if [ "$AIENV_SKIP_SETTINGS_GENERATION" = "1" ]; then
+    fail "動的Bedrock許可キーを算出できないため settings.json を生成できません: $RENDER_SETTINGS_JSON"
+  fi
+  generate_settings_json claude/settings.json "$RENDER_SETTINGS_JSON" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
+  if [ "$AIENV_DEFERRED_EXIT_CODE" != "0" ] || [ ! -f "$RENDER_SETTINGS_JSON" ]; then
+    fail "settings.json を生成できませんでした（Bedrock envファイルが実在するのに読めない等。詳細は上記のWARN）: $RENDER_SETTINGS_JSON"
+  fi
+  exit 0
+fi
 
 # --- ローカル実体プロファイルの雛形配置（2026-08-30 共通コア分離 §9.0 A-1 P1機構） ---
 # サンプル（config/profile.md.sample・repo管理下）から $AIENV_LOCAL_PROFILE_PATH
@@ -1592,114 +848,14 @@ else
   fi
 fi
 
-# ⚠️ 2026-09-07実測発見（配役表 能力軸整理）: 直後のensure_leader_configured()は
-# $AIENV_LOCAL_PROFILE_PATH.leader.lock を取得する（pid-lock.sh）。ロック取得は
-# 同ディレクトリへのmktempに依存するため、親ディレクトリ（$HOME/.config/
-# takumi009-ai-env/）が存在しないとmktempが無言で失敗し、ロック取得が
-# 「他プロセスとの競合」と誤認されて回収不能なまま失敗し続ける。⚠️
-# 2026-09-08本人裁定A案で雛形配置ブロックの分岐を統合した現在は、コピーを
-# 試みる分岐（上）が`mkdir -p`を必ず実行するため実質的に冗長だが、雛形配置
-# 側の分岐条件が将来また変わっても本ブロックだけでロック取得の前提を独立に
-# 保証できるよう、DRY_RUN以外は無条件でここでも作る（DRY_RUNでは
-# ensure_leader_configuredがロックを取得しない＝副作用不要）。
-if [ "$DRY_RUN" != "1" ]; then
-  mkdir -p "$(dirname "$AIENV_LOCAL_PROFILE_PATH")"
-fi
-
-# --- リーダー実行値の決定（2026-09-01 配役表解凍 §4.2-a〜g・§3.9）---
-# §3.9の処理順どおり、雛形配置(上)の直後・settings.json生成の直前に
-# ④leader行の確定（v2のときだけ・対話はensure_leader_configured内部で
-# 発生しうる）→値出力口(resolve_leader_runtime)でmodel/effortを得る、を行う。
-# --dry-runでは対話・resolver呼び出しとも一切行わない（既存の
-# 「--dry-runはpython3を要求しない」保証を崩さないため。計画表示は
-# 既定値のプレースホルダのまま行う＝dry-runの精度より安全側の単純さを優先）。
-#
-# §3.9対話確定のロックが使う scripts/lib/pid-lock.sh を、ここ（トップ
-# レベル・関数の外）でsourceする。⚠️ 関数の中でsourceすると、pid-lock.sh側の
-# `declare -a _PID_LOCK_ACQUIRED_FILES=()`がbashの仕様でその関数へlocal化
-# されてしまい、関数がreturnした時点で配列が消え、後で発火するEXIT trap
-# （_pid_lock_cleanup）がロックファイルを解放できなくなる（2026-09-01実測・
-# Codex一次レビュー指摘対応）。⚠️ --print-model 等の早期exitモードより後、
-# 実インストールフローの直前でsourceする（それらのモードにpid-lock.shへの
-# 依存を持ち込まない＝tests/test-check-drift.shのようにinstall-main.sh単体を
-# 別ディレクトリへコピーしてscripts/lib/を持たないfixtureが--print-model等の
-# 値出力口だけを使う既存の使い方を壊さないため）。
-if [ "$DRY_RUN" != "1" ]; then
-  # shellcheck disable=SC1091
-  source "$DIR/scripts/lib/pid-lock.sh"
-fi
-ensure_leader_configured
-
-AIENV_SETTINGS_MODEL="$AIENV_MODEL_VALUE"
+# --- リーダー実行値と動的Bedrock許可キーの決定（雛形配置の直後・settings.json生成の直前）---
+# --dry-run では resolver を呼ばない（「--dry-run は python3 を要求しない」保証を
+# 崩さない。計画表示は generate_settings_json() の dry-run 分岐が行う）。
+AIENV_SETTINGS_MODEL=""
 AIENV_SETTINGS_EFFORT=""
-# ⚠️ DRY_RUN=1のときは動的Bedrock許可キーの算出そのものを行わない（副作用の
-# 無い計画表示だけのため）。generate_settings_json()呼び出し側のガードで
-# 未初期化を参照しないよう、DRY_RUNの内外どちらでも既定値を先に確定させる。
 AIENV_SKIP_SETTINGS_GENERATION=0
 if [ "$DRY_RUN" != "1" ]; then
-  # ⚠️ 裸の代入のままだと、mktemp失敗時に`set -e`で即座に終了するが
-  # fail_settings_generation()を経由しないためNO_GENERATED_FILEが付かない
-  # （2026-09-01工程横断レビュー指摘・MINOR対応）。`||`で明示的に渡す。
-  _leader_runtime_err_tmp="$(mktemp)" || fail_settings_generation "リーダー実行値確認用の一時ファイルを作成できません"
-  if _leader_runtime_json="$(resolve_leader_runtime 2>"$_leader_runtime_err_tmp")"; then
-    rm -f "$_leader_runtime_err_tmp"
-    # ⚠️ 2つのpython3呼び出しに分けず1回で両方抽出する（値の再パースを
-    # 減らす・失敗時に`set -e`が即座に働くよう`||`で明示的にfail()へ渡す）。
-    _leader_runtime_fields="$(printf '%s' "$_leader_runtime_json" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-print(d["model"])
-print(d.get("effort", ""))
-')" || fail_settings_generation "リーダー実行値のJSON解析に失敗しました（resolve-leaderの出力契約違反の可能性）"
-    AIENV_SETTINGS_MODEL="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '1p')"
-    AIENV_SETTINGS_EFFORT="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '2p')"
-  else
-    _leader_runtime_errline="$(cat "$_leader_runtime_err_tmp" 2>/dev/null)"
-    rm -f "$_leader_runtime_err_tmp"
-    # ⚠️ 「既存ファイルを保持します」は旧ファイルが実在するときだけ正しい
-    # 表現。真の初回インストール等では保持ではなく欠落（NO_GENERATED_FILE）
-    # であり、fail_settings_generation()がその区別を末尾へ付加する
-    # （2026-09-01工程横断レビュー指摘・MINOR-2対応）ため、ここでは
-    # 「保持」を断定しない中立な表現にする。
-    fail_settings_generation "リーダー実行値を解決できませんでした（${_leader_runtime_errline:-不明なエラー}）。settings.jsonの生成を中止します。"
-  fi
-  # 動的Bedrock許可キー（§4.2-d）。プロファイルのrole.*が参照
-  # する定義（モデル定義ファイル側）のproviderが実際にbedrockで使っている
-  # 別名だけをここで確定させ、generate_settings_json()・
-  # compute_bedrock_env_json()が唯一の値表として参照する配列を更新する。
-  # ⚠️ 算出に失敗した場合は、settings.json本体の生成そのものをスキップし
-  # 既存ファイルを保持したうえでAIENV_DEFERRED_EXIT_CODEを立てる（設計書
-  # §6.2-B S18そのもの＝2026-09-01工程横断レビュー差し戻し・MAJOR対応で
-  # 追加された状態。S4〈bedrock.env実在するのに読めない〉と同型のdeferred
-  # 非0裁定を、この失敗モードにも適用する）。
-  # 旧実装はWARNのみで固定2キー（CLAUDE_CODE_USE_BEDROCK・AWS_REGION）へ
-  # 縮退してsettings.json生成を続行しており、未知のworker別名1件でも他の
-  # 正常な動的pinキーまで許可集合から落ち、既存settingsに書かれていたpinが
-  # 静かに消え得た。「動的キー0件」という正常な結果（compute_allowed_
-  # bedrock_env_keys()のexit 0契約）と「算出そのものの失敗」（exit 1契約）の
-  # 区別は、この呼び出し側でも維持する（関数の契約を変えない）。
-  AIENV_SKIP_SETTINGS_GENERATION=0
-  AIENV_ALLOWED_BEDROCK_ENV_KEYS=("CLAUDE_CODE_USE_BEDROCK" "AWS_REGION")
-  _bedrock_keys_tmp="$(mktemp 2>/dev/null)" || _bedrock_keys_tmp=""
-  if [ -z "$_bedrock_keys_tmp" ]; then
-    warn "動的Bedrock許可キーの算出に失敗しました（一時ファイルを作成できません）。settings.jsonの生成をスキップし、既存ファイルを保持します。"
-    AIENV_SKIP_SETTINGS_GENERATION=1
-    AIENV_DEFERRED_EXIT_CODE=1
-  else
-    _bedrock_keys_rc=0
-    _bedrock_keys_err="$(compute_allowed_bedrock_env_keys 2>&1 1>"$_bedrock_keys_tmp")" || _bedrock_keys_rc=$?
-    if [ "$_bedrock_keys_rc" -eq 0 ]; then
-      AIENV_ALLOWED_BEDROCK_ENV_KEYS=()
-      while IFS= read -r _bedrock_allowed_key; do
-        [ -n "$_bedrock_allowed_key" ] && AIENV_ALLOWED_BEDROCK_ENV_KEYS+=("$_bedrock_allowed_key")
-      done < "$_bedrock_keys_tmp"
-    else
-      warn "動的Bedrock許可キーの算出に失敗しました（${_bedrock_keys_err:-不明なエラー}）。settings.jsonの生成をスキップし、既存ファイルを保持します。"
-      AIENV_SKIP_SETTINGS_GENERATION=1
-      AIENV_DEFERRED_EXIT_CODE=1
-    fi
-    rm -f "$_bedrock_keys_tmp"
-  fi
+  resolve_settings_inputs
 fi
 
 # --- claude/ ---
@@ -1798,7 +954,7 @@ if [ "$DRY_RUN" != "1" ]; then
 
   # dangling 検出: aienv管理下（$AGENTS_SRC_DIR配下を指す）symlinkに限定して
   # 検査する（本スクリプトが関与しない他アプリ由来のsymlinkを誤検知しないため。
-  # update-sub.shの既存2c実装と同じ様式）。削除はしない。
+  # install-main.sh の link() が使う経路＝update-sub は install-sub 経由）。削除はしない。
   AGENTS_DANGLING=()
   for existing in "$AGENTS_DEST_DIR"/*.md; do
     [ -L "$existing" ] || continue

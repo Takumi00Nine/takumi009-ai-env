@@ -45,14 +45,15 @@
 # --with-dotfiles は install-main.sh へそのまま委譲する（実装の二重管理を避ける。
 # install-main.sh側の挙動＝相談資料§3-5「dotfilesは独立のまま部品として下請け」）。
 #
-# --check-profile（install-main.sh 4.2-e の検査口をサブ機からも直接叩けるようにする
+# --check-profile（install-main.sh の検査口をサブ機からも直接叩けるようにする
 # 転送・2026-09-02追加）: install-main.sh 側が副作用ゼロで自身exitする契約
-# （check_profile_cmd()）のため、本スクリプト側でも検査モードのときはstep1
-# （Vault骨格配置）を行わず、委譲呼び出しの直後にinstall-main.shの終了コードを
-# そのまま返して即終了する＝step3〜5（機役割の案内ログ等）へは一切進まない。
-# `--check-profile --print-schema-version` を付けた場合は install-main.sh が
-# schema_versionの値だけを1行返す契約（§6）を壊さないよう、本スクリプト自身の
-# ログ（"claude/・codex/ の配置は…委譲します"等）もこのモードでは出さない。
+# （check_profile_cmd()＝resolve 結果を1行返す）のため、本スクリプト側でも検査
+# モードのときはstep1（Vault骨格配置）を行わず、委譲呼び出しの直後に
+# install-main.shの終了コードをそのまま返して即終了する＝step3〜5（機役割の
+# 案内ログ等）へは一切進まない。出力契約（stdout 1行目＝resolve 行）を壊さない
+# よう、本スクリプト自身のログもこのモードでは出さない。
+# 受け付ける引数は上記4つだけ（旧・リーダー配役の対話フラグと schema 版数の
+# 印字フラグは 2026-09-19 に install-main.sh 側ごと退役＝転送しない）。
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 
@@ -74,24 +75,14 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 DRY_RUN=0
 WITH_DOTFILES=0
-RECONFIGURE_LEADER=0
-NON_INTERACTIVE=0
 CHECK_PROFILE=0
-PRINT_SCHEMA_VERSION=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --with-dotfiles) WITH_DOTFILES=1 ;;
-    # 2026-09-01 配役表解凍 §3.9: リーダー配役の対話は共通関数1箇所
-    # （install-main.sh側）に置き、install-sub.shはそのままinstall-main.sh
-    # へ委譲する（フラグが落ちると挙動が変わるため必ず転送する）。
-    --reconfigure-leader) RECONFIGURE_LEADER=1 ;;
-    --non-interactive) NON_INTERACTIVE=1 ;;
-    # 2026-09-02追加: install-main.sh 4.2-eの検査口（副作用ゼロ）をサブ機からも
-    # 直接叩けるようにする転送。--print-schema-versionは--check-profileの
-    # サブモード（単独では意味を持たない・install-main.sh側の既存契約）。
+    # 2026-09-02追加: install-main.sh の検査口（副作用ゼロ）をサブ機からも
+    # 直接叩けるようにする転送（check-drift.sh ⑧・README の検査手順が使う）。
     --check-profile) CHECK_PROFILE=1 ;;
-    --print-schema-version) PRINT_SCHEMA_VERSION=1 ;;
     *) echo "unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -127,17 +118,13 @@ fi
 # set -u 下で unbound variable になる既知の制限がある（bash 4.4で修正済みだが
 # macOSは3.2のまま）。"${arr[@]+"${arr[@]}"}" の形で回避する（実測確認済み）。
 # ⚠️ --check-profile モードでは、この見出しログ自体を出さない
-# （`--check-profile --print-schema-version` は install-main.sh 側で
-# 「schema_versionの値だけを1行返す」契約＝§6のため、本スクリプト側の
-# 前置きログを挟むと出力契約を壊してしまう）。
+# （install-main.sh 側の「stdout 1行目＝resolve 行」の出力契約を、本スクリプト側の
+# 前置きログで壊さないため）。
 [ "$CHECK_PROFILE" != "1" ] && log "claude/・codex/ の配置は install-main.sh に委譲します"
 main_args=(--sub-delegate)
 [ "$DRY_RUN" = "1" ] && main_args+=(--dry-run)
 [ "$WITH_DOTFILES" = "1" ] && main_args+=(--with-dotfiles)
-[ "$RECONFIGURE_LEADER" = "1" ] && main_args+=(--reconfigure-leader)
-[ "$NON_INTERACTIVE" = "1" ] && main_args+=(--non-interactive)
 [ "$CHECK_PROFILE" = "1" ] && main_args+=(--check-profile)
-[ "$PRINT_SCHEMA_VERSION" = "1" ] && main_args+=(--print-schema-version)
 # ⚠️ 裸の呼び出しで`set -e`に任せると、install-main.sh側が設計書S4等の
 # 「他の処理は完走させたうえで最終的に非0」を意図した終了コードを返した
 # 場合でも、install-sub.shはここで即座に終了してしまい、後続のstep3〜5

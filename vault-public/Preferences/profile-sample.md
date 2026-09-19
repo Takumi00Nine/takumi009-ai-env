@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-17
+updated: 2026-09-19
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -15,6 +15,7 @@ related:
   - "[[Decisions/2026-09-08-model-definitions-file]]"
   - "[[Decisions/2026-09-09-cmux-session-todo-operation]]"
   - "[[Decisions/2026-09-17-effort-per-role-v2]]"
+  - "[[Knowledge/profile-resolver-absolute-path-required]]"
 aliases:
   - "配役表サンプル"
   - "プロファイルサンプル"
@@ -68,7 +69,7 @@ aliases:
 2. sample を実体へコピー: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は `profile.md.bak.v<旧版>-<日付>` に退避してから。権限 0600）
 3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-high`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
 4. `scripts/install-sub.sh --check-profile`（副作用ゼロの検査。OK を確認）
-5. `scripts/update-sub.sh --resync`（1 で pull 済み＝HEAD 不変。update-sub.sh は HEAD 不変でも settings.json 再生成・職種定義 symlink 再同期・管理 symlink の drift 自動収束を毎回行うが、Preferences 再同期は `--resync` を付けたときだけ追加で走る。config.toml の再生成は HEAD が進んだときだけで、この流れでは手順6の install-sub.sh 再実行で生成される）
+5. `scripts/update-sub.sh`（引数なし・pull→install-sub→Preferences 同期を毎回行う）
 6. 新しいフック・職種定義が届いた版では `scripts/install-sub.sh` を再実行（symlink 配置・settings.json 再生成。既存プロファイルには触れない。`AGENTS: dangling` が出たら表示されたファイルを削除）
 7. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
 8. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/work/takumi009-ai-env/cmux/`、描画側（Dock 常駐）は dotfiles の `~/work/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。

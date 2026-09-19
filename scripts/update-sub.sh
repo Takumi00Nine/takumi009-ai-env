@@ -1,84 +1,36 @@
 #!/usr/bin/env bash
-# サブ環境の手動実行コマンド: このリポジトリを git pull し、変化があれば
-# codex/config.toml の再生成・Vaultの Preferences 再同期・新しい骨格フォルダの
-# 補充を行う（2026-07-08 本人発案・サブ専用）。
+# サブ機の手動更新コマンド（**サブ専用**・本人が能動的に実行する。SessionStart
+# フック claude/hooks/check-sub-update.sh が未反映コミットを検知すると本コマンドの
+# 実行を案内する）。
 #
-# 2026-07-23: 定期LaunchAgent（com.takumi009.update-sub・1日2回=09:00/13:00の
-# 無人自動pull）は廃止した。代わりに claude/hooks/check-sub-update.sh
-# （SessionStartフック）がセッション起動のたびに未反映コミットの有無を実測し、
-# あれば本コマンドの手動実行を案内する（本人が能動的に実行する運用へ変更）。
-# 本スクリプト自体の処理内容（pull・config.toml再生成・Preferences再同期・
-# 骨格フォルダ補充）は変更していない。**サブ専用**＝メインでは実行しない
-# （メインは編集側なので自動pullは多地点編集事故のもと）。
+# 処理は直列 1 本＝毎回すべて行う（状態ファイルを持たない・冪等。どこで失敗しても
+# 同じコマンドの再実行で前へ進む）:
+#   0. 配役表の machine_role が「sub」と解決できなければ拒否（メイン機での誤実行を
+#      防ぐ最後の砦。メイン機で走ると 4. の rsync --delete がメイン Vault の
+#      Preferences/ を消す。判定式の正本＝claude/hooks/lib/profile_resolve.py）
+#   1. 多重起動防止ロック（scripts/lib/pid-lock.sh＝backup-vault.sh・maintenance.sh
+#      と共通の実装）
+#   2. git pull --ff-only（失敗＝WARN・exit 1・何も変えない。force しない）
+#   3. scripts/install-sub.sh（symlink・settings.json・config.toml・agents symlink・
+#      Vault 骨格＝配置の正本はこの 1 経路だけ。HEAD が不変でも毎回走る。
+#      非0＝FAIL＋復旧コマンドを出し、同じ rc で exit）
+#   4. vault-public/Preferences/ → $VAULT/Preferences/ を rsync -a --delete
+#      （**Preferences 以外には絶対に触らない**＝サブ機ローカルの Fragments 等は消えない。
+#      install-sub.sh には machine_role ガードが無いので、この処理は本スクリプトに残す）
+#   5. vault-public/ 配下の新しい骨格フォルダ（Preferences 以外）を $VAULT へ補充
+#      （既存フォルダの中身・README には触らない）
 #
-# 2026-07-24: 機役割が「sub」でなければ fail() で拒否するガードを追加した
-# （リーダー裁定・Codex一次レビュー指摘Major対応）。メインで誤って本コマンドを
-# 手動実行すると 4b の`rsync --delete`でメインVaultの`Preferences/`が
-# 上書き削除されるため、最後の砦として設けている。2026-09-07: 判定元を
-# 旧マーカーファイル（廃止＝Decisions/2026-09-07-profile-axes-consolidation）
-# から配役表の能力軸`machine_role`へ変更した（配役表-能力軸整理-設計-
-# 2026-09-07.md §2。claude/hooks/check-sub-update.shと同じ共通レシピを
-# 複製する＝判定式の正本は`claude/hooks/lib/profile_resolve.py`の1箇所）。
-# 処理順序:
-#   0. 配役表の`machine_role`の確認（「sub」でなければ即fail()で拒否）
-#   1. スクリプト自身の多重起動防止ロック（scripts/lib/pid-lock.shの
-#      acquire_pid_lock()＝backup-vault.sh・maintenance.shと共通の実装。
-#      2026-08-30 Codex 2巡目差し戻し・MAJOR対応で独自実装から移行した）。
-#      ⚠️ 下記2.の自己更新re-exec後は、新規取得ではなく既存ロックの
-#      「引き継ぎ（handoff）」になる（詳細は2.参照）。
-#   2. git pull --ff-only（衝突可能性を排除。ff不可ならWARNで終了。サブは
-#      編集しない運用のため通常は起きないはずだが、念のため force しない）。
-#      ⚠️ 自己更新対策（2026-09-03 本人実査・緊急対応）: pullでこのスクリプト
-#      自身（scripts/update-sub.sh）が変わっていた場合、その場で新版へ
-#      exec しなおして最初からやり直す。bashはスクリプトを逐次読みするため、
-#      実行中の自分自身をpullで書き換えたまま処理を続けると、後続処理が
-#      旧版のまま・あるいは不定動作になる既知の危険がある（実際にサブ機で
-#      1回目の実行だけagentsのsymlink化〈当時追加直後の新機能〉が効かない
-#      という実害が発生した）。execはPIDを保つため、自分の多重起動防止
-#      ロックは解放せずそのまま引き継ぐ（1.参照）＝解放→再取得の往復を
-#      挟むと、その間に別プロセスへロックを奪われる競合窓が生じ、そのプロセスは
-#      既にpull済みのHEADを見て「変更なし」と誤判定し、config.toml再生成・
-#      Preferences再同期・骨格フォルダ補充〈4a〜4c〉が次のupstream更新まで
-#      欠落しうるため（Codexレビュー指摘・Major対応で解放方式から変更）。
-#      再exec後はAIENV_UPDATE_SUB_REEXEC=1・AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD
-#      （自己更新前の元のHEAD。実在するcommitであることを検証したうえで
-#      信頼する＝環境変数の誤残留対策）を環境変数で引き継ぎ、pullを再実行せず
-#      before_head/after_headを復元する（引き継がないと「pull済みでHEAD
-#      不変」に見えてしまい、4.の変更検知が誤って空振りする）。
-#   2a. check-drift.shのinstaller管理symlink検査をHEAD不変時にも実行し、
-#       欠落・通常ファイル・誤リンク・hook実体の非実行を検知した場合、既存の
-#       install-main.sh --sub-delegateを再実行する。管理対象リストと判定の正本を
-#       増やさず、途中中断・installer失敗後の次回実行でも正しい配置へ収束する。
-#       agent-model-guard.sh・usage-inject.shはこの管理symlink一覧（check-drift.sh
-#       のSYMLINKS配列）に含まれており、個別の配置ロジックを持たない
-#       （2026-09-14 main追随・衝突解消: model廃止側が個別実装していた
-#       agent-model-guard.sh専用の配置処理は、この共通機構と重複するため撤去した）。
-#   2b. settings.json の再生成（§9.0 A-0-1・2026-08-30追加）。⚠️ ここは
-#       「HEADが変化していなくても」実行する＝下の3.の早期終了より前に置く
-#       （Codex一次レビュー指摘・Nit対応: 3.の「何もせず終了」は git pull由来の
-#       処理に限った説明であり、settings.json再生成はHEAD不変でも走る）。
-#   2c. claude/agents/*.md を $HOME/.claude/agents/ へ symlink化する
-#       （install-main.sh の agents symlinkループ・link()/backup_once()と
-#        同じ様式・同じ退避規則。2026-09-03 本人指示で追加＝従来このスクリプトは
-#        agentsの同期を一切行っておらず、repoへ新しいロール定義を追加しても
-#        サブ機へ配布されない欠落があった。repoから削除されたロールへの
-#        dangling symlinkは削除せずWARNのみに留める＝削除は本人判断）。
-#       ⚠️ 冪等で軽い処理のため2b.と同じく「HEADが変化していなくても」実行する
-#       位置に置く（当初は4.配下〈HEAD変化時のみ〉に置いていたが、2回目以降の
-#       実行がHEAD不変で早期終了する経路だとagentsのsymlink化に一切到達しない
-#       実バグがあったため、2026-09-03 本人実査で2b.と同じ扱いへ位置を修正した）。
-#   3. pull で HEAD が変化していなければ、2b./2c.より後の処理（4.）は何もせず
-#      終了（静か・冪等）
-#   4. 変化があれば:
-#      a. codex/config.toml をテンプレから再生成する
-#         （install-main.sh の generate_config_toml() と同等処理。
-#          既存の .pre-aienv.bak は上書きしない）
-#      b. vault-public/Preferences/ を $HOME/Data/obsidian/Preferences/ へ
-#         rsync -a --delete で再同期する（**Preferences 以外には絶対に触らない**＝
-#         サブ機ローカルの Fragments 等の断片を消さないため）
-#      c. vault-public/ 配下に新しい骨格フォルダ（Preferences以外）があり、
-#         $VAULT にまだ存在しなければ mkdir + README.md を補充する
-#         （既存フォルダの中身・READMEには触らない）
+# 全体を main() に包み末尾で呼ぶ＝2. の pull で本ファイル自身が書き換わっても、実行中の
+# 本文は解析済みで影響を受けない（次回 run から新版）。3. 以降の実作業は別プロセス
+# install-sub.sh＝pull 後の新版が走る。自己再 exec・HEAD 比較による早期終了・
+# install-main.sh の複製処理（settings.json 再生成・agents symlink・drift 自動修復）は
+# 2026-09-19 に撤去した（ai-env 全体最適化 着手順 3・design-step3.md §2・§5）。
+#
+# 引数は受け付けない（旧 resync フラグは廃止＝毎回 Preferences を同期するので不要。
+# 計画だけ見たいときは scripts/install-sub.sh --dry-run）。
+# 復旧（本人が現地で打つ）:
+#   cd ~/work/takumi009-ai-env && git pull --ff-only && scripts/install-sub.sh
+#   scripts/update-sub.sh
 #
 # パスは $HOME 相対（DIR・VAULT・LOCK_FILE は環境変数で上書き可＝ユニットテスト用。
 # 本番実行時は既定値のまま呼べば良い）。
@@ -88,912 +40,115 @@ set -euo pipefail
 : "${DIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 : "${VAULT:=$HOME/Data/obsidian}"
 : "${LOCK_FILE:=${TMPDIR:-/tmp}/aienv-update-sub.lock}"
-# 配役表-能力軸整理-設計-2026-09-07.md §2.2: machine_roleの共通レシピが
-# 使う入力。4つの読み手が同じ既定値・同じ環境変数名を共有する。
+# machine_role の共通レシピが使う入力（claude/hooks/check-sub-update.sh と同じ
+# 既定値・同じ環境変数名）。
 : "${PROFILE_RESOLVE_LIB:=$DIR/claude/hooks/lib/profile_resolve.py}"
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
 : "${AIENV_AGENTS_DIR:=$DIR/claude/agents}"
-# Bedrock最小セット（2026-08-30 §9.0 A-1-4）: install-main.shと同じ環境変数名・
-# 既定値。存在しない（Bedrock未導入機）場合は何もしない。
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
 STALE_LOCK_SECONDS="${STALE_LOCK_SECONDS:-3600}"
+# 3. の install-sub.sh（Vault 骨格配置）と 4.・5. が同じ Vault を見るようにする。
+export VAULT
 
 log() { echo "[update-sub] $*"; }
 warn() { echo "[update-sub] WARN: $*" >&2; }
 fail() { echo "[update-sub] FAIL: $*" >&2; exit 1; }
 
-# --resync（前提修正 P-3・3-b・設計§3.1）: HEADが不変でもPreferences再同期
-# （4b相当）だけを強制実行する契約オプション。他の引数と併用しない（1つだけ）。
-# --resync を付けない通常実行の挙動は1文字も変えない（契約5）。
-RESYNC=0
-if [ "$#" -gt 0 ]; then
-  if [ "$#" -eq 1 ] && [ "$1" = "--resync" ]; then
-    RESYNC=1
-  else
-    fail "不正な引数です。受け付けるのは --resync だけです（他の引数と併用もできません）: $*"
-  fi
-fi
-# EXIT_CODE — スクリプト全体の最終終了コード（既定0）。設計書§3.9
-# 「update-sub.shはリーダー行が未確定ならWARN＋非0終了」を満たすための
-# フラグ（Codex一次レビュー指摘・Blocking対応・2026-09-01）。
-# ⚠️ **リーダー実行値（--print-leader-runtime）の取得失敗**に加え、**Bedrock
-# envファイルが実在するのに読めない／解析できない場合（BEDROCK_STATUS=
-# EXISTS_BUT_UNAVAILABLE）も**非0にする（状態機械B・設計書§6.2-B S4「生成
-# 中止・旧保持・非0」・2026-09-01工程横断レビュー差し戻しMAJOR対応）。
-# install-main.sh側は同じS4裁定を先行実装済みであり、update-sub.shだけが
-# WARN＋exit 0のまま非対称になっていた（旧コメント「リーダー未確定とは
-# 無関係な既存の失敗モードのため対象にしない＝exit 0のまま」は本裁定と
-# 矛盾していたため撤回する）。「対話の途中で止まらない」という§3.9の趣旨に
-# 合わせ、失敗を検知しても後続の2c・4a〜4c（agents symlink化・config.toml
-# 再生成・Preferences再同期・骨格フォルダ補充）は続行し、スクリプト末尾で
-# 初めてこのフラグに従って終了する（deferred方式＝leader未確定時と同じ扱い）。
-EXIT_CODE=0
+# pid-lock.sh は main() の外で source する（ライブラリが declare -a で作る
+# グローバル配列を EXIT trap の _pid_lock_cleanup が読むため。関数内で source すると
+# bash はその配列を関数ローカルにしてしまい、ロックの後始末が空振りする）。
+[ -f "$DIR/scripts/lib/pid-lock.sh" ] || {
+  echo "[update-sub] FAIL: scripts/lib/pid-lock.sh が見つかりません（checkout破損の可能性）: $DIR/scripts/lib/pid-lock.sh" >&2
+  exit 1
+}
+. "$DIR/scripts/lib/pid-lock.sh"
 
-# bedrock_env_file_kind <path> — Bedrock envファイルの種別を1行で標準出力へ
-# 印字する: ABSENT（本当に存在しない＝ENOENT）／UNAVAILABLE（通常ファイル以外
-# ＝ディレクトリ・dangling symlink・親ディレクトリの探索権限不足等でlstat自体
-# が失敗する場合を含む）／OK（読める可能性のある通常ファイル）。
-# install-main.sh generate_settings_json()と全く同じ判定ロジックを意図的に
-# 複製したもの（両スクリプトはBedrock envファイルの解析自体は
-# install-main.sh --print-bedrock-env-json への一本化を維持しており、
-# ここで複製するのはファイル種別の軽い判定口のみ＝2026-08-30 Codex四次
-# レビュー指摘・MAJOR対応の横展開）。
-# ⚠️ シェルの `[ -e ]`/`[ -L ]` だけに頼らずPythonの例外種別で判定する
-# （`[ -e path ]`は親ディレクトリの探索権限が無いだけでも偽になり、「本当に
-# 存在しない」場合と区別できない。これをABSENTと誤認すると、実際には存在する
-# 設定ファイルを空payloadで上書きしてしまう）。
-bedrock_env_file_kind() {
-  python3 -c "
-import os, stat, sys
-path = sys.argv[1]
-try:
-    st = os.lstat(path)
-except FileNotFoundError:
-    print('ABSENT')
-    sys.exit(0)
-except OSError:
-    print('UNAVAILABLE')
-    sys.exit(0)
-if stat.S_ISLNK(st.st_mode):
-    try:
-        st = os.stat(path)
-    except OSError:
-        print('UNAVAILABLE')
-        sys.exit(0)
-print('OK' if stat.S_ISREG(st.st_mode) else 'UNAVAILABLE')
-" "$1"
+# resolve_machine_role — 配役表の machine_role を main|sub|unknown の 1 語で標準出力へ。
+# 解決失敗・欠落・unavailable はすべて unknown（積極的な証明が無ければ動かない
+# fail-closed）。`|| _out=""` は set -e/pipefail 対策（resolve が非0のとき、コマンド
+# 置換がそのまま script 全体を落として fail() の分かりやすいメッセージが出ないまま
+# 黙って落ちる事故を防ぐ）。
+resolve_machine_role() {
+  local _out _tab _rest _role
+  _out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" \
+    --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _out=""
+  _tab=$'\t'
+  _rest="${_out#*"${_tab}MACHINE_ROLE:"}"
+  _role=""
+  [ "$_rest" != "$_out" ] && _role="${_rest%%"${_tab}"*}"
+  case "$_role" in main|sub) printf '%s\n' "$_role" ;; *) printf 'unknown\n' ;; esac
 }
 
-# --- 0. 配役表`machine_role`の確認（メインでの誤実行を防ぐ最後の砦） ---
-# 解決失敗・unknown・unavailable・欠落のいずれでも拒否する（積極的な証明が
-# 無ければ動かないfail-closed。実体プロファイルへ書くのは本人だけ＝FR-15）。
-# `|| _mr_out=""` はset -e/pipefail対策（resolveが非0のとき、pipefail下の
-# コマンド置換がそのまま script 全体を落としてしまい、直後のfail()の分かりやすい
-# メッセージが一切出ないまま黙って落ちる事故になるため。実装中に発見・回帰テストで
-# 固定化した実バグの型と同じ＝配役表-能力軸整理-設計-2026-09-07.md §2.2）。
-_mr_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" \
-  --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _mr_out=""
-_mr_tab=$'\t'
-_mr_rest="${_mr_out#*"${_mr_tab}MACHINE_ROLE:"}"
-MACHINE_ROLE=""
-[ "$_mr_rest" != "$_mr_out" ] && MACHINE_ROLE="${_mr_rest%%"${_mr_tab}"*}"
-case "$MACHINE_ROLE" in main|sub) : ;; *) MACHINE_ROLE="unknown" ;; esac
-if [ "$MACHINE_ROLE" != "sub" ]; then
-  # ${AIENV_LOCAL_PROFILE_PATH}と明示的に波括弧で囲む（2026-07-16
-  # scripts/install-backup.shで発見済みの実バグの回帰: bash 3.2(macOS既定)+
-  # ja_JP.UTF-8ロケール環境で、裸の$VAR直後に全角記号（）等が続くと変数名の
-  # 境界を誤認識し「unbound variable」で本来のFAILメッセージを握り潰してしまう）。
-  fail "このマシンはサブ機として登録されていません（配役表の machine_role が sub ではありません: ${AIENV_LOCAL_PROFILE_PATH}）。メイン機でこのコマンドを実行すると Vault の Preferences が上書き削除される恐れがあるため拒否します。サブ機であれば実体プロファイルへ machine_role: configured value=sub を書いてください（検査＝scripts/install-sub.sh --check-profile）。"
-fi
+main() {
+  [ "$#" -eq 0 ] || fail "引数は受け付けません（旧 resync フラグは廃止＝毎回 Preferences を同期します。計画だけ見るには scripts/install-sub.sh --dry-run）: $*"
 
-[ -d "$DIR/.git" ] || fail "DIR が git リポジトリではありません: $DIR"
-command -v git >/dev/null 2>&1 || fail "git が見つかりません"
-command -v rsync >/dev/null 2>&1 || fail "rsync が見つかりません"
+  # --- 0. 配役表 machine_role の確認（メインでの誤実行を防ぐ最後の砦） ---
+  local machine_role
+  machine_role="$(resolve_machine_role)"
+  if [ "$machine_role" != "sub" ]; then
+    # ${AIENV_LOCAL_PROFILE_PATH} と明示的に波括弧で囲む（bash 3.2＋ja_JP.UTF-8 で
+    # 裸の $VAR 直後に全角記号が続くと変数名の境界を誤認識し unbound variable で
+    # 本来の FAIL メッセージを握り潰す実バグの回帰防止）。
+    fail "このマシンはサブ機として登録されていません（配役表の machine_role が sub ではありません: ${AIENV_LOCAL_PROFILE_PATH}）。メイン機でこのコマンドを実行すると Vault の Preferences が上書き削除される恐れがあるため拒否します。サブ機であれば実体プロファイルへ machine_role: configured value=sub を書いてください（検査＝scripts/install-sub.sh --check-profile）。"
+  fi
+  [ -d "$DIR/.git" ] || fail "DIR が git リポジトリではありません: $DIR"
+  [ -x "$DIR/scripts/install-sub.sh" ] || fail "scripts/install-sub.sh が見つかりません（checkout破損の可能性）: $DIR/scripts/install-sub.sh"
+  command -v git >/dev/null 2>&1 || fail "git が見つかりません"
+  command -v rsync >/dev/null 2>&1 || fail "rsync が見つかりません"
 
-# 自己更新によるre-exec（下記2.参照）で渡された環境変数が「本物」かどうかを
-# ここで一度だけ判定し、以降の1.（ロック）・2.（pull）双方で同じ判定結果を
-# 使う（判定を2箇所へ分散させると、たとえば1.だけ「re-execとみなす」・2.は
-# 「みなさない」という食い違いが起こりうるため、単一の正本にする）。
-# `AIENV_UPDATE_SUB_REEXEC=1`だけでなく`AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD`が
-# このリポジトリに実在するcommitであることまで検証する（Codexレビュー
-# 指摘・Minor対応: シェル環境やLaunchAgent設定にこの内部専用変数が誤って
-# 残留・伝播した場合、検証無しだと恒久的にgit pull自体をスキップし続けて
-# しまう。真正なre-exec以外はこのガードを無視して通常のロック取得・pull
-# 経路へフォールバックする）。
-IS_SELF_UPDATE_REEXEC=0
-if [ "${AIENV_UPDATE_SUB_REEXEC:-}" = "1" ] \
-   && [ -n "${AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD:-}" ] \
-   && git -C "$DIR" cat-file -e "${AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD}^{commit}" >/dev/null 2>&1; then
-  IS_SELF_UPDATE_REEXEC=1
-fi
-
-# --- 1. 多重起動防止ロック ---
-# 2026-08-30 Codex 2巡目差し戻し・MAJOR対応: 従来は本ファイル内で
-# backup-vault.shと同等のロック取得ロジックを独自に複製していたが、
-# kill -0のPID生存確認だけでstale判定しており、元プロセスが異常終了した
-# 直後にOSが同じPID番号を無関係な別の長時間生存プロセス（ログインシェル等）
-# へ再利用すると、そのPIDが生き続ける限り永久に「既に実行中」skipが続く
-# バグがあった（STALE_LOCK_SECONDSを宣言しながら一切参照していなかった）。
-# scripts/lib/pid-lock.sh側の共有関数acquire_pid_lock()に同じ実バグが
-# あったため併せて修正し（stale_secondsを時間側のフェイルセーフとして実際に
-# 使うよう変更）、backup-vault.sh・maintenance.shが既に使っているこの共有
-# 関数へ本ファイルも切り替えた（設計書§1.2「stale判定はscripts/lib/の
-# 共有シェルライブラリをbackup-vault.shと共用・コピペ実装しない」に合わせる
-# ＝重複実装の解消）。
-# shellcheck source=scripts/lib/pid-lock.sh
-source "$DIR/scripts/lib/pid-lock.sh"
-if [ "$IS_SELF_UPDATE_REEXEC" = "1" ]; then
-  # 自己更新によるre-exec後（下記2.参照）: execはPIDを保つため、直前の
-  # プロセスが取得したロックファイルは引き続き自分自身の所有物である
-  # （PID・プロセス開始時刻とも不変）。解放してから改めてacquire_pid_lock()
-  # で再取得する設計だと、解放〜再取得の間に別プロセスがロックを奪える
-  # 競合窓が生じ、そのプロセスは既にpull済みのHEADを見て「変更なし」と
-  # 誤判定するため、config.toml再生成・Preferences再同期・骨格フォルダ補充
-  # （4a〜4c）が次のupstream更新まで欠落しうる（Codexレビュー指摘・Major
-  # 対応: 当初はexec前に明示的に解放していたが、この実害を見落としていた）。
-  # そこで一切解放せず、既存のロックファイルを「自分のもの」としてそのまま
-  # 引き継ぐ（handoff）。PID一致だけでは不十分（Codexフォローアップレビュー
-  # 指摘・Major対応: 共有ライブラリ本体〈_pid_lock_is_alive()〉がPID再利用
-  # 問題〈死んだ旧所有者のPID番号が別プロセスへ再利用される〉への対策として
-  # PID＋プロセス開始時刻の指紋照合を採用しているのと同じ理由で、handoff側も
-  # 指紋まで照合しないと、環境変数の誤残留＋異常終了した旧ロックの残留＋
-  # PID番号の再利用が偶然重なった場合に誤って他プロセスのロックを「自分の
-  # もの」として引き継いでしまう穴があった）。
-  # ⚠️ ライブラリ本体（_pid_lock_is_alive）の「判定不能なら生存扱いへ倒す」
-  # という設計は、あくまで“他プロセスの正当なロックを誤って削除しない”ための
-  # fail-openであり、目的が逆（Codexフォローアップレビュー指摘・Major対応:
-  # 当初はこの判定不能→受理という向きをそのまま流用していたが、handoffは
-  # “これを自分のものとして採用してよいか”という判断であり、証明できない
-  # 場合はfail-closedで拒否すべきだった）。そのためhandoffでは、記録された
-  # 指紋が実指紋（予約値_PID_LOCK_FP_UNAVAILABLEや空の旧形式ではない）で
-  # あり、かつ現在の指紋も取得でき、両者が完全一致した場合のみ受理する。
-  if [ ! -e "$LOCK_FILE" ]; then
-    fail "自己更新の再実行(exec)後、引き継ぐべき多重起動防止ロックが見つかりません（${LOCK_FILE}）。前段の実行がロックを取得できていなかった可能性があります。"
+  # --- 1. 多重起動防止ロック ---
+  # acquire_pid_lock() は「他プロセスが保持中なら exit 0 で skip」の契約（backup-vault
+  # 等の定期実行向け）。本コマンドは手動実行なので、先に読み取り専用の
+  # is_pid_lock_held() で覗き、保持中なら非0で終える（更新できていないのに成功に
+  # 見せない）。stale（PID 死亡）なら acquire_pid_lock() が回収して取得する。
+  # 先読みと取得の間に別プロセスが取得した場合は pid-lock の契約どおり exit 0
+  # （skip）になる＝手動コマンドの二重起動でしか起きない極小窓として許容
+  # （2026-09-19 検証1巡目 θ-1）。
+  if is_pid_lock_held "$LOCK_FILE"; then
+    fail "既に実行中です（pid=$(sed -n 1p "$LOCK_FILE" 2>/dev/null)）。今回は何もしません: $LOCK_FILE"
   fi
-  lock_owner_pid="$(sed -n '1p' "$LOCK_FILE" 2>/dev/null || true)"
-  lock_owner_fp="$(sed -n '2p' "$LOCK_FILE" 2>/dev/null || true)"
-  handoff_ok=0
-  if [ "$lock_owner_pid" = "$$" ] \
-     && [ -n "$lock_owner_fp" ] \
-     && [ "$lock_owner_fp" != "$_PID_LOCK_FP_UNAVAILABLE" ]; then
-    current_fp="$(_pid_lock_fingerprint "$$" 2>/dev/null || true)"
-    if [ -n "$current_fp" ] && [ "$lock_owner_fp" = "$current_fp" ]; then
-      handoff_ok=1
-    fi
-  fi
-  if [ "$handoff_ok" != "1" ]; then
-    fail "自己更新の再実行(exec)後、多重起動防止ロックの所有者が自分自身と一致しません（記録PID: ${lock_owner_pid:-不明}・自分のPID: $$）。execの直前に別プロセスがロックを奪った可能性があります: ${LOCK_FILE}"
-  fi
-  _PID_LOCK_ACQUIRED_FILES+=("$LOCK_FILE")
-  _pid_lock_register_cleanup
-else
   acquire_pid_lock "$LOCK_FILE" "$STALE_LOCK_SECONDS" "update-sub"
-fi
 
-# --- 2. git pull --ff-only ---
-if ! git -C "$DIR" remote get-url origin >/dev/null 2>&1; then
-  warn "remote 'origin' が設定されていません。git pull をスキップします: $DIR"
-  exit 0
-fi
-
-if [ "$IS_SELF_UPDATE_REEXEC" = "1" ]; then
-  # 自己更新によるre-exec後（下記参照）: pullは既に完了しているため
-  # 再実行しない。before_headは自己更新が起きる"前"の元の値を環境変数経由で
-  # 引き継ぐ（引き継がないと、ここで改めてpullした場合〈既にpull済みなので
-  # 差分ゼロ〉before_head=after_headとなり、3.の早期終了で本来届けるべき
-  # config.toml再生成・Preferences再同期・骨格フォルダ補充・agents symlink化
-  # が丸ごと空振りしてしまう）。
-  before_head="${AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD:-}"
-  after_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
-  log "update-sub.sh自身の更新を検知したため、新版のスクリプトで最初からやり直しています（元のHEAD: ${before_head} -> ${after_head}）。"
-else
-  before_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
-  pull_rc=0
-  git -C "$DIR" pull --ff-only >/dev/null 2>&1 || pull_rc=$?
-  if [ "$pull_rc" -ne 0 ]; then
-    # 前提修正 P-3・3-a: 終了コードだけを 0→非0 へ正す（制御の流れ＝後続を
-    # 実行せずその場で抜ける、は現行のまま変えない）。⚠️ 現行は警告して
-    # `exit 0` で終わるため、終了コードが pull の成否を証明しなかった
-    # （「更新できていないのに成功に見える」）。
-    warn "git pull --ff-only に失敗しました（ローカル変更との衝突等の可能性。サブは編集しない運用のため通常は起きないはずです）: $DIR"
+  # --- 2. git pull --ff-only（失敗しても何も変えない） ---
+  local pull_out
+  if ! pull_out="$(git -C "$DIR" pull --ff-only 2>&1)"; then
+    warn "git pull --ff-only に失敗しました（ローカル変更との衝突・remote 未設定・ネットワーク等の可能性。サブは編集しない運用のため通常は起きないはずです）: $DIR"
+    [ -n "$pull_out" ] && printf '%s\n' "$pull_out" >&2
     exit 1
   fi
-  after_head="$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo '')"
+  log "git pull --ff-only 完了（HEAD: $(git -C "$DIR" rev-parse --short HEAD 2>/dev/null || echo '?')）"
 
-  # ⚠️ 自己更新対策（2026-09-03 本人実査・緊急対応）: pullでこのスクリプト
-  # 自身（scripts/update-sub.sh）が変わっていたら、その場で新版へexecしなおして
-  # 最初からやり直す。bashはスクリプトを逐次読みするため、実行中の自分自身を
-  # pullで書き換えたまま処理を続けると、後続処理が旧版のまま・あるいは不定動作
-  # になる既知の危険がある（サブ機の実機で、1回目の実行だけagentsのsymlink化が
-  # 効かないという実害が発生し発見した）。
-  if [ "$before_head" != "$after_head" ]; then
-    # git diff自体が失敗した場合（オブジェクト破損・before_headが不正な値等）は
-    # 「自己更新なし」に丸めず、安全側（自己更新ありとみなして新版へやり直す）に
-    # 倒す（Codex一次レビュー指摘・Major対応: `2>/dev/null || echo ''`だと
-    # git diffの失敗と「差分ゼロ」を区別できず、fail-openで保護が効かなくなる
-    # 経路があった）。
-    self_changed=""
-    diff_rc=0
-    self_changed="$(git -C "$DIR" diff --name-only "$before_head" "$after_head" -- scripts/update-sub.sh 2>/dev/null)" || diff_rc=$?
-    if [ "$diff_rc" -ne 0 ] || [ -n "$self_changed" ]; then
-      if [ "$diff_rc" -ne 0 ]; then
-        log "update-sub.sh自身が変わったかどうかを判定できませんでした（git diff失敗・コード${diff_rc}）。安全側として新版のスクリプトで最初からやり直します（${before_head} -> ${after_head}）。"
-      else
-        log "update-sub.sh自身が更新されました（${before_head} -> ${after_head}）。新版のスクリプトで最初からやり直します。"
-      fi
-      # ⚠️ ロックは解放しない（1.のhandoff方式を参照）。execはPIDを保つため、
-      # 既に取得済みのロックファイルはexec後もそのまま自分自身の所有物であり、
-      # 解放→再取得という往復を挟まないことで、その間に別プロセスへロックを
-      # 奪われる競合窓自体を作らない（Codexレビュー指摘・Major対応: 当初は
-      # ここでexec前に明示的解放していたが、解放〜再取得の間に別プロセスが
-      # 割り込むと、そのプロセスは既にpull済みのHEADを見て「変更なし」と
-      # 誤判定し、config.toml再生成・Preferences再同期・骨格フォルダ補充
-      # 〈4a〜4c〉が次のupstream更新まで欠落しうる実害があった）。
-      export AIENV_UPDATE_SUB_REEXEC=1
-      export AIENV_UPDATE_SUB_ORIG_BEFORE_HEAD="$before_head"
-      # LOCK_FILEを明示的にexportする（Codexレビュー指摘・Minor対応:
-      # LOCK_FILEが呼び出し元の環境変数由来ではなく`: "${LOCK_FILE:=...}"`の
-      # 既定値だった場合、この行が無いとexportされず子プロセスへ引き継がれ
-      # ない。今回の新版はexec先も自分自身＝同じ既定値ロジックなので実害は
-      # 出ないが、将来ロック既定パスの算出方法が変わった場合でも、1.が
-      # handoffする対象を「実際に取得したロックのパスそのもの」に固定する
-      # ための安全策）。
-      export LOCK_FILE
-      # execが対象を起動できない場合（パーミッション不足・破損等）でも
-      # フォールスルーせずfail()を確実に届けるため、execfailを立てておく
-      # （Codex一次レビュー指摘・Minor対応: execfail無しだと非対話bashは
-      # exec失敗時にそのままshell自体を終了し、直後のfail()に到達しない）。
-      shopt -s execfail
-      exec bash "$DIR/scripts/update-sub.sh" "$@"
-      fail "update-sub.sh自身の更新を検知しましたが、新版への再実行(exec)に失敗しました: $DIR/scripts/update-sub.sh"
-    fi
+  # --- 3. 配置は install-sub.sh に委譲（pull 後の新版が別プロセスで走る） ---
+  local rc=0
+  "$DIR/scripts/install-sub.sh" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "[update-sub] FAIL: install-sub.sh が非0終了しました（rc=${rc}）。復旧: scripts/install-sub.sh を現地で再実行し、出力の先頭 FAIL 行を直してください" >&2
+    exit "$rc"
   fi
-fi
 
-# claude/agents/*.md 直接配置（2c.）がinstall-main.sh link()と共有する
-# sync_managed_symlink()を読み込む（検証4巡目 BLOCKING-1対応・2026-09-14。
-# 詳細はscripts/lib/managed-symlink.sh側のコメント参照）。
-# ⚠️ 検証5巡目 MAJOR-1対応（2026-09-14）: 従来はpull・自己再exec判定より前
-# （ロック取得の直前）でsourceしていたが、自己再exec判定は`update-sub.sh`
-# 本体の差分（--`scripts/update-sub.sh`）だけを見るため、この共有lib
-# だけを更新したコミットをpullしても再exec条件に一致せず、同一実行中は
-# メモリ上に読み込み済みの旧`sync_managed_symlink()`のまま2c.を処理して
-# しまう（検証職が実測＝lib_on_disk_new=yes・new_lib_used=no）。この
-# 共有関数はpullより前には使われないため、pull・自己再exec判定が完了した
-# 後、2a.の直前でsourceする（自己更新判定へこのlibも対象追加する代案も
-# あるが、pull後sourceの方が単純＝裁定採用）。
-# ⚠️ 検証6巡目 MAJOR対応（2026-09-14）: この位置は1.でacquire_pid_lock()が
-# 既にEXIT trap（_pid_lock_cleanup）を登録した後にあたる。bashには
-# 「`set -e`下でsource/.ビルトインがファイル欠落等で失敗して script が
-# 終了する経路は、明示的な`exit N`とは異なりEXIT trap実行後の最後の
-# コマンドの終了コードで上書きされる」という実測済みの挙動があり
-# （`source X || fail ...`のように`||`で明示的にfail()へ渡しても、
-# source自体の失敗はこの上書きの対象になる＝一時再現スクリプトで実測。
-# 一方`[ -r X ] || fail ...`や`bash -n X || fail ...`のような通常の
-# コマンド失敗は`||`経由のfail()〈exit 1〉がtrap後も正しく保持される）、
-# `scripts/lib/managed-symlink.sh`が欠落・構文破損している場合、bareな
-# `source`の失敗がEXIT trapの成功（rmdir系の`|| true`で常に0）に上書き
-# され、2a.以降が一切実行されないままrc=0で「成功」報告になっていた
-# （検証職の再現＝HEAD不変でlib削除→rc=0・stderrにNo such file or
-# directory／upstreamでlib削除→pullでもrc=0）。source自体の失敗検知に
-# 頼らず、source前に可読性（-r）と構文（bash -n）を明示的に検査し、
-# 失敗時はfail()で確実に非0終了させる。source後にはsync_managed_symlink()
-# が実際に定義されたかも`declare -F`で検証する（構文は正しいがこの関数
-# 定義部分だけが壊れている等の残余ケースに対する多層防御）。
-if [ ! -r "$DIR/scripts/lib/managed-symlink.sh" ]; then
-  fail "共有ライブラリが読み取れません（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
-fi
-if ! /bin/bash -n "$DIR/scripts/lib/managed-symlink.sh" 2>/dev/null; then
-  fail "共有ライブラリの構文が不正です（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
-fi
-# shellcheck source=scripts/lib/managed-symlink.sh
-source "$DIR/scripts/lib/managed-symlink.sh"
-for _managed_symlink_fn in sync_managed_symlink; do
-  if ! declare -F "$_managed_symlink_fn" >/dev/null 2>&1; then
-    fail "共有ライブラリの読み込みに失敗しました（${_managed_symlink_fn}()が定義されていません）: $DIR/scripts/lib/managed-symlink.sh"
-  fi
-done
-unset _managed_symlink_fn
+  # --- 4. Preferences を rsync で再同期する（Preferences 以外は絶対に触らない） ---
+  local vp_prefs="$DIR/vault-public/Preferences" vault_prefs="$VAULT/Preferences"
+  [ -d "$vp_prefs" ] || fail "Preferences の rsync に失敗しました: ${vp_prefs} -> ${vault_prefs}（同期元 vault-public/Preferences が見つかりません＝checkout破損の可能性）"
+  mkdir -p "$vault_prefs" 2>/dev/null && rsync -a --delete "$vp_prefs/" "$vault_prefs/" \
+    || fail "Preferences の rsync に失敗しました: ${vp_prefs} -> ${vault_prefs}"
+  log "Preferences を再同期しました: $vp_prefs -> $vault_prefs"
 
-# --- 2a. 実配置にdriftがあれば既存installerで再同期する（HEAD不変でも実行） ---
-# 2026-09-11 検証2巡目MAJOR-1対応: pull差分を起動条件にすると、配置前の中断や
-# installer非0の次回はHEAD不変になり、欠落したsymlinkを永久に再試行できない。
-# check-drift.shのinstaller管理symlink一覧・判定を内部モードで再利用し、現在の
-# desired stateだけを見る。検査自体が失敗した場合も配置漏れを見逃さないよう
-# installerを実行する側へ倒し、実行後に同じ検査で収束を再確認する。
-# ⚠️ 検証3巡目 MAJOR-1対応（2026-09-14）: 判定器（check-drift.sh）自体が欠落
-# している場合、従来は`[ -f ... ]`のガードでこのブロック全体を無警告で
-# 素通りしており（[[Knowledge/fail-open-and-observable-guards]]原則2「判定不能
-# はdriftなしに丸めない」に反する）、管理symlinkの欠落を検知できないまま
-# rc=0で成功終了していた。判定器が利用不能なら「driftなし」と混同せず、
-# installerは実行したうえで「検証不能」を警告し非0で終了する。
-# ⚠️ ただし「HEADのgit管理下にはscripts/check-drift.shが存在するのに、実際の
-# 作業ツリーから消えている」場合だけを異常（checkout破損）とみなす。HEADが
-# そもそもこのファイルを追跡していない場合（この機能自体を持たない旧版
-# チェックアウト、またはpull系ロジックだけを検証するための意図的な最小
-# fixture＝tests/test-update-sub.shの大半のテストがこれに該当）は、この
-# 2a.機能自体が最初から対象外の状態であり、旧来どおり何もしない（2026-09-14
-# 工程内実測: 単純に`-f`欠落=常に異常へ倒すと、check-drift.shを一度も
-# 含めたことのない既存の最小fixtureテスト群が軒並み巻き込まれて壊れることを
-# 確認した）。
-# ⚠️ 検証4巡目 MAJOR-1対応（2026-09-14）: HEAD追跡有無の判定に`git cat-file -e
-# HEAD:scripts/check-drift.sh`を使うと、対象不存在（HEAD非追跡）とGit自体の
-# 判定障害（オブジェクト破損・read-only等でコマンドが実行できない）が同じ
-# 非0で返り区別できず、後者もfail-openで「HEAD非追跡＝何もしない」に
-# 丸まっていた。`git ls-tree --name-only HEAD -- scripts/check-drift.sh`へ
-# 差し替え、コマンド自体の終了コードと出力の有無で三値化する: ①コマンドが
-# 非0＝Git判定コマンド自体の異常＝判定不能として installer＋警告＋非0
-# ②コマンドは0で出力が空＝HEAD非追跡＝従来どおり何もしない ③コマンドは0で
-# 出力が非空＝HEADには追跡されているのに作業ツリーから消えている＝
-# checkout破損として installer＋警告＋非0。
-if [ -f "$DIR/scripts/check-drift.sh" ]; then
-  managed_links_rc=0
-  DIR="$DIR" HOME="$HOME" /bin/bash "$DIR/scripts/check-drift.sh" \
-    --managed-symlinks-only >/dev/null 2>&1 || managed_links_rc=$?
-  if [ "$managed_links_rc" -ne 0 ]; then
-    if "$DIR/scripts/install-main.sh" --sub-delegate --non-interactive; then
-      managed_links_after_rc=0
-      DIR="$DIR" HOME="$HOME" /bin/bash "$DIR/scripts/check-drift.sh" \
-        --managed-symlinks-only >/dev/null 2>&1 || managed_links_after_rc=$?
-      if [ "$managed_links_after_rc" -eq 0 ]; then
-        log "実配置のdriftを検知し、既存installerでClaude/Codex配置を再同期しました。"
-      else
-        warn "既存installerの実行後も管理symlinkの実配置driftが残っています。"
-        EXIT_CODE=1
-      fi
-    else
-      warn "実配置のdriftを検知しましたが、既存installerによる配置の再同期に失敗しました。"
-      EXIT_CODE=1
-    fi
-  fi
-else
-  check_drift_ls_tree_out=""
-  check_drift_ls_tree_rc=0
-  check_drift_ls_tree_out="$(git -C "$DIR" ls-tree --name-only HEAD -- scripts/check-drift.sh 2>/dev/null)" \
-    || check_drift_ls_tree_rc=$?
-  if [ "$check_drift_ls_tree_rc" -ne 0 ] || [ -n "$check_drift_ls_tree_out" ]; then
-    if [ "$check_drift_ls_tree_rc" -ne 0 ]; then
-      warn "scripts/check-drift.sh の追跡状態をgitで判定できませんでした（git ls-tree失敗・コード${check_drift_ls_tree_rc}）。判定不能をdriftなしとは扱わず、既存installerを実行します。"
-    else
-      warn "scripts/check-drift.sh がgit管理下には存在するのに作業ツリーから消えています（checkout破損の可能性）。判定不能をdriftなしとは扱わず、既存installerを実行します。"
-    fi
-    if [ -f "$DIR/scripts/install-main.sh" ]; then
-      if "$DIR/scripts/install-main.sh" --sub-delegate --non-interactive; then
-        warn "既存installerは実行しましたが、check-drift.sh欠落のため実配置の収束を確認できていません。"
-      else
-        warn "実配置のdriftを検証できない状態で、既存installerによる配置の再同期にも失敗しました。"
-      fi
-    else
-      warn "check-drift.shに加えscripts/install-main.shも作業ツリーから消えているため、配置の再同期を実行できません（checkout破損の可能性）。"
-    fi
-    EXIT_CODE=1
-  fi
-  # else: check_drift_ls_tree_rc=0 かつ出力が空 ＝ HEAD非追跡。従来どおり
-  # 何もしない（意図的な最小fixture・この機能を持たない旧版チェックアウト）。
-fi
-
-# --- 2b. settings.json の再生成（git の HEAD が変わっていなくても実行する。
-#         §9.0 A-0-1・§11.2 項目3）---
-# 値の正本＝model/effortの出力口を install-main.sh --print-leader-runtime に
-# 一本化した（2026-09-01 配役表解凍 §4.2-a・§4.3。scripts/check-drift.shも
-# 同じ出力口を呼ぶ）。プロファイルがv1（旧7キーのみ・schema_versionが無い/1）
-# または実体が存在しない場合は、値出力口自身がAIENV_MODEL_MAIN/AIENV_MODEL_SUB
-# （--sub-delegateの有無で選ぶ現行の解決）へ委譲する＝v1委譲期間の後方互換
-# （§3.5）。旧`--print-model`は廃止予定のためもう呼ばない。HEAD不変でも実行
-# するのは、プロファイルの手編集（リーダー行だけの変更）がgit履歴を進めなくても
-# 再生成に反映されるようにするため（§11.2 項目3の受入条件そのもの）。
-# 「早期終了（3.の変化無しexit）より前」に置くのが要点——変化無しでも
-# settings.jsonだけは追随させる。生成に失敗したら旧ファイルは一切触らない
-# （mktemp+mvの原子性。install-main.sh generate_settings_json() と同じ設計判断の
-# 意図的な複製＝4a.のconfig.toml再生成と同じ流儀）。
-SETTINGS_JSON_SRC="$DIR/claude/settings.json"
-SETTINGS_JSON_DEST="$HOME/.claude/settings.json"
-if [ ! -f "$SETTINGS_JSON_SRC" ]; then
-  warn "claude/settings.json のテンプレが見つかりません（checkout破損の可能性）: $SETTINGS_JSON_SRC"
-elif ! command -v python3 >/dev/null 2>&1; then
-  warn "python3 が見つからないため settings.json の再生成をskipしました（旧ファイルは保持します）"
-elif [ ! -x "$DIR/scripts/install-main.sh" ]; then
-  warn "scripts/install-main.sh が見つかりません（checkout破損の可能性）。settings.json の再生成をskipします（旧ファイルは保持します）"
-else
-  # leader_runtime_error_message <コード> [<理由>] — install-main.sh
-  # --print-leader-runtime が標準エラーへ返す機械可読コード（4.2-b。
-  # `<コード>\t<理由>`の1行）を人向け文言へ変換する（2026-09-01 設計書§4.3。
-  # 旧実装はここを`2>/dev/null`で理由ごと捨てて汎用WARNへ丸めていた＝静かに
-  # 既定モデルへ倒れる経路を作らないための機構が理由まで見えないと直しようが
-  # なかった。文面には必ず「プロファイルのリーダー行を確認してください」を
-  # 含める＝リーダー指示）。scripts/check-drift.shにも同名の関数を意図的に
-  # 複製している（両スクリプトは互いをsourceしない独立プロセスで、変換ロジックは
-  # 数行のみのため共有libを新設するほどではない＝bedrock_env_file_kind()等
-  # ここまでの既存の複製方針と同型）。
-  leader_runtime_error_message() {
-    local code="$1" reason="${2:-}" msg=""
-    case "$code" in
-      PROFILE_NOT_FOUND|PROFILE_UNREADABLE)
-        msg="プロファイル実体を読み取れませんでした（不在・symlink・権限不足等の可能性）"
-        ;;
-      PROFILE_INVALID:*)
-        msg="プロファイルの構文または検証エラーです（${code#PROFILE_INVALID:}）"
-        ;;
-      PROFILE_RESOLVER_MISSING)
-        msg="resolver本体（共有lib）が見つかりません"
-        ;;
-      LEADER_UNCONFIGURED)
-        msg="リーダー配役が未確定です（unknown・not_adopted・行なしのいずれか）"
-        ;;
-      LEADER_UNAVAILABLE)
-        msg="リーダー候補が使用不可です"
-        ;;
-      LEADER_CANDIDATE_INVALID:*)
-        msg="リーダー候補の検証に失敗しました（条件番号: ${code#LEADER_CANDIDATE_INVALID:}）"
-        ;;
-      PROFILE_RESOLVER_ERROR|*)
-        msg="リーダー実行値を解決できませんでした（原因不明。コード: ${code:-なし}）"
-        ;;
-    esac
-    [ -n "$reason" ] && msg="${msg}（${reason}）"
-    printf '%s。プロファイルのリーダー行（role.leader）を確認してください: %s' "$msg" "$AIENV_LOCAL_PROFILE_PATH_HINT"
-  }
-  : "${AIENV_LOCAL_PROFILE_PATH_HINT:=$HOME/.config/takumi009-ai-env/profile.md}"
-
-  MODEL_VALUE=""
-  EFFORT_VALUE=""
-  MODEL_OK=0
-  # ⚠️ `if MODEL_VALUE=$(...); then`の条件は「コマンド置換の終了コード」だけを
-  # 見ており、$MODEL_VALUE自体は非0終了でも出力があれば非空になりうる
-  # （2026-08-30 Codex四次レビュー指摘・MAJOR対応: 以前は後続の判定で
-  # `[ -n "$MODEL_VALUE" ]`だけを見ていたため、値出力口が部分出力を残して
-  # 非0終了した場合に「取得成功」と誤判定し、取得失敗時のWARN分岐へ到達
-  # しないまま生成経路へ入ってしまい、かつBEDROCK_STATUS/BEDROCK_PAYLOADが
-  # 未初期化のままset -u下で異常終了しうる欠陥があった）。取得成功/失敗は
-  # 明示フラグMODEL_OKで判定する。
-  _leader_runtime_err_tmp="$(mktemp 2>/dev/null)" || _leader_runtime_err_tmp=""
-  if [ -n "$_leader_runtime_err_tmp" ]; then
-    # ⚠️ --sub-delegateは付けたまま渡す。v2解決自体には使われない（§4.2-f）が、
-    # v1委譲期間中のフォールバック値（AIENV_MODEL_MAIN/AIENV_MODEL_SUBの
-    # 出し分け）は引き続きこのフラグの有無だけで決まる。外すとv1機でサブが
-    # メイン既定値へ倒れてしまう（2026-09-01実測で発見・回帰させない）。
-    if _leader_runtime_json="$("$DIR/scripts/install-main.sh" --print-leader-runtime --sub-delegate 2>"$_leader_runtime_err_tmp")"; then
-      # model・effortの抽出はinstall-main.sh本体（resolve_leader_runtime呼び出し
-      # 直後）と同じ「1回のpython3呼び出しで両方取り出す」方式（値の再パースを
-      # 増やさない）。⚠️ JSONとして読めることだけでなく、契約（4.2-a）が定める
-      # 形自体も検査する: ①stdoutが物理行1行だけ（契約「1行のJSON」）②
-      # トップレベルはobject③modelは非空文字列かつC0制御文字・DEL（0x00-0x1F・
-      # 0x7F）を含まない④effortは**キーが存在する場合に限り**同様の非空
-      # clean文字列（存在しない＝正常な省略。空文字列を許すとupdate側とcheck-
-      # drift側で「未指定」の判定基準が食い違う）。enumそのもの（低/中/高等）
-      # まではここで検査しない（enumはprovider/配送先ごとに異なりresolver側が
-      # 唯一の正本＝値表の重複を増やさない）。契約違反はJSON解析失敗と同列に
-      # resolve-leaderの出力契約違反として扱う（2026-09-01 Codex一次・二次
-      # レビュー指摘・Major対応: 従来はjson.load()が例外を出さなければ無条件で
-      # 信頼しており、非文字列値・制御文字混入・複数行整形JSON・
-      # `"effort": ""`のような矛盾値の契約違反を検出できなかった）。
-      if _leader_runtime_fields="$(printf '%s' "$_leader_runtime_json" | python3 -c '
-import json, sys
-
-def is_clean_str(s):
-    if not isinstance(s, str) or s == "":
-        return False
-    return not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
-
-raw = sys.stdin.read()
-if raw.count(chr(10)) > 1 or (raw.count(chr(10)) == 1 and not raw.endswith(chr(10))):
-    sys.exit(1)
-d = json.loads(raw)
-if not isinstance(d, dict):
-    sys.exit(1)
-model = d.get("model")
-if not is_clean_str(model):
-    sys.exit(1)
-if "effort" in d:
-    effort = d["effort"]
-    if not is_clean_str(effort):
-        sys.exit(1)
-else:
-    effort = ""
-print(model)
-print(effort)
-' 2>/dev/null)"; then
-        MODEL_VALUE="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '1p')"
-        EFFORT_VALUE="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '2p')"
-        MODEL_OK=1
-      else
-        warn "$(leader_runtime_error_message "PROFILE_RESOLVER_ERROR" "リーダー実行値のJSON解析に失敗しました（resolve-leaderの出力契約違反の可能性）")"
-      fi
-    else
-      # ⚠️ 契約（4.2-b）は「標準エラーへ`<コード>\t<理由>`を1行」を定めている。
-      # 契約外（複数行・タブ無し・理由が空/制御文字混入等）の出力は、たとえ
-      # 1行目だけを見ても内容をそのまま理由として再掲しない＝契約違反自体を
-      # 汎用文言に倒し、契約外の生テキストをログへ流さない
-      # （2026-09-01 Codex二次レビュー指摘・Major対応: 従来は1行目を取り出す
-      # だけで、その中身の妥当性〈タブの有無・理由の空文字・制御文字混入〉を
-      # 検証していなかった）。
-      _leader_runtime_stderr_parsed="$(python3 -c '
-import re, sys
-
-def is_clean_str(s):
-    return s != "" and not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
-
-# 機械可読コードは契約（4.2-b・profile-resolve-contract-2026-09-01.md §4）が
-# 列挙する既知の集合に限定する（2026-09-01 Codex三次レビュー指摘・Major
-# 対応: 構文的にcleanなだけの未知コードを無条件で通すと、将来の実装不具合で
-# 任意文字列が「コード」として素通りしログへ再掲されうる）。
-KNOWN_CODE_RE = re.compile(
-    r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|"
-    r"PROFILE_RESOLVER_MISSING|PROFILE_RESOLVER_ERROR|LEADER_UNCONFIGURED|"
-    r"LEADER_UNAVAILABLE|"
-    r"PROFILE_INVALID:[A-Za-z0-9_-]+|LEADER_CANDIDATE_INVALID:[A-Za-z0-9_-]+)$"
-)
-
-with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
-    raw = f.read()
-lines = raw.split(chr(10))
-if lines and lines[-1] == "":
-    lines = lines[:-1]
-if len(lines) != 1 or chr(9) not in lines[0]:
-    print("INVALID")
-    sys.exit(0)
-code, reason = lines[0].split(chr(9), 1)
-if not KNOWN_CODE_RE.match(code) or not is_clean_str(reason):
-    print("INVALID")
-    sys.exit(0)
-print("VALID")
-print(code)
-print(reason)
-' "$_leader_runtime_err_tmp" 2>/dev/null)"
-      if [ "$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '1p')" = "VALID" ]; then
-        _leader_runtime_code="$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '2p')"
-        _leader_runtime_reason="$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '3p')"
-        warn "リーダー実行値の取得に失敗しました（scripts/install-main.sh --print-leader-runtime）: $(leader_runtime_error_message "${_leader_runtime_code:-PROFILE_RESOLVER_ERROR}" "$_leader_runtime_reason")"
-      else
-        warn "リーダー実行値の取得に失敗しました（scripts/install-main.sh --print-leader-runtime）: $(leader_runtime_error_message "PROFILE_RESOLVER_ERROR" "標準エラーの出力が契約（4.2-b・1行のコード+理由）に従っていません")"
-      fi
-    fi
-    rm -f "$_leader_runtime_err_tmp"
-  else
-    warn "リーダー実行値の取得に失敗しました: 一時ファイルを作成できませんでした"
-  fi
-  BEDROCK_STATUS="ABSENT"
-  BEDROCK_PAYLOAD='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-  if [ "$MODEL_OK" = "1" ]; then
-    mkdir -p "$(dirname "$SETTINGS_JSON_DEST")"
-    # Bedrock envファイルの状態を3分類する: ABSENT(未導入・正常)／
-    # EXISTS_BUT_UNAVAILABLE(存在するのに読めない・解析できない)／OK。
-    # EXISTS_BUT_UNAVAILABLEの場合はsettings.json本体の再生成ごと中止し
-    # 既存ファイルを保持する（「生成失敗時は旧ファイルを触らない」契約＝
-    # 設計書§11.2。2026-08-30 Codex 3巡目差し戻し・MAJOR対応: 従来は
-    # パーミッション矯正失敗・print-bedrock-env-jsonの解析失敗のいずれも
-    # 「Bedrock未導入」と同じ空payloadへ丸めた上でsettings.json本体の
-    # 再生成・mv上書きを続行しており、既存設定に書かれていた
-    # CLAUDE_CODE_USE_BEDROCK・リージョン・モデルpin等が黙って消え得た。
-    # Bedrockパスがディレクトリの場合も`-f`テストが無警告のまま偽になり、
-    # 同じ経路で空設定へ進んでいた。install-main.sh generate_settings_json()
-    # と同じ設計に揃える）。
-    bedrock_kind="$(bedrock_env_file_kind "$AIENV_BEDROCK_ENV_FILE")"
-    if [ "$bedrock_kind" != "ABSENT" ]; then
-      if [ "$bedrock_kind" = "UNAVAILABLE" ]; then
-        warn "Bedrock envファイルのパスが通常ファイルではありません（ディレクトリ・dangling symlink・親ディレクトリの探索権限不足等の可能性）。settings.jsonの再生成を中止し、既存ファイルを保持します: $AIENV_BEDROCK_ENV_FILE"
-        BEDROCK_STATUS="EXISTS_BUT_UNAVAILABLE"
-      else
-        # 非公開の値を持つため、読む前にパーミッションを0600へ揃える
-        # （install-main.sh generate_settings_json()と同じ流儀。絶対厳守③）。
-        # 矯正に失敗した/矯正後も600でない場合はfail-openで読み進めない
-        # （Codex一次レビュー指摘Major対応の横展開）。
-        chmod 600 "$AIENV_BEDROCK_ENV_FILE" 2>/dev/null || true
-        bedrock_env_perm="$(stat -f '%Lp' "$AIENV_BEDROCK_ENV_FILE" 2>/dev/null || stat -c '%a' "$AIENV_BEDROCK_ENV_FILE" 2>/dev/null || echo '')"
-        if [ "$bedrock_env_perm" != "600" ]; then
-          warn "Bedrock envファイルのパーミッションを0600へ揃えられませんでした（現在: ${bedrock_env_perm:-不明}）。settings.jsonの再生成を中止し、既存ファイルを保持します: $AIENV_BEDROCK_ENV_FILE"
-          BEDROCK_STATUS="EXISTS_BUT_UNAVAILABLE"
-        else
-          # Bedrock envファイルの解析は install-main.sh --print-bedrock-
-          # env-json（＝compute_bedrock_env_json()）だけが行う（2026-08-30
-          # 工程横断レビュー指摘・MAJOR-A対応: 以前はここで許可リスト・生
-          # ファイルの読取処理を独自に複製しており〈値表は同一だが解析
-          # ロジックが2箇所に分岐〉、installer/updaterの生成結果が食い違い
-          # うる構造だった。生ファイルは一切直接readしない）。
-          if BEDROCK_PAYLOAD="$("$DIR/scripts/install-main.sh" --print-bedrock-env-json 2>/dev/null)"; then
-            BEDROCK_STATUS="OK"
-          else
-            warn "Bedrock envファイルの解析に失敗しました。settings.jsonの再生成を中止し、既存ファイルを保持します: $AIENV_BEDROCK_ENV_FILE"
-            BEDROCK_STATUS="EXISTS_BUT_UNAVAILABLE"
-            BEDROCK_PAYLOAD='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-          fi
-        fi
-      fi
-    fi
-  fi
-  if [ "$MODEL_OK" != "1" ]; then
-    # 取得失敗の理由は上のwarn（leader_runtime_error_message経由）で既に出力済み。
-    # settings.json の再生成をskipします（旧ファイルは保持します）。
-    # ⚠️ 設計書§3.9「update-sub.shはリーダー行が未確定ならWARN＋非0終了」の
-    # 実装（2026-09-01 Codex一次レビュー指摘・Blocking対応）。ここでは
-    # 直ちにexitせず、後続の4a〜4d（config.toml再生成・Preferences再同期・
-    # 骨格フォルダ補充・agents symlink化）は続行させたうえで、スクリプト末尾で
-    # このフラグに従って終了する＝「対話の途中で止まらない」という同節の趣旨を
-    # 保ちつつ、最終的な終了コードには必ず反映させる。
-    EXIT_CODE=1
-  elif [ "$BEDROCK_STATUS" = "EXISTS_BUT_UNAVAILABLE" ]; then
-    # settings.json本体の再生成ごとskipし旧ファイルを保持する（上でWARN済み）。
-    # ⚠️ ここも非0終了にする（状態機械B S4・2026-09-01工程横断レビュー差し戻し
-    # MAJOR対応。上のEXIT_CODEコメント参照）。leader未確定の場合と同じ
-    # deferred方式＝4a〜4dは続行し、スクリプト末尾でこのフラグに従って終了する。
-    EXIT_CODE=1
-  else
-    settings_tmp="$(mktemp "$(dirname "$SETTINGS_JSON_DEST")/.$(basename "$SETTINGS_JSON_DEST").aienv-tmp.XXXXXX")"
-    if PY_OUT="$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-if not isinstance(data, dict) or data.get('model') != '__AIENV_MODEL__':
-    got = data.get('model') if isinstance(data, dict) else type(data).__name__
-    print('template \"model\" field is not the __AIENV_MODEL__ placeholder (got: ' + repr(got) + ')', file=sys.stderr)
-    sys.exit(1)
-# effortLevelの目印検査はmodel側と対で行う（2026-09-01 配役表解凍 §4.2-g・
-# install-main.sh generate_settings_json()と同じ検証。片側だけ検査すると
-# 誰かがテンプレへ特定のeffort値を直接ハードコードしても検出できない）。
-if data.get('effortLevel') != '__AIENV_EFFORT__':
-    got_effort = data.get('effortLevel')
-    print('template \"effortLevel\" field is not the __AIENV_EFFORT__ placeholder (got: ' + repr(got_effort) + ')', file=sys.stderr)
-    sys.exit(1)
-data['model'] = sys.argv[3]
-effort = sys.argv[5]
-if effort:
-    data['effortLevel'] = effort
-else:
-    # 未指定はキー自体を削除する（セッション/アカウント既定に従う。
-    # ⚠️ v1委譲期間だけはeffortにlegacy値'high'が入るためキーは維持される
-    # ＝install-main.sh generate_settings_json()と同じ非対称。§4.2-g）。
-    data.pop('effortLevel', None)
-
-payload = json.loads(sys.argv[4])
-template_env_keys = set((data.get('env') or {}).keys())
-skipped = []
-if payload.get('env'):
-    data.setdefault('env', {})
-    for k, v in payload['env'].items():
-        if k in template_env_keys:
-            skipped.append(k)
-            continue
-        data['env'][k] = v
-
-with open(sys.argv[2], 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-if skipped:
-    print('SKIPPED_ENV_KEYS:' + ','.join(skipped))
-if payload.get('rejected_keys'):
-    print('REJECTED_ENV_KEYS:' + ','.join(payload['rejected_keys']))
-if payload.get('malformed_lines'):
-    print('MALFORMED_ENV_LINES:' + ','.join(payload['malformed_lines']))
-" "$SETTINGS_JSON_SRC" "$settings_tmp" "$MODEL_VALUE" "$BEDROCK_PAYLOAD" "$EFFORT_VALUE" 2>&1)"; then
-      mv "$settings_tmp" "$SETTINGS_JSON_DEST"
-      log "settings.json を再生成しました（model=${MODEL_VALUE}, effort=${EFFORT_VALUE:-未指定}）: $SETTINGS_JSON_DEST"
-      while IFS= read -r py_out_line; do
-        case "$py_out_line" in
-          SKIPPED_ENV_KEYS:*)
-            warn "Bedrock envファイルのキーがテンプレ側envと衝突したためスキップしました（キー名: ${py_out_line#SKIPPED_ENV_KEYS:}）: $AIENV_BEDROCK_ENV_FILE"
-            ;;
-          REJECTED_ENV_KEYS:*)
-            warn "Bedrock envファイルに許可リスト外のキーがあったため取り込みませんでした（キー名: ${py_out_line#REJECTED_ENV_KEYS:}）: $AIENV_BEDROCK_ENV_FILE"
-            ;;
-          MALFORMED_ENV_LINES:*)
-            warn "Bedrock envファイルに解析できない行がありました（行番号: ${py_out_line#MALFORMED_ENV_LINES:}）: $AIENV_BEDROCK_ENV_FILE"
-            ;;
-        esac
-      done <<EOF
-$PY_OUT
-EOF
-    else
-      rm -f "$settings_tmp"
-      warn "settings.json の生成に失敗しました（旧ファイルは保持します）: ${PY_OUT}"
-    fi
-  fi
-fi
-
-# --- 2c. claude/agents/*.md を ~/.claude/agents/ へ symlink化する（git の
-#         HEAD が変わっていなくても実行する。2b.と同じ理由） ---
-# 本人指示（2026-09-03・最優先）: 従来このスクリプトは claude/agents/ の同期を
-# 一切行っておらず、repoへ新しいロール定義（例: vault-scribe.md）を追加しても
-# サブ機へ配布されない欠落があった（install-main.sh は agents を含む全symlinkを
-# 再構築するが、update-sub.sh はサブ機の日常運用で使う軽量更新のため、新規
-# agentファイルの取り込みに install-sub.sh のフル再実行が必要になっていた）。
-# install-main.sh の agents symlinkループ・link()と同じ退避規則を、
-# scripts/lib/managed-symlink.sh の sync_managed_symlink() 経由で共有する
-# （検証4巡目 BLOCKING-1対応・2026-09-14。従来は「最小差分を優先」という
-# 本人指示で複製実装にしていたが、その結果install-main.sh側だけに
-# 検証3巡目 BLOCKING-1対応〈既存backupと内容が異なる通常ファイルの追加
-# 保存〉を入れた際、ここが二重実装のまま取り残されて同種のデータ消失が
-# 再発した。共有関数化してこの再発パターン自体を塞ぐ）。
-# ⚠️ 当初は4.配下（HEAD変化時のみ実行）に置いていたが、サブ機の実機で
-# 「2回目以降の実行はHEAD不変で3.の早期終了に入り、agentsのsymlink化に
-# 一切到達しない」という実バグが発生したため、2026-09-03 本人実査で2b.と
-# 同じ「HEAD不変でも実行する」位置へ移した（冪等で軽い処理のため毎回
-# 走らせて問題ない）。
-AGENTS_SRC_DIR="$DIR/claude/agents"
-AGENTS_DEST_DIR="$HOME/.claude/agents"
-if [ -d "$AGENTS_SRC_DIR" ]; then
-  mkdir -p "$AGENTS_DEST_DIR"
-  agents_md_count=0
-  # 前提修正 P-2（設計§2・2-c: update-sub.shにも2-a・2-bを入れる）:
-  # 職種定義の配布結果を必ず報告する。①新しく配置した定義（初回未配置）
-  # ②repoから消えた定義へのdangling symlinkの2つを固定文（§2.1）で報告し、
-  # ②が1件でもあれば非0終了する（①は終了コードに影響しない）。
-  AGENTS_NEWLY_PLACED=()
-  # 案件③ B-1 D-4（設計-v1.1.3.md §5 手順1）: effort-per-role v2の生成実
-  # ファイル方式を退役し、install-main.sh link()と同じsync_managed_symlink()
-  # 経由のsymlink化へ戻す。
-  for f in "$AGENTS_SRC_DIR"/*.md; do
-    [ -e "$f" ] || continue
-    agents_md_count=$((agents_md_count + 1))
-    name="$(basename "$f")"
-    dest="$AGENTS_DEST_DIR/$name"
-    # dest が symlink・実ファイルいずれの形でも一切存在しなかったものだけを
-    # 「初回未配置」として数える（既存の名前を張り替えたケースは対象外＝
-    # 設計§2.1「新しい定義を配置した」）。
-    if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
-      AGENTS_NEWLY_PLACED+=("${name%.md}")
-    fi
-    if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$f" ]; then
-      # 既にsymlinkでリンク先も正しければ何もしない（no-op）。それ以外
-      # （古いrepoパスを指している・danglingを含む・symlinkでない実ファイル
-      # ＝v2が生成した実ファイルもここに含む）は sync_managed_symlink() が
-      # 「常に正しい状態へ収束させる」＝install-main.sh link() と同じ方針・
-      # 同じ退避規則で張り直す。
-      continue
-    fi
-    sync_managed_symlink "$f" "$dest" "update-sub"
-  done
-  if [ "${#AGENTS_NEWLY_PLACED[@]}" -gt 0 ]; then
-    log "AGENTS: 初回未配置 ${#AGENTS_NEWLY_PLACED[@]}件（正常・配置しました）: $(IFS=,; echo "${AGENTS_NEWLY_PLACED[*]}")"
-  fi
-  if [ "$agents_md_count" -eq 0 ]; then
-    # ⚠️ .mdが0件の場合もcheckout破損の可能性として扱い、以降のdangling走査は
-    # 行わない（Codexフォローアップレビュー指摘・Minor対応: ディレクトリ自体は
-    # あるが中身が空／.md以外しか無い状態も、ディレクトリ丸ごと欠落と同じ
-    # 「checkout全体の異常」であり、既存の全symlinkを個別の「削除された
-    # ロール」として誤って警告してしまう事故を防ぐため、この場合もdangling
-    # 走査をskipする＝上のディレクトリ丸ごと欠落時の分岐と同じ扱いに揃える）。
-    warn "claude/agents/ に .md ファイルが1つもありません（checkout破損の可能性）。roleのsymlink化はskipされました: $AGENTS_SRC_DIR"
-  else
-    # repoから削除されたロールのsymlink（dangling）は削除せず報告のみに留める
-    # （本人指示: 削除は本人判断）。aienv管理下（$AGENTS_SRC_DIR配下を指す）
-    # symlinkに限定して検査する＝本スクリプトが関与しない他アプリ由来のsymlinkを
-    # 誤検知しないため。⚠️ $AGENTS_SRC_DIR自体が存在しない・中身が空の場合は
-    # この走査を行わない（Codex一次・フォローアップレビュー指摘・Minor対応:
-    # checkout全体が壊れているケースと個別ロール削除のケースを混同し、既存の
-    # 全symlinkを誤って「削除されたロール」として警告してしまう事故を防ぐ）。
-    AGENTS_DANGLING=()
-    if [ -d "$AGENTS_DEST_DIR" ]; then
-      for existing in "$AGENTS_DEST_DIR"/*.md; do
-        [ -L "$existing" ] || continue
-        target="$(readlink "$existing")"
-        case "$target" in
-          "$AGENTS_SRC_DIR"/*)
-            [ -e "$target" ] || AGENTS_DANGLING+=("$(basename "$existing" .md)")
-            ;;
-        esac
-      done
-    fi
-    if [ "${#AGENTS_DANGLING[@]}" -gt 0 ]; then
-      # ⚠️ ここは肯定判定にだけ使う（§2.1）。この行の有無で「他の失敗の
-      # 不在」を推定しない（PA-11・pull失敗・machine_role・--resync等、
-      # update-sub.shの非0経路は他にも複数あるため）。
-      log "AGENTS: dangling ${#AGENTS_DANGLING[@]}件（異常・repo から消えた定義のリンクが残っています。削除は本人が判断）: $(IFS=,; echo "${AGENTS_DANGLING[*]}")"
-      EXIT_CODE=1
-    fi
-  fi
-else
-  warn "claude/agents/ が見つかりません（checkout破損の可能性）。roleのsymlink化をskipします: $AGENTS_SRC_DIR"
-fi
-
-# --- 3. repoの更新が無ければ、4.（config.toml再生成・Preferences再同期・
-#         骨格フォルダ補充）は行わず終了する（settings.json再生成は2b.・
-#         guard配置は2a.・agents symlink化は2c.で既に済んでいる＝Codex一次レビュー指摘・
-#         Nit対応の横展開） ---
-if [ "$before_head" = "$after_head" ]; then
-  # --resync（前提修正 P-3・3-b・設計§3.1・契約2）: HEAD不変の場合でも
-  # 4b（Preferences再同期）相当だけを強制実行する。pull は通ったが同期だけ
-  # 失敗した状態から、再実行（--resync無し）では復旧できない欠陥への対策。
-  # ⚠️ 同期元の欠落・rsync自体の失敗のどちらも非0で終わる（契約3・現行4bの
-  # 「WARNして続行」を踏襲しない＝復旧手段が静かに失敗しては意味が無い）。
-  # rsyncの失敗は `rsync ... || fail "..."` で安定した固有メッセージを出して
-  # 明示的に非0終了させる（2026-09-07 Codex一次レビュー2巡目指摘・NIT対応:
-  # 旧コメントは「set -eに任せる」としていたが、PA-10(b)が固有文言を肯定
-  # 確認できるよう明示的なfail()経由へ変更済み）。ローカル実体プロファイルには
-  # 一切触れない（契約4・読むだけ。本ブロックは書込を一切行わない）。--resync
-  # を付けない通常実行はこのif本体に入らず、契約5（1文字も変えない）を満たす。
-  if [ "$RESYNC" = "1" ]; then
-    RESYNC_VP_PREFS="$DIR/vault-public/Preferences"
-    RESYNC_VAULT_PREFS="$VAULT/Preferences"
-    [ -d "$RESYNC_VP_PREFS" ] || fail "--resync: vault-public/Preferences が見つかりません（checkout破損の可能性）: $RESYNC_VP_PREFS"
-    mkdir -p "$RESYNC_VAULT_PREFS"
-    # 安定した固有メッセージで非0終了させる（rsync自身の生stderrに頼らない。
-    # 2026-09-07 Codex一次レビュー指摘・MINOR対応: PA-10(b)がrsync失敗固有の
-    # 文言を肯定確認できるようにするため）。
-    rsync -a --delete "$RESYNC_VP_PREFS/" "$RESYNC_VAULT_PREFS/" || fail "--resync: Preferences の rsync に失敗しました: $RESYNC_VP_PREFS -> $RESYNC_VAULT_PREFS"
-    log "--resync: Preferences を再同期しました: $RESYNC_VP_PREFS -> $RESYNC_VAULT_PREFS"
-  fi
-  log "変更なし（repoのHEAD: ${after_head}）。settings.json再生成・agents symlink化のほかは何もしません。"
-  # ⚠️ ここで無条件に0終了すると、2b.でEXIT_CODEへ記録したリーダー未確定の
-  # 失敗（§3.9）が握り潰される（2026-09-01 Codex一次レビュー指摘・Blocking
-  # 対応の一部）。
-  exit "$EXIT_CODE"
-fi
-
-log "更新を検知しました: ${before_head} -> ${after_head}"
-
-# --- 4a. codex/config.toml をテンプレから再生成する ---
-# install-main.sh の generate_config_toml() と同等の処理（意図的な複製。
-# ロジックを変える場合はinstall-main.sh側も合わせて見直すこと）。
-CONFIG_SRC="$DIR/codex/config.toml"
-CONFIG_DEST="$HOME/.codex/config.toml"
-if [ -f "$CONFIG_SRC" ]; then
-  if [ -e "$CONFIG_DEST" ] && [ ! -L "$CONFIG_DEST" ] && [ ! -e "$CONFIG_DEST.pre-aienv.bak" ]; then
-    cp "$CONFIG_DEST" "$CONFIG_DEST.pre-aienv.bak"
-    log "backed up: $CONFIG_DEST -> $CONFIG_DEST.pre-aienv.bak"
-  fi
-  mkdir -p "$(dirname "$CONFIG_DEST")"
-  # $HOME はここでは sed の「置換値」側（s#PATTERN#REPLACEMENT#）として使うため、
-  # エスケープが必要なのは置換値の特殊文字（& \）と区切り文字（#）だけでよい
-  # （install-main.sh の generate_config_toml() と全く同じ用途・同じエスケープ）。
-  # 検索パターン側で使う check-drift.sh とは必要なエスケープの種類が異なる点に注意
-  # （Codexレビュー指摘・Minor：正規表現メタ文字まで一律エスケープすると、
-  # $HOME に "." 等が含まれる環境で生成される config.toml に余計な "\" が混入する）。
-  escaped_home=$(printf '%s' "$HOME" | sed -e 's/[&\]/\\&/g' -e 's/#/\\#/g')
-  config_tmp="$(mktemp "$(dirname "$CONFIG_DEST")/.$(basename "$CONFIG_DEST").aienv-tmp.XXXXXX")"
-  sed "s#__AIENV_HOME__#${escaped_home}#g" "$CONFIG_SRC" > "$config_tmp"
-  mv "$config_tmp" "$CONFIG_DEST"
-  log "config.toml を再生成しました: $CONFIG_DEST"
-else
-  warn "codex/config.toml のテンプレが見つかりません（checkout破損の可能性）: $CONFIG_SRC"
-fi
-
-# --- 4b. Preferences をrsyncで再同期する（Preferences以外は絶対に触らない） ---
-# ⚠️ 2026-09-07 Codex一次レビュー指摘・BLOCKING対応: --resync実行中にpullで
-# HEADが実際に進んだ場合、この4bへ普通に到達する（HEAD不変の早期終了経路
-# だけが--resyncの対象ではない）。RESYNC=1のときは、この経路でも同期元
-# 欠落・rsync失敗を非0で終わらせる（設計§3.1契約3。「WARNして続行」を
-# 踏襲しない）。RESYNC=0（--resyncなし通常実行）の挙動は1文字も変えない
-# （契約5＝elseの分岐が旧来のwarn/黙示のset -e依存のまま）。
-VP_PREFS="$DIR/vault-public/Preferences"
-VAULT_PREFS="$VAULT/Preferences"
-if [ -d "$VP_PREFS" ]; then
-  mkdir -p "$VAULT_PREFS"
-  if [ "$RESYNC" = "1" ]; then
-    rsync -a --delete "$VP_PREFS/" "$VAULT_PREFS/" || fail "--resync: Preferences の rsync に失敗しました: $VP_PREFS -> $VAULT_PREFS"
-  else
-    rsync -a --delete "$VP_PREFS/" "$VAULT_PREFS/"
-  fi
-  log "Preferences を再同期しました: $VP_PREFS -> $VAULT_PREFS"
-else
-  if [ "$RESYNC" = "1" ]; then
-    fail "--resync: vault-public/Preferences が見つかりません（checkout破損の可能性）: $VP_PREFS"
-  else
-    warn "vault-public/Preferences が見つかりません（checkout破損の可能性）: $VP_PREFS"
-  fi
-fi
-
-# --- 4c. 新しい骨格フォルダがあれば補充する（既存フォルダには一切触らない） ---
-if [ -d "$DIR/vault-public" ]; then
+  # --- 5. 新しい骨格フォルダがあれば補充する（既存フォルダには一切触らない） ---
+  local d name dest
   for d in "$DIR"/vault-public/*/; do
     [ -d "$d" ] || continue
     name="$(basename "$d")"
     [ "$name" = "Preferences" ] && continue
     dest="$VAULT/$name"
-    if [ ! -e "$dest" ]; then
-      mkdir -p "$dest"
-      if [ -f "$d/README.md" ]; then
-        cp "$d/README.md" "$dest/README.md"
-      fi
-      log "新しい骨格フォルダを補充しました: $dest"
+    [ -e "$dest" ] && continue
+    mkdir -p "$dest" 2>/dev/null || fail "骨格フォルダを作成できません: ${dest}"
+    if [ -f "$d/README.md" ]; then
+      cp "$d/README.md" "$dest/README.md" || fail "骨格フォルダを作成できません: ${dest}"
     fi
+    log "新しい骨格フォルダを補充しました: $dest"
   done
-fi
 
-log "done."
-# ⚠️ EXIT_CODEは2b.でリーダー実行値の取得に失敗した場合、またはBedrock env
-# ファイルが実在するのに読めない／解析できない場合（BEDROCK_STATUS=
-# EXISTS_BUT_UNAVAILABLE）に1になる（設計書§3.9「update-sub.shはリーダー行が
-# 未確定ならWARN＋非0終了」・状態機械B S4。2026-09-01 Codex一次レビュー指摘・
-# Blocking対応／同日工程横断レビュー差し戻しMAJOR対応）。2c・4a〜4cは
-# いずれの場合も続行済みのため、ここで初めて反映する。
-exit "$EXIT_CODE"
+  log "done."
+}
+
+main "$@"

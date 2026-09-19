@@ -142,25 +142,26 @@ echo "=== AC-2: 経路（provider×execution）ごとの代表1件が起動で�
   fi
 }
 
-echo "=== AC-3: --print-bedrock-env-json が認証情報キーを1つも出さず正常終了 ==="
+echo "=== AC-3: --render-settings-json の生成物（sample 3本を入力）に認証情報キーが無く正常終了 ==="
 {
-  # 2026-09-08 検証職(Codex)1巡目指摘・リーダー裁定でAC-3の定義を確定:
-  # --print-bedrock-env-jsonは動的Bedrock許可キーの算出のためAIENV_LOCAL_
-  # PROFILE_PATH（compute_allowed_bedrock_env_keys()がrole.*の
-  # 候補を読む）・AIENV_MODEL_DEFS_FILE（同候補の解決に使う）も読む
-  # （scripts/install-main.sh の compute_allowed_bedrock_env_keys()参照）。
-  # AC-3は「AIENV_BEDROCK_ENV_FILE単体」ではなく「AIENV_BEDROCK_ENV_FILE＋
-  # AIENV_LOCAL_PROFILE_PATH=config/profile.md.sample＋AIENV_MODEL_DEFS_
-  # FILE=config/models.conf.sampleの3変数を与えてexit 0・認証情報キー
-  # なし」と定義する（本人のローカル実体・schema 4のままだと動的キー算出が
-  # そちらを読みに行きT4-LEGACYでexit 1になる＝サンプルbedrock.envをサンプル
-  # profile/models.confと組で検査するのが本来の意図）。
-  out="$(AIENV_LOCAL_PROFILE_PATH="$PROFILE_SAMPLE" AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" AIENV_BEDROCK_ENV_FILE="$BEDROCK_SAMPLE" "$INSTALL_MAIN" --print-bedrock-env-json)"; rc=$?
+  # AC-3 は「AIENV_BEDROCK_ENV_FILE＝bedrock.env.sample＋AIENV_LOCAL_PROFILE_PATH＝
+  # profile.md.sample＋AIENV_MODEL_DEFS_FILE＝models.conf.sample の3変数を与えて
+  # exit 0・生成物の env に認証情報キーなし」と定義する（旧 --print-bedrock-env-json
+  # は 2026-09-19 に退役。生成物は installer 本番と同じ generate_settings_json() の
+  # 出力＝同じ性質を検査できる）。bedrock.env は生成側が chmod 600 するため
+  # repo のサンプルを直接指さず一時コピーを使う。HOME も偽装し実 ~/.claude を読まない。
+  ac3_home="$WORK/ac3-home"; mkdir -p "$ac3_home"
+  ac3_bedrock="$WORK/ac3-bedrock.env"; cp "$BEDROCK_SAMPLE" "$ac3_bedrock"
+  ac3_out="$WORK/ac3-settings.json"
+  AIENV_LOCAL_PROFILE_PATH="$PROFILE_SAMPLE" AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" AIENV_BEDROCK_ENV_FILE="$ac3_bedrock" \
+    HOME="$ac3_home" "$INSTALL_MAIN" --render-settings-json "$ac3_out" >/dev/null 2>&1; rc=$?
   assert_eq "AC-3: exit0" "0" "$rc"
+  env_keys="$(python3 -c "import json; print(' '.join(json.load(open('$ac3_out')).get('env', {}).keys()))" 2>/dev/null)"
   for cred_key in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_BEARER_TOKEN_BEDROCK ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do
-    assert_not_contains "AC-3: 出力に${cred_key}を含まない" "$out" "$cred_key"
+    assert_not_contains "AC-3: 生成物の env に ${cred_key} を含まない" "$env_keys" "$cred_key"
   done
-  assert_contains "AC-3: 出力がJSONのenvキーを持つ" "$out" '"env"'
+  assert_contains "AC-3: 生成物の env に sample の許可キー（CLAUDE_CODE_USE_BEDROCK）が取り込まれる" "$env_keys" "CLAUDE_CODE_USE_BEDROCK"
+  assert_eq "AC-3: 偽 HOME に .claude が作られない（生成物以外に何も置かない）" "" "$(ls -A "$ac3_home")"
 }
 
 echo "=== AC-4: ngwords・/Users/・禁止キー名を含まない（3本） ==="
@@ -245,8 +246,8 @@ echo "=== AC-5: tests/ が sample の定義名・ローカル実体パスを持�
   # (b) ローカル実体・private repo（HOME 偽装で吸収できない literal 形だけ）。
   #     ~/.claude/・~/Data/obsidian の形は入れない（ゲート系テストが deny 入力として正当に使う）
   paths='takumi009-ai-env-private|/Users/[^/[:space:]]+/(Data/obsidian|\.config|\.claude|\.codex)'
-  # 除外＝自ファイル（パターン定義行が自己一致する）・S11 で縮小する 4 本（S11 着地で外す）
-  excl='tests/test-config-samples.sh|tests/test-install-main.sh|tests/test-update-sub.sh|tests/test-check-drift.sh|tests/test-install-sub.sh'
+  # 除外＝自ファイルだけ（パターン定義行が自己一致する）
+  excl='tests/test-config-samples.sh'
   scan() {  # scan <file...> → 該当行（コメント行・見出し行を除く）
     grep -nHE "(^|[^a-z0-9-])(${names})([^a-z0-9-]|$)|${paths}" "$@" \
       | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#|^[^:]+:[0-9]+:echo "===' || true

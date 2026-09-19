@@ -69,22 +69,19 @@ make_fake_repo() {
   mkdir -p "$repo/scripts" "$repo/claude/hooks" "$repo/claude/agents" "$repo/codex" "$repo/vault-public/Preferences"
   cp "$REPO_ROOT/$SCRIPT_REL" "$repo/scripts/check-drift.sh"
   chmod +x "$repo/scripts/check-drift.sh"
-  # 2026-08-30 §9.0 A-0-3: check-drift.sh は model/effort値を自前で持たず、
-  # 値出力口（install-main.sh --print-leader-runtime。2026-09-01 配役表解凍
-  # §4.2-a・§4.4で--print-modelから改名）を呼ぶ。実物をfixtureへコピーする
-  # （--print-leader-runtimeは他の全処理より先にexitする副作用ゼロの経路の
-  # ため、fixture内で呼んでも実システムに一切触れない）。
+  # check-drift.sh ①-2 は model/effort値を自前で持たず、fixture内の
+  # scripts/install-main.sh --render-settings-json（生成関数そのもの）に
+  # 一時ファイルへ再生成させて比べる（2026-09-19 着手順3・設計 §4.2）。
+  # 実物をfixtureへコピーする（--render-settings-json は他の全処理より先に
+  # exitする経路で、生成先は呼び出し側の一時ファイルのみ＝fixture内で呼んでも
+  # 実システムに一切触れない）。
   cp "$REPO_ROOT/scripts/install-main.sh" "$repo/scripts/install-main.sh"
   chmod +x "$repo/scripts/install-main.sh"
-  # install-main.shが（--print-leader-runtime等の副作用ゼロの早期exit経路も
-  # 含めて）冒頭でscripts/lib/managed-symlink.shをsourceするため同梱する
-  # （検証4巡目 BLOCKING-1対応・2026-09-14）。
+  # install-main.shが冒頭でscripts/lib/managed-symlink.shをsourceするため同梱する。
   mkdir -p "$repo/scripts/lib"
   cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$repo/scripts/lib/managed-symlink.sh"
   mkdir -p "$repo/claude/hooks/lib"
-  # ローカル実体プロファイルを置かないfixture（大半のテスト）はv1委譲経路
-  # （§3.5）に入るため、この共有libは通常参照されない。v2プロファイルを
-  # 明示的に置くテスト（後述）のためだけに実物を同梱しておく。
+  # install_fake_home() が置くv2プロファイルを resolver（実物）で解決する。
   cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$repo/claude/hooks/lib/profile_resolve.py"
   cat > "$repo/claude/settings.json" <<'EOF'
 {
@@ -120,89 +117,20 @@ EOF
   echo "# サンプル方針" > "$repo/vault-public/Preferences/sample.md"
 }
 
-# make_fake_repo_with_stub_leader_runtime <repo> <stub_log> <main_model> <sub_model> —
-# Codex一次レビュー指摘（MAJOR-1・2026-09-07・第2巡）対応。make_fake_repo()を
-# 呼んだ後、scripts/install-main.shを引数記録つきの軽量スタブへ置き換える。
-# 実物のinstall-main.shはv2実体でmachine_roleに依存しない値を返す（D-6）ため、
-# 4j/4j2のような実物ベースのテストでは「診断が--sub-delegateの有無を実際に
-# 使っているか」を固定できない（実際、当該分岐を削除しても327 passedのまま
-# だったことをCodexが実測で確認済み）。本ヘルパーはscripts/check-drift.sh
-# 自身の引数組み立て（machine_role=subのときだけ--sub-delegateを付ける・
-# scripts/check-drift.sh:401-402）を、install-main.sh側の実装から切り離して
-# 直接検証するために使う。
-# --print-leader-runtimeが受け取った引数は<stub_log>へ1行1回で記録し、
-# 引数に--sub-delegateを含むかどうかで返すJSONのmodelを変える
-# （含まない＝<main_model>／含む＝<sub_model>）。--print-bedrock-env-jsonと
-# --check-profileは他の診断項目（Bedrock envマージ・⑧の表示）が空振りしない
-# よう最小限の無害な応答を返す。
-make_fake_repo_with_stub_leader_runtime() {
-  local repo="$1" stub_log="$2" main_model="$3" sub_model="$4"
-  make_fake_repo "$repo"
-  : > "$stub_log"
-  cat > "$repo/scripts/install-main.sh" <<STUB
-#!/bin/bash
-printf '%s\n' "\$*" >> "$stub_log"
-case "\$1" in
-  --print-leader-runtime)
-    shift
-    for a in "\$@"; do
-      if [ "\$a" = "--sub-delegate" ]; then
-        printf '{"model": "%s"}\n' "$sub_model"
-        exit 0
-      fi
-    done
-    printf '{"model": "%s"}\n' "$main_model"
-    exit 0
-    ;;
-  --print-bedrock-env-json)
-    printf '{"env": {}, "rejected_keys": [], "malformed_lines": []}\n'
-    exit 0
-    ;;
-  --check-profile)
-    printf 'OK\tschema_version=5\tTEAM_MODE:full\tMACHINE_ROLE:unknown\n'
-    exit 0
-    ;;
-  *)
-    exit 1
-    ;;
-esac
-STUB
-  chmod +x "$repo/scripts/install-main.sh"
-}
-
-# claude/・codex/ の symlink化（install-main.sh相当を簡易に再現）＋
-# config.toml・settings.json生成を行う。$3（省略可）はsettings.jsonのmodel値
-# （既定 claude-fable-5[1m]＝ローカル実体プロファイルを置かないテストの大半が
-# 想定するメイン機の既定値。check-drift.sh側のAIENV_MODEL_MAIN既定値と一致させることで
-# 「他項目のfixtureのためだけの」テストで①-2が無関係にdriftを出さないようにする）。
-# $4（省略可）はeffortLevel値。既定"high"＝ローカル実体プロファイルを置かない
-# fixture（大半のテスト）はv1委譲経路（§3.5）に入り、値出力口
-# （--print-leader-runtime）は常にlegacy値"high"を返す（§4.2-g）。空文字を
-# 明示的に渡すとeffortLevelキー自体を持たない生成物になる
-# （§3.8「effort未指定はキー自体を出さない」を模擬するテスト専用）。
+# claude/・codex/ の symlink化（install-main.sh相当を簡易に再現）＋config.toml
+# 生成を行う。settings.json は本物の生成関数（fixtureへコピーした
+# scripts/install-main.sh --render-settings-json）で作る＝check-drift ①-2 が
+# 同じ入力口で再生成した生成物と一致する陰性コントロールになる（2026-09-19
+# 着手順3・設計 §4.2）。プロファイル（role.leader=fable-1m-high・
+# machine_role=main）とモデル定義は $home/.config/takumi009-ai-env/ に置く
+# （呼び出し元が先に置いていれば上書きしない）。
 install_fake_home() {
-  local repo="$1" home="$2" model="${3:-claude-fable-5[1m]}" effort="${4-high}"
+  local repo="$1" home="$2"
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
-  # settings.json はsymlinkではなく生成物（install-main.shのgenerate_settings_json()
-  # と同じプレースホルダ置換方式・2026-08-21 機役割対応）。effortLevelは
-  # sedの単純文字列置換ではキーの削除を表現できないため、model同様の目印
-  # 置換に加えてpython3でキー削除まで行う（install-main.sh generate_settings_
-  # json()の実装を模した最小限の再現）。
-  sed "s#__AIENV_MODEL__#${model}#g" "$repo/claude/settings.json" > "$home/.claude/settings.json.tmp"
-  python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-effort = sys.argv[3]
-if effort:
-    data['effortLevel'] = effort
-else:
-    data.pop('effortLevel', None)
-with open(sys.argv[2], 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-" "$home/.claude/settings.json.tmp" "$home/.claude/settings.json" "$effort"
-  rm -f "$home/.claude/settings.json.tmp"
+  if [ ! -e "$home/.config/takumi009-ai-env/profile.md" ]; then
+    write_clean_profile "$home/.config/takumi009-ai-env/profile.md"
+  fi
+  render_settings_json "$repo" "$home" "$home/.claude/settings.json"
   ln -s "$repo/claude/hooks/bootstrap-vault.sh" "$home/.claude/hooks/bootstrap-vault.sh"
   ln -s "$repo/claude/hooks/delegation-gate-v2.sh" "$home/.claude/hooks/delegation-gate-v2.sh"
   ln -s "$repo/claude/hooks/bash-danger-gate.sh" "$home/.claude/hooks/bash-danger-gate.sh"
@@ -225,6 +153,37 @@ with open(sys.argv[2], 'w') as f:
   local escaped_home
   escaped_home=$(printf '%s' "$home" | sed -e 's/[&\]/\\&/g' -e 's/#/\\#/g')
   sed "s#__AIENV_HOME__#${escaped_home}#g" "$repo/codex/config.toml" > "$home/.codex/config.toml"
+}
+
+# write_clean_profile <dest> — ⑧（--check-profile）でadvisory・未知キーが出ない
+# 最小のv2プロファイル（role表＝leader＋コア職種manifest〈navi・ja-doc〉＋
+# fixtureのclaude/agents/sample-agent.md）。⑧の陽性ケースは各テストが
+# write_v2_profile() で上書きする。
+write_clean_profile() {
+  local dest="$1"
+  mkdir -p "$(dirname "$dest")"
+  {
+    echo "---"
+    echo "schema_version: 7"
+    echo "profile_slug: test"
+    echo "team_mode: configured value=full"
+    echo "no_read_paths: unavailable"
+    echo "role.leader: configured model=fable-1m-high"
+    echo "role.navi: not_adopted"
+    echo "role.ja-doc: not_adopted"
+    echo "role.sample-agent: configured model=fable-1m-high"
+    echo "machine_role: configured value=main"
+    echo "---"
+  } > "$dest"
+  write_model_defs "$(dirname "$dest")/models.conf"
+}
+
+# render_settings_json <repo> <home> <dest> — fixtureの install-main.sh に
+# settings.json を生成させる（HOMEを偽HOMEへ向ける＝実 ~/.claude には触れない。
+# プロファイル・モデル定義は $home/.config/takumi009-ai-env/ から読まれる）。
+render_settings_json() {
+  local repo="$1" home="$2" dest="$3"
+  HOME="$home" bash "$repo/scripts/install-main.sh" --render-settings-json "$dest" >/dev/null 2>&1
 }
 
 run_check() {
@@ -332,11 +291,11 @@ write_model_defs() {
   local dest="$1"
   mkdir -p "$(dirname "$dest")"
   cat > "$dest" <<'EOF'
-[sonnet-high]
+[t-sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 
-[opus-high]
+[t-opus-high]
 provider=anthropic-api
 model=claude-opus-5
 
@@ -540,7 +499,24 @@ echo "=== 4f. ①-2 settings.jsonがJSONとして解析できない（手動編�
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 4g. ①-2 settings.jsonのテンプレ記載キーの値がテンプレと異なる場合は[DIFF]として検知する ==="
+echo "=== SD-1. ①-2 実settings.jsonがrender生成物のコピーなら差分0（陰性コントロール・2026-09-19 設計 §4.2） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "SD-1: 生成物と一致（settings.jsonはテンプレと一致）" "$out" "settings.jsonはテンプレと一致しています"
+  assert_not_contains "SETTINGS-DIFFは出ない" "$out" "[SETTINGS-DIFF]"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== SD-2. ①-2 permissions.allowの1要素を書き換えると[SETTINGS-DIFF]がキー名つきで出る（値は出さない） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
@@ -550,177 +526,30 @@ echo "=== 4g. ①-2 settings.jsonのテンプレ記載キーの値がテンプ�
 import json
 p = '$HOME_DIR/.claude/settings.json'
 d = json.load(open(p))
-d['permissions']['allow'] = ['Bash(npm run lint)']
+d['permissions']['allow'][0] = 'Bash(secret-value-must-not-leak)'
 json.dump(d, open(p, 'w'))
 "
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "settings.json DIFF検知" "$out" "[DIFF] キー 'permissions.allow'"
+  assert_contains "SD-2: [SETTINGS-DIFF] キー 'permissions'" "$out" "[SETTINGS-DIFF] キー 'permissions'"
+  assert_not_contains "値そのものは出ない" "$out" "secret-value-must-not-leak"
   assert_not_contains "一致メッセージは出ない" "$out" "settings.jsonはテンプレと一致しています"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 4h. ①-2 settings.jsonのテンプレ記載キーがlive側から欠落していると[MISSING-KEY]として検知する ==="
+echo "=== SD-3. ①-2 render失敗（プロファイルを壊す）は[SETTINGS-RENDER-FAILED] 1件＝監視不能をdrift計上 ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-del d['permissions']
-json.dump(d, open(p, 'w'))
-"
+  echo "broken profile" > "$HOME_DIR/.config/takumi009-ai-env/profile.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "MISSING-KEY検知" "$out" "[MISSING-KEY] キー 'permissions.allow'"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4i. ①-2 modelフィールドがテンプレの期待値(メイン=claude-fable-5[1m])と異なっていると/model等の意図的切替も含めdrift計上される（2026-09-01工程横断レビュー差し戻しMAJOR対応: 旧実装はここをINFO表示のみに丸め、旧modelのまま放置されても週次総drift 0になっていた。effortLevelとの非対称を解消し、V13は「週次driftで拾う」設計書§6.2-B S10どおりに扱う） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  # あえてサブ機の値でsettings.jsonを生成する（ローカル実体プロファイルは
-  # 置かない＝v1委譲経路に入り、このマシンはmainとして判定される想定）。
-  install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "modelの差分はもはやINFO表示されない（回帰確認）" "$out" "'model' フィールドが現在の期待値と異なります"
-  assert_contains "modelの差分はDIFFとしてdrift計上される" "$out" "[DIFF] キー 'model'"
-  assert_not_contains "総drift件数0にはならない（回帰確認）" "$out" "総drift件数: 0"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4j. ①-2 v2実体ではsettings.jsonのmodel期待値はrole.leaderから決まり、machine_role(sub)には依存しない（配役表-能力軸整理-設計-2026-09-07.md §5.2 D-6） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  # settings.json自体はmain既定値(claude-fable-5[1m])で生成する。
-  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
-  # machine_role: sub だが role.leader は main既定値と同じmodelを配役する。
-  # 旧方式（--sub-delegate経由でAIENV_MODEL_SUB=claude-opus-5を選ぶ）なら
-  # driftするはずだが、v2実体ではrole.leaderが唯一の正本であり機役割にも
-  # --sub-delegateにも依存しないため、driftしないことを確認する。
-  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=fable-1m-high" \
-    "machine_role: configured value=sub"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "machine_role=subでもmodelの差分は出ない（role.leaderが正本）" "$out" "[DIFF] キー 'model'"
-  assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4j2. FX-M1/FX-M2対照(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): 4jと同一環境でmachine_role=mainに変えても同じ非drift結果になる（診断がsub/main両側で同一のsettings.json期待値へ収束することの確認・AC-6④） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
-  # 4jとの唯一の違いはmachine_roleの値（sub→main）。role.leaderの値は同じ。
-  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=fable-1m-high" \
-    "machine_role: configured value=main"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "machine_role=mainでもmodelの差分は出ない（role.leaderが正本・4jと同一結果）" "$out" "[DIFF] キー 'model'"
-  assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4j3. FX-M1(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=main・本番と同じ場所に旧マーカー(sub)を併設しても診断結果に影響しない（旧マーカーを読んでいないことの証明） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
-  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=fable-1m-high" \
-    "machine_role: configured value=main"
-  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
-  printf 'sub\n' > "$HOME_DIR/.config/takumi009-ai-env/machine-role"  # AC5-ALLOW:FX-M1
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "FX-M1: 旧マーカーがsubでもmachine_role=mainならmodelの差分は出ない" "$out" "[DIFF] キー 'model'"
-  assert_contains "FX-M1: settings.json一致（旧マーカーは無視される）" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4j4. FX-M2(配役表-能力軸整理-設計-2026-09-07.md §10.1・MAJOR-4対応): machine_role=sub・旧マーカー無しで通常どおり診断される（4jと同型だが旧マーカー不在を明示） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
-  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=fable-1m-high" \
-    "machine_role: configured value=sub"
-
-  # ⚠️ 廃止済みマーカーのファイル名をソースへ直接書かない（AC-5の0件検査に
-  # 自分自身が引っかかるため）。実行時に文字列を組み立てる。
-  _h_4j4='-'
-  _legacy_marker_name_4j4="machine${_h_4j4}role"
-  [ ! -e "$HOME_DIR/.config/takumi009-ai-env/$_legacy_marker_name_4j4" ] && pass "FX-M2前提: 旧マーカーは無い" \
-    || fail_case "FX-M2前提: 旧マーカーが無いはずが存在する"
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "FX-M2: machine_role=sub・旧マーカー無しでもmodelの差分は出ない" "$out" "[DIFF] キー 'model'"
-  assert_contains "FX-M2: settings.json一致" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4j5. FX-M1直接検証(Codex一次レビュー指摘・MAJOR-1・第2巡対応): machine_role=mainのとき--print-leader-runtimeへ--sub-delegateを付けず、スタブが返すmain側の値がsettings.jsonと一致する ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  STUB_LOG_M1="$(mktemp -d)/stub-calls-m1.log"
-  make_fake_repo_with_stub_leader_runtime "$REPO" "$STUB_LOG_M1" "claude-opus-5" "claude-sonnet-5"
-  # ⚠️ スタブは{"model": ...}のみ返しeffortキーを持たないため、settings.json
-  # 側もeffortLevelキー自体を持たない形に揃える（effort=""でinstall_fake_home
-  # にeffortLevelキーを落とさせる）。揃えないとmodelとは無関係のeffortLevel
-  # 差分でこのテストの意図が濁る。
-  install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5" ""
-  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=opus-high" \
-    "machine_role: configured value=main"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_not_contains "FX-M1: --print-leader-runtime呼出しに--sub-delegateが付かない" "$(cat "$STUB_LOG_M1")" "--sub-delegate"
-  assert_contains "FX-M1: --print-leader-runtimeは呼ばれている" "$(cat "$STUB_LOG_M1")" "--print-leader-runtime"
-  assert_not_contains "FX-M1: main側の期待値と一致しmodelの差分は出ない" "$out" "[DIFF] キー 'model'"
-  assert_contains "FX-M1: settings.json一致" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4j6. FX-M2直接検証(Codex一次レビュー指摘・MAJOR-1・第2巡対応): machine_role=subのとき--print-leader-runtimeへ--sub-delegateが付き、スタブが返すsub側の値(main側と異なる)により同一settings.jsonでも差分が検知される ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  STUB_LOG_M2="$(mktemp -d)/stub-calls-m2.log"
-  make_fake_repo_with_stub_leader_runtime "$REPO" "$STUB_LOG_M2" "claude-opus-5" "claude-sonnet-5"
-  # ⚠️ settings.jsonは4j5と同じ"claude-opus-5"・effortLevelキー無しのまま
-  # 変えない（「同一settings.jsonに対する診断結果が分岐する」ことを固定
-  # するため）。
-  install_fake_home "$REPO" "$HOME_DIR" "claude-opus-5" ""
-  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=opus-high" \
-    "machine_role: configured value=sub"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "FX-M2: --print-leader-runtime呼出しに--sub-delegateが付く" "$(cat "$STUB_LOG_M2")" "--sub-delegate"
-  assert_contains "FX-M2: sub側の期待値(claude-sonnet-5)と実際(claude-opus-5)が食い違いmodelの差分が出る" "$out" "[DIFF] キー 'model'"
+  assert_contains "SD-3: [SETTINGS-RENDER-FAILED]" "$out" "[SETTINGS-RENDER-FAILED]"
+  assert_contains "監視不能である旨を明示する" "$out" "再生成できず監視不能"
+  assert_not_contains "一致メッセージは出ない" "$out" "settings.jsonはテンプレと一致しています"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -740,92 +569,6 @@ echo "=== 4k. ①-2 settings.jsonが旧versionのまま(symlink)残っている�
   assert_contains "UNEXPECTED-SYMLINK検知" "$out" "[UNEXPECTED-SYMLINK]"
   assert_not_contains "旧symlinkは誤って一致扱いにならない（回帰確認）" "$out" "settings.jsonはテンプレと一致しています"
   assert_not_contains "内容比較（DIFF等）は行わず即座にdrift扱いにする" "$out" "[DIFF] キー 'model'"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4l. ①-2 テンプレに無いキーがsettings.jsonに追加されているとEXTRA-KEYとして検知する（Codex一次レビュー指摘・Major対応: 従来WARN表示のみでpermissions等への意図しない追加変更が見逃されていた） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-d['extraTopLevelKey'] = 'unexpected'
-json.dump(d, open(p, 'w'))
-"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "EXTRA-KEY検知" "$out" "[EXTRA-KEY] キー 'extraTopLevelKey'"
-  assert_not_contains "一致メッセージは出ない" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4m. ①-2 modelキー自体がsettings.jsonから欠落しているとMISSING-KEYとしてdrift計上する（Codex一次レビュー指摘・Minor対応: キー欠落まで/model切替と同列にINFO扱いされていた） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-del d['model']
-json.dump(d, open(p, 'w'))
-"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "MISSING-KEY検知" "$out" "[MISSING-KEY] キー 'model'"
-  assert_not_contains "INFO扱いにはならない（回帰確認）" "$out" "'model' フィールドが現在の期待値と異なります"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4n. ①-2 modelキーが文字列以外の型ならMISSING扱いせず通常のDIFFとしてdrift計上する（Codex一次レビュー指摘・Minor対応の網羅: 非文字列型ケース） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-d['model'] = 12345
-json.dump(d, open(p, 'w'))
-"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "DIFF検知（非文字列型）" "$out" "[DIFF] キー 'model'"
-  assert_not_contains "INFO扱いにはならない（回帰確認）" "$out" "'model' フィールドが現在の期待値と異なります"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4o. ①-2 repoテンプレ側の'model'が__AIENV_MODEL__の目印から変わっている(再ハードコード)場合はTEMPLATE-INVALIDとして検知する（Codex二次レビュー指摘・Minor対応: 今回のタスクの発端＝テンプレへのmodel直書き回帰を、render()だけだと検知できずliveのmodel差分がINFOとして握りつぶされてしまっていた） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  # repoテンプレ側を「誰かが特定モデルを直接ハードコードしてしまった」状態にする。
-  python3 -c "
-import json
-p = '$REPO/claude/settings.json'
-d = json.load(open(p))
-d['model'] = 'claude-hardcoded-oops'
-json.dump(d, open(p, 'w'))
-"
-  install_fake_home "$REPO" "$HOME_DIR" "claude-hardcoded-oops"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "TEMPLATE-INVALID検知" "$out" "[TEMPLATE-INVALID]"
-  assert_contains "実際の値がメッセージに含まれる" "$out" "claude-hardcoded-oops"
-  assert_not_contains "誤って一致扱いにならない（回帰確認）" "$out" "settings.jsonはテンプレと一致しています"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -851,210 +594,6 @@ json.dump(d, open(p, 'w'))
   assert_not_contains "agentPushNotifEnabledはEXTRA-KEY扱いにならない" "$out" "agentPushNotifEnabled"
   assert_not_contains "inputNeededNotifEnabledはEXTRA-KEY扱いにならない" "$out" "inputNeededNotifEnabled"
   assert_contains "総drift件数0" "$out" "総drift件数: 0"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4q. ①-2 既知アプリ管理キー一覧に無いキーは従来どおりEXTRA-KEYとしてdrift計上する（4pの回帰確認: 除外対象を広げすぎていない） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-d['someUnknownKey'] = 'x'
-json.dump(d, open(p, 'w'))
-"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "未知キーはEXTRA-KEYとして検知される" "$out" "[EXTRA-KEY]"
-  assert_contains "総drift件数1" "$out" "総drift件数: 1"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4q2. ①-2 既知アプリ管理キーと同名でもトップレベル以外（ネストしたキー）は除外しない（Codex一次レビュー指摘・Minor対応: leaf一致だと別階層の同名キーまで誤って除外してしまう） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-d.setdefault('permissions', {})['agentPushNotifEnabled'] = True
-json.dump(d, open(p, 'w'))
-"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "ネストしたagentPushNotifEnabledはEXTRA-KEYとして検知される" "$out" "[EXTRA-KEY]"
-  assert_contains "総drift件数1" "$out" "総drift件数: 1"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4r. ①-2 model値の出力口が一本化されている（install-main.sh --print-model の出力と生成されたsettings.jsonのmodelが一致する。§9.0 A-0-3・値表2箇所重複の解消） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-
-  printed_main="$("$REPO/scripts/install-main.sh" --print-model)"
-  printed_sub="$("$REPO/scripts/install-main.sh" --print-model --sub-delegate)"
-  assert_eq_num "メイン既定値の出力口はsettings.jsonのmodelと一致" "$printed_main" "claude-fable-5[1m]"
-  assert_eq_num "サブ既定値の出力口はsettings.jsonのmodelと一致" "$printed_sub" "claude-opus-5"
-  own_table_lines="$(grep -c ':.*AIENV_MODEL_MAIN:=\|:.*AIENV_MODEL_SUB:=' "$REPO/scripts/check-drift.sh" || true)"
-  assert_eq_num "check-drift.sh自身はAIENV_MODEL_MAIN/SUBの既定値表を持たない（重複解消）" "$own_table_lines" "0"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4s. ①-2 model値の出力口（install-main.sh --print-model）が値を返せない場合はfail-openで一致扱いにせずdrift計上する ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  rm -f "$REPO/scripts/install-main.sh"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "MODEL-VALUE-UNAVAILABLEとして検知される" "$out" "[MODEL-VALUE-UNAVAILABLE]"
-  assert_not_contains "誤って一致扱いにならない" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4t. ①-2 'env'配下のキーはdrift検知時に値を出力しない（Bedrock envファイル取り込み後の値露出防止・2026-08-30 Codex一次レビュー指摘・Major対応） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  # settings.jsonの"env"配下に、Bedrock envファイル取り込みを想定した
-  # 秘密情報風の値（推論プロファイルARN相当）を追加する。
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-d.setdefault('env', {})['ANTHROPIC_DEFAULT_OPUS_MODEL'] = 'arn:aws:bedrock:us-east-2:123456789012:application-inference-profile/secret-id'
-json.dump(d, open(p, 'w'))
-"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "EXTRA-KEYとして検知される（テンプレに無いenvキーのため）" "$out" "[EXTRA-KEY]"
-  assert_contains "値は<redacted>に置換される" "$out" "<redacted>"
-  assert_not_contains "ARNの値そのものはログに出ない" "$out" "123456789012"
-  assert_not_contains "ARNの値そのものはログに出ない(secret-id部分)" "$out" "secret-id"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4u. ①-2 Bedrock envファイルが正しくマージ済みのsettings.jsonは恒常的なEXTRA-KEY drift扱いにならない（2026-08-30 工程横断レビュー指摘・MAJOR-5対応: installer/update-subが正しく生成した状態がdriftとして誤報され続けていた） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
-  cat > "$HOME_DIR/.config/takumi009-ai-env/bedrock.env" <<'EOF'
-CLAUDE_CODE_USE_BEDROCK=1
-AWS_REGION=us-east-1
-EOF
-  # install-main.sh generate_settings_json()が実際に生成する結果を模す
-  # （許可リストに載っているキーのみをenvブロックへ追加した状態）。
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-d.setdefault('env', {})['CLAUDE_CODE_USE_BEDROCK'] = '1'
-d['env']['AWS_REGION'] = 'us-east-1'
-json.dump(d, open(p, 'w'))
-"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "正しくマージ済みの状態はdriftにならず一致と判定される" "$out" "settings.jsonはテンプレと一致しています"
-  assert_not_contains "CLAUDE_CODE_USE_BEDROCKはEXTRA-KEYにならない" "$out" "[EXTRA-KEY]"
-  assert_contains "総drift件数0" "$out" "総drift件数: 0"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4v. ①-2 Bedrock envファイルに書かれているのにsettings.jsonへ反映されていなければMISSING-KEYとして正しく検知する（4uの対比・fail-openにしない確認） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
-  cat > "$HOME_DIR/.config/takumi009-ai-env/bedrock.env" <<'EOF'
-CLAUDE_CODE_USE_BEDROCK=1
-EOF
-  # settings.json側には反映されていない（生成失敗・手動改変等を模す）。
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "MISSING-KEYとして検知される（fail-openで見逃さない）" "$out" "[MISSING-KEY]"
-  assert_contains "キー名env.CLAUDE_CODE_USE_BEDROCKが出る" "$out" "env.CLAUDE_CODE_USE_BEDROCK"
-  assert_contains "値は<redacted>のまま" "$out" "<redacted>"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4w. ①-2 Bedrock env値の出力口が読取失敗で非0終了した場合はfail-openで一致扱いにせずBEDROCK-ENV-VALUE-UNAVAILABLEとして検知する（2026-08-30 Codex二次レビュー指摘・Major対応） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  mkdir -p "$HOME_DIR/.config/takumi009-ai-env"
-  ENV_FILE="$HOME_DIR/.config/takumi009-ai-env/bedrock.env"
-  # bedrock.envをディレクトリとして作る（Codex三次レビュー指摘・Minor対応:
-  # chmod 000はroot実行環境で読めてしまい未検証になりうるが、open()は
-  # ディレクトリに対して実行uidに依存せず常にIsADirectoryErrorで失敗する）。
-  mkdir -p "$ENV_FILE"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "BEDROCK-ENV-VALUE-UNAVAILABLEとして検知される" "$out" "[BEDROCK-ENV-VALUE-UNAVAILABLE]"
-  assert_not_contains "誤って一致扱いにならない" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 4x. ①-2 Bedrock env値の出力口がexit0・非空文字列で戻ってきても、中身が壊れたJSON／旧flat形式（envキーが無い）ならfail-openで空env扱いにせずBEDROCK-ENV-VALUE-UNAVAILABLEとして検知する（2026-08-30 Codex 2巡目差し戻し・MAJOR対応: 従来はexit0・非空なら無条件で信頼しており、壊れた/旧形式のpayloadが静かに「空env」として受理される穴があった） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  # install-main.sh を「--print-bedrock-env-jsonがexit0・非空文字列だが
-  # スキーマが壊れている（envキーが無い旧flat形式）」を返すスタブへ差し替える
-  # （--print-leader-runtimeはinstall_fake_home()の既定model/effort
-  # （claude-fable-5[1m]/high）と一致させ、①-2 model/effort側は無関係に
-  # driftを出さないようにする。2026-09-01 配役表解凍以降、値出力口は
-  # --print-modelから--print-leader-runtimeへ一本化＝§4.2-a）。
-  cat > "$REPO/scripts/install-main.sh" <<'EOF'
-#!/bin/bash
-case "$1" in
-  --print-leader-runtime)
-    echo '{"model": "claude-fable-5[1m]", "effort": "high"}'
-    exit 0
-    ;;
-  --print-bedrock-env-json)
-    echo '{"AWS_REGION": "us-east-1"}'
-    exit 0
-    ;;
-esac
-exit 1
-EOF
-  chmod +x "$REPO/scripts/install-main.sh"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "壊れた/旧形式のpayloadでもBEDROCK-ENV-VALUE-UNAVAILABLEとして検知される" "$out" "[BEDROCK-ENV-VALUE-UNAVAILABLE]"
-  assert_not_contains "誤って一致扱いにならない" "$out" "settings.jsonはテンプレと一致しています"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -1251,6 +790,111 @@ EOF
   rm -rf "$REPO" "$HOME_DIR"
 }
 
+echo "=== TC-1. ②Codex Desktopが書き直す3テーブル（plugins・mcp_servers・desktop）は既知アプリ管理として除外され、今日の実ファイルと同型でもdrift 0・未知キー0（2026-09-19 設計 §4.1） ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  # テンプレ＝本人が決めた7キー＋同梱MCP・バンドルプラグイン（08-10版の形）。
+  cat > "$REPO/codex/config.toml" <<'EOF'
+service_tier = "default"
+approval_policy = "never"
+model = "gpt-5"
+model_reasoning_effort = "high"
+
+[sandbox_workspace_write]
+network_access = true
+
+[features]
+hooks = true
+js_repl = true
+
+[mcp_servers.computer-use]
+command = "__AIENV_HOME__/.codex/computer-use/bin"
+
+[mcp_servers.node_repl]
+command = "node"
+
+[mcp_servers.node_repl.env]
+NODE_REPL_INSTRUCTIONS_USE_CASE_BROWSER = "browser"
+
+[plugins."sites@openai-bundled"]
+enabled = true
+
+[plugins."computer-use@openai-bundled"]
+enabled = false
+EOF
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  # live＝アプリが起動時に書き直した後の形（computer-use MCP欠落・plugins差・
+  # node_repl.env差・desktopテーブル追加）。7キーは不変。
+  cat > "$HOME_DIR/.codex/config.toml" <<EOF
+service_tier = "default"
+approval_policy = "never"
+model = "gpt-5"
+model_reasoning_effort = "high"
+
+[sandbox_workspace_write]
+network_access = true
+
+[features]
+hooks = true
+js_repl = true
+
+[mcp_servers.node_repl]
+command = "node"
+
+[mcp_servers.node_repl.env]
+NODE_REPL_INSTRUCTIONS_USE_CASE_BROWSER = ""
+BROWSER_USE_CODEX_APP_VERSION = "26.915.31945"
+
+[plugins."computer-use@openai-bundled"]
+enabled = false
+
+[plugins."unified-computer-use@openai-bundled"]
+enabled = true
+
+[desktop]
+theme = "system"
+EOF
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "TC-1: 3テーブル差分だけならTOML三分類で一致" "$out" "TOML三分類で一致しています"
+  assert_not_contains "未知キーWARNは出ない" "$out" "WARN: 未知キー"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+echo "=== TC-2. ②3テーブルを除外しても監視7キー（model等）は生きている＝modelを変えると[DIFF] ==="
+{
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  make_fake_repo "$REPO"
+  cat > "$REPO/codex/config.toml" <<'EOF'
+service_tier = "default"
+model = "gpt-5"
+
+[plugins."sites@openai-bundled"]
+enabled = true
+EOF
+  install_fake_home "$REPO" "$HOME_DIR"
+  cat > "$HOME_DIR/.codex/config.toml" <<'EOF'
+service_tier = "default"
+model = "gpt-4"
+
+[plugins."unified-computer-use@openai-bundled"]
+enabled = true
+EOF
+
+  out="$(run_check "$REPO" "$HOME_DIR")"
+  assert_contains "TC-2: [DIFF] キー 'model'" "$out" "[DIFF] キー 'model'"
+  assert_not_contains "plugins差はDIFFにならない" "$out" "キー 'plugins"
+
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
 echo "=== 5e. ②config.tomlがTOMLとして解析できない場合は監視不能として[TOML-PARSE-FAILED]をdrift計上する（パース失敗ケース） ==="
 {
   REPO="$(mktemp -d)"
@@ -1366,7 +1010,7 @@ echo "=== 7b. ③git status --porcelain の実行自体が失敗した場合は�
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 8. ④実Vaultとvault-publicのPreferencesに差分があるとDIFFを検知する ==="
+echo "=== 8. ④実Vaultとvault-publicのPreferencesに差分があるとINFO表示する（driftには数えない） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
@@ -1377,8 +1021,9 @@ echo "=== 8. ④実Vaultとvault-publicのPreferencesに差分があるとDIFF�
   echo "# 実Vault側だけの更新（未エクスポート）" > "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "Preferences DIFF検知" "$out" "[DIFF]"
+  assert_contains "Preferences差分はℹ️ INFO表示（driftにしない・2026-09-19 設計 §4.3）" "$out" "ℹ️ INFO: 実Vault と vault-public/Preferences に差分が"
   assert_contains "エクスポート漏れの可能性メッセージ" "$out" "export-public-vault.sh の再実行が必要な可能性"
+  assert_contains "総drift件数0（④はinformational）" "$out" "総drift件数: 0"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -1407,7 +1052,7 @@ echo "=== 8b. ④diff -rq の実行自体が失敗した場合は『差分なし
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 8c. --json: ④の検査自体が実行できない異常(DIFF-CHECK-FAILED)はitem4_driftに含めずfail-fast対象になる(Codexレビュー指摘Major対応) ==="
+echo "=== I4-2. --json: ④のdiff -rq自体の失敗(DIFF-CHECK-FAILED)はinformationalにせず通常drift 1件・exit 1 ==="
 {
   # 改訂v2 §1.2は「④の差分は除外・実行異常はfail-fast対象」と明記している。
   # 8bと同じfixture（読み取り不能ファイルでdiff -rqをexit 2以上にする）を
@@ -1424,9 +1069,9 @@ echo "=== 8c. --json: ④の検査自体が実行できない異常(DIFF-CHECK-F
   rc=0
   out="$(run_check_json "$REPO" "$HOME_DIR")" || rc=$?
   json="$(last_line "$out")"
-  assert_eq_num "exit code 1(検査実行異常はfail-fast対象)" "$rc" "1"
+  assert_eq_num "I4-2: diff -rq自体の失敗はdrift 1でexit 1" "$rc" "1"
   assert_eq_num "item4_drift=0(④の内容差分としては計上しない)" "$(json_field "$json" item4_drift)" "0"
-  assert_eq_num "drift_excluding_item4=1(実行異常はfail-fast側に計上)" "$(json_field "$json" drift_excluding_item4)" "1"
+  assert_eq_num "drift_excluding_item4=1(実行異常は通常drift)" "$(json_field "$json" drift_excluding_item4)" "1"
   assert_contains "実際に[DIFF-CHECK-FAILED]は検知されている" "$out" "[DIFF-CHECK-FAILED]"
 
   chmod 644 "$REPO/vault-public/Preferences/sample.md"
@@ -1496,24 +1141,26 @@ echo "=== 11. --json: ズレ無しなら total_drift/item4_drift/drift_excluding
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 12. --json: ④(vault-public/Preferences差分)のみのdriftはdrift_excluding_item4=0でexit 0になる(fail-fast対象から除外・改訂v2 §1.2) ==="
+echo "=== I4-1. --json: ④の差分2件はinformational＝総drift件数0・item4_drift=2・exit 0（2026-09-19 設計 §4.3） ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  # 意図的にvault-public側と異なる内容にする(④のみdriftさせる)。
+  # 意図的にvault-public側と2ファイル分異なる内容にする(④のみ差分)。
   echo "different content" > "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  echo "# 実Vault側だけのノート" > "$HOME_DIR/Data/obsidian/Preferences/only-in-vault.md"
 
   rc=0
   out="$(run_check_json "$REPO" "$HOME_DIR")" || rc=$?
   json="$(last_line "$out")"
-  assert_eq_num "exit code 0(④のみのdriftはfail-fast対象外)" "$rc" "0"
-  assert_eq_num "total_drift=1(④の1件)" "$(json_field "$json" total_drift)" "1"
-  assert_eq_num "item4_drift=1" "$(json_field "$json" item4_drift)" "1"
+  assert_eq_num "I4-1: 総drift件数0でexit 0（④はdriftに数えない）" "$rc" "0"
+  assert_contains "総drift件数0" "$out" "総drift件数: 0"
+  assert_eq_num "total_drift=0" "$(json_field "$json" total_drift)" "0"
+  assert_eq_num "item4_drift=2（件数はJSONに残す）" "$(json_field "$json" item4_drift)" "2"
   assert_eq_num "drift_excluding_item4=0" "$(json_field "$json" drift_excluding_item4)" "0"
-  assert_contains "実際に[DIFF]は検知されている(除外されたのはfail-fast判定だけ)" "$out" "[DIFF]"
+  assert_contains "ℹ️ INFOとして表示されている" "$out" "ℹ️ INFO: 実Vault と vault-public/Preferences に差分が 2 件"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -1548,7 +1195,7 @@ echo "=== 13. --json: ④以外(例: ③UNCOMMITTED)のdriftはdrift_excluding_i
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 14. --json: ③と④の両方にdriftがあれば両方カウントされたうえでdrift_excluding_item4=③分のみになる ==="
+echo "=== 14. --json: ③drift＋④差分なら total_drift=drift_excluding_item4=③分のみ・item4_driftは件数として残る ==="
 {
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
@@ -1567,8 +1214,8 @@ echo "=== 14. --json: ③と④の両方にdriftがあれば両方カウント�
   out="$(run_check_json "$REPO" "$HOME_DIR")" || rc=$?
   json="$(last_line "$out")"
   assert_eq_num "exit code 1" "$rc" "1"
-  assert_eq_num "total_drift=2(③+④)" "$(json_field "$json" total_drift)" "2"
-  assert_eq_num "item4_drift=1(④のみ)" "$(json_field "$json" item4_drift)" "1"
+  assert_eq_num "total_drift=1(③のみ・④は数えない)" "$(json_field "$json" total_drift)" "1"
+  assert_eq_num "item4_drift=1(④の件数)" "$(json_field "$json" item4_drift)" "1"
   assert_eq_num "drift_excluding_item4=1(③のみ)" "$(json_field "$json" drift_excluding_item4)" "1"
 
   rm -rf "$REPO" "$HOME_DIR"
@@ -2867,101 +2514,6 @@ echo "=== 60. ⑦-2 ロック回収ミューテックスの更新時刻が未来
   rm -rf "$REPO" "$HOME_DIR"
 }
 
-echo "=== 61. ①-2 effortLevelは三者一致が崩れると/effort等での意図的切替とは扱われず常時driftになる（V13・2026-09-01 設計書§4.4。旧実装ではmodel側だけINFO特例があり非対称だったが、2026-09-01工程横断レビュー差し戻しMAJOR対応でmodel側もdrift扱いへ揃え、この非対称は解消済み） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]" "high"
-  # live側だけeffortLevelを書き換える（/effortでの意図的切替を模す）。
-  python3 -c "
-import json
-p = '$HOME_DIR/.claude/settings.json'
-d = json.load(open(p))
-d['effortLevel'] = 'low'
-json.dump(d, open(p, 'w'))
-"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "effortLevelの差分はDIFFとして検知される（INFO特例は無い。modelも同様＝テスト4i参照）" "$out" "[DIFF] キー 'effortLevel'"
-  assert_not_contains "effortLevelにはINFO扱いの文言が出ない" "$out" "'effortLevel' フィールドが現在の期待値と異なります"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 62. ①-2 リーダー行がeffort未指定ならeffortLevelキーが存在しないことを期待し、存在すればMISSING扱いではなくEXTRA-KEYとして検知する（§3.8・4.2-a「未指定はキー自体を出さない」の裏返し） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  # install-main.shをeffort未指定（キー自体を出さない）のリーダー実行値を
-  # 返すスタブへ差し替える。
-  cat > "$REPO/scripts/install-main.sh" <<'EOF'
-#!/bin/bash
-case "$1" in
-  --print-leader-runtime)
-    echo '{"model": "claude-fable-5[1m]"}'
-    exit 0
-    ;;
-  --print-bedrock-env-json)
-    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-    exit 0
-    ;;
-esac
-exit 1
-EOF
-  chmod +x "$REPO/scripts/install-main.sh"
-  # liveのeffortLevelは書いたまま残す（installerがeffort未指定にも関わらず
-  # 誰かが/effort等で値を残した状態を模す）。
-  install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]" "leftover-value"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "effortLevelキーが期待値に無いのに存在するのでEXTRA-KEYとして検知される" "$out" "[EXTRA-KEY] キー 'effortLevel'"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 63. ①-2 テンプレの'effortLevel'が__AIENV_EFFORT__の目印から変わっている場合はTEMPLATE-INVALIDとして検知する（model側と対の検査・2026-09-01 設計書§4.4） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  # repoテンプレ側のeffortLevelへ特定値を直書きする（回帰を模す）。
-  cat > "$REPO/claude/settings.json" <<'EOF'
-{
-  "permissions": {
-    "allow": ["Bash(npm test)"]
-  },
-  "model": "__AIENV_MODEL__",
-  "effortLevel": "high-hardcoded-oops"
-}
-EOF
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "TEMPLATE-INVALID(effortLevel)として検知される" "$out" "[TEMPLATE-INVALID]"
-  assert_contains "'effortLevel'フィールドの目印から変わっている旨のメッセージ" "$out" "'effortLevel' フィールドが __AIENV_EFFORT__ の目印から変わっています"
-  assert_not_contains "誤って一致扱いにならない" "$out" "settings.jsonはテンプレと一致しています"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 64. ①-2 機械可読コード(LEADER_UNCONFIGURED)が人向け文言へ変換されてMODEL-VALUE-UNAVAILABLEに含まれる（2026-09-01 設計書§4.4・旧2>/dev/nullの丸めを廃止） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" "unknown"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "MODEL-VALUE-UNAVAILABLEが検知される" "$out" "[MODEL-VALUE-UNAVAILABLE]"
-  assert_contains "機械可読コードが人向け文言(リーダー配役が未確定です)へ変換される" "$out" "リーダー配役が未確定です"
-  assert_contains "プロファイルのリーダー行を確認してくださいという案内が出る" "$out" "プロファイルのリーダー行（role.leader）を確認してください"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
 echo "=== 65. ①-3 ANTHROPIC_MODEL環境変数が設定されているとEFFECTIVE_MODEL_OVERRIDE_PRESENTとして検知される（値は出さない・V13） ==="
 {
   REPO="$(mktemp -d)"
@@ -3023,8 +2575,8 @@ echo "=== 68. ⑧ --check-profileが非0終了するとPROFILE-VALIDATION-FAILED
   # V15（禁止キー名ガード）に違反する行を書く＝fail区分のvalidator違反を
   # 決定的に起こす（構文エラーの中でも最も再現しやすいケースを選ぶ）。
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-high" \
-    "role.leader_api_token: configured model=sonnet-high"
+    "configured model=t-sonnet-high" \
+    "role.leader_api_token: configured model=t-sonnet-high"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "PROFILE-VALIDATION-FAILEDとして検知される" "$out" "[PROFILE-VALIDATION-FAILED]"
@@ -3040,7 +2592,9 @@ echo "=== 69. ⑧ プロファイル実体がまだ存在しない場合はPROFI
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
-  # ローカル実体プロファイルを一切置かない（P1ロールアウト未完了機を模す）。
+  # ローカル実体プロファイルを消す（P1ロールアウト未完了機を模す。①-2 は
+  # 再生成できず[SETTINGS-RENDER-FAILED]になるが、ここでは⑧だけを見る）。
+  rm -rf "$HOME_DIR/.config/takumi009-ai-env"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_not_contains "PROFILE-VALIDATION-FAILEDにはならない" "$out" "[PROFILE-VALIDATION-FAILED]"
@@ -3057,7 +2611,7 @@ echo "=== 70. ⑧ advisory（V1-a・V9-f）がdriftとして週次通知に出�
   install_fake_home "$REPO" "$HOME_DIR"
   echo "# researcher" > "$REPO/claude/agents/researcher.md"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-high" \
+    "configured model=t-sonnet-high" \
     "role.researcher: configured model=opus-46-xhigh" \
     "mystery_key: configured value=abc"
 
@@ -3088,7 +2642,7 @@ echo "=== 70b. ⑧ advisory T4-PRIME（実体の版がコードの期待版よ�
 ---
 schema_version: 8
 profile_slug: test
-role.leader: configured model=sonnet-high
+role.leader: configured model=t-sonnet-high
 team_mode: configured value=full
 ---
 EOF
@@ -3114,7 +2668,7 @@ echo "=== 70c. ⑧ advisory JUDGEMENT_UNKNOWN（ワーカーのBedrock経路有�
   # advisoryへ積む＝profile_resolve.py _evaluate_single_candidate()）。
   mkdir -p "$HOME_DIR/.config/takumi009-ai-env/bedrock.env"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-high" \
+    "configured model=t-sonnet-high" \
     "role.researcher: configured model=bedrock-sonnet"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -3136,7 +2690,7 @@ echo "=== 70d. ⑧ advisory EFFORT_COMPATIBILITY_UNVERIFIED（Bedrock別名で�
   # EFFORT_COMPATIBILITY_UNVERIFIEDになる（profile_resolve.py
   # model_effort_advisory()）。
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-    "configured model=sonnet-high" \
+    "configured model=t-sonnet-high" \
     "role.researcher: configured model=bedrock-opus-xhigh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -3158,12 +2712,9 @@ echo "=== 70e. ⑧ advisory T4（版が仮想補完された）もdriftとして
   cat > "$REPO/scripts/install-main.sh" <<'EOF'
 #!/bin/bash
 case "$1" in
-  --print-leader-runtime)
-    echo '{"model": "claude-fable-5[1m]", "effort": "high"}'
-    exit 0
-    ;;
-  --print-bedrock-env-json)
-    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+  --render-settings-json)
+    # ①-2 を空振りさせない（実ファイルをそのまま生成物として返す）。
+    cp "$HOME/.claude/settings.json" "$2"
     exit 0
     ;;
   --check-profile)
@@ -3194,12 +2745,9 @@ echo "=== 70f. ⑧ プロファイル契約（§3）の6コードのいずれと
   cat > "$REPO/scripts/install-main.sh" <<'EOF'
 #!/bin/bash
 case "$1" in
-  --print-leader-runtime)
-    echo '{"model": "claude-fable-5[1m]", "effort": "high"}'
-    exit 0
-    ;;
-  --print-bedrock-env-json)
-    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+  --render-settings-json)
+    # ①-2 を空振りさせない（実ファイルをそのまま生成物として返す）。
+    cp "$HOME/.claude/settings.json" "$2"
     exit 0
     ;;
   --check-profile)
@@ -3232,12 +2780,9 @@ echo "=== 71. ⑧ --check-profileがexit 0でもOK行・v1委譲の既知文言�
   cat > "$REPO/scripts/install-main.sh" <<'EOF'
 #!/bin/bash
 case "$1" in
-  --print-leader-runtime)
-    echo '{"model": "claude-fable-5[1m]", "effort": "high"}'
-    exit 0
-    ;;
-  --print-bedrock-env-json)
-    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
+  --render-settings-json)
+    # ①-2 を空振りさせない（実ファイルをそのまま生成物として返す）。
+    cp "$HOME/.claude/settings.json" "$2"
     exit 0
     ;;
   --check-profile)
@@ -3276,63 +2821,6 @@ json.dump(d, open(p, 'w'))
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "V13_UNAVAILABLEとして検知される" "$out" "[V13_UNAVAILABLE]"
   assert_contains "modelSettingsというキー名は出る" "$out" "modelSettings"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 73. ①-2 --print-leader-runtimeがeffortキーを空文字列で返す契約違反はJSON解析失敗として拒否する（未指定＝キー省略との混同を防ぐ・2026-09-01 Codex二次レビュー指摘・Major対応） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  cat > "$REPO/scripts/install-main.sh" <<'EOF'
-#!/bin/bash
-case "$1" in
-  --print-leader-runtime)
-    echo '{"model": "claude-fable-5[1m]", "effort": ""}'
-    exit 0
-    ;;
-  --print-bedrock-env-json)
-    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-    exit 0
-    ;;
-esac
-exit 1
-EOF
-  chmod +x "$REPO/scripts/install-main.sh"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "MODEL-VALUE-UNAVAILABLEとして検知される（空文字列effortは契約違反）" "$out" "[MODEL-VALUE-UNAVAILABLE]"
-  assert_contains "JSON解析失敗（契約違反）である旨のメッセージが出る" "$out" "リーダー実行値を解決できませんでした"
-
-  rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== 74. ①-2 --print-leader-runtimeが複数行に整形されたJSONを返す契約違反は1行JSONの契約違反として拒否する（2026-09-01 Codex二次レビュー指摘・Major対応） ==="
-{
-  REPO="$(mktemp -d)"
-  HOME_DIR="$(mktemp -d)"
-  make_fake_repo "$REPO"
-  install_fake_home "$REPO" "$HOME_DIR"
-  cat > "$REPO/scripts/install-main.sh" <<'EOF'
-#!/bin/bash
-case "$1" in
-  --print-leader-runtime)
-    printf '{\n  "model": "claude-fable-5[1m]",\n  "effort": "high"\n}\n'
-    exit 0
-    ;;
-  --print-bedrock-env-json)
-    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-    exit 0
-    ;;
-esac
-exit 1
-EOF
-  chmod +x "$REPO/scripts/install-main.sh"
-
-  out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "MODEL-VALUE-UNAVAILABLEとして検知される（複数行JSONは契約違反）" "$out" "[MODEL-VALUE-UNAVAILABLE]"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -3488,48 +2976,6 @@ echo "=== 84. ⑨[USAGE-LOCK-STUCK]: ロックが固着している ==="
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "固着したロックを検知する" "$out" "[USAGE-LOCK-STUCK]"
   rm -rf "$REPO" "$HOME_DIR"
-}
-
-echo "=== FAILSOFT-UNKNOWN-CODE: AC-19(NFR-3)。未知の失敗コード(BOGUS_CODE)でも異常終了せず[MODEL-VALUE-UNAVAILABLE]のdrift項目として報告し、--jsonモードでrc=1・『原因不明。コード:』で終わる（AIENV_FAILSOFT_STUB未設定時はskip） ==="
-{
-  if [ -z "${AIENV_FAILSOFT_STUB:-}" ] || [ ! -f "$AIENV_FAILSOFT_STUB" ]; then
-    echo "  skip - AIENV_FAILSOFT_STUBが未設定/存在しないためFAILSOFT-UNKNOWN-CODEをskipします"
-  else
-    REPO="$(mktemp -d)"
-    HOME_DIR="$(mktemp -d)"
-    make_fake_repo "$REPO"
-    install_fake_home "$REPO" "$HOME_DIR" "claude-fable-5[1m]"
-    write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
-      "configured model=fable-1m-high"
-
-    rc=0
-    # ⚠️ check-drift.shは--json未指定時は常に0を返す設計（tests/test-
-    # check-drift.sh「10. exit codeは常に0」の既存契約）。drift検出を非0
-    # 終了として観測できるのは--jsonモード（drift_excluding_item4>0で
-    # exit 1）だけなので、AC-19のrc確認は--jsonモードで行う（2026-09-16
-    # 実測発見）。
-    # ⚠️ check-drift.sh自身の直接resolve()呼びはPROFILE_RESOLVE_LIB、
-    # install-main.sh --print-leader-runtimeへの委譲先（resolve-leader）は
-    # 別名のAIENV_PROFILE_RESOLVE_LIBで解決する（install-main.sh:156）——
-    # 子プロセスへは環境変数として引き継がれるが変数名が違うため、両方を
-    # スタブへ向けないとBOGUS_CODE経路に入らない（tests/test-update-sub.shの
-    # FAILSOFT-UNKNOWN-CODEと同じ実測知見・2026-09-16）。
-    # ⚠️ AIENV_MODEL_DEFS_FILEもケース内でHOME配下の実体へ明示する（検証
-    # 1巡目MAJOR-2対応。write_v2_profile()が$HOME_DIR配下に書いた実体を
-    # 読ませ、外側の環境が持つ別のmodels.confへ流れないようにする）。
-    out="$(PROFILE_RESOLVE_LIB="$AIENV_FAILSOFT_STUB" AIENV_PROFILE_RESOLVE_LIB="$AIENV_FAILSOFT_STUB" \
-      AIENV_REAL_LIB="$REPO/claude/hooks/lib/profile_resolve.py" \
-      AIENV_MODEL_DEFS_FILE="$HOME_DIR/.config/takumi009-ai-env/models.conf" \
-      run_check_json "$REPO" "$HOME_DIR")" || rc=$?
-    json="$(last_line "$out")"
-
-    assert_eq_num "FAILSOFT-UNKNOWN-CODE: --jsonはexit 1（drift_excluding_item4>0・異常終了しない）" "$rc" "1"
-    assert_eq_num "FAILSOFT-UNKNOWN-CODE: drift_excluding_item4>0" "$([ "$(json_field "$json" drift_excluding_item4)" -gt 0 ] && echo 1 || echo 0)" "1"
-    assert_contains "FAILSOFT-UNKNOWN-CODE: MODEL-VALUE-UNAVAILABLEのdrift項目が出る" "$out" "[MODEL-VALUE-UNAVAILABLE]"
-    assert_contains "FAILSOFT-UNKNOWN-CODE: 『原因不明。コード:』を含む（未知コードは汎用文言に落ちる）" "$out" "原因不明。コード:"
-
-    rm -rf "$REPO" "$HOME_DIR"
-  fi
 }
 
 echo

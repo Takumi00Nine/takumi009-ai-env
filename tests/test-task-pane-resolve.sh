@@ -524,13 +524,9 @@ else
   pass "test-check-drift.shに旧件数（15件）が残っていない"
 fi
 
-# ⑦tests/test-install-main.shのアサーション。
-TEST_INSTALL_MAIN="$REPO_ROOT/tests/test-install-main.sh"
-if grep -qF 'task-pane-resolve.sh' "$TEST_INSTALL_MAIN"; then
-  pass "test-install-main.shにtask-pane-resolve.shのアサーションがある"
-else
-  fail_case "test-install-main.shにtask-pane-resolve.shのアサーションがある"
-fi
+# ⑦退役（2026-09-19）＝静的結合検査（他テストファイルへの文字列有無）で実体を担保しない。
+# test-install-main.shは現在settings.json登録済み全フックを動的に列挙してsymlink/実行権限を
+# 突合しており（同ファイルL156-176相当）task-pane-resolve.shも含めて実体は担保済み。
 
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="

@@ -31,21 +31,21 @@
 # Codex一次レビュー指摘Major対応）。
 #
 # 2026-08-21: claude/settings.json を symlink から「テンプレ+生成」方式へ変更した
-# （codex/config.tomlと同型。理由: JSONもシェル変数展開されない・symlinkのままだと
-# セッション内`/model`実行時にClaude Code自身がrepo管理下のファイルを直接書き換えて
-# しまう副作用があった）。"model"フィールドはマシン別（メイン=claude-fable-5[1m]・
-# サブ=claude-opus-5。サブはProプランでFable 5非対応、[1m]も付けない＝リーダー指示）
-# に出し分ける。決定は--sub-delegateの有無（＝install-sub.sh経由か直接実行か）から
-# 直接行われ、旧マーカーの読み返しには依存しない。4番を旧来のsymlink検証
-# から生成物検証へ更新し、4b〜4eでmodel出し分け・環境変数上書き・内容保持を追加検証する。
+# （codex/config.tomlと同型）。4番を旧来のsymlink検証から生成物検証へ更新し、
+# 4eで内容保持を確認する。model 値は実体プロファイル（resolver）経由で決まる
+# （旧 legacy 経路 AIENV_MODEL_MAIN/SUB とその検証 4b/4c/4d/4f は 2026-09-19 に退役）。
 #
 # 2026-09-07: 機役割の正本を旧マーカーファイルから配役表の能力軸`machine_role`
 # （本人が実体プロファイルへ書く）へ移した（配役表-能力軸整理-設計-2026-09-07.md
 # §5.1）。マーカー設置を検証していた7〜9番は撤去し、代わりに案内ログ1行が
 # 出ることを7番・AIENV_LOCAL_PROFILE_PATH未設定でも到達することを7b番・
 # 委譲が非0終了しても案内ログまで完走することを12番で確認する。
-# 13・13b・14番の副作用ゼロ検査も、マーカー不在の確認から案内ログが
+# 13・13b番の副作用ゼロ検査も、マーカー不在の確認から案内ログが
 # 出ないことへ差し替えた。
+#
+# 2026-09-19（ai-env 全体最適化 着手順 3・θ）: install-sub.sh が転送しなくなった
+# 旧フラグ（リーダー配役の対話・schema 版数印字）の検証 10/11/14番を退役。
+# fixture の定義名は t- 接頭辞のダミー（実名を書かない）。
 #
 # 実行方法: bash tests/test-install-sub.sh
 
@@ -122,11 +122,11 @@ write_models_conf_at() {
   local dir="$1"
   mkdir -p "$dir"
   cat > "$dir/models.conf" <<'EOF'
-[sonnet-high]
+[t-sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5
 
-[opus-high]
+[t-opus-high]
 provider=anthropic-api
 model=claude-opus-5
 EOF
@@ -140,7 +140,7 @@ make_fake_home() {
   # 案内ログの検証とは無関係なテストは、install-main.shの雛形配置
   # （config/profile.md.sample からのコピー。2026-09-08 本人裁定A案で
   # 読み元をvault-public/Preferences/profile-sample.mdから付け替え）に
-  # 依存させない（テストの独立性）。seed_v1_profile()・seed_v2_profile()・
+  # 依存させない（テストの独立性）。seed_v2_profile()・
   # 個別のcat上書きで置き換えるテストはこの既定値を上書きする（後勝ち）。
   mkdir -p "$home/.config/takumi009-ai-env"
   write_models_conf_at "$home/.config/takumi009-ai-env"
@@ -151,54 +151,14 @@ profile_slug: test-install-sub-machine
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
-role.leader: configured model=sonnet-high
+role.leader: configured model=t-sonnet-high
 ---
 EOF
 }
 
-# 2026-09-01 配役表解凍（設計書§3.9）: v2雛形はrole.leaderがunknownのまま
-# 配布されるため、リーダー配役が未確定のままinstall-main.sh（install-sub.sh
-# 経由の委譲も含む）を対話・--non-interactiveいずれも指定せず実行すると
-# 対話可否の判定で止まる。本ファイルの主眼＝Vault骨格配置・symlink化・
-# 機役割の案内ログとは無関係なテストは、この既定値をexportしておくことで
-# 「未確定→envの値を検査して採用（質問しない）」経路を常に通す。
-export AIENV_LEADER_ROLE='model=sonnet-high'
-
-# seed_v1_profile <home> — ローカル実体プロファイルを不在にする。
-# 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.8・D-13）: legacy
-# 実装（AIENV_MODEL_MAIN/AIENV_MODEL_SUB）への委譲は「実体が本当に存在しない
-# （PROFILE_NOT_FOUND）」場合だけに縮小された——実在するがschema_versionを
-# 持たない実体はT4-LEGACYとして解決失敗する（委譲されない）。そのため
-# 「v1相当を強制する」とは、make_fake_home()が書いたprofile.mdを消して
-# 不在にすることを意味する。
-# 呼び出し側は必ずrun_v1_legacy_repo()経由でTMP_REPO（config/profile.md.sample
-# を除いた実repoの複製）に対して実行すること（$REPO_ROOTを直接使うと、
-# install-main.sh自身のP1雛形自動配置が実サンプルをコピーしてしまい、コピー後に
-# 「実在するschema 7の実体」という別の非委譲ケースへ倒れて本テストの意図＝
-# legacy値置換ロジックの検証を阻害するため）。
-seed_v1_profile() {
-  local home="$1"
-  local dest="$home/.config/takumi009-ai-env/profile.md"
-  [ -e "$dest" ] && command rm "$dest"
-  return 0
-}
-
-# run_v1_legacy_repo() — config/profile.md.sampleを除いたrepoの複製を作り、
-# そのパスを標準出力へ書く（seed_v1_profile()と対で使う。4b/4c/4d/4fの
-# 共通前処理。2026-09-08 本人裁定A案で除外対象をvault-public/Preferences/
-# profile-sample.mdからconfig/profile.md.sampleへ付け替え）。
-run_v1_legacy_repo() {
-  local tmp_repo
-  tmp_repo="$(mktemp -d)"
-  cp -R "$REPO_ROOT/." "$tmp_repo/"
-  command rm "$tmp_repo/config/profile.md.sample"
-  printf '%s\n' "$tmp_repo"
-}
-
 # seed_v2_profile <home> — v2形式（schema_version:7・新3キー・role.leaderが
 # configured）のプロファイルをあらかじめ置く。--check-profile系テスト
-# （13・14番）で使う。role.leaderは既にconfiguredのため、AIENV_LEADER_ROLEの
-# 値には依存しない。
+# （13・13b番）で使う。role.leaderは既にconfigured。
 seed_v2_profile() {
   local home="$1"
   local dest="$home/.config/takumi009-ai-env/profile.md"
@@ -208,7 +168,7 @@ seed_v2_profile() {
 ---
 schema_version: 7
 profile_slug: test
-role.leader: configured model=opus-high
+role.leader: configured model=t-opus-high
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
@@ -292,62 +252,6 @@ echo "=== 4. claude/・codex/ の symlink化が install-main.sh 経由で行わ�
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 4b. install-sub.sh 経由で生成されるsettings.jsonのmodelはサブ既定値(claude-opus-5・[1m]無し)に置換される ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # v1相当に固定してlegacy委譲を強制する（本テストの主眼＝
-  # AIENV_MODEL_MAIN/SUBの置換ロジックであり、v2配役表のリーダー確定とは
-  # 無関係なため）。TMP_REPOはsample不在にして自動雛形配置を封じる
-  # （seed_v1_profileのコメント参照）。
-  seed_v1_profile "$FAKE_HOME"
-  TMP_REPO="$(run_v1_legacy_repo)"
-
-  env -u AIENV_LEADER_ROLE SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null
-
-  settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
-  assert_true "modelがclaude-opus-5になっている" \
-    "$(printf '%s' "$settings_content" | grep -q '"model": "claude-opus-5"' && echo 1 || echo 0)"
-  assert_true "__AIENV_MODEL__プレースホルダが残っていない" \
-    "$(printf '%s' "$settings_content" | grep -q '__AIENV_MODEL__' && echo 0 || echo 1)"
-  assert_true "[1m]サフィックスは付かない（リーダー指示：サブはFable専用の1M contextを付けない）" \
-    "$(printf '%s' "$settings_content" | grep -q '\[1m\]' && echo 0 || echo 1)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 4c. install-main.sh単体実行(--sub-delegate無し)で生成されるsettings.jsonのmodelはメイン既定値(claude-fable-5[1m])に置換される ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  seed_v1_profile "$FAKE_HOME"
-  TMP_REPO="$(run_v1_legacy_repo)"
-
-  env -u AIENV_LEADER_ROLE SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null
-
-  settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
-  assert_true "modelがclaude-fable-5[1m]になっている" \
-    "$(printf '%s' "$settings_content" | grep -q '"model": "claude-fable-5\[1m\]"' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
-echo "=== 4d. AIENV_MODEL_MAIN/AIENV_MODEL_SUB環境変数でmodel値を上書きできる（テスト用） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  seed_v1_profile "$FAKE_HOME"
-  TMP_REPO="$(run_v1_legacy_repo)"
-
-  env -u AIENV_LEADER_ROLE AIENV_MODEL_SUB="custom-test-model" SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null
-
-  settings_content="$(cat "$FAKE_HOME/.claude/settings.json")"
-  assert_true "AIENV_MODEL_SUBで上書きした値が反映される" \
-    "$(printf '%s' "$settings_content" | grep -q '"model": "custom-test-model"' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
 echo "=== 4e. settings.json生成後も他のキー（permissions等）はテンプレの中身を保っている（プレースホルダ以外は無変更であることの確認） ==="
 {
   FAKE_HOME="$(mktemp -d)"
@@ -363,30 +267,6 @@ echo "=== 4e. settings.json生成後も他のキー（permissions等）はテン
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 4f. model値に引用符・バックスラッシュが含まれても壊れたJSONを生成しない（Codex一次レビュー指摘・Minor対応の回帰確認: sedプレースホルダ置換からpython3 json moduleでの直接キー代入へ変更した効果） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # v1相当に固定する（weird"model\valueはv2のmodel形式検証〈V9-b〉を
-  # 通らないため、v2配役表経由では本テストの意図＝JSON生成側のエスケープ
-  # 耐性を検証できない）。
-  seed_v1_profile "$FAKE_HOME"
-  TMP_REPO="$(run_v1_legacy_repo)"
-
-  env -u AIENV_LEADER_ROLE AIENV_MODEL_SUB='weird"model\value' SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null
-
-  assert_true "生成物が有効なJSONとしてパースできる（引用符・バックスラッシュを含む値でも壊れない）" \
-    "$(python3 -c "import json; json.load(open('$FAKE_HOME/.claude/settings.json'))" 2>/dev/null && echo 1 || echo 0)"
-  assert_true "model値が完全一致で読み戻せる" \
-    "$(python3 -c "
-import json
-d = json.load(open('$FAKE_HOME/.claude/settings.json'))
-print(1 if d.get('model') == 'weird\"model\\\\value' else 0)
-" 2>/dev/null)"
-
-  rm -rf "$FAKE_HOME" "$TMP_REPO"
-}
-
 echo "=== 5. LaunchAgent類は一切インストールされない（メイン専用機能に加え、旧サブ専用の定期自動pull運用も2026-07-23廃止済み） ==="
 {
   FAKE_HOME="$(mktemp -d)"
@@ -400,8 +280,6 @@ echo "=== 5. LaunchAgent類は一切インストールされない（メイン�
     assert_true "$name.plist は入らない" \
       "$([[ ! -e "$FAKE_HOME/Library/LaunchAgents/com.takumi009.$name.plist" ]] && echo 1 || echo 0)"
   done
-  assert_true "launchagents/ 配下にサブ用plistのソース自体がもう存在しない（撤去済み）" \
-    "$([[ ! -e "$REPO_ROOT/launchagents/com.takumi009.update-sub.plist" ]] && echo 1 || echo 0)"
   assert_true "廃止済みの旨のログが出る" \
     "$(echo "$out" | grep -q "定期更新LaunchAgentも廃止済み" && echo 1 || echo 0)"
 
@@ -461,66 +339,6 @@ echo "=== 7b. 機役割の案内: AIENV_LOCAL_PROFILE_PATHが未設定でもset 
     "$(echo "$out" | grep -qF 'machine_role: configured value=sub を1行書いてください' && echo 1 || echo 0)"
   assert_true "unbound variableで落ちていない" \
     "$(echo "$out" | grep -qi 'unbound variable' && echo 0 || echo 1)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 10. §3.9対話フラグの転送: --non-interactiveがinstall-main.shへ転送される（追完・2026-09-01リーダー指示） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  # 本テストの主眼＝role.leaderが未確定のときの対話可否判定であり、
-  # make_fake_home()の既定プロファイル（role.leader確定済み）を
-  # role.leader未確定へ上書きする。
-  cat > "$FAKE_HOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-schema_version: 7
-profile_slug: test-install-sub-machine
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=sub
-role.leader: unknown
----
-EOF
-
-  # ⚠️ AIENV_FORCE_TTY_FOR_TESTで対話可能を強制したうえで--non-interactive
-  # を渡す（2026-09-01 Codex差分レビュー指摘・MAJOR対応: コマンド置換自体が
-  # 非TTYのため、これを付けないと「単に非TTYだから失敗した」のか「転送された
-  # --non-interactiveが優先されたから失敗した」のかを区別できず、転送処理
-  # そのものを削除してもテストが偽陽性で通ってしまう）。
-  rc=0
-  out="$(env -u AIENV_LEADER_ROLE AIENV_FORCE_TTY_FOR_TEST=1 SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --non-interactive 2>&1)" || rc=$?
-  assert_true "exit非0（--non-interactiveがinstall-main.shへ転送されTTY強制より優先される）" \
-    "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
-  assert_true "LEADER_UNCONFIGURED_NONINTERACTIVEが出る" \
-    "$(echo "$out" | grep -q 'LEADER_UNCONFIGURED_NONINTERACTIVE' && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 11. §3.9対話フラグの転送: --reconfigure-leaderがinstall-main.shへ転送される（追完・2026-09-01リーダー指示） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  PROFILE_PATH="$FAKE_HOME/.config/takumi009-ai-env/profile.md"
-  mkdir -p "$(dirname "$PROFILE_PATH")"
-  cat > "$PROFILE_PATH" <<'EOF'
----
-schema_version: 7
-profile_slug: test
-role.leader: configured model=opus-high
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=sub
----
-EOF
-
-  rc=0
-  AIENV_LEADER_ROLE='model=sonnet-high' \
-    SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --reconfigure-leader >/dev/null 2>&1 || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_true "--reconfigure-leaderがinstall-main.shへ転送され、AIENV_LEADER_ROLEの新しい値が採用される" \
-    "$(grep -qE '^role\.leader:.*configured model=sonnet-high' "$PROFILE_PATH" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -592,7 +410,7 @@ echo "=== 13b. --check-profile: 不正プロファイル（role.leader重複=T6�
 schema_version: 7
 profile_slug: test
 role.leader: unknown
-role.leader: configured model=opus-high
+role.leader: configured model=t-opus-high
 team_mode: configured value=full
 no_read_paths: unavailable
 machine_role: configured value=sub
@@ -618,34 +436,15 @@ machine_role: configured value=sub
   assert_true "install-sub.sh経由も非0終了する（委譲先の非0をexit 0へ握り潰さない）" \
     "$([[ "$rc_sub" -ne 0 ]] && echo 1 || echo 0)"
   assert_eq "exit codeがinstall-main.sh直接呼び出しと一致" "$rc_main" "$rc_sub"
-  assert_eq "エラー内容(PROFILE_INVALID:T6)がinstall-main.sh直接呼び出しと完全一致" "$out_main" "$out_sub"
-  assert_true "PROFILE_INVALID:T6が出る" \
-    "$(echo "$out_sub" | grep -q 'PROFILE_INVALID:T6' && echo 1 || echo 0)"
+  assert_eq "エラー内容（resolve 行）がinstall-main.sh直接呼び出しと一致" "$out_main" "$out_sub"
+  assert_true "resolve 行に T6（キー重複）が出る" \
+    "$(echo "$out_sub" | grep -qw 'T6' && echo 1 || echo 0)"
   assert_true "Vaultは作られない（副作用ゼロ）" \
     "$([[ ! -e "$FAKE_HOME_SUB/Data/obsidian" ]] && echo 1 || echo 0)"
   assert_true "機役割の案内ログは出ない（副作用ゼロ）" \
     "$(echo "$out_sub" | grep -qF 'machine_role: configured value=sub を1行書いてください' && echo 0 || echo 1)"
 
   rm -rf "$FAKE_HOME_SUB" "$FAKE_HOME_MAIN" "$SHARED_MODEL_DEFS_DIR"
-}
-
-echo "=== 14. --check-profile --print-schema-version: install-sub.sh経由でもschema_versionの値だけを1行返す・副作用ゼロ（2026-09-02追加） ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  make_fake_home "$FAKE_HOME"
-  seed_v2_profile "$FAKE_HOME"
-
-  rc=0
-  out="$(HOME="$FAKE_HOME" bash "$SCRIPT" --check-profile --print-schema-version 2>&1)" || rc=$?
-
-  assert_eq "exit code 0" "0" "$rc"
-  assert_eq "schema_versionの値だけを1行返す（見出しログ等が混ざらない）" "7" "$out"
-  assert_true "Vaultは作られない（副作用ゼロ）" \
-    "$([[ ! -e "$FAKE_HOME/Data/obsidian" ]] && echo 1 || echo 0)"
-  assert_true "機役割の案内ログは出ない（副作用ゼロ）" \
-    "$(echo "$out" | grep -qF 'machine_role: configured value=sub を1行書いてください' && echo 0 || echo 1)"
-
-  rm -rf "$FAKE_HOME"
 }
 
 # --- 前提修正 P-2 の回帰テスト（2026-09-07）: install-sub.sh 経由（install-main.sh

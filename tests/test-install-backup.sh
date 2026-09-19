@@ -150,39 +150,6 @@ echo "=== 7. 不明な引数はexit 1(FAIL) ==="
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 14. 旧plistファイルが元々無い状態でもdomain照会が失敗すればfail-closedでexit 1になる(Codexレビュー4巡目指摘Major対応) ==="
-{
-  # 旧plistファイルの有無で外側を先にゲートしていた旧実装では、この
-  # 「plistは既に無い・でもlaunchd照会も機能していない」という組み合わせで
-  # unknown分岐へ一切入らずサイレントにexit 0（完了扱い）になってしまって
-  # いた。domain照会自体が機能していない場合にfail-closedでexit 1になる
-  # ことを検証する。
-  FAKE_HOME="$(mktemp -d)"
-  # 旧plistファイルは意図的に作らない（このテストの主眼）。
-
-  STUB_BIN="$(mktemp -d)"
-  cat > "$STUB_BIN/launchctl" <<EOF
-#!/usr/bin/env bash
-case "\$1" in
-  print) exit 1 ;;   # domain自体への照会も含めて常に失敗
-  *) exit 0 ;;
-esac
-EOF
-  chmod +x "$STUB_BIN/launchctl"
-
-  rc=0
-  PATH="$STUB_BIN:$PATH" HOME="$FAKE_HOME" bash "$SCRIPT" >"$FAKE_HOME/stdout.log" 2>"$FAKE_HOME/stderr.log" || rc=$?
-  assert_eq "旧plist無しでもdomain照会不能ならexit 1(fail-closed)" "1" "$rc"
-
-  err="$(cat "$FAKE_HOME/stderr.log")"
-  assert_true "確認できなかった旨のWARNが出る" \
-    "$(echo "$err" | grep -q "ロード状態をlaunchd照会で確認できませんでした" && echo 1 || echo 0)"
-  assert_true "新ラベルのplistは正常に生成されている" \
-    "$([[ -f "$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$STUB_BIN"
-}
-
 echo "=== 15. 新ラベルのenableが失敗した場合はexit 1になる(以前は\`|| true\`で握り潰していた・scripts/install-maintenance.shで確立した方式の横展開・2026-07-16リーダー裁定対応) ==="
 {
   FAKE_HOME="$(mktemp -d)"

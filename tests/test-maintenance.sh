@@ -1093,7 +1093,7 @@ run_dt7_case() {
     "$record_fixture" "$record_fixture.before"
   local frag_text
   frag_text="$(cat "$(find "$VAULT/Fragments" -name '20*.md' | head -1)")"
-  assert_contains "実施サマリのセグメントが§16.3の写像表の固定文字列と一致する" "$frag_text" "$expect_segment"
+  assert_contains "実施サマリのセグメントが§16.3の写像表の固定文字列と一致する（${expect_segment}）" "$frag_text" "$expect_segment"
   local last_run
   last_run="$(cat "$LOG_ROOT/last-run.json")"
   assert_contains "last_success_atが進む(掃除の失敗をadd_anomalyにしていない証拠・設計書§16.4)" \
@@ -1130,7 +1130,7 @@ echo "=== 34. DT-7状態c: rc=0で消した対が1件（実施・AC-57①②③�
   T="$WORK_ROOT/t34c"; mkdir -p "$T"
   setup_test_env "$T"
   FAKE_PRUNE_MODE=ok0 FAKE_PRUNE_STDOUT=$'FB3B2F30-00D7-4093-91CE-0DE32B43165C\tslug-a\n' \
-    run_dt7_case "$T" "・宣言掃除 実施・1件（FB3B2F30-00D7-4093-91CE-0DE32B43165C=slug-a）" "1" "0"
+    run_dt7_case "$T" "・宣言掃除 実施・1件" "1" "0"
 }
 
 echo "=== 35. DT-7状態d: 宣言記録が破損している(rc=2) ==="
@@ -1183,7 +1183,7 @@ echo "=== 39. Phase3宣言掃除: 入口のパスはMAINTENANCE_TASK_PRUNE_CMD�
     run_maintenance || rc=$?
   assert_eq "exit 0" "0" "$rc"
   FRAG_TEXT="$(cat "$(find "$VAULT/Fragments" -name '20*.md' | head -1)")"
-  assert_contains "上書きしたパスの応答が反映される" "$FRAG_TEXT" "・宣言掃除 実施・1件（UUID-ALT=slug-alt）"
+  assert_contains "上書きしたパスの応答が反映される（・宣言掃除 実施・1件・UUIDは含まない）" "$FRAG_TEXT" "・宣言掃除 実施・1件"
 }
 
 echo "=== 39b. FR-78/AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしないとき、既定は ai-env の cmux/cmux-task-declare.sh を指す（cmux-session-todo v3・供給側の移設） ==="
@@ -1280,7 +1280,7 @@ echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経�
     RUN_DIR="$(readlink "$LOG_ROOT/latest")"
     FRAG_FILE="$(find "$VAULT/Fragments" -name '20*.md' | head -1)"
     FRAG_LINE="$(grep '^- 定常メンテ(週次): ' "$FRAG_FILE" 2>/dev/null)"
-    assert_contains "AC-104: サマリ行が既定経路でも削除対象のUUID=slugを含む" "$FRAG_LINE" "・宣言掃除 実施・1件（22222222-2222-2222-2222-222222222222=slug-c）（詳細: ${RUN_DIR}）"
+    assert_contains "AC-104: サマリ行が『・宣言掃除 実施・1件』を含みUUIDを含まない" "$FRAG_LINE" "・宣言掃除 実施・1件（詳細: ${RUN_DIR}）"
     assert_contains "AC-104: サマリ行に昇格候補の件数が出る" "$FRAG_LINE" "昇格候補0件"
 
     rm -rf "$DEFAULT_PRUNE_DIR"
@@ -1366,7 +1366,7 @@ WRAPEOF
     # セグメント単位）とRUN_DIRが含まれることを見る。
     FRAG_FILE="$(find "$VAULT/Fragments" -name '20*.md' | head -1)"
     FRAG_LINE="$(grep '^- 定常メンテ(週次): ' "$FRAG_FILE")"
-    assert_contains "サマリ行が削除対象のUUID=slugとRUN_DIRを含む(AC-57)" "$FRAG_LINE" "・宣言掃除 実施・1件（11111111-1111-1111-1111-111111111111=slug-b）（詳細: ${RUN_DIR}）"
+    assert_contains "サマリ行が『・宣言掃除 実施・1件』を含みUUIDを含まない(AC-57)" "$FRAG_LINE" "・宣言掃除 実施・1件（詳細: ${RUN_DIR}）"
 
     # cmuxの書込系コマンド(AC-34)が1度も呼ばれていないことを、隔離cmux
     # スタブの集約呼出しログで検査する(verifier実装レビュー2巡目#10対応)。

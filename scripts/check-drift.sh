@@ -136,15 +136,11 @@
 #     は「stdoutの最終行だけがJSON、それより前は全て人間向けテキスト」という
 #     契約でパースする）。
 #     JSON形式: {"total_drift": N, "item4_drift": M, "drift_excluding_item4":
-#     N-M, "unknown_config_keys": K}（item4 = ④vault-public/Preferences差分。
-#     design上この項目だけは環境故障ではなく公開同期待ちの実体差分のため
-#     exit code契約から除外する＝改訂v2 §1.2）。**除外されるのは「④の内容
-#     差分（[MISSING]/[DIFF]）」のみ**であり、「④の検査自体が実行できない
-#     異常（[DIFF-CHECK-FAILED]）」はitem4_driftに含めず通常のdrift
-#     （drift_excluding_item4側）として扱う（2026-07-16 Codexレビュー指摘
-#     Major対応: 改訂v2 §1.2は「④の差分は除外・実行異常は対象」と明記して
-#     おり、実行異常まで除外すると「監視不能も異常」という本スクリプト
-#     自身の方針に反するため）。unknown_config_keysは②のTOML三分類で
+#     N, "unknown_config_keys": K}（item4 = ④vault-public/Preferences差分の
+#     件数。2026-09-19（着手順3・設計 §4.3）から informational＝total_drift
+#     に含めないため drift_excluding_item4 = total_drift。「④の検査自体が
+#     実行できない異常（[DIFF-CHECK-FAILED]）」は通常のdriftとして扱う
+#     （「監視不能も異常」の方針）。unknown_config_keysは②のTOML三分類で
 #     「テンプレにも既知アプリ管理キー一覧にも無い」と判定された件数
 #     （2026-08-10追加・工程横断レビュー指摘Major対応。driftには数えず
 #     total_drift/drift_excluding_item4には含めないが、maintenance.sh側が
@@ -172,19 +168,11 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 # 私的パッチ（別のprivateリポジトリ）のローカルclone先。環境変数で上書き可
 # （ユニットテスト用。本番は既定値のままでよい＝README.md「導入手順」記載のパス）。
 : "${AIENV_PRIVATE_REPO:=$HOME/work/takumi009-ai-env-private}"
-# ①-2（~/.claude/settings.json）で使う配役表の能力軸`machine_role`（配役表-
-# 能力軸整理-設計-2026-09-07.md §2.2の共通レシピ。fail-closed＝解決失敗・
-# unknown・unavailable・欠落等はすべてmain扱い）。4つの読み手が共有する
-# 既定値・環境変数名。
-# ⚠️ model/effort既定値（AIENV_MODEL_MAIN/AIENV_MODEL_SUB等）はここでは持たない
-# （2026-08-30 §9.0 A-0-3＝値表2箇所重複の解消）。値の出力口は
-# scripts/install-main.sh --print-leader-runtime [--sub-delegate] に一本化し
-# （2026-09-01 配役表解凍 §4.2-a・§4.4で--print-modelから改名）、診断側は
-# その出力を読むだけにする（①-2で呼び出す）。
-: "${PROFILE_RESOLVE_LIB:=$DIR/claude/hooks/lib/profile_resolve.py}"
+# ローカル実体プロファイルの既定パス（⑧の案内文と①-2の失敗文言で使う）。
+# ⚠️ model/effort の既定値・resolverの直叩きはここでは持たない。①-2 は
+# scripts/install-main.sh --render-settings-json（生成関数そのもの）に再生成
+# させ、その生成物と実ファイルを比べるだけ（2026-09-19 着手順3・設計 §4.2）。
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
-: "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
-: "${AIENV_AGENTS_DIR:=$DIR/claude/agents}"
 
 JSON_MODE=0
 MANAGED_SYMLINKS_ONLY=0
@@ -201,12 +189,10 @@ if [ "$JSON_MODE" = "1" ] && [ "$MANAGED_SYMLINKS_ONLY" = "1" ]; then
 fi
 
 TOTAL_DRIFT=0
-# ④(vault-public/Preferences差分)専用カウンタ。この項目だけはdrift_excluding_
-# item4のexit code契約から除外する（改訂v2 §1.2。旧仕様ではこれがmaintenance.sh
-# Phase1①のfail-fast判定基準だったが、2026-08-10にmaintenance.sh側は
-# fail-fastを廃止し警告記録のみに変更＝[[Decisions/2026-08-10-round6-
-# rulings]]決定1。exit code契約自体・この集計方針は不変）ため、TOTAL_DRIFT
-# とは別に集計する。
+# ④(vault-public/Preferences差分)の件数。2026-09-19（着手順3・設計 §4.3）から
+# informational＝TOTAL_DRIFTには足さず、--json の item4_drift に件数として
+# 出すだけ（export は週次 Phase0 と案件締めで行う）。読み手（maintenance.sh）は
+# drift_excluding_item4 だけを見るため契約は不変。
 ITEM4_DRIFT=0
 # ②のTOML三分類における未知キー（テンプレにも既知アプリ管理キー一覧にも
 # 無いキー）の件数。driftには数えない設計だが、WARN表示のみだとRUN_DIRの
@@ -221,12 +207,11 @@ UNKNOWN_CONFIG_KEYS=0
 
 log() { echo "[check-drift] $*"; }
 item_drift() { echo "  - $*"; TOTAL_DRIFT=$((TOTAL_DRIFT + 1)); }
-# ④(vault-public/Preferences差分)の**内容差分**専用item_drift()ラッパー
-# （[MISSING]・[DIFF]の2箇所のみで使う。[DIFF-CHECK-FAILED]＝検査実行自体の
-# 異常は対象外＝通常のitem_drift()を使う。2026-07-16 Codexレビュー指摘Major
-# 対応）。通常のitem_drift()と全く同じ出力・TOTAL_DRIFTカウントを行ったうえで、
-# 追加でITEM4_DRIFTも加算する。
-item4_drift() { item_drift "$@"; ITEM4_DRIFT=$((ITEM4_DRIFT + 1)); }
+# ④(vault-public/Preferences差分)の**内容差分**は informational（ℹ️ 表示＋
+# ITEM4_DRIFT の加算のみ・TOTAL_DRIFT には足さない）。[DIFF-CHECK-FAILED]＝
+# 検査実行自体の異常は対象外＝通常のitem_drift()を使う。
+# item4_info <件数> <文言>: ITEM4_DRIFT には差分ファイル数（diff -rq の行数）を足す。
+item4_info() { local n="$1"; shift; log "  -> ℹ️ INFO: $*（export は週次 Phase0 と案件締めで行う＝drift には数えない）"; ITEM4_DRIFT=$((ITEM4_DRIFT + n)); }
 
 echo "======================================================================"
 echo "① symlink が repo を向いているか"
@@ -308,77 +293,32 @@ echo "======================================================================"
 # generate_settings_json()。理由は同ファイル冒頭コメント参照＝JSONもシェル変数
 # 展開されない・symlinkのままだと`/model`実行時にClaude Code自身がrepo管理下の
 # ファイルを直接書き換えてしまう副作用があった）。①のsymlink一覧からは除外し、
-# ②のTOML比較と同型（プレースホルダ展開込みの内容比較）だがJSON向けに簡略化した
-# チェックをここで行う。まず旧symlinkのまま残っていないか（[UNEXPECTED-SYMLINK]）
-# を確認してから、生成物としての内容比較に進む。
-#
-# ⚠️ "model"キーはもはや特別扱いしない（2026-09-01工程横断レビュー差し戻し
-# MAJOR対応）。旧実装はセッション内`/model`での意図的な一時切替を理由に
-# 不一致を常にINFO表示へ丸めており、旧modelのまま放置されても週次総drift
-# 0になっていた。V13は「週次driftで拾う」契約（設計書§6.2-B S10）であり、
-# effortLevelとの非対称も生んでいたため、他のキーと同じDRIFT分類
-# （MISSING-KEY/DIFF/EXTRA-KEY）で扱う（意図的な切替の除外はしない）。
+# ここでは「installerの生成関数で一時ファイルへ再生成→実ファイルとJSON正規化diff」
+# を行う（2026-09-19 着手順3・設計 §4.2）。
+#   入力口＝scripts/install-main.sh --render-settings-json <path> の1つだけ
+#   （旧 --print-* 系の値出力口と項目別比較は退役）。
+#   生成側と本番installは同じ生成関数・同じ環境変数の既定値
+#   （AIENV_LOCAL_PROFILE_PATH・AIENV_MODEL_DEFS_FILE・AIENV_BEDROCK_ENV_FILE・
+#   AIENV_AGENTS_DIR）を読むため、ここで揃える処理は持たない（本スクリプトは
+#   それらを上書きしない）。
+#   判定＝両側から既知アプリ管理キー（下記）をトップレベル完全一致で除いたうえで
+#   sort_keysで正規化し、差分のあるトップレベルキー名だけを1件1行で出す
+#   （値は出さない＝絶対厳守③。permissions.allowの1要素差でも'permissions' 1件）。
+#   再生成に失敗したら[SETTINGS-RENDER-FAILED] 1件＝監視不能をdrift計上
+#   （③GIT-STATUS-CHECK-FAILED・⑤GH-CHECK-FAILEDと同型）。
+# まず旧symlinkのまま残っていないか（[UNEXPECTED-SYMLINK]）を確認してから、
+# 生成物との比較に進む。
 #
 # 既知アプリ管理キー一覧（2026-08-30追加・§9.0検出事項⑤/
 # [[Knowledge/symlink-config-app-writeback-pitfall]]）: Claude Code自身が
 # settings.jsonへ書き戻すキー。実測2件はいずれもトップレベルキーのため、
-# トップレベルキー完全一致でのみ除外する（Codex一次レビュー指摘・Minor対応:
-# config.tomlの②はテーブルの深さを問わないleaf key判定だが、settings.jsonで
-# 同じ判定にすると別階層に偶然同名キーがあった場合まで誤って除外してしまう。
-# table prefix一覧は設けない）。これら以外のテンプレに無いキー（EXTRA-KEY）は
-# 引き続きWARNに留めずdrift計上する。
+# トップレベルキー完全一致でのみ除外する（config.tomlの②はテーブルの深さを
+# 問わないleaf key判定だが、settings.jsonで同じ判定にすると別階層に偶然同名
+# キーがあった場合まで誤って除外してしまう。table prefix一覧は設けない）。
 KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS=(
   "agentPushNotifEnabled"   # Claude Codeアプリが自動追記する通知設定（2026-08-28実測・実害なし）
   "inputNeededNotifEnabled" # 同上
 )
-#
-# 配役表の`machine_role`を読み、期待されるmodel/effort値を決定する
-# （fail-closed＝解決失敗・unknown・unavailable・欠落等はすべてmain扱い。
-# 他の読み手と同じ判定パターンを踏襲＝配役表-能力軸整理-設計-2026-09-07.md
-# §2.2）。値そのものは自前の値表を持たず、値出力口
-# （scripts/install-main.sh --print-leader-runtime [--sub-delegate]）を呼んで
-# 得る（§9.0 A-0-3＝値表2箇所重複の解消・2026-09-01 配役表解凍 §4.2-a・§4.4で
-# --print-modelから改名。診断からは副作用ゼロの--print-leader-runtimeだけを
-# 呼び、--sub-delegate本体は呼ばない。⚠️ --sub-delegateフラグ自体はv1委譲期間の
-# フォールバック値選択〈AIENV_MODEL_MAIN/AIENV_MODEL_SUB〉に引き続き使うため、
-# --print-leader-runtimeと併用する＝§4.2-f）。
-#
-# leader_runtime_error_message <コード> [<理由>] — install-main.sh
-# --print-leader-runtime が標準エラーへ返す機械可読コード（4.2-b）を人向け
-# 文言へ変換する（2026-09-01 設計書§4.4。旧実装はここを`2>/dev/null`で理由を
-# 捨てて[MODEL-VALUE-UNAVAILABLE]の定型文だけに丸めていた）。
-# scripts/update-sub.shにも同名の関数を意図的に複製している（両スクリプトは
-# 互いをsourceしない独立プロセスで、変換ロジックは数行のみのため共有libを
-# 新設するほどではない＝bedrock_env_file_kind()等ここまでの既存の複製方針と
-# 同型）。
-leader_runtime_error_message() {
-  local code="$1" reason="${2:-}" msg=""
-  case "$code" in
-    PROFILE_NOT_FOUND|PROFILE_UNREADABLE)
-      msg="プロファイル実体を読み取れませんでした（不在・symlink・権限不足等の可能性）"
-      ;;
-    PROFILE_INVALID:*)
-      msg="プロファイルの構文または検証エラーです（${code#PROFILE_INVALID:}）"
-      ;;
-    PROFILE_RESOLVER_MISSING)
-      msg="resolver本体（共有lib）が見つかりません"
-      ;;
-    LEADER_UNCONFIGURED)
-      msg="リーダー配役が未確定です（unknown・not_adopted・行なしのいずれか）"
-      ;;
-    LEADER_UNAVAILABLE)
-      msg="リーダー候補が使用不可です"
-      ;;
-    LEADER_CANDIDATE_INVALID:*)
-      msg="リーダー候補の検証に失敗しました（条件番号: ${code#LEADER_CANDIDATE_INVALID:}）"
-      ;;
-    PROFILE_RESOLVER_ERROR|*)
-      msg="リーダー実行値を解決できませんでした（原因不明。コード: ${code:-なし}）"
-      ;;
-  esac
-  [ -n "$reason" ] && msg="${msg}（${reason}）"
-  printf '%s。プロファイルのリーダー行（role.leader）を確認してください: %s' "$msg" "$AIENV_LOCAL_PROFILE_PATH_HINT"
-}
 # 配役表-能力軸整理-設計-2026-09-07.md §2.3: AIENV_LOCAL_PROFILE_PATH_HINTの
 # 既定をAIENV_LOCAL_PROFILE_PATHにする（既存の上書きを壊さず、パスが2つに
 # 割れるのを防ぐ）。
@@ -386,371 +326,103 @@ leader_runtime_error_message() {
 
 SETTINGS_JSON_LIVE="$HOME/.claude/settings.json"
 SETTINGS_JSON_TEMPLATE="$DIR/claude/settings.json"
-# 配役表-能力軸整理-設計-2026-09-07.md §2.2の共通レシピ（副作用ゼロ＝
-# resolveは読むだけ。Knowledge/diagnostics-must-not-mutateを満たす）。
-_mr_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" \
-  --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _mr_out=""
-_mr_tab=$'\t'
-_mr_rest="${_mr_out#*"${_mr_tab}MACHINE_ROLE:"}"
-MACHINE_ROLE=""
-[ "$_mr_rest" != "$_mr_out" ] && MACHINE_ROLE="${_mr_rest%%"${_mr_tab}"*}"
-case "$MACHINE_ROLE" in main|sub) : ;; *) MACHINE_ROLE="unknown" ;; esac
+# ①-3 が modelSettings.<model> の照合に使う期待model（生成物から読む。値は
+# ログへ出さない。再生成できなければ空＝①-3 はその項目を飛ばす）。
 EXPECTED_MODEL=""
-EXPECTED_EFFORT=""
-EXPECTED_EFFORT_SET=0
-EXPECTED_MODEL_UNAVAILABLE_REASON=""
-# Bedrock envファイルの期待マージ分（2026-08-30 工程横断レビュー指摘・
-# MAJOR-5対応）。値表・許可リストをここに複製せず、install-main.shの
-# --print-bedrock-env-json（副作用ゼロの値出力口）を呼ぶ。
-# ⚠️ 「ファイルが存在しない」場合だけexit 0で{}が返る。ファイルが存在する
-# のに読取・解析に失敗した場合は非0終了する（install-main.sh
-# compute_bedrock_env_json()参照）ため、ここでは fail-open で{}へ丸めず、
-# 失敗を独立したフラグ（EXPECTED_BEDROCK_ENV_UNAVAILABLE）として持ち回り、
-# 後段で[BEDROCK-ENV-VALUE-UNAVAILABLE]としてdrift計上する（Codex二次
-# レビュー指摘・Major対応: 従来は失敗時も{}扱いにしており、Bedrock envが
-# 監視できていないのに「一致」と誤判定しうる穴があった）。exit0・非空文字列
-# でも中身がJSONとして壊れている／トップレベルがdictでない／envキーが
-# dictでない（旧flat形式含む）場合は同様に監視不能として扱う（2026-08-30
-# Codex 2巡目差し戻し・MAJOR対応: 従来はexit0・非空なら無条件で信頼しており、
-# 壊れた/旧形式のpayloadを静かに「空env」として受理する穴があった）。
-EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-EXPECTED_BEDROCK_ENV_UNAVAILABLE=0
-if [ -x "$DIR/scripts/install-main.sh" ]; then
-  # --sub-delegateは併用する（v2解決自体には使われない＝§4.2-fだが、
-  # v1委譲期間中のフォールバック値〈AIENV_MODEL_MAIN/AIENV_MODEL_SUB〉の
-  # 出し分けは引き続きこのフラグの有無だけで決まるため、外すとv1機の
-  # サブがメイン既定値へ倒れてしまう＝2026-09-01実測で発見・回帰させない）。
-  _leader_runtime_print_args=(--print-leader-runtime)
-  [ "$MACHINE_ROLE" = "sub" ] && _leader_runtime_print_args+=(--sub-delegate)
-  _leader_runtime_err_tmp="$(mktemp 2>/dev/null)" || _leader_runtime_err_tmp=""
-  if [ -n "$_leader_runtime_err_tmp" ]; then
-    if _leader_runtime_json="$("$DIR/scripts/install-main.sh" "${_leader_runtime_print_args[@]}" 2>"$_leader_runtime_err_tmp")"; then
-      # ⚠️ JSONとして読めることだけでなく契約（4.2-a）が定める形自体も検査
-      # する: ①stdoutが物理行1行だけ②トップレベルはobject③modelは非空文字列
-      # かつC0制御文字・DEL（0x00-0x1F・0x7F）を含まない④effortは**キーが
-      # 存在する場合に限り**同様の非空clean文字列（2026-09-01 Codex一次・
-      # 二次レビュー指摘・Major対応。scripts/update-sub.shの同名処理と
-      # 意図的に同じ検査を複製）。
-      if _leader_runtime_fields="$(printf '%s' "$_leader_runtime_json" | python3 -c '
-import json, sys
-
-def is_clean_str(s):
-    if not isinstance(s, str) or s == "":
-        return False
-    return not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
-
-raw = sys.stdin.read()
-if raw.count(chr(10)) > 1 or (raw.count(chr(10)) == 1 and not raw.endswith(chr(10))):
-    sys.exit(1)
-d = json.loads(raw)
-if not isinstance(d, dict):
-    sys.exit(1)
-model = d.get("model")
-if not is_clean_str(model):
-    sys.exit(1)
-print(model)
-if "effort" in d:
-    effort = d["effort"]
-    if not is_clean_str(effort):
-        sys.exit(1)
-    print("1")
-    print(effort)
-else:
-    print("0")
-    print("")
-' 2>/dev/null)"; then
-        EXPECTED_MODEL="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '1p')"
-        EXPECTED_EFFORT_SET="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '2p')"
-        EXPECTED_EFFORT="$(printf '%s\n' "$_leader_runtime_fields" | sed -n '3p')"
-      else
-        EXPECTED_MODEL_UNAVAILABLE_REASON="$(leader_runtime_error_message "PROFILE_RESOLVER_ERROR" "リーダー実行値のJSON解析に失敗しました（resolve-leaderの出力契約違反の可能性）")"
-      fi
-    else
-      # ⚠️ 契約（4.2-b）は「標準エラーへ`<コード>\t<理由>`を1行」を定めている。
-      # 契約外（複数行・タブ無し・理由が空/制御文字混入等）の出力は生テキスト
-      # のまま理由として再掲しない（2026-09-01 Codex二次レビュー指摘・
-      # Major対応。scripts/update-sub.shと同じ検査を複製）。
-      _leader_runtime_stderr_parsed="$(python3 -c '
-import re, sys
-
-def is_clean_str(s):
-    return s != "" and not any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
-
-# 機械可読コードは契約（4.2-b・profile-resolve-contract-2026-09-01.md §4）が
-# 列挙する既知の集合に限定する（2026-09-01 Codex三次レビュー指摘・Major
-# 対応。scripts/update-sub.shと同じ検査を複製）。
-KNOWN_CODE_RE = re.compile(
-    r"^(PROFILE_NOT_FOUND|PROFILE_UNREADABLE|"
-    r"PROFILE_RESOLVER_MISSING|PROFILE_RESOLVER_ERROR|LEADER_UNCONFIGURED|"
-    r"LEADER_UNAVAILABLE|"
-    r"PROFILE_INVALID:[A-Za-z0-9_-]+|LEADER_CANDIDATE_INVALID:[A-Za-z0-9_-]+)$"
-)
-
-with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
-    raw = f.read()
-lines = raw.split(chr(10))
-if lines and lines[-1] == "":
-    lines = lines[:-1]
-if len(lines) != 1 or chr(9) not in lines[0]:
-    print("INVALID")
-    sys.exit(0)
-code, reason = lines[0].split(chr(9), 1)
-if not KNOWN_CODE_RE.match(code) or not is_clean_str(reason):
-    print("INVALID")
-    sys.exit(0)
-print("VALID")
-print(code)
-print(reason)
-' "$_leader_runtime_err_tmp" 2>/dev/null)"
-      if [ "$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '1p')" = "VALID" ]; then
-        _leader_runtime_code="$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '2p')"
-        _leader_runtime_reason="$(printf '%s\n' "$_leader_runtime_stderr_parsed" | sed -n '3p')"
-        EXPECTED_MODEL_UNAVAILABLE_REASON="$(leader_runtime_error_message "${_leader_runtime_code:-PROFILE_RESOLVER_ERROR}" "$_leader_runtime_reason")"
-      else
-        EXPECTED_MODEL_UNAVAILABLE_REASON="$(leader_runtime_error_message "PROFILE_RESOLVER_ERROR" "標準エラーの出力が契約（4.2-b・1行のコード+理由）に従っていません")"
-      fi
-    fi
-    rm -f "$_leader_runtime_err_tmp"
-  else
-    EXPECTED_MODEL_UNAVAILABLE_REASON="一時ファイルを作成できませんでした"
-  fi
-  if ! EXPECTED_BEDROCK_ENV_JSON="$("$DIR/scripts/install-main.sh" --print-bedrock-env-json 2>/dev/null)"; then
-    EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
-    EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-  elif [ -z "$EXPECTED_BEDROCK_ENV_JSON" ]; then
-    EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
-    EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-  elif ! python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-except Exception:
-    sys.exit(1)
-sys.exit(0 if isinstance(d, dict) and isinstance(d.get('env'), dict) else 1)
-" "$EXPECTED_BEDROCK_ENV_JSON" 2>/dev/null; then
-    # exit0・非空文字列でも、JSON不正／トップレベルがdictでない／envキーが
-    # dictでない（旧flat形式やスキーマ崩れを含む）場合はここで検出し、
-    # fail-openで{}へ丸めず監視不能として扱う（2026-08-30 Codex 2巡目差し戻し・
-    # MAJOR対応: 従来はexit0かつ空文字列でなければ無条件で信頼しており、
-    # 壊れた/旧形式のpayloadを静かに「空env」として受理してしまう穴があった）。
-    EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
-    EXPECTED_BEDROCK_ENV_JSON='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-  fi
-else
-  EXPECTED_BEDROCK_ENV_UNAVAILABLE=1
-  EXPECTED_MODEL_UNAVAILABLE_REASON="scripts/install-main.sh が見つからないか実行権限がありません"
-fi
 
 if [ -L "$SETTINGS_JSON_LIVE" ]; then
   # 2026-08-21より前のinstall-main.shはsettings.jsonをsymlinkしていた（旧方式）。
-  # 旧symlinkがrepoテンプレをそのまま指している場合、テンプレの"model"値は
-  # __AIENV_MODEL__プレースホルダの生文字列のままであり、下の内容比較ロジックへ
-  # 素通しすると（"model"は特別扱いのため）誤って「一致」と判定されかねない
-  # （Codex一次レビュー指摘・Major対応）。symlinkのままである時点で「/model実行時に
-  # repo管理下のファイルが直接書き換わる」旧来の問題が解消されていないため、
-  # 内容比較を行わず即座にdrift計上する。
+  # symlinkのままである時点で「/model実行時にrepo管理下のファイルが直接
+  # 書き換わる」旧来の問題が解消されていないため、内容比較を行わず即座に
+  # drift計上する。
   item_drift "[UNEXPECTED-SYMLINK] $SETTINGS_JSON_LIVE がsymlinkのままです（2026-08-21以降は生成物であるべき。旧versionのinstall-main.shを適用した環境の可能性が高いため、scripts/install-main.shを再実行してください）"
 elif [ ! -f "$SETTINGS_JSON_LIVE" ]; then
   item_drift "[MISSING] $SETTINGS_JSON_LIVE が存在しません（未インストール？）"
 elif [ ! -f "$SETTINGS_JSON_TEMPLATE" ]; then
   item_drift "[MISSING] リポジトリ側テンプレが見つかりません: $SETTINGS_JSON_TEMPLATE"
-elif [ -z "$EXPECTED_MODEL" ]; then
-  # 値出力口（install-main.sh --print-leader-runtime）が値を返さなかった場合は
-  # fail-openで「一致」扱いにせず監視不能として drift 計上する
-  # （③GIT-STATUS-CHECK-FAILED・⑤GH-CHECK-FAILEDと同型の既存の設計思想。
-  # 2026-09-01 配役表解凍 §4.4: 理由は4.2-bの機械可読コードを
-  # leader_runtime_error_message()で人向け文言へ変換したもの＝旧実装の
-  # `2>/dev/null`による定型文への丸めを廃止）。
-  item_drift "[MODEL-VALUE-UNAVAILABLE] リーダー実行値の出力口（scripts/install-main.sh --print-leader-runtime）が値を返しませんでした＝監視不能: ${EXPECTED_MODEL_UNAVAILABLE_REASON:-理由不明}"
-elif [ "$EXPECTED_BEDROCK_ENV_UNAVAILABLE" = "1" ]; then
-  # Bedrock env値の出力口（install-main.sh --print-bedrock-env-json）が
-  # 非0終了した場合（envファイルは存在するのに読取・解析に失敗）は、
-  # fail-openで{}扱いにせず監視不能として drift 計上する（2026-08-30
-  # Codex二次レビュー指摘・Major対応と同型の既存の設計思想）。
-  item_drift "[BEDROCK-ENV-VALUE-UNAVAILABLE] Bedrock env値の出力口（scripts/install-main.sh --print-bedrock-env-json）が失敗しました（envファイルの読取・解析エラーの可能性）＝監視不能"
+elif [ ! -x "$DIR/scripts/install-main.sh" ]; then
+  item_drift "[SETTINGS-RENDER-FAILED] scripts/install-main.sh が見つからないか実行権限がありません＝settings.jsonを再生成できず監視不能"
 else
-  app_managed_keys_joined="$(printf '%s\x1f' "${KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS[@]}")"
-  SETTINGS_JSON_CLASSIFY_OUT="$(python3 -c "
-import sys, json
-
-def flatten(d, prefix=''):
-    out = {}
-    if isinstance(d, dict):
-        for k, v in d.items():
-            path = f'{prefix}.{k}' if prefix else k
-            if isinstance(v, dict) and v:
-                out.update(flatten(v, path))
-            else:
-                out[path] = v
-    return out
-
-def render(obj, model):
-    if isinstance(obj, dict):
-        return {k: render(v, model) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [render(v, model) for v in obj]
-    if isinstance(obj, str):
-        return obj.replace('__AIENV_MODEL__', model)
-    return obj
-
-try:
-    with open(sys.argv[1]) as f:
-        live = json.load(f)
-except Exception as e:
-    print(f'PARSE_FAILED\tlive\t{type(e).__name__}: {e}')
-    sys.exit(0)
-
-try:
-    with open(sys.argv[2]) as f:
-        template = json.load(f)
-except Exception as e:
-    print(f'PARSE_FAILED\ttemplate\t{type(e).__name__}: {e}')
-    sys.exit(0)
-
-# テンプレの"model"値が __AIENV_MODEL__ の目印から変わっていないかを確認する
-# （Codex二次レビュー指摘・Minor対応: ここを確認せずrender()するだけだと、誰かが
-# テンプレへ再び特定モデルをハードコードする回帰＝今回のタスクの発端そのもの＝が
-# 起きても、そのハードコード値がそのまま「期待値」として扱われてしまい検知
-# できなかった）。scripts/install-main.sh generate_settings_json() も同じ検証を
-# install時に行う（インストール時とdrift監視時の二重の安全網）。
-if not isinstance(template, dict) or template.get('model') != '__AIENV_MODEL__':
-    got = template.get('model') if isinstance(template, dict) else type(template).__name__
-    print(f'TEMPLATE_INVALID\t{got!r}')
-    sys.exit(0)
-
-# effortLevelの目印検査はmodel側と対で行う（2026-09-01 配役表解凍 §4.4）。
-# ⚠️ model側だけ守ると、誰かがテンプレへ特定のeffort値を直接ハードコード
-# しても検出できない非対称が残る（4.2-g・install-main.sh generate_settings_
-# json()と同じ検証）。
-if template.get('effortLevel') != '__AIENV_EFFORT__':
-    got_effort = template.get('effortLevel')
-    print(f'TEMPLATE_INVALID_EFFORT\t{got_effort!r}')
-    sys.exit(0)
-
-expected_model = sys.argv[3]
-app_managed_keys = set(k for k in sys.argv[4].split(chr(0x1f)) if k)
-expected_effort_set = sys.argv[6] == '1' if len(sys.argv) > 6 else False
-expected_effort = sys.argv[7] if len(sys.argv) > 7 else ''
-# effortLevelは値そのものをテンプレの文字列置換（render）に任せない
-# （§3.8・4.2-g: 未指定時は"効かない値へ空文字を埋める"のではなく**キー自体を
-# 削除**するのが正しい生成規則であり、V13は「effortLevelキーが存在しないこと」
-# を検査対象にする＝存在したらdrift。render()の単純な文字列置換ではキーの
-# 削除を表現できないため、flatten()より前にdictへ直接反映する）。
-if expected_effort_set:
-    template['effortLevel'] = expected_effort
-else:
-    template.pop('effortLevel', None)
-live_flat = flatten(live)
-tmpl_flat = flatten(render(template, expected_model))
-
-# Bedrock envファイルからの期待マージ分（2026-08-30 工程横断レビュー指摘・
-# MAJOR-5対応）: install-main.sh --print-bedrock-env-json（値出力口の一本化・
-# ①-2の他項目と同じ設計）が返す値をテンプレの期待値へ合成する。これが無いと、
-# 正しくBedrockのenvをマージ済みのsettings.jsonが恒常的にEXTRA-KEY drift
-# 扱いになってしまう（installer/update-subは正しく動いているのに毎回
-# 誤報が出る状態）。
-# ⚠️ 出力形式は{'env': {...}, 'rejected_keys': [...], 'malformed_lines': [...]}
-# という構造化オブジェクト（2026-08-30 工程横断レビュー指摘・MAJOR-A対応で
-# rejected_keys/malformed_linesを呼び出し側〈generate_settings_json・
-# update-sub.sh〉へ伝えるために追加された）。check-drift.shはこのうち
-# 'env'サブオブジェクトだけを期待値の合成に使う（rejected_keys・
-# malformed_linesはdrift判定に使わない＝それらはsettings.jsonへ反映されない
-# ことが正しい挙動のため）。
-try:
-    expected_bedrock_payload = json.loads(sys.argv[5]) if len(sys.argv) > 5 else {}
-    if not isinstance(expected_bedrock_payload, dict):
-        expected_bedrock_payload = {}
-except Exception:
-    expected_bedrock_payload = {}
-expected_bedrock_env = expected_bedrock_payload.get('env') or {}
-if not isinstance(expected_bedrock_env, dict):
-    expected_bedrock_env = {}
-for _k, _v in expected_bedrock_env.items():
-    tmpl_flat[f'env.{_k}'] = _v
-
-for key in sorted(set(live_flat) | set(tmpl_flat)):
-    # ⚠️ "model"キーはもはや特別扱いしない（2026-09-01工程横断レビュー
-    # 差し戻しMAJOR対応）。旧実装はセッション内の/modelスラッシュコマンドでの
-    # 意図的な一時切替を理由にmodel不一致を常にMODEL_INFOへ丸めており、旧
-    # モデルのまま放置されても週次総drift 0になっていた（V13は「週次driftで
-    # 拾う」契約＝設計書§6.2-B S10「次回生成で上書きされる。その前にV13が
-    # ⚠️＋週次drift」・
-    # effortLevelとの非対称も解消する。意図的な切替の除外はしない＝下の通常
-    # DRIFT分類（MISSING-KEY/DIFF/EXTRA-KEY）へeffortLevel等と同列に合流させる）。
-    # 既知アプリ管理キー（2026-08-30追加・§9.0検出事項⑤）: トップレベルの
-    # キー名完全一致でのみ除外する（Codex一次レビュー指摘・Minor対応:
-    # config.toml②はテーブルの深さを問わないleaf key判定だが、settings.jsonの
-    # 実測2件は両方ともトップレベルキーであり、leaf判定のままだと
-    # 別階層（例: 別セクション配下）に偶然同名キーがあった場合まで誤って
-    # 除外してしまう。実測範囲に限定してトップレベル一致のみ許容する）。
-    # テンプレ記載の有無に関わらず優先する＝Claude Codeが書き戻す値なので、
-    # テンプレとの厳密一致も追随判定も意味を持たない。
-    if '.' not in key and key in app_managed_keys:
-        continue
-    # "env."配下のキーは値を出力しない（2026-08-30 Codex一次レビュー指摘・Major
-    # 対応: §9.0 A-1-4でBedrock envファイルの値がsettings.jsonの"env"ブロックへ
-    # 取り込まれるようになったため、推論プロファイルARN等（アカウントIDを含み
-    # うる＝§4.5）がdrift出力・週次通知ログに平文で載る経路になっていた。
-    # 絶対厳守③に従い、キー名は出すが値は常に<redacted>にする）。
-    def _show(v):
-        return '<redacted>' if key.startswith('env.') else repr(v)
-    if key in tmpl_flat:
-        if key not in live_flat:
-            print(f'DRIFT\tMISSING-KEY\t{key}\t{_show(tmpl_flat[key])}')
-        elif live_flat[key] != tmpl_flat[key]:
-            print(f'DRIFT\tDIFF\t{key}\t{_show(tmpl_flat[key])}\t{_show(live_flat[key])}')
-    else:
-        # config.tomlの②と異なり、settings.jsonには既知アプリ管理キー一覧に
-        # 載らないその他の未知キーはWARN表示に留めず即drift計上する（Codex一次
-        # レビュー指摘・Major対応: WARNのみだとpermissions等への意図しない追加
-        # 変更が総drift0のまま見逃され続ける）。
-        print(f'DRIFT\tEXTRA-KEY\t{key}\t{_show(live_flat[key])}')
-" "$SETTINGS_JSON_LIVE" "$SETTINGS_JSON_TEMPLATE" "$EXPECTED_MODEL" "$app_managed_keys_joined" "$EXPECTED_BEDROCK_ENV_JSON" "$EXPECTED_EFFORT_SET" "$EXPECTED_EFFORT" 2>&1)"
-  SETTINGS_JSON_CLASSIFY_RC=$?
-  if [ "$SETTINGS_JSON_CLASSIFY_RC" -ne 0 ]; then
-    item_drift "[JSON-PARSE-FAILED] 検査①-2の実行自体に失敗しました（python3 exit=${SETTINGS_JSON_CLASSIFY_RC}）＝監視不能。詳細: ${SETTINGS_JSON_CLASSIFY_OUT}"
+  _render_tmpd="$(mktemp -d 2>/dev/null)" || _render_tmpd=""
+  if [ -z "$_render_tmpd" ]; then
+    item_drift "[SETTINGS-RENDER-FAILED] 再生成用の一時ディレクトリを作成できません＝監視不能"
   else
-    drift_before=$TOTAL_DRIFT
-    while IFS=$'\t' read -r kind a b c d; do
-      [ -z "$kind" ] && continue
-      case "$kind" in
-        PARSE_FAILED)
-          case "$a" in
-            live) parse_failed_path="$SETTINGS_JSON_LIVE" ;;
-            template) parse_failed_path="$SETTINGS_JSON_TEMPLATE" ;;
-            *) parse_failed_path="(${a})" ;;
-          esac
-          item_drift "[JSON-PARSE-FAILED] ${parse_failed_path} をJSONとして解析できませんでした（${b}）＝監視不能"
-          ;;
-        TEMPLATE_INVALID)
-          item_drift "[TEMPLATE-INVALID] ${SETTINGS_JSON_TEMPLATE} の 'model' フィールドが __AIENV_MODEL__ の目印から変わっています（現在: ${a}）。誰かが特定モデルをテンプレへ直接ハードコードした可能性があります。__AIENV_MODEL__ プレースホルダへ戻してください"
-          ;;
-        TEMPLATE_INVALID_EFFORT)
-          # 2026-09-01 配役表解凍 §4.4: model側と対のeffortLevel目印検査
-          # （__AIENV_EFFORT__）。片側だけ検査すると「誰かがテンプレへeffort
-          # を直接ハードコードした」を検出できず非対称が残る。
-          item_drift "[TEMPLATE-INVALID] ${SETTINGS_JSON_TEMPLATE} の 'effortLevel' フィールドが __AIENV_EFFORT__ の目印から変わっています（現在: ${a}）。誰かが特定のeffortをテンプレへ直接ハードコードした可能性があります。__AIENV_EFFORT__ プレースホルダへ戻してください"
-          ;;
-        DRIFT)
-          case "$a" in
-            MISSING-KEY)
-              item_drift "[MISSING-KEY] キー '${b}' が ${SETTINGS_JSON_LIVE} にありません（テンプレ値: ${c}）"
+    _render_rc=0
+    "$DIR/scripts/install-main.sh" --render-settings-json "$_render_tmpd/settings.json" >/dev/null 2>"$_render_tmpd/err" || _render_rc=$?
+    if [ "$_render_rc" -ne 0 ] || [ ! -f "$_render_tmpd/settings.json" ]; then
+      _render_err="$(head -1 "$_render_tmpd/err" 2>/dev/null)"
+      item_drift "[SETTINGS-RENDER-FAILED] scripts/install-main.sh --render-settings-json が失敗しました（exit ${_render_rc}: ${_render_err:-理由不明}）＝settings.jsonを再生成できず監視不能。プロファイルのリーダー行（role.leader）を確認してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
+    else
+      app_managed_keys_joined="$(printf '%s\x1f' "${KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS[@]}")"
+      SETTINGS_JSON_DIFF_OUT="$(python3 -c "
+import json, sys
+
+rendered_path, live_path, keys_joined = sys.argv[1], sys.argv[2], sys.argv[3]
+app_managed = set(k for k in keys_joined.split(chr(31)) if k)
+
+def load(path, label):
+    try:
+        with open(path, encoding='utf-8') as f:
+            d = json.load(f)
+    except Exception as e:
+        print('PARSE_FAILED' + chr(9) + label + chr(9) + type(e).__name__)
+        return None
+    if not isinstance(d, dict):
+        print('PARSE_FAILED' + chr(9) + label + chr(9) + 'top-level is not an object')
+        return None
+    return d
+
+rendered = load(rendered_path, 'rendered')
+live = load(live_path, 'live')
+if rendered is None or live is None:
+    sys.exit(0)
+for k in app_managed:
+    rendered.pop(k, None)
+    live.pop(k, None)
+
+def norm(v):
+    return json.dumps(v, sort_keys=True, ensure_ascii=False)
+
+for key in sorted(set(rendered) | set(live)):
+    if key not in live or key not in rendered or norm(rendered[key]) != norm(live[key]):
+        print('DIFF' + chr(9) + key)
+m = rendered.get('model')
+if isinstance(m, str) and m:
+    print('MODEL' + chr(9) + m)
+" "$_render_tmpd/settings.json" "$SETTINGS_JSON_LIVE" "$app_managed_keys_joined" 2>&1)"
+      SETTINGS_JSON_DIFF_RC=$?
+      if [ "$SETTINGS_JSON_DIFF_RC" -ne 0 ]; then
+        # 詳細にMODEL行（値）を含めない（絶対厳守③）。
+        item_drift "[JSON-PARSE-FAILED] 検査①-2の実行自体に失敗しました（python3 exit=${SETTINGS_JSON_DIFF_RC}）＝監視不能。詳細: $(printf '%s\n' "$SETTINGS_JSON_DIFF_OUT" | grep -v '^MODEL' | tail -1)"
+      else
+        drift_before=$TOTAL_DRIFT
+        while IFS=$'\t' read -r kind a b; do
+          [ -z "$kind" ] && continue
+          case "$kind" in
+            MODEL)
+              EXPECTED_MODEL="$a"
+              ;;
+            PARSE_FAILED)
+              case "$a" in
+                live) parse_failed_path="$SETTINGS_JSON_LIVE" ;;
+                rendered) parse_failed_path="生成物（--render-settings-json の出力）" ;;
+                *) parse_failed_path="(${a})" ;;
+              esac
+              item_drift "[JSON-PARSE-FAILED] ${parse_failed_path} をJSONとして解析できませんでした（${b}）＝監視不能"
               ;;
             DIFF)
-              item_drift "[DIFF] キー '${b}' の値がテンプレと異なります（テンプレ: ${c} / 実ファイル: ${d}）"
-              ;;
-            EXTRA-KEY)
-              item_drift "[EXTRA-KEY] キー '${b}' が ${SETTINGS_JSON_LIVE} にのみ存在します（テンプレにありません。値: ${c}）"
+              item_drift "[SETTINGS-DIFF] キー '${a}' が生成物と異なります（値は出しません。scripts/install-main.sh の再実行で生成物へ揃うか、意図した変更ならテンプレ claude/settings.json へ反映してください）"
               ;;
           esac
-          ;;
-      esac
-    done <<EOF
-$SETTINGS_JSON_CLASSIFY_OUT
+        done <<EOF
+$SETTINGS_JSON_DIFF_OUT
 EOF
-    if [ "$TOTAL_DRIFT" -eq "$drift_before" ]; then
-      log "  -> ✅ settings.jsonはテンプレと一致しています"
+        if [ "$TOTAL_DRIFT" -eq "$drift_before" ]; then
+          log "  -> ✅ settings.jsonはテンプレと一致しています（installerの生成物との正規化diffで差分なし）"
+        fi
+      fi
     fi
+    rm -rf "$_render_tmpd"
   fi
 fi
 
@@ -908,6 +580,13 @@ KNOWN_APP_MANAGED_TOML_TABLE_PREFIXES=(
   "projects"                 # フォルダごとのtrust_level履歴
   "tui"                      # オンボーディング通知の既読カウンタ等（実質的な設定ではない）
   "shell_environment_policy" # Codex.appがファイル末尾の機械管理領域に自動追記するセクション。ビルド毎に変わるNODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S等を含む。2026-08-03のアプリ書換で出現・2026-08-05実測確認
+  # 2026-09-19 着手順3（設計 §4.1・本人裁定）: Codex Desktopが起動時に書き直す
+  # 3テーブル。監視対象はテンプレのうち本人が決めたキー（service_tier・
+  # approval_policy・model・model_reasoning_effort・sandbox_workspace_write.
+  # network_access・features.hooks・features.js_repl）だけになる。
+  "plugins"                  # バンドルプラグインの目録（版ごとに増減・enabledの本人設定はアプリ側が保持）
+  "mcp_servers"              # 同梱MCP（node_repl・computer-use）の起動設定とenv＝アプリが版ごとに書き直す
+  "desktop"                  # デスクトップ設定（アプリのUIから変わる）
 )
 KNOWN_APP_MANAGED_TOML_LEAF_KEYS=(
   "notify"                                    # Codexアプリがインストール時のパスで自動再設定する。ユーザーがテンプレ上でコメントアウトして無効化していても実ファイルには復活しうる
@@ -1098,7 +777,7 @@ echo "======================================================================"
 VP_PREFS="$DIR/vault-public/Preferences"
 VAULT_PREFS="$VAULT/Preferences"
 if [ ! -d "$VP_PREFS" ]; then
-  item4_drift "[MISSING] $VP_PREFS が見つかりません（export-public-vault.sh 未実行？）"
+  item4_info 1 "$VP_PREFS が見つかりません（export-public-vault.sh 未実行？）"
 elif [ ! -d "$VAULT_PREFS" ]; then
   log "  -> 実Vaultの Preferences が見つかりません（${VAULT_PREFS}）。このマシンに私的パッチが無い（サブ機）想定ならチェック対象外"
 else
@@ -1112,16 +791,12 @@ else
     log "  -> ✅ 差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
   elif [ "$diff_rc" -eq 1 ]; then
     n=$(printf '%s\n' "$diff_out" | grep -c . || true)
-    item4_drift "[DIFF] 実Vault と vault-public/Preferences に差分が ${n} 件あります（export-public-vault.sh の再実行が必要な可能性）"
+    item4_info "$n" "実Vault と vault-public/Preferences に差分が ${n} 件あります（export-public-vault.sh の再実行が必要な可能性）"
     printf '%s\n' "$diff_out" | sed 's/^/    /'
   else
     # DIFF-CHECK-FAILEDは「④の内容差分」ではなく「④の検査自体が実行できない」
-    # という実行異常であり、改訂v2 §1.2は「④の差分は除外するが実行異常は
-    # exit code契約の対象」と明記している（2026-07-16 Codexレビュー指摘Major
-    # 対応: 当初item4_drift()にしていたため、diff -rqが失敗するだけで
-    # drift_excluding_item4>0のexit code契約をすり抜けられてしまっていた
-    # ＝本スクリプト自身の「監視不能も異常」という方針とも矛盾していた）。
-    # 通常のitem_drift()（drift_excluding_item4に算入される）を使う。
+    # という実行異常＝informationalにせず通常のitem_drift()（drift_excluding_
+    # item4に算入される）を使う（「監視不能も異常」の方針・2026-07-16）。
     item_drift "[DIFF-CHECK-FAILED] diff -rq ${VAULT_PREFS} ${VP_PREFS} の実行に失敗しました（exit ${diff_rc}。ファイル読み取り不能等の可能性）＝差分の有無を判定できません。確認: diff -rq ${VAULT_PREFS} ${VP_PREFS}"
     printf '%s\n' "$diff_out" | sed 's/^/    /'
   fi
@@ -1894,22 +1569,19 @@ print('UNKNOWN_EXTRA' + chr(9) + unknown_extra)
 
   if [ "$CHECK_PROFILE_PARSE_RC" -ne 0 ]; then
     item_drift "[PROFILE-VALIDATION-FAILED] --check-profile の出力を解析できませんでした（python3 exit=${CHECK_PROFILE_PARSE_RC}）＝監視不能。詳細: ${CHECK_PROFILE_FIRST_LINE:-空}"
-  elif [ "$CHECK_PROFILE_RC" -ne 0 ] && [ "$CP_STATUS" = "PROFILE_NOT_FOUND" ] && case "$CHECK_PROFILE_FIRST_LINE" in *$'\t'*) true ;; *) false ;; esac; then
-    # ⚠️ ローカル実体が一度も作られていない（P1ロールアウト未完了・v1委譲
-    # 期間中のマシン）を「壊れている」と誤検知しない。他の値出力口
-    # （resolve_leader_runtime）と同じく「実体が無い＝v1委譲」を落ちない
-    # 挙動として扱う設計方針（§3.5）をここでも踏襲する。機械可読コード
-    # （PROFILE_NOT_FOUND）の**厳密一致**で判定する＝人向け文言は
-    # install-main.sh側の実装変更で変わりうるため、コード側で判定する
-    # 方が壊れにくい。⚠️ タブ区切りの理由が続く正規の形（`<コード>\t<理由>`）
-    # であることも要求する（2026-09-01 Codex三次レビュー指摘・Major対応:
-    # 裸の"PROFILE_NOT_FOUND"1語だけでも同じ扱いになっていた＝契約の
-    # 「タブ+理由」を満たさない出力を素通ししていた）。
-    log "  -> ローカル実体プロファイルがまだ存在しません（P1ロールアウト未完了・v1委譲期間の可能性）。チェック対象外"
+  elif [ "$CHECK_PROFILE_RC" -ne 0 ] && { [ "$CP_STATUS" = "PROFILE_NOT_FOUND" ] || { [ "$CP_STATUS" = "MINIMAL" ] && [ ! -e "$AIENV_LOCAL_PROFILE_PATH" ] && [ ! -L "$AIENV_LOCAL_PROFILE_PATH" ]; }; } && case "$CHECK_PROFILE_FIRST_LINE" in *$'\t'*) true ;; *) false ;; esac; then
+    # ⚠️ ローカル実体が一度も作られていない（P1ロールアウト未完了のマシン）を
+    # 「壊れている」と誤検知しない。2026-09-19（着手順3・ι）から --check-profile
+    # は resolver の `resolve` 行をそのまま返す＝実体が無いときは
+    # `MINIMAL\tT1\t…`（非0）なので、MINIMAL かつ実体パスが実在しない場合も
+    # 同じ扱いにする（旧コード PROFILE_NOT_FOUND の厳密一致も残す）。
+    # ⚠️ タブ区切りの理由が続く正規の形（`<コード>\t<理由>`）であることも要求
+    # する（2026-09-01 Codex三次レビュー指摘・Major対応）。
+    log "  -> ローカル実体プロファイルがまだ存在しません（P1ロールアウト未完了の可能性）。チェック対象外"
   elif [ "$CHECK_PROFILE_RC" -ne 0 ]; then
-    # ⚠️ fail区分のvalidator違反は resolver 側（install-main.sh --print-
-    # leader-runtime／settings.json生成）で既に止まる契約（§5「resolverの
-    # exit契約」）。ここで検出するのは「同じ違反を①-2とは独立の経路
+    # ⚠️ fail区分のvalidator違反は resolver 側（install-main.sh
+    # --render-settings-json／settings.json生成）で既に止まる契約（§5
+    # 「resolverのexit契約」）。ここで検出するのは「同じ違反を①-2とは独立の経路
     # （--check-profile）から見て、SessionStart/週次通知でも必ず拾う」ため
     # であり、fail条件を二重に定義するものではない（設計書§4.4の注記）。
     # ⚠️ CP_STATUSが厳密に'OK'と一致する場合を除きすべて対象にする
@@ -2166,7 +1838,10 @@ log "総drift件数: ${TOTAL_DRIFT}"
 echo "======================================================================"
 
 if [ "$JSON_MODE" = "1" ]; then
-  DRIFT_EXCLUDING_ITEM4=$((TOTAL_DRIFT - ITEM4_DRIFT))
+  # ④は2026-09-19からTOTAL_DRIFTに含めない（informational）ため、
+  # drift_excluding_item4 は総drift件数と同じ値になる（キー名は読み手の契約
+  # ＝maintenance.sh のため変えない）。
+  DRIFT_EXCLUDING_ITEM4=$TOTAL_DRIFT
   # 呼び出し側（maintenance.sh Phase1①）は「stdoutの最終行だけがJSON」という
   # 契約でパースする（ファイル冒頭の使い方コメント参照）。ここまでの人間向け
   # 出力は変更していないため、このJSON行が常にstdoutの最終行になる。
