@@ -221,7 +221,7 @@ echo "======================================================================"
 echo "① symlink が repo を向いているか"
 echo "======================================================================"
 
-# 2026-08-21: bash-danger-gate.sh・next-pane-resolve.sh・check-sub-update.sh の
+# 2026-08-21: bash-danger-gate.sh・Project対応表フック・check-sub-update.sh の
 # 3件が本一覧から漏れていた（install-main.shは配置しているのに監視対象外だった
 # 既存不具合。今回のsettings.json対応でこの配列を触ったのを機にCodex一次
 # レビュー指摘・Major対応として合わせて追加。settings.json/①-2の対応とは独立の
@@ -232,8 +232,7 @@ SYMLINKS=(
   "$HOME/.claude/hooks/bash-danger-gate.sh|$DIR/claude/hooks/bash-danger-gate.sh"
   "$HOME/.claude/hooks/vault-recall.sh|$DIR/claude/hooks/vault-recall.sh"
   "$HOME/.claude/hooks/vault-read-log.sh|$DIR/claude/hooks/vault-read-log.sh"
-  "$HOME/.claude/hooks/next-pane-resolve.sh|$DIR/claude/hooks/next-pane-resolve.sh"
-  "$HOME/.claude/hooks/task-pane-resolve.sh|$DIR/claude/hooks/task-pane-resolve.sh"
+  "$HOME/.claude/hooks/dock-pane-resolve.sh|$DIR/claude/hooks/dock-pane-resolve.sh"
   "$HOME/.claude/hooks/check-sub-update.sh|$DIR/claude/hooks/check-sub-update.sh"
   # 2026-08-30追加: settings.jsonには2026-08-10導入時から登録済みだったが、
   # install-main.shへのlink配置が漏れていた（同型4回目・§9.0 A-0-2で修理）。

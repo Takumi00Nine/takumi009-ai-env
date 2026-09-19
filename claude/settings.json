@@ -155,15 +155,9 @@
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/next-pane-resolve.sh",
-            "timeout": 5,
-            "statusMessage": "Project番号対応表を注入中"
-          },
-          {
-            "type": "command",
-            "command": "$HOME/.claude/hooks/task-pane-resolve.sh",
-            "timeout": 5,
-            "statusMessage": "Task番号対応表を注入中"
+            "command": "$HOME/.claude/hooks/dock-pane-resolve.sh",
+            "timeout": 8,
+            "statusMessage": "Dock番号対応表を注入中"
           },
           {
             "type": "command",

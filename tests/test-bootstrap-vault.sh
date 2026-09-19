@@ -88,7 +88,7 @@ assert_ascending_line_positions() {
 # safe_mktemp_d — mktemp -d のラッパー。差分レビュー指摘#6（MAJOR）対応。
 # 本ファイルは `set -euo pipefail` のため `VAR="$(mktemp -d)"` の失敗自体は
 # 既に即終了する契約だが、失敗せずに空・`/`・既存の非空ディレクトリという
-# 異常な値を返した場合の防御をtest-next-pane-resolve.shのWORK_DIRガードと
+# 異常な値を返した場合の防御をtest-dock-pane-resolve.shのWORK_DIRガードと
 # 揃える（同種の`rm -rf`巻き込み事故を防ぐ二重の安全網）。
 # 標準出力へ検証済みのパスを1行返す。失敗時はFATALをstderrへ出しreturn 1
 # （呼び出し側は `VAR="$(safe_mktemp_d)" || exit 1` の形で使うこと）。

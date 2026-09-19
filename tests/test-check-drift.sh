@@ -38,6 +38,17 @@ assert_not_contains() {
   fi
 }
 
+# 形検査（値でなく形を見る＝Decisions/2026-09-17-tests-rough-not-strict）。
+# symlink総数はSYMLINKS配列の増減で変わるため固定件数を判定に使わない。
+assert_matches() {
+  local desc="$1" haystack="$2" regex="$3"
+  if [[ "$haystack" =~ $regex ]]; then
+    pass "$desc"
+  else
+    fail_case "$desc (形が一致しない: /$regex/)"
+  fi
+}
+
 # --jsonモード（設計書§1.2 maintenance.sh Phase1①向け）のJSONフィールド数値比較用。
 assert_eq_num() {
   local desc="$1" actual="$2" expected="$3"
@@ -97,8 +108,7 @@ EOF
   echo '#!/bin/bash' > "$repo/claude/hooks/bash-danger-gate.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/vault-recall.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/vault-read-log.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/next-pane-resolve.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/task-pane-resolve.sh"
+  echo '#!/bin/bash' > "$repo/claude/hooks/dock-pane-resolve.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/check-sub-update.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/context-size-warn.sh"
   echo '#!/bin/bash' > "$repo/claude/hooks/agent-model-guard.sh"
@@ -136,8 +146,7 @@ install_fake_home() {
   ln -s "$repo/claude/hooks/bash-danger-gate.sh" "$home/.claude/hooks/bash-danger-gate.sh"
   ln -s "$repo/claude/hooks/vault-recall.sh" "$home/.claude/hooks/vault-recall.sh"
   ln -s "$repo/claude/hooks/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
-  ln -s "$repo/claude/hooks/next-pane-resolve.sh" "$home/.claude/hooks/next-pane-resolve.sh"
-  ln -s "$repo/claude/hooks/task-pane-resolve.sh" "$home/.claude/hooks/task-pane-resolve.sh"
+  ln -s "$repo/claude/hooks/dock-pane-resolve.sh" "$home/.claude/hooks/dock-pane-resolve.sh"
   ln -s "$repo/claude/hooks/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
   ln -s "$repo/claude/hooks/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"
   ln -s "$repo/claude/hooks/agent-model-guard.sh" "$home/.claude/hooks/agent-model-guard.sh"
@@ -368,7 +377,7 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
   cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "symlink drift 0件" "$out" "symlink総数: 16件 / drift: 0件"
+  assert_matches "symlink drift 0件" "$out" 'symlink総数: [0-9]+件 / drift: 0件'
   assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
   assert_contains "config.toml一致" "$out" "TOML三分類で一致しています"
   assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
@@ -405,7 +414,9 @@ echo "=== 2. ①symlinkが無い（未インストール）を検知する ==="
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "MISSING検知" "$out" "[MISSING]"
-  assert_contains "16件全部drift" "$out" "symlink総数: 16件 / drift: 16件"
+  # 総数と drift 件数が同じ数字＝全件drift（固定件数は見ない）。
+  assert_matches "全件drift" "$out" 'symlink総数: ([0-9]+)件 / drift: ([0-9]+)件'
+  assert_eq_num "総数とdrift件数が一致（全件drift）" "${BASH_REMATCH[2]:-}" "${BASH_REMATCH[1]:-x}"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -451,7 +462,7 @@ echo "=== DR-01. Agent model guardのリンク先一致を保ったまま実行b
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "非実行を汎用コードで検知" "$out" "[NOT-EXECUTABLE]"
-  assert_contains "非実行だけdrift増分1" "$out" "symlink総数: 16件 / drift: 1件"
+  assert_matches "非実行だけdrift増分1" "$out" 'symlink総数: [0-9]+件 / drift: 1件'
 
   chmod +x "$REPO/claude/hooks/agent-model-guard.sh"
   out="$(run_check "$REPO" "$HOME_DIR")"

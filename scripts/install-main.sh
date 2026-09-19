@@ -899,10 +899,10 @@ link claude/hooks/bash-danger-gate.sh "$HOME/.claude/hooks/bash-danger-gate.sh"
 # このスクリプトはsymlink配置のみを担当）。
 link claude/hooks/vault-recall.sh    "$HOME/.claude/hooks/vault-recall.sh"
 link claude/hooks/vault-read-log.sh  "$HOME/.claude/hooks/vault-read-log.sh"
-# Nextペイン番号参照の自動解決(UserPromptSubmit)。cmux-next-watch --list の
-# 対応表を注入する（2026-08-06 追加・表示ツール本体は ~/work/tools 側）。
-link claude/hooks/next-pane-resolve.sh "$HOME/.claude/hooks/next-pane-resolve.sh"
-link claude/hooks/task-pane-resolve.sh "$HOME/.claude/hooks/task-pane-resolve.sh"
+# Dock（Project／Task）ペイン番号参照の自動解決(UserPromptSubmit)。cmux の
+# --list 対応表を注入する（2026-08-06 追加・2026-09-19 Project/Task の2本を
+# 1本に統合・表示ツール本体は cmux/ 側）。
+link claude/hooks/dock-pane-resolve.sh "$HOME/.claude/hooks/dock-pane-resolve.sh"
 # サブ機更新チェック(SessionStart)。settings.json は main/sub 共通でこのフックを
 # 登録するため、リンクも main/sub 共通で配置する（スクリプト側が配役表の
 # `machine_role`で判定し、メイン機では無出力で即 exit 0＝fail-closed）。
@@ -911,7 +911,7 @@ link claude/hooks/task-pane-resolve.sh "$HOME/.claude/hooks/task-pane-resolve.sh
 link claude/hooks/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
 # セッション肥大化警告(UserPromptSubmit)。settings.json には2026-08-10導入時から
 # 登録されていたが、本スクリプトへのlink配置が漏れていた（2026-08-30発覚・
-# context-size-warn.sh/bash-danger-gate.sh/next-pane-resolve.sh/check-sub-update.sh
+# context-size-warn.sh/bash-danger-gate.sh/Project対応表フック/check-sub-update.sh
 # に続く同型4回目。settings.json登録とinstaller配置の2点セット突合を
 # scripts/check-drift.sh側にも追加している＝§9.0 A-0-2）。
 link claude/hooks/context-size-warn.sh "$HOME/.claude/hooks/context-size-warn.sh"
@@ -982,8 +982,7 @@ fi
 
 if [ "$DRY_RUN" != "1" ]; then
   chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh" \
-           "$DIR/claude/hooks/bash-danger-gate.sh" "$DIR/claude/hooks/next-pane-resolve.sh" \
-           "$DIR/claude/hooks/task-pane-resolve.sh" \
+           "$DIR/claude/hooks/bash-danger-gate.sh" "$DIR/claude/hooks/dock-pane-resolve.sh" \
            "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh" \
            "$DIR/claude/hooks/check-sub-update.sh" "$DIR/claude/hooks/context-size-warn.sh" \
            "$DIR/claude/hooks/agent-model-guard.sh" \
