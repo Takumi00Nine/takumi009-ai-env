@@ -1,6 +1,6 @@
 ---
 date: 2026-09-06
-updated: 2026-09-19
+updated: 2026-09-20
 tags: [preference, core, worker, roles, conduct]
 project: takumi009-ai-env
 related:
@@ -15,6 +15,7 @@ related:
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
   - "[[Decisions/2026-09-14-worker-test-scope]]"
   - "[[Decisions/2026-09-17-worker-wrapper-b1]]"
+  - "[[Decisions/2026-09-20-roles-config-only]]"
 aliases:
   - "ワーカー共通規範"
   - "職種共通ルール"
@@ -45,9 +46,9 @@ aliases:
 - 作業中に設計・要件の矛盾を見つけたら、勝手に直さずリーダーへ報告して判断を仰ぐ。
 
 ## 4. 外部脳（Vault）
-- Vault（`~/Data/obsidian`）は読むだけ。AI 向け6フォルダ（Fragments／Knowledge／Decisions／Projects／Preferences／Personal）へは書かない（書けるのは `vault-scribe` だけ）。残すべき知見・判断は最終報告の「Vault記録候補:」で申告する。
+- Vault（`~/Data/obsidian`）は読むだけ。AI 向け6フォルダ（Fragments／Knowledge／Decisions／Projects／Preferences／Personal）へは書かない（書けるのは Vault 書込を宣言した記録職＝既定 `vault-scribe` だけ）。残すべき知見・判断は最終報告の「Vault記録候補:」で申告する。
 - 撤回・白紙化バナー付きのノートを新しい判断の材料にしない。
-- `vault-scribe` 以外の子には機械の柵（AI 向け6フォルダへの Edit/Write を拒否するフック）が載る＝規範と機構の二重。
+- Vault 書込を宣言していない職種の子には機械の柵（AI 向け6フォルダへの Edit/Write を拒否するフック）が載る＝規範と機構の二重。
 
 ## 5. 安全
 - 破壊的操作（`launchctl bootout/load`・`kill`・`rm -rf`・インストール系・常駐設定の変更）を含む可能性があるスクリプト・コマンドは、実行前に中身を確認し、隔離（sandbox・temp HOME）できる場合だけ隔離して実行する。隔離できなければ実行せずコマンド案として報告する。読み取り系のコマンドや、破壊的操作を含まないことが明らかな自作の単体テストは、この確認を省いてそのまま実行してよい。実行を主務とする職種（verifier・operator）は、職種定義のより厳しい規定に従う。

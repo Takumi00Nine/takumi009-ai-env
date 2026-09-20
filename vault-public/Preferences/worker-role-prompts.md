@@ -28,6 +28,7 @@ related:
   - "[[Decisions/2026-09-17-effort-per-role-v2]]"
   - "[[Decisions/2026-09-17-verifier-review-before-tests]]"
   - "[[Decisions/2026-09-17-worker-wrapper-b1]]"
+  - "[[Decisions/2026-09-20-roles-config-only]]"
 aliases:
   - "7ロール運用"
   - "requirements-analyst"
@@ -65,11 +66,11 @@ aliases:
 | `adoption-critic` | 自分の成果物に書ける | — | — | 同上 |
 | `researcher` | **自分の調査報告には書ける／他職種の成果物には書かない**（**本人裁定 2026-09-07**） | — | 調査に要する読取・実行のみ | 同上 |
 | `operator` | **自分の巡回・障害報告には書ける／診断の対象（設定・成果物・常駐）は変更しない**。破壊的操作は提案止まり | — | 読取・診断系のみ | `workspace-write`（`cwd`＝報告の置き場） |
-| `vault-scribe` | **Vault へ書ける（唯一）** | — | — | **該当なし**（Codex はこの職種を演じない＝Vault 書込は Claude のみ） |
+| `vault-scribe` | **Vault へ書ける（宣言あり・既定の記録職）** | — | — | **該当なし**（Codex はこの職種を演じない＝Vault 書込は Claude のみ） |
 
 **全職種に共通**＝①Vault の AI 向け6フォルダへは `vault-scribe` 以外書かない ②**`cwd` に `$HOME` 全体を渡すときは職種を問わず `read-only`**（広い `cwd` と `workspace-write` を組み合わせない）。
 
-補助ロール（7工程外）: **`vault-scribe`**（執筆代行）＝リーダーが確定した内容の Vault 書き込み専任。内容の新規判断はしない・Codex 一次レビュー対象外（リーダーが diff 実査）。記録職＝`subagent_type: vault-scribe`・既定は名前無し subagent（起動形態に依存しない）。同一個体への続行は Agent ID 宛の SendMessage で可。**停止条件＝工程の区切りか、依頼なしで 30 分**（名前無し subagent は常駐コストを持たないが、依頼なしの放置は続行しない・[[Decisions/2026-09-16-worker-context-recycle]]）。運用の詳細＝[[Preferences/vault-operation]]・[[Decisions/2026-08-10-vault-scribe]]。
+補助ロール（7工程外）: **`vault-scribe`**（執筆代行）＝リーダーが確定した内容の Vault 書き込み専任。内容の新規判断はしない・Codex 一次レビュー対象外（リーダーが diff 実査）。記録職＝Vault 書込を宣言した職種（既定 `subagent_type: vault-scribe`）・既定は名前無し subagent（起動形態に依存しない）。同一個体への続行は Agent ID 宛の SendMessage で可。**停止条件＝工程の区切りか、依頼なしで 30 分**（名前無し subagent は常駐コストを持たないが、依頼なしの放置は続行しない・[[Decisions/2026-09-16-worker-context-recycle]]）。運用の詳細＝[[Preferences/vault-operation]]・[[Decisions/2026-08-10-vault-scribe]]。
 
 ## 職種定義を新設・改訂するときの掟（2026-09-01 本人指示）
 **共通部と固有部の分離（2026-09-06 本人決定）**: 全職種に共通の型（着手前の Read・事実の扱い・成果物の2ファイル構成とシンプルさ・Vault の扱い・安全則・一次レビュー・報告形式・指示の優先）は [[Preferences/core-worker]] に1本で持ち、職種定義（`agents/*.md`）には「absolute-rules と core-worker を Read する」の2行と、その職種固有の手順・出力形式だけを書く。共通部を職種定義へ複製しない。職種定義には日付・決定ノート参照・理由を書かず（ルールだけ）、なぜ・いつは Decisions 側に置く。

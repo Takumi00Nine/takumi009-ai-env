@@ -11,6 +11,7 @@ related:
   - "[[Decisions/2026-09-20-health-self-explain-error-only-autofix]]"
   - "[[Decisions/2026-09-20-fragments-reviewed-close-command]]"
   - "[[Decisions/2026-09-20-project-frame-wait-status-v5]]"
+  - "[[Decisions/2026-09-20-roles-config-only]]"
 aliases:
   - "外部脳運用チートシート"
   - "public執筆の掟"
@@ -36,7 +37,7 @@ aliases:
 - **Tasks 節**（任意）: `## Tasks` → `### <版名>` → `- [ ]`/`- [/]`（進行中）/`- [x]`。cmux Dock「Task」枠の表示元。工程の節目にリーダーが記録職へ更新を依頼する。依頼をまとめて出すときは、その依頼の直後に始める子行を着手後の状態 `[/]` で書く（▶ は `[/]` の版に付く＝未着手のまま出すと矢印が別の版に残る）。Tasks を触った依頼の後はリーダーが Dock の出力（`~/work/takumi009-ai-env/cmux/cmux-task-model.sh --frame` の `cur` 行）を 1 回見る。`next:` が無いノートは先頭未完タスクを Project 枠が導出表示する（書き戻しなし）。「Task の N 番」解決・Dock の展開規則は下の「Tasks の書き方」節参照。
 - **Tasks の書き方**: Dock は `###` 版名と `- [ ]` 子行をそのまま描くので短く書く＝**版名は目的だけ・20文字以内**／**子行は「動詞句」・番号なし・25文字以内**（例: `- [x] 実装`・`- [ ] 検証→merge`。番号は Dock が版に振るので子行に書かない）。経緯・承認日時・モード・巡数・枠消費・コミット番号・締めの1行（モード・検証職・巡数）は見出しや子行に書かず、その版の直下に `- 記録:`（版全体）か `- 記録 <子行の動詞句>:`（子行個別・子行の文言をそのまま）の行へ書く（Dock は描かない）。詳細は Decision／Fragments へ。理由＝長い版名・子行が Dock の右端で切れて読めない。「Task の N 番」解決＝`~/work/takumi009-ai-env/cmux/cmux-task-model.sh --list`（番号は版。未完の版だけに記載順で 1 から。5 列＝番号・版名・分数・状態・本文）。Dock の ▶ は `[/]` を含む最初の版 → 無ければ frontmatter `next:` と版名が完全一致する版 → 無ければ 1 番。展開されるのは done≥1 か `[/]` を含む版。完了版は「── 完了 n 件 ✅」の 1 行に畳む。
 ## 書き方の鉄則
-- 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず記録職 `vault-scribe`（`subagent_type: vault-scribe`・起動形態は問わない＝既定は名前無し subagent）へ委任**＝リーダーが内容を確定して渡し、vault-scribe が掟に従い執筆。**リーダー直筆は禁止**。⚠️ **単独モードだけは例外**＝リーダーが案件の締めに直筆する（Vault 専用の直接作業宣言マーカーで gate を通す）。**vault-scribe 専任の対象は AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）のみ**＝人間向け領域（Blogs/・Explorations/ ほか）はリーダー・ワーカー・スクリプトが直接書き込み可。他ワーカーは6フォルダへの記録候補を「Vault記録候補:」で申告。
+- 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず Vault 書込を宣言した記録職（定義の frontmatter `aienv-vault-write: allowed`・既定＝`vault-scribe`・起動形態は問わない＝既定は名前無し subagent）へ委任**＝リーダーが内容を確定して渡し、vault-scribe が掟に従い執筆。**リーダー直筆は禁止**。⚠️ **単独モードだけは例外**＝リーダーが案件の締めに直筆する（Vault 専用の直接作業宣言マーカーで gate を通す）。**記録職専任の対象は AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）のみ**＝人間向け領域（Blogs/・Explorations/ ほか）はリーダー・ワーカー・スクリプトが直接書き込み可。他ワーカーは6フォルダへの記録候補を「Vault記録候補:」で申告。
 - 長くなったら分割（目安8,000字・Decisions は対象外）＝詳細を別ノートへ分離し相互リンク。
 - フロントマター必須（date/tags/project）・本文編集で `updated` 更新。wiki link はフォルダ付き `[[Folder/note]]`・関連ノートは**相互に**リンク。
 - aliases 必須（README 除く）＝想起フックの検索キー。実際に打ちそうな語1〜5個・汎用語禁止・迷ったら付けない。外部情報系は `review_by:`（任意）。
