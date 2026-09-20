@@ -967,6 +967,164 @@ echo "=== 設計固有の失敗経路: vault_gate_denies_ai_folders ==="
   assert_true "vault_gate_denies_ai_folders: 配下でないパスは素通り" "$([ -z "$out2" ] && echo 1 || echo 0)"
 }
 
+# ============================================================
+# RC-X（職種の追加・削除を設定だけで完結させる設計 2026-09-20 §3・§4.5）:
+# Vault 書込宣言（frontmatter `aienv-vault-write: allowed`）で柵の有無を決める。
+# 職種名の名指し・件数の固定はしない（定義集合はディレクトリの中身そのもの）。
+# ============================================================
+
+# --settings JSON の PreToolUse のうち vault-write-gate.sh を含むエントリ数。
+count_vault_gate_entries() {
+  printf '%s' "$1" | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+n = 0
+for e in s.get("hooks", {}).get("PreToolUse", []):
+    if any("vault-write-gate.sh" in (h.get("command") or "") for h in e.get("hooks", [])):
+        n += 1
+print(n)
+'
+}
+
+# 要件 §7 の probe 形の定義（契約だけを満たす最小形）を書く。
+# 引数: <出力パス> <name> [<frontmatter に足す行>...]
+write_probe_def() {
+  local out="$1" name="$2" extra
+  shift 2
+  {
+    echo "---"
+    echo "name: $name"
+    echo "description: probe definition for the wrapper-path test"
+    echo "tools: Read"
+    for extra in "$@"; do echo "$extra"; done
+    echo "---"
+    echo "probe body"
+    echo
+    echo "## 権限"
+    echo "成果物への書込＝なし／テスト＝なし／実行＝なし"
+  } > "$out"
+}
+
+# 一時配役表（new_fixture の $PROFILE）の閉じ `---` の直前に 1 行足す。
+profile_add_role_line() {
+  python3 - "$PROFILE" "$1" <<'PYPROF'
+import sys
+path, line = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+head, sep, tail = text.rpartition("\n---\n")
+open(path, "w", encoding="utf-8").write(head + "\n" + line + sep + tail)
+PYPROF
+}
+
+# child-settings を直叩きする。結果はグローバル CS_STDOUT / CS_STDERR / CS_RC。
+run_child_settings() {
+  local role="$1" dir="$2"
+  CS_STDOUT="$(python3 "$CLAUDE_EXEC_PY" child-settings --src "$REPO_ROOT/claude/settings.json" --role "$role" --child-cwd "$WORK" --agents-dir "$dir" 2>"$WORK/cs-stderr.log")"
+  CS_RC=$?
+  CS_STDERR="$(cat "$WORK/cs-stderr.log" 2>/dev/null || true)"
+}
+
+echo "=== RC-X1. child-settings 直叩き: 宣言の 4 状態（なし／有効／不正／重複）＋未知 aienv- キー（AC-3(a)(b)(c)） ==="
+{
+  new_fixture
+  RCX_DIR="$WORK/decl-agents"
+  mkdir -p "$RCX_DIR"
+  write_probe_def "$RCX_DIR/decl-ok.md"   decl-ok   "aienv-vault-write: allowed"
+  write_probe_def "$RCX_DIR/decl-none.md" decl-none
+  write_probe_def "$RCX_DIR/decl-bad.md"  decl-bad  "aienv-vault-write: yes"
+  write_probe_def "$RCX_DIR/decl-dup.md"  decl-dup  "aienv-vault-write: yes" "aienv-vault-write: allowed"
+  write_probe_def "$RCX_DIR/decl-typo.md" decl-typo "aienv-vault-writ: allowed"
+
+  run_child_settings decl-ok "$RCX_DIR"
+  assert_eq "RC-X1 decl-ok: exit 0" "0" "$CS_RC"
+  assert_eq "RC-X1 decl-ok: vault-write-gate エントリ 0 件" "0" "$(count_vault_gate_entries "$CS_STDOUT")"
+
+  run_child_settings decl-none "$RCX_DIR"
+  assert_eq "RC-X1 decl-none: exit 0" "0" "$CS_RC"
+  assert_eq "RC-X1 decl-none: vault-write-gate エントリ 1 件" "1" "$(count_vault_gate_entries "$CS_STDOUT")"
+
+  for pair in "decl-bad:VAULT_WRITE_DECLARATION_INVALID" \
+              "decl-dup:VAULT_WRITE_DECLARATION_DUPLICATE" \
+              "decl-typo:AIENV_KEY_UNKNOWN"; do
+    r="${pair%%:*}"; code="${pair#*:}"
+    run_child_settings "$r" "$RCX_DIR"
+    assert_eq "RC-X1 $r: exit 1" "1" "$CS_RC"
+    assert_eq "RC-X1 $r: stdout 空" "" "$CS_STDOUT"
+    assert_eq "RC-X1 $r: stderr がちょうど 1 行（traceback でない）" "1" "$(wc -l < "$WORK/cs-stderr.log" | tr -d ' ')"
+    assert_true "RC-X1 $r: stderr が $code で始まる" "$([[ "$CS_STDERR" == "$code"* ]] && echo 1 || echo 0)"
+  done
+  # 後勝ちで 0 件にならない＝重複は DUPLICATE であって INVALID/成功ではない。
+  run_child_settings decl-dup "$RCX_DIR"
+  assert_not_contains "RC-X1 decl-dup: INVALID ではなく DUPLICATE" "$CS_STDERR" "VAULT_WRITE_DECLARATION_INVALID"
+}
+
+echo "=== RC-X2. ラッパー経由: 宣言が不正な職種は子を起動せず exit 8（AC-3(c)） ==="
+{
+  new_fixture
+  RCX2_DIR="$WORK/decl-agents"
+  mkdir -p "$RCX2_DIR"
+  write_probe_def "$RCX2_DIR/decl-bad.md" decl-bad "aienv-vault-write: yes"
+  profile_add_role_line "role.decl-bad: configured model=t-sonnet-high"
+  export AIENV_AGENT_SOURCE_DIR="$RCX2_DIR"
+  run_wrapper --role decl-bad --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-rcx2 --model-def t-sonnet-high
+  assert_eq "RC-X2: exit 8" "8" "$RC"
+  assert_eq "RC-X2: stub 0 行（子は起動しない）" "0" "$(stub_lines)"
+  assert_contains "RC-X2: stderr に原因コード" "$RUN_STDERR" "VAULT_WRITE_DECLARATION_INVALID"
+}
+
+echo "=== RC-X3. ラッパー経由: 実定義の複製＋probe（宣言なし）で起動・--agents は probe・柵 1 件・--allowedTools=Read（AC-1④⑥） ==="
+{
+  new_fixture
+  RCX3_DIR="$WORK/agents-with-probe"
+  mkdir -p "$RCX3_DIR"
+  cp "$REAL_AGENTS_DIR"/*.md "$RCX3_DIR"/
+  write_probe_def "$RCX3_DIR/zz-probe.md" zz-probe
+  profile_add_role_line "role.zz-probe: configured model=t-sonnet-high"
+  export AIENV_AGENT_SOURCE_DIR="$RCX3_DIR"
+  run_wrapper --role zz-probe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-rcx3 --model-def t-sonnet-high
+  assert_eq "RC-X3: exit 0" "0" "$RC"
+  assert_eq "RC-X3: --agents のトップキー={zz-probe}" "zz-probe" "$(stub_arg_after --agents | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
+  assert_eq "RC-X3: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  assert_eq "RC-X3: --allowedTools=Read" "Read" "$(stub_arg_after --allowedTools)"
+}
+
+echo "=== RC-X4. ラッパー経由: probe を zz-probe-b へ改名（削除＋追加）しても同じ観測（AC-2b②） ==="
+{
+  new_fixture
+  RCX4_DIR="$WORK/agents-with-probe-b"
+  mkdir -p "$RCX4_DIR"
+  cp "$REAL_AGENTS_DIR"/*.md "$RCX4_DIR"/
+  write_probe_def "$RCX4_DIR/zz-probe-b.md" zz-probe-b
+  profile_add_role_line "role.zz-probe-b: configured model=t-sonnet-high"
+  export AIENV_AGENT_SOURCE_DIR="$RCX4_DIR"
+  run_wrapper --role zz-probe-b --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-rcx4 --model-def t-sonnet-high
+  assert_eq "RC-X4: exit 0" "0" "$RC"
+  assert_eq "RC-X4: --agents のトップキー={zz-probe-b}" "zz-probe-b" "$(stub_arg_after --agents | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
+  assert_eq "RC-X4: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  assert_eq "RC-X4: --allowedTools=Read" "Read" "$(stub_arg_after --allowedTools)"
+}
+
+echo "=== RC-X5. 実定義の全件: vault_declared_writable の真偽と child-settings の柵の件数が 1:1（AC-3 回帰） ==="
+{
+  new_fixture
+  rcx5_n=0
+  for f in "$REAL_AGENTS_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    rcx5_n=$((rcx5_n + 1))
+    role="${f##*/}"; role="${role%.md}"
+    declared="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c 'import sys, agent_def; print(agent_def.vault_declared_writable(sys.argv[1], sys.argv[2]))' "$REAL_AGENTS_DIR" "$role" 2>&1)"
+    run_child_settings "$role" "$REAL_AGENTS_DIR"
+    assert_eq "RC-X5 $role: child-settings exit 0" "0" "$CS_RC"
+    case "$declared" in
+      True)  want=0 ;;
+      False) want=1 ;;
+      *)     want="(vault_declared_writable failed: $declared)" ;;
+    esac
+    assert_eq "RC-X5 $role: 宣言=$declared ↔ vault-write-gate エントリ $want 件" "$want" "$(count_vault_gate_entries "$CS_STDOUT")"
+  done
+  assert_true "RC-X5: 実定義が 1 件以上ある（空虚な真の禁止）" "$([ "$rcx5_n" -ge 1 ] && echo 1 || echo 0)"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

@@ -514,7 +514,7 @@ ${TEAM_MODE_LINE}
 $list
 
 ② 上記を読み終えるまで、ユーザー依頼の実作業（調査・検索・コード変更・委任を含む）に着手しない。
-④ 記録職＝subagent_type: vault-scribe（略称不可）。
+④ 記録職＝Vault 書込を宣言した職種（例: subagent_type: vault-scribe）。
 ${TEAM_MODE_DIRECTIVE5}
 ⑥ プロジェクトが確定したら1回だけ宣言する: ~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>（宣言済みなら呼び直さない・実行はリーダーであってフックではない）
 ${MACHINE_ROLE_HOLD_LINE:+

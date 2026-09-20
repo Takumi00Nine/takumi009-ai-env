@@ -918,7 +918,7 @@ link claude/hooks/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
 # に続く同型4回目。settings.json登録とinstaller配置の2点セット突合を
 # scripts/check-drift.sh側にも追加している＝§9.0 A-0-2）。
 link claude/hooks/context-size-warn.sh "$HOME/.claude/hooks/context-size-warn.sh"
-# 対象8職種のAgent呼出しへmodel明示を強制するPreToolUseガード。
+# `claude/agents/` 直下の定義集合（管理職種）のAgent呼出しへmodel明示を強制するPreToolUseガード。
 link claude/hooks/agent-model-guard.sh "$HOME/.claude/hooks/agent-model-guard.sh"
 # 配役表に職種行がある職種のin-process起動（Agentツール）境界(PreToolUse
 # ^Agent$。ラッパー起動-設計-v1.1.1.md §4・D-3)。agent-model-guard.shと

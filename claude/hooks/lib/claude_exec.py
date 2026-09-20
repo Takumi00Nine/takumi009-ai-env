@@ -14,11 +14,14 @@ Bash側（scripts/claude-exec.sh）へ複製しない。
       一致するキー名を、FR-8の固定1キー（CLAUDE_CODE_WRAPPER_BIN）を除いて
       NUL区切りで標準出力する（値は出さない＝FR-15）。
 
-  child-settings --src <path> --role <職種> --child-cwd <絶対パス>
+  child-settings --src <path> --role <職種> --child-cwd <絶対パス> --agents-dir <dir>
       設計§2.5のとおり、(1)親から抽出する層 + (2)Vault保護の柵（裁定A・
-      vault-scribe以外）+ (3)カナリア（SessionEnd）を組んだ `--settings`
-      インラインJSONを標準出力する。抽出元が読めない／解析できない／
-      (1)が0commandなら非0で終わる（呼び出し側はexit 8にする＝F3）。
+      Vault 書込を宣言した職種以外＝`<dir>/<職種>.md` の frontmatter
+      `aienv-vault-write: allowed` の有無を agent_def.vault_declared_writable で
+      読む）+ (3)カナリア（SessionEnd）を組んだ `--settings` インラインJSONを
+      標準出力する。抽出元が読めない／解析できない／(1)が0command／宣言が
+      不正（重複・不正値・未知の aienv- キー）／定義が読めないなら非0で
+      終わる（呼び出し側はexit 8にする＝F3）。
 
   classify --raw <path> [--timed-out]
       子の標準出力（--output-format json）ファイルを読み、FR-19の分類器
@@ -42,6 +45,9 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+
+# 同じ lib/ に在る（スクリプト実行時の sys.path[0]）＝追加の path 操作は不要。
+import agent_def
 
 # --- env-keys ---------------------------------------------------------
 
@@ -120,8 +126,17 @@ def cmd_child_settings(args: argparse.Namespace) -> int:
         sys.stderr.write("CHILD_SETTINGS_LAYER1_EMPTY: (1)の柵が0本です\n")
         return 1
 
+    # (2) Vault 保護の柵＝定義ファイルの宣言が無い職種にだけ載せる（職種名の
+    # 名指しはしない＝設計 2026-09-20 §3.1・FR-10）。宣言が不正なら fail-close
+    # （既存 2 コードと同じ出し方＝stderr 1 行・stdout 空・return 1）。
+    try:
+        declared = agent_def.vault_declared_writable(args.agents_dir, args.role)
+    except agent_def.AgentDefError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+
     combined = list(layer1)
-    if args.role != "vault-scribe":
+    if not declared:
         combined.append(_VAULT_GATE_ENTRY)
 
     canary_path = os.path.join(args.child_cwd, ".claude-exec-hooks-alive")
@@ -299,6 +314,7 @@ def main(argv: list[str]) -> int:
     p_child_settings.add_argument("--src", required=True)
     p_child_settings.add_argument("--role", required=True)
     p_child_settings.add_argument("--child-cwd", required=True)
+    p_child_settings.add_argument("--agents-dir", required=True)
 
     p_classify = sub.add_parser("classify")
     p_classify.add_argument("--raw", required=True)

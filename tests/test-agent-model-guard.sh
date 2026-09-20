@@ -108,8 +108,13 @@ assert len(entries)==1 and entries[0]['matcher']=='^Agent$'
 assert re.search(entries[0]['matcher'],'Bash') is None
 PY
 
-echo "=== 対象8職種・許容4別名の設定一致 ==="
-for role in adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier; do
+echo "=== 対象職種（claude/agents/*.md の列挙・AC-4①）・許容4別名の設定一致 ==="
+# roles-config-only 設計 v1.2 §4.2: 職種名を列挙せず repo の定義集合そのもの
+# を回す（model 無し→GD-02 と同じ deny・model=opus→PASS の 2 判定）。
+for f in "$REPO_ROOT"/claude/agents/*.md; do
+  role="${f##*/}"; role="${role%.md}"
+  run_guard "{\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"$role\"}}" "$WORK/role.out" "$WORK/role.err"
+  assert_deny_case "$role のmodel欠落はGD-02と同じdeny(MODEL_ARGUMENT_REQUIRED)" "$WORK/role.out" "$WORK/role.err" 'MODEL_ARGUMENT_REQUIRED: resolve-candidate の AGENT_MODEL を Agent.model に明示してください。'
   run_guard "{\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"$role\",\"model\":\"opus\"}}" "$WORK/role.out" "$WORK/role.err"
   assert_pass_case "$role がexit 0・無出力で正常値を通過" "$WORK/role.out" "$WORK/role.err"
 done
@@ -417,6 +422,163 @@ echo "=== I2-m5(検証2巡目): source失敗時のfail-close分岐そのもの�
     pass "I2-m5: vault-write-gate.shはlib/が無いとfail-close（deny・GUARD_COMMON_UNREADABLE・exit 0）で素通ししない"
   else
     fail_case "I2-m5: vault-write-gate.shのfail-closeが働かない (rc=$RUN_RC out=[$(cat "$WORK/nolib-vg.out" 2>/dev/null)] err=[$(cat "$WORK/nolib-vg.err" 2>/dev/null)])"
+  fi
+}
+
+echo "=== RC-G（職種の追加・削除を設定だけで・roles-config-only 設計 v1.2 §2・§4.2） ==="
+{
+  # 設計 §2.3: 差替口は env 変数でなく複製配置（I2-m5 と同じ方式）。
+  # $WORK/<名前>/claude/hooks/agent-model-guard.sh（repo からコピー）＋
+  # $WORK/<名前>/claude/hooks/lib（repo lib への symlink）＋
+  # $WORK/<名前>/claude/agents/（複製元を cp・省略時は repo の実定義）。
+  # コピーした本体は SELF_DIR＝$WORK/<名前>/claude/hooks に解決するので
+  # AGENTS_DIR が fixture を指す。
+  make_guard_fixture() {
+    fx_name=$1
+    fx_src="${2:-$REPO_ROOT/claude/agents}"
+    fx_root="$WORK/$fx_name/claude"
+    mkdir -p "$fx_root/hooks" "$fx_root/agents"
+    cp "$GUARD" "$fx_root/hooks/agent-model-guard.sh"
+    ln -s "$REPO_ROOT/claude/hooks/lib" "$fx_root/hooks/lib"
+    cp "$fx_src"/*.md "$fx_root/agents/"
+    echo "$fx_root"
+  }
+
+  # 要件 §7 の probe（FR-12 の契約だけを満たす最小定義・宣言なし）
+  write_probe() {
+    probe_path=$1
+    probe_name=$2
+    printf -- '---\nname: %s\ndescription: roles-config-only probe（契約だけを満たす最小定義）\ntools: Read\n---\n## 権限\nprobe 本文（起動しない）\n' "$probe_name" > "$probe_path"
+  }
+
+  # RC_G_HOME が非空なら HOME をその値に差し替える（RC-G7）。
+  RC_G_HOME=""
+  run_guard_at() {
+    guard_path=$1; input=$2; out_file=$3; err_file=$4
+    RUN_RC=0
+    printf '%s' "$input" | env -u CLAUDE_CODE_SUBAGENT_MODEL_FORCE -u CLAUDE_CODE_SUBAGENT_MODEL GATE_MARKER_DIR="$MARKER_DIR" ${RC_G_HOME:+"HOME=$RC_G_HOME"} /bin/bash "$guard_path" >"$out_file" 2>"$err_file" || RUN_RC=$?
+  }
+
+  # PASS（exit 0・無出力）＋マーカーあり
+  assert_pass_marker() {
+    rcg_label=$1; out_file=$2; err_file=$3; marker_file=$4
+    if [ "$RUN_RC" -eq 0 ] && [ ! -s "$out_file" ] && [ ! -s "$err_file" ] && [ -f "$marker_file" ]; then
+      pass "$rcg_label"
+    else
+      fail_case "$rcg_label (rc=$RUN_RC out=[$(cat "$out_file" 2>/dev/null)] err=[$(cat "$err_file" 2>/dev/null)] marker=$([ -f "$marker_file" ] && echo あり || echo なし))"
+    fi
+  }
+
+  # 名前 N（session_id 付き）を fixture のガードへ入力し、GD-02 の deny＋マーカー無し／
+  # model=opus で PASS＋マーカーあり の 2 判定を行う（RC-G1・RC-G7 で共用）
+  rc_g_managed_pair() {
+    rcg_label=$1; guard_path=$2; role_name=$3; sid=$4
+    mk="$MARKER_DIR/claude-delegated-ok-$sid"
+    rm -f "$mk"
+    run_guard_at "$guard_path" "{\"session_id\":\"$sid\",\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"$role_name\"}}" "$WORK/rcg.out" "$WORK/rcg.err"
+    assert_deny_case "$rcg_label: ${role_name} のmodel欠落はGD-02と同じdeny" "$WORK/rcg.out" "$WORK/rcg.err" 'MODEL_ARGUMENT_REQUIRED: resolve-candidate の AGENT_MODEL を Agent.model に明示してください。'
+    if [ ! -f "$mk" ]; then pass "$rcg_label: deny時はマーカー無し"; else fail_case "$rcg_label: deny時はマーカー無し"; fi
+    run_guard_at "$guard_path" "{\"session_id\":\"$sid\",\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"$role_name\",\"model\":\"opus\"}}" "$WORK/rcg.out" "$WORK/rcg.err"
+    assert_pass_marker "$rcg_label: ${role_name} のmodel=opusはexit 0・無出力・マーカー claude-delegated-ok-$sid あり" "$WORK/rcg.out" "$WORK/rcg.err" "$mk"
+  }
+
+  # 未知の名前（model 無し）→ PASS＋マーカーあり（RC-G4・RC-G5・RC-G7 で共用）
+  rc_g_unknown() {
+    rcg_label=$1; guard_path=$2; role_name=$3; sid=$4
+    mk="$MARKER_DIR/claude-delegated-ok-$sid"
+    rm -f "$mk"
+    run_guard_at "$guard_path" "{\"session_id\":\"$sid\",\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"$role_name\"}}" "$WORK/rcg.out" "$WORK/rcg.err"
+    assert_pass_marker "$rcg_label: ${role_name}（model無し）はexit 0・無出力・マーカーあり" "$WORK/rcg.out" "$WORK/rcg.err" "$mk"
+  }
+
+  # ---- RC-G1（AC-1②）: 実定義の複製に probe を置く → 管理職種になる
+  FX1="$(make_guard_fixture rc-g1)"
+  FX1_GUARD="$FX1/hooks/agent-model-guard.sh"
+  write_probe "$FX1/agents/zz-probe.md" zz-probe
+  rc_g_managed_pair "RC-G1" "$FX1_GUARD" zz-probe s1
+
+  # ---- RC-G2（AC-2②）: probe を除く → 未知扱い、戻す → 再び GD-02
+  rm -f "$FX1/agents/zz-probe.md"
+  rc_g_unknown "RC-G2(除去後)" "$FX1_GUARD" zz-probe s2
+  write_probe "$FX1/agents/zz-probe.md" zz-probe
+  rc_g_managed_pair "RC-G2(戻した後)" "$FX1_GUARD" zz-probe s2b
+
+  # ---- RC-G3（AC-2b③ ガード側）: 改名 → 新名は管理・旧名は未知
+  rm -f "$FX1/agents/zz-probe.md"
+  write_probe "$FX1/agents/zz-probe-b.md" zz-probe-b
+  rc_g_managed_pair "RC-G3(新名)" "$FX1_GUARD" zz-probe-b s3
+  rc_g_unknown "RC-G3(旧名)" "$FX1_GUARD" zz-probe s3old
+  rm -f "$FX1/agents/zz-probe-b.md"
+  write_probe "$FX1/agents/zz-probe.md" zz-probe
+
+  # ---- RC-G4（AC-4②・AC-5 Explore）: 組込み種別・未知の名前は PASS＋マーカー
+  rc_g_unknown "RC-G4" "$FX1_GUARD" Explore s4a
+  rc_g_unknown "RC-G4" "$FX1_GUARD" general-purpose s4b
+  rc_g_unknown "RC-G4" "$FX1_GUARD" Plan s4c
+  rc_g_unknown "RC-G4" "$FX1_GUARD" zz-nowhere s4d
+
+  # ---- RC-G5（D-1）: dangling symlink は数えない
+  ln -s "$FX1/agents/zz-not-there.md" "$FX1/agents/zz-dang.md"
+  rc_g_unknown "RC-G5(dangling symlink)" "$FX1_GUARD" zz-dang s5
+  rm -f "$FX1/agents/zz-dang.md"
+
+  # ---- RC-G6（AC-4⑤）: 一覧が取れない／空は fail-close（HF と同じ check_error 形式・マーカー無し）
+  check_error_at() {
+    rcg_label=$1 guard_path=$2 input=$3 cause=$4 marker_file=$5
+    rm -f "$marker_file"
+    run_guard_at "$guard_path" "$input" "$WORK/rcg6.out" "$WORK/rcg6.err"
+    expected="MODEL_GUARD_ERROR: cause=$cause; model 指定を検査できません。フックの入力と配置を確認してください。"
+    assert_deny_case "$rcg_label はexit 0の完全なdeny JSON" "$WORK/rcg6.out" "$WORK/rcg6.err" "$expected"
+    if [ ! -f "$marker_file" ]; then pass "$rcg_label はマーカー無し"; else fail_case "$rcg_label はマーカー無し"; fi
+  }
+  managed_input='{"session_id":"s6","tool_name":"Agent","tool_input":{"subagent_type":"requirements-analyst","model":"opus"}}'
+  S6_MARKER="$MARKER_DIR/claude-delegated-ok-s6"
+
+  FX6A="$(make_guard_fixture rc-g6-del)"
+  rm -rf "$FX6A/agents"
+  check_error_at "RC-G6a agents/不在(AGENTS_DIR_UNREADABLE)" "$FX6A/hooks/agent-model-guard.sh" "$managed_input" AGENTS_DIR_UNREADABLE "$S6_MARKER"
+
+  FX6B="$(make_guard_fixture rc-g6-perm)"
+  chmod 000 "$FX6B/agents"
+  check_error_at "RC-G6b agents/権限なし(AGENTS_DIR_UNREADABLE)" "$FX6B/hooks/agent-model-guard.sh" "$managed_input" AGENTS_DIR_UNREADABLE "$S6_MARKER"
+  chmod 755 "$FX6B/agents"
+
+  FX6C="$(make_guard_fixture rc-g6-empty)"
+  rm -f "$FX6C"/agents/*.md
+  check_error_at "RC-G6c *.md 0件(AGENTS_DIR_EMPTY)" "$FX6C/hooks/agent-model-guard.sh" "$managed_input" AGENTS_DIR_EMPTY "$S6_MARKER"
+
+  # ---- RC-G7（AC-4⑥）: HOME に配役表・models.conf が無くても結果が変わらない
+  mkdir -p "$WORK/empty-home"
+  RC_G_HOME="$WORK/empty-home"
+  rc_g_managed_pair "RC-G7(空HOME)" "$FX1_GUARD" zz-probe s7
+  rc_g_unknown "RC-G7(空HOME)" "$FX1_GUARD" Explore s7a
+  rc_g_unknown "RC-G7(空HOME)" "$FX1_GUARD" general-purpose s7b
+  rc_g_unknown "RC-G7(空HOME)" "$FX1_GUARD" Plan s7c
+  rc_g_unknown "RC-G7(空HOME)" "$FX1_GUARD" zz-nowhere s7d
+  RC_G_HOME=""
+
+  # ---- RC-G8（AC-4③）: hooks/lib のコード行に職種名の引用リテラル・case パターンが無い
+  # 対象＝定義集合の全名（ls claude/agents ＋ zz-probe）。非コメント行
+  # （^\s*# を除く）に "N"／'N'／N) が 0 件。走査対象名は tests/ にだけ置く。
+  rc_g8_hits=0
+  rc_g8_names="zz-probe"
+  for f in "$REPO_ROOT"/claude/agents/*.md; do
+    n="${f##*/}"; rc_g8_names="$rc_g8_names ${n%.md}"
+  done
+  for n in $rc_g8_names; do
+    for f in "$REPO_ROOT"/claude/hooks/*.sh "$REPO_ROOT"/claude/hooks/lib/*.py "$REPO_ROOT"/claude/hooks/lib/*.sh; do
+      [ -f "$f" ] || continue
+      hit="$(grep -vE '^[[:space:]]*#' "$f" | grep -nE "[\"']${n}[\"']|${n}\\)" || true)"
+      if [ -n "$hit" ]; then
+        rc_g8_hits=$((rc_g8_hits + 1))
+        echo "    RC-G8 hit: ${f#$REPO_ROOT/} name=$n :: $(printf '%s' "$hit" | head -1)"
+      fi
+    done
+  done
+  if [ "$rc_g8_hits" -eq 0 ]; then
+    pass "RC-G8 claude/hooks/*.sh・lib/*.py・lib/*.sh の非コメント行に職種名の引用リテラル/caseパターンが0件"
+  else
+    fail_case "RC-G8 claude/hooks/*.sh・lib/*.py・lib/*.sh の非コメント行に職種名の引用リテラル/caseパターンが0件 (hits=$rc_g8_hits)"
   fi
 }
 

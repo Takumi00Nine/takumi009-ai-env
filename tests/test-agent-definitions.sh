@@ -18,7 +18,13 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-AGENTS_DIR="$REPO_ROOT/claude/agents"
+# 検査対象の定義ディレクトリ。既定は repo の実定義。ラッパーと同じ変数名で
+# 差し替えられる（職種の追加・削除を設定だけで完結させる設計 2026-09-20
+# §4.3・§6.2＝`AIENV_AGENT_SOURCE_DIR=<dir> bash tests/test-agent-definitions.sh`。
+# 固定職種の内容検査（1・2・4・7・9）も同じディレクトリに掛かるので、<dir> は
+# 実定義の複製に fixture を足したものにする）。
+AGENTS_DIR="${AIENV_AGENT_SOURCE_DIR:-$REPO_ROOT/claude/agents}"
+AGENT_DEF_LIB="$REPO_ROOT/claude/hooks/lib"
 
 PASS=0
 FAIL=0
@@ -53,23 +59,279 @@ assert_contains_file() {
   fi
 }
 
-echo "=== model廃止 AC-1: 8職種集合・frontmatter model不在 ==="
-if python3 - "$REPO_ROOT" <<'PYMODEL'
+# ------------------------------------------------------------------
+# 定義ファイル契約 (a)〜(g) の検査（職種の追加・削除を設定だけで完結させる
+# 設計 2026-09-20 §4.3・§6.1・FR-12）。<dir>/*.md のうち Path.is_file()
+# （symlink を辿る＝ガードの `-f` と同じ集合）の各ファイルについて契約を
+# **全部**評価し、違反を `<ファイル名>: <CODE>` で 1 行ずつ出力する（短絡
+# しない）。0 ファイルは `NO_DEFINITIONS` を出力して非 0（空虚な真の禁止）。
+# 違反 0 件なら無出力・exit 0。
+#   (a)(b)(d) … agent_def.load_agent_def の例外コードで判定
+#               （ROLE_INVALID→NAME_FORMAT_INVALID・ROLE_NAME_MISMATCH→
+#               NAME_FILENAME_MISMATCH・FRONTMATTER_FIELD_*／BODY_EMPTY はそのまま）
+#   (g)       … agent_def.vault_declared_writable の例外コードをそのまま
+#               （VAULT_WRITE_DECLARATION_INVALID／VAULT_WRITE_DECLARATION_DUPLICATE
+#               ／AIENV_KEY_UNKNOWN）。宣言の解析ロジックはテスト側に持たない
+#   (c)(e)(f) … このヘルパ内で直接見る（BUILTIN_NAME_COLLISION・
+#               MODEL_KEY_FORBIDDEN・EFFORT_KEY_FORBIDDEN・
+#               PERMISSION_HEADING_COUNT・LEGACY_REFERENCE_PRESENT）
+# ⚠️ 定義集合の等値・件数はここでは見ない（AC-6＝集合の閉列挙なし）。
+# ------------------------------------------------------------------
+contract_check() {
+  PYTHONPATH="$AGENT_DEF_LIB" python3 - "$1" <<'PYCONTRACT'
+import re
+import sys
 from pathlib import Path
-import re, sys
-r=Path(sys.argv[1])
-roles=set('adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier'.split())
-assert {p.stem for p in (r/'claude/agents').glob('*.md')} == roles
-for role in sorted(roles):
-    rel=f'claude/agents/{role}.md'
-    new=(r/rel).read_bytes()
-    assert not re.search(rb'^[ \t]*model[ \t]*:',new.split(b'---',2)[1],re.M)
-PYMODEL
-then
-  pass "8職種集合・frontmatter model不在"
-else
-  fail_case "8職種集合・frontmatter model不在"
-fi
+
+import agent_def
+
+# (c) 組込み種別名（このテストにだけ置く。出典＝
+# https://code.claude.com/docs/en/sub-agents 2026-09-20 取得）。
+BUILTIN_NAMES = {
+    "Explore",
+    "Plan",
+    "general-purpose",
+    "claude",
+    "statusline-setup",
+    "claude-code-guide",
+}
+# 契約 (a)〜(d) について agent_def の例外コードを契約の語へ読み替える。
+CODE_MAP = {
+    "ROLE_INVALID": "NAME_FORMAT_INVALID",
+    "ROLE_NAME_MISMATCH": "NAME_FILENAME_MISMATCH",
+}
+
+
+def code_of(exc: Exception) -> str:
+    return str(exc).split(":", 1)[0]
+
+
+def frontmatter_text(raw: bytes):
+    """先頭の '---' ブロックの中身。壊れていれば None（構造の違反は
+    load_agent_def の例外として別途出る）。"""
+    if not raw.startswith(b"---\n"):
+        return None
+    idx = 4
+    while True:
+        nl = raw.find(b"\n", idx)
+        if nl == -1:
+            return None
+        if raw[idx:nl] == b"---":
+            return raw[4:idx].decode("utf-8", errors="replace")
+        idx = nl + 1
+
+
+agents_dir = sys.argv[1]
+files = sorted(p for p in Path(agents_dir).glob("*.md") if p.is_file())
+if not files:
+    print("NO_DEFINITIONS")
+    sys.exit(1)
+
+violations = []
+for path in files:
+    stem = path.name[: -len(".md")]
+    codes = []
+
+    def add(code: str) -> None:
+        if code not in codes:
+            codes.append(code)
+
+    # (a)(b)(d)
+    try:
+        agent_def.load_agent_def(agents_dir, stem)
+    except agent_def.AgentDefError as exc:
+        c = code_of(exc)
+        add(CODE_MAP.get(c, c))
+
+    # (c)
+    if stem in BUILTIN_NAMES:
+        add("BUILTIN_NAME_COLLISION")
+
+    # (e)(f)
+    raw = path.read_bytes()
+    fm = frontmatter_text(raw)
+    if fm is not None:
+        if re.search(r"^[ \t]*model[ \t]*:", fm, re.M):
+            add("MODEL_KEY_FORBIDDEN")
+        if re.search(r"^[ \t]*effort[ \t]*:", fm, re.M):
+            add("EFFORT_KEY_FORBIDDEN")
+    text = raw.decode("utf-8", errors="replace")
+    if len(re.findall(r"^## 権限", text, re.M)) != 1:
+        add("PERMISSION_HEADING_COUNT")
+    if "worker-role-prompts" in text:
+        add("LEGACY_REFERENCE_PRESENT")
+
+    # (g)
+    try:
+        agent_def.vault_declared_writable(agents_dir, stem)
+    except agent_def.AgentDefError as exc:
+        c = code_of(exc)
+        add(CODE_MAP.get(c, c))
+
+    for c in codes:
+        violations.append(f"{path.name}: {c}")
+
+for v in violations:
+    print(v)
+sys.exit(1 if violations else 0)
+PYCONTRACT
+}
+
+# 要件 §7 の probe 定義（契約 (a)〜(g) だけを満たす最小形・宣言なし）を書く。
+# 引数: <出力パス> <name> [<frontmatter に足す行>...]（陰性 fixture 用）
+write_probe_def() {
+  local out="$1" name="$2" extra
+  shift 2
+  {
+    echo "---"
+    echo "name: $name"
+    echo "description: probe definition for the role-definition contract test"
+    echo "tools: Read"
+    for extra in "$@"; do echo "$extra"; done
+    echo "---"
+    echo "probe body"
+    echo
+    echo "## 権限"
+    echo "成果物への書込＝なし／テスト＝なし／実行＝なし"
+  } > "$out"
+}
+
+echo "=== AD-C1. 定義ファイル契約 (a)〜(g): 検査対象ディレクトリの全定義が違反 0 件（AC-9①・FR-12） ==="
+{
+  adc1_out="$(contract_check "$AGENTS_DIR")"
+  adc1_rc=$?
+  assert_eq "contract_check(AGENTS_DIR): exit 0" "0" "$adc1_rc"
+  assert_eq "contract_check(AGENTS_DIR): 違反の出力が無い" "" "$adc1_out"
+}
+
+echo "=== AD-C2. probe を足した複製で契約 0 件・agents-json／allowed-tools が probe を出す・消せば SOURCE_UNREADABLE（AC-1③④・AC-2b③） ==="
+{
+  AGENT_DEF="$AGENT_DEF_LIB/agent_def.py"
+  ADC2_WORK="$(mktemp -d)"
+  ADC2_DIR="$ADC2_WORK/agents"
+  mkdir -p "$ADC2_DIR"
+  cp "$AGENTS_DIR"/*.md "$ADC2_DIR"/
+  write_probe_def "$ADC2_DIR/zz-probe.md" zz-probe
+
+  adc2_out="$(contract_check "$ADC2_DIR")"
+  adc2_rc=$?
+  assert_eq "複製+probe: contract_check exit 0" "0" "$adc2_rc"
+  assert_eq "複製+probe: 違反の出力が無い" "" "$adc2_out"
+
+  adc2_json="$(python3 "$AGENT_DEF" agents-json --dir "$ADC2_DIR" --role zz-probe 2>/dev/null)"
+  adc2_keys="$(printf '%s' "$adc2_json" | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+top = sorted(obj.keys())
+inner = sorted(obj[top[0]].keys()) if len(top) == 1 else []
+print(",".join(top) + "|" + ",".join(inner))
+' 2>/dev/null)"
+  assert_eq "複製+probe: agents-json のトップキー={zz-probe}・値キー={description,tools,prompt}" "zz-probe|description,prompt,tools" "$adc2_keys"
+  adc2_tools="$(python3 "$AGENT_DEF" allowed-tools --dir "$ADC2_DIR" --role zz-probe 2>/dev/null)"
+  assert_eq "複製+probe: allowed-tools=Read" "Read" "$adc2_tools"
+
+  rm -f "$ADC2_DIR/zz-probe.md"
+  if python3 "$AGENT_DEF" agents-json --dir "$ADC2_DIR" --role zz-probe >/dev/null 2>"$ADC2_WORK/removed.err"; then
+    fail_case "probe を消した複製: agents-json --role zz-probe は非 0 のはずが成功した"
+  else
+    grep -q 'SOURCE_UNREADABLE' "$ADC2_WORK/removed.err" \
+      && pass "probe を消した複製: agents-json --role zz-probe は非 0・SOURCE_UNREADABLE" \
+      || fail_case "probe を消した複製: 失敗はしたが理由が SOURCE_UNREADABLE でない (stderr=[$(cat "$ADC2_WORK/removed.err")])"
+  fi
+  rm -rf "$ADC2_WORK"
+}
+
+echo "=== AD-C3. 陰性 fixture（各 1 ファイルの一時ディレクトリ）で契約テストが非 0・理由が当該違反を指す（AC-9②） ==="
+{
+  ADC3_WORK="$(mktemp -d)"
+  adc3_n=0
+
+  # fixture ディレクトリを 1 つ作り、パスをグローバル ADC3_DIR に置く。
+  adc3_new_dir() {
+    adc3_n=$((adc3_n + 1))
+    ADC3_DIR="$ADC3_WORK/case-$adc3_n"
+    mkdir -p "$ADC3_DIR"
+  }
+  # contract_check が非 0 で、出力に <期待行> を含む。
+  adc3_assert_violation() {
+    local desc="$1" dir="$2" needle="$3" out rc
+    out="$(contract_check "$dir")"
+    rc=$?
+    # `-e` … needle が `-zz.md: …` のように `-` で始まっても option と誤解させない。
+    if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qF -e "$needle"; then
+      pass "$desc: 非 0・[$needle]"
+    else
+      fail_case "$desc (rc=$rc out=[$(printf '%s' "$out" | tr '\n' ' ')] want=[$needle])"
+    fi
+  }
+
+  # (b) name ≠ ファイル名
+  adc3_new_dir
+  write_probe_def "$ADC3_DIR/zz-probe.md" zz-other
+  adc3_assert_violation "name≠ファイル名" "$ADC3_DIR" "zz-probe.md: NAME_FILENAME_MISMATCH"
+
+  # (a) 大文字・数字・`:`・先頭ハイフン
+  for bad_name in 'Zz-Probe' 'zz-probe1' 'zz:probe' '-zz'; do
+    adc3_new_dir
+    write_probe_def "$ADC3_DIR/${bad_name}.md" "$bad_name"
+    adc3_assert_violation "名前形式 [$bad_name]" "$ADC3_DIR" "${bad_name}.md: NAME_FORMAT_INVALID"
+  done
+
+  # (c) 組込み種別名との衝突（名前形式は有効＝出力が衝突の 1 行だけ）
+  for builtin in general-purpose claude statusline-setup; do
+    adc3_new_dir
+    write_probe_def "$ADC3_DIR/${builtin}.md" "$builtin"
+    adc3_out="$(contract_check "$ADC3_DIR")"
+    adc3_rc=$?
+    if [ "$adc3_rc" -ne 0 ] && [ "$adc3_out" = "${builtin}.md: BUILTIN_NAME_COLLISION" ]; then
+      pass "組込み種別 [$builtin]: 非 0・出力が BUILTIN_NAME_COLLISION の 1 行だけ"
+    else
+      fail_case "組込み種別 [$builtin] (rc=$adc3_rc out=[$(printf '%s' "$adc3_out" | tr '\n' ' ')])"
+    fi
+  done
+
+  # (f) `## 権限` 見出し 0 件
+  adc3_new_dir
+  cat > "$ADC3_DIR/zz-probe.md" <<'EOF'
+---
+name: zz-probe
+description: probe without permission heading
+tools: Read
+---
+probe body without the heading
+EOF
+  adc3_assert_violation "## 権限 が 0 件" "$ADC3_DIR" "zz-probe.md: PERMISSION_HEADING_COUNT"
+
+  # (g) 値が不正
+  adc3_new_dir
+  write_probe_def "$ADC3_DIR/zz-probe.md" zz-probe "aienv-vault-write: yes"
+  adc3_assert_violation "宣言の値が yes" "$ADC3_DIR" "zz-probe.md: VAULT_WRITE_DECLARATION_INVALID"
+
+  # (g) 重複（不正値の後に allowed＝後勝ちで有効にならない・INVALID を出さない）
+  adc3_new_dir
+  write_probe_def "$ADC3_DIR/zz-probe.md" zz-probe "aienv-vault-write: yes" "aienv-vault-write: allowed"
+  adc3_assert_violation "宣言が 2 行" "$ADC3_DIR" "zz-probe.md: VAULT_WRITE_DECLARATION_DUPLICATE"
+  adc3_dup_out="$(contract_check "$ADC3_DIR")"
+  assert_true "宣言が 2 行: VAULT_WRITE_DECLARATION_INVALID は出さない" "$(printf '%s\n' "$adc3_dup_out" | grep -qF 'VAULT_WRITE_DECLARATION_INVALID' && echo 0 || echo 1)"
+
+  # (g) 未知の aienv- キー
+  adc3_new_dir
+  write_probe_def "$ADC3_DIR/zz-probe.md" zz-probe "aienv-vault-writ: allowed"
+  adc3_assert_violation "aienv-vault-writ（打ち間違い）" "$ADC3_DIR" "zz-probe.md: AIENV_KEY_UNKNOWN"
+
+  # (b) 生きた symlink `zz-alias.md → implementer.md`（ファイルを作らず symlink
+  # だけで違反になる＝ガードの `-f` と同じく辿って数える）
+  adc3_new_dir
+  cp "$AGENTS_DIR/implementer.md" "$ADC3_DIR/implementer.md"
+  ln -s implementer.md "$ADC3_DIR/zz-alias.md"
+  adc3_assert_violation "symlink zz-alias.md→implementer.md" "$ADC3_DIR" "zz-alias.md: NAME_FILENAME_MISMATCH"
+
+  # 0 ファイル＝空虚な真の禁止
+  adc3_new_dir
+  adc3_assert_violation "定義 0 件" "$ADC3_DIR" "NO_DEFINITIONS"
+
+  rm -rf "$ADC3_WORK"
+}
 
 echo "=== 1. AC-12①: claude/agents/verifier.md が在り、tester.md が無い ==="
 {
@@ -122,25 +384,9 @@ echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）
   assert_contains_file "vault-scribe.md は「Codexは演じない/対象外」と書かれている" "$AGENTS_DIR/vault-scribe.md" "Codex はこの職種を演じない"
 }
 
-echo "=== 4b. 権限行の内蔵（2026-09-19 段3-4）: 各定義に「## 権限」見出しがちょうど1件・worker-role-prompts への参照が0件 ==="
-{
-  # 権限行の正本は agents/*.md の「## 権限」行（Vault の worker-role-prompts.md
-  # の表はその転記＝リーダー向け一覧）。定義側に旧正本への参照が残っていない
-  # こと、見出しの表記ゆれ（末尾の補足つき等）が無いことを見る。
-  # ⚠️ `grep -c`は0件一致のとき"0"を出力しつつ非0終了する（項目7と同じ扱い）
-  # ため、`|| echo 0`は付けない。
-  for role in adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier; do
-    f="$AGENTS_DIR/${role}.md"
-    if [ -f "$f" ]; then
-      n_head="$(grep -c '^## 権限' "$f")"
-      n_ref="$(grep -c 'worker-role-prompts' "$f")"
-    else
-      n_head="(file missing)"; n_ref="(file missing)"
-    fi
-    assert_eq "${role}.md: ## 権限 見出しが1件" "1" "$n_head"
-    assert_eq "${role}.md: worker-role-prompts 参照が0件" "0" "$n_ref"
-  done
-}
+# （旧 4b「## 権限 見出し 1 件・worker-role-prompts 参照 0 件」と旧 10「effort:
+# 行 0 件」・旧 AC-1「集合の等値・model 不在」は契約 (e)(f) として AD-C1 の
+# contract_check に吸収した＝設計 2026-09-20 §4.3。）
 
 # 廃止したMCP経路のexecution値を検査するための共有パターン。⚠️ このファイル
 # 自身（tests/配下）も検査対象に含める都合上（項目6）、ソース上に完成した
@@ -226,47 +472,7 @@ echo "=== 9. agents/verifier.md の出力形式に、出力先ファイルの先
   assert_eq "verifier.md: 件数:/打ち切り可否:/--- の3行が連続してこの順序で存在する" "FOUND" "$three_line_block"
 }
 
-echo "=== 10. FM-G3(設計v1.1.3 §5・§7): 素材claude/agents/*.mdにeffort:行が0件 ==="
-{
-  # D-4でinstallerのeffort:生成を退役し、配置先職種定義はsymlinkで素材を
-  # そのまま指す（素材と配置先が同一実体・sync_managed_symlink直呼び）。
-  # ラッパー経路ではfrontmatterのeffort:は実行時の値にならない（設計§7）ため、
-  # 素材へ書くと配置先でもそのまま出て誤解を招く。素材は「effort行を持たない」
-  # ことを恒久条件として固定する（frontmatterブロック内の`^effort:`行だけを
-  # 見る。本文中に偶然`effort:`という文字列が出てもfrontmatter外なら対象外）。
-  effort_hits="$(python3 - "$AGENTS_DIR" <<'PYEFFORT'
-import sys
-from pathlib import Path
-
-def frontmatter_block(b: bytes):
-    if not b.startswith(b"---\n"):
-        return None
-    idx = 4
-    while True:
-        nl = b.find(b"\n", idx)
-        if nl == -1:
-            return None
-        if b[idx:nl] == b"---":
-            return b[4:idx]
-        idx = nl + 1
-
-d = Path(sys.argv[1])
-hits = []
-for f in sorted(d.glob("*.md")):
-    block = frontmatter_block(f.read_bytes())
-    if block is None:
-        continue
-    for line in block.split(b"\n"):
-        if line.startswith(b"effort:"):
-            hits.append(f.name)
-for name in hits:
-    print(name)
-PYEFFORT
-)"
-  assert_eq "claude/agents/*.md のfrontmatterにeffort:行が0件" "" "$effort_hits"
-}
-
-echo "=== 11. 新設②(設計-v1.1.1.md §7・D-6・要件AC-11b②): agents_json_matches_source_and_has_no_effort（8職種） ==="
+echo "=== 11. 新設②(設計-v1.1.1.md §7・D-6・要件AC-11b②): agents_json_matches_source_and_has_no_effort（検査対象ディレクトリの全定義） ==="
 {
   AGENT_DEF="$REPO_ROOT/claude/hooks/lib/agent_def.py"
   result="$(python3 - "$AGENT_DEF" "$AGENTS_DIR" <<'PYCHECK'
@@ -276,7 +482,9 @@ import sys
 from pathlib import Path
 
 agent_def, agents_dir = sys.argv[1], sys.argv[2]
-roles = "adoption-critic implementer operator requirements-analyst researcher system-designer vault-scribe verifier".split()
+# 定義集合は閉じた列挙で持たない（ディレクトリの中身そのもの＝設計 2026-09-20 §4.3）。
+roles = [p.stem for p in sorted(Path(agents_dir).glob("*.md")) if p.is_file()]
+assert roles, "no definitions found"
 
 
 def split_frontmatter(raw: bytes):
@@ -351,7 +559,7 @@ else:
 PYCHECK
 )"
   if [ "$(printf '%s\n' "$result" | head -1)" = "OK" ]; then
-    pass "agents_json_matches_source_and_has_no_effort: 8職種すべてで一致・effort/color/name無し"
+    pass "agents_json_matches_source_and_has_no_effort: 全定義で一致・effort/color/name無し"
   else
     fail_case "agents_json_matches_source_and_has_no_effort ($(printf '%s' "$result" | tr '\n' ' '))"
   fi
@@ -362,10 +570,11 @@ echo "=== 12. 検証1巡目 I1-m6 対応: agent_def.py の --role 検査（陰�
   AGENT_DEF="$REPO_ROOT/claude/hooks/lib/agent_def.py"
   I1M6_WORK="$(mktemp -d)"
 
-  # --role が ^[a-z][a-z0-9-]*$ に一致しない（`../`混入・大文字・空文字・
-  # 空白混入）ときは非0で失敗する（実在のディレクトリ・実在の素材に対して
-  # 検査する＝ファイル名連結より前に弾かれることを見る）。
-  for bad_role in '../implementer' 'Implementer' '' 'imple menter' 'implementer/../x'; do
+  # --role が ^[a-z][a-z-]*$ に一致しない（`../`混入・大文字・空文字・
+  # 空白混入・数字＝契約 (a)・設計 2026-09-20 §6.3）ときは非0で失敗する
+  # （実在のディレクトリ・実在の素材に対して検査する＝ファイル名連結より前に
+  # 弾かれることを見る）。
+  for bad_role in '../implementer' 'Implementer' '' 'imple menter' 'implementer/../x' 'implementer2' 'zz-probe-1'; do
     if python3 "$AGENT_DEF" agents-json --dir "$AGENTS_DIR" --role "$bad_role" >/dev/null 2>"$I1M6_WORK/role-invalid.err"; then
       fail_case "role_invalid(agents-json,role=[$bad_role]): 不正な--roleは非0で失敗するはずが成功した"
     else
@@ -404,7 +613,7 @@ EOF
   fi
 
   # nameフィールド自体が無い素材も同様に非0で失敗する（"名前が在るなら一致"
-  # ではなく、8職種の実素材が全てnameを持つ前提＝欠落も不一致として扱う）。
+  # ではなく、実素材が全てnameを持つ前提（契約 (b)）＝欠落も不一致として扱う）。
   NONAME_DIR="$I1M6_WORK/agents-noname"
   mkdir -p "$NONAME_DIR"
   cat > "$NONAME_DIR/noname.md" <<'EOF'

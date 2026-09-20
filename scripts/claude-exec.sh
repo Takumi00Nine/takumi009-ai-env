@@ -21,7 +21,7 @@
 # dry-runでは作らない。
 #
 # Spawn contract (moved from README "Roles" 2026-09-19, verbatim):
-# Worker models are selected per spawn from profile candidates. Run `resolve-candidate` with the deployed `--agents-dir`; for subagent execution, pass the returned `AGENT_MODEL` value explicitly as `Agent.model`. Do not spawn on a nonzero exit or malformed output. The Agent guard rejects missing or invalid model arguments for the eight managed roles. Legacy Claude IDs and non-anthropic-api subagent providers are rejected; external-cli retains `CODEX_ARGS`.
+# Worker models are selected per spawn from profile candidates. Run `resolve-candidate` with the deployed `--agents-dir`; for subagent execution, pass the returned `AGENT_MODEL` value explicitly as `Agent.model`. Do not spawn on a nonzero exit or malformed output. The Agent guard rejects missing or invalid model arguments for the managed roles (= the definitions under `claude/agents/`). Legacy Claude IDs and non-anthropic-api subagent providers are rejected; external-cli retains `CODEX_ARGS`.
 # A role that has candidates in the local profile is not launched in-process via the `Agent` tool (a `PreToolUse` hook rejects that) — it's launched as a separate `claude -p` process through `scripts/claude-exec.sh` (a Bash wrapper mirroring `scripts/codex-exec.sh`'s contract; see "claude-exec.sh" below for the invocation form, how to read the worker's report, and how to recover from a stale lock).
 #
 # Reading the worker's report / recovering from a leftover lock / `effort:` (moved from README "claude-exec.sh" 2026-09-19, verbatim):
@@ -436,9 +436,9 @@ fi
 
 # --- 手順11: 職種ごとの子の設定（--settingsのインラインJSON）を生成する
 # （§2.5）。 -------------------------------------------------------------
-CHILD_SETTINGS_JSON="$(python3 "$CLAUDE_EXEC_PY" child-settings --src "$CHILD_SETTINGS_SRC" --role "$ROLE" --child-cwd "$OUT_DIR" 2>/dev/null)"
+CHILD_SETTINGS_JSON="$(python3 "$CLAUDE_EXEC_PY" child-settings --src "$CHILD_SETTINGS_SRC" --role "$ROLE" --child-cwd "$OUT_DIR" --agents-dir "$AGENTS_DIR")"
 if [ -z "$CHILD_SETTINGS_JSON" ]; then
-  echo "[$SCRIPT_NAME] FAIL: 子へ届ける柵を組み立てられません（抽出元が読めない、または柵が0本です）: $CHILD_SETTINGS_SRC" >&2
+  echo "[$SCRIPT_NAME] FAIL: 子へ届ける柵を組み立てられません（抽出元が読めない、柵が0本、または Vault 書込宣言が不正です）: $CHILD_SETTINGS_SRC" >&2
   fail_exit 8 child_settings_unavailable
 fi
 

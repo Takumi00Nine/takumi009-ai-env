@@ -33,7 +33,7 @@ takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json template (generated)
 │   ├── hooks/                 # Claude Code hooks
-│   └── agents/                # Worker role definitions (7 roles)
+│   └── agents/                # Worker role definitions (one .md per role)
 ├── codex/                     # AGENTS.md, hooks.json (symlink targets), config.toml template (generated)
 ├── scripts/
 │   ├── install-main.sh        # Main-environment installer
@@ -66,7 +66,7 @@ takumi009-ai-env/
 `claude/agents/` and this environment's workflow are built around three role words:
 
 - **Orchestrator (leader)**: The main Claude Code session. It makes decisions, talks with the user, and directs the overall workflow — it delegates implementation/investigation/testing to workers rather than doing them itself.
-- **Worker**: A subagent launched from one of the 7 role definitions under `claude/agents/` — requirements-analyst, system-designer, implementer, verifier, researcher, operator, adoption-critic.
+- **Worker**: A subagent launched from one of the role definitions under `claude/agents/` (one `.md` per role; the set is whatever the directory holds — currently requirements-analyst, system-designer, implementer, verifier, researcher, operator, adoption-critic, vault-scribe). Adding or removing a role = editing that directory and the local profile only (contract and steps: see 日本語 §「職種定義の契約と設定変更の手順」).
 - **Codex**: The default cast for the verifier role, invoked via `scripts/codex-exec.sh` (a Bash wrapper around `codex exec`; continuation of a review thread uses the wrapper's `--resume` flag). Workers don't invoke it themselves — the orchestrator starts verification once a stage's deliverable is complete, and workers only apply the resulting findings.
 
 How a worker is launched (`resolve-candidate`, in-process `Agent` rejection, `claude-exec.sh`) — details = the comment at the top of `scripts/claude-exec.sh`.
@@ -279,7 +279,7 @@ takumi009-ai-env/
 ├── claude/
 │   ├── settings.json          # ~/.claude/settings.json のテンプレ（生成）
 │   ├── hooks/                 # Claude Code のフック
-│   └── agents/                # ワーカー役割定義（7ロール）
+│   └── agents/                # ワーカー役割定義（1 ファイル＝1 職種）
 ├── codex/                     # AGENTS.md・hooks.json（symlink先）・config.toml（生成）
 ├── scripts/
 │   ├── install-main.sh        # メイン環境インストーラ
@@ -312,10 +312,17 @@ takumi009-ai-env/
 `claude/agents/` およびこの環境のワークフローは、次の3つの役割語を軸に組み立てられています。
 
 - **リーダー（orchestrator）**: メインの Claude Code セッション。意思決定・ユーザー対話・工程全体の采配を行い、実装/調査/テストは自分でやらずワーカーへ委任します。
-- **ワーカー（worker）**: `claude/agents/` 配下の7つの役割定義（要件定義・設計・実装・テスト・調査・運用・採用判定）で起動されるサブエージェントです。
+- **ワーカー（worker）**: `claude/agents/` 配下の役割定義（1 ファイル＝1 職種。集合はディレクトリの中身そのもの＝現在は要件定義・設計・実装・検証・調査・運用・採用判定・記録）で起動されるサブエージェントです。
 - **Codex**: 一次レビュアー専任（`scripts/codex-exec.sh`＝`codex exec`のBashラッパー経由。レビュースレッドの継続はラッパーの`--resume`で行う）。ワーカーがリーダーへ報告する前に、自分の成果物のレビューを依頼する相手です。
 
 ワーカーの起動の仕組みの詳細＝`scripts/claude-exec.sh` 冒頭のコメント。
+
+#### 職種定義の契約と設定変更の手順
+
+**職種定義の契約**（`claude/agents/<職種>.md` 1 本の中で全部満たせる。検査＝`bash tests/test-agent-definitions.sh`）
+(a) 職種名（ファイル名＝`name`）は `^[a-z][a-z-]*$`（英小文字とハイフンのみ・先頭は英字・数字と `:` は不可） (b) frontmatter `name:` がファイル名（拡張子除く）と一致 (c) 組込み種別名（Explore・Plan・general-purpose・claude・statusline-setup・claude-code-guide）と衝突しない (d) `description:`・`tools:` が非空・本文が非空 (e) frontmatter に `model:`・`effort:` を書かない (f) 本文に `## 権限` 見出しがちょうど 1 件・`worker-role-prompts` への参照 0 件 (g) Vault の AI 向け 6 フォルダへ書く職種だけ frontmatter に `aienv-vault-write: allowed` を**ちょうど 1 行**（値はこれのみ・行末コメント不可・同じキーを 2 行以上書かない・`aienv-` で始まる他のキーは不可）。宣言の無い職種はラッパー経路で柵（`vault-write-gate.sh`）が載る。
+
+**設定変更の手順**（追加・削除・改名とも）: ① `claude/agents/<職種>.md` を書く／消す ② `~/.config/takumi009-ai-env/profile.md` の `role.<職種>: …` 行を足す／消す（`config/profile.md.sample` が当該職種を参照していればそちらも） ③ `bash tests/test-agent-definitions.sh` が exit 0（数秒） ④ 追加は `bash scripts/install-main.sh` を再実行して `~/.claude/agents/<職種>.md` を配置・削除は `rm ~/.claude/agents/<職種>.md`（dangling symlink の除去）。改名＝削除＋追加。コア規範が名指す職種（工程 7 職＋vault-scribe）の削除・改名は規範改訂を伴う通常の変更。
 
 ### vault-public/ について
 

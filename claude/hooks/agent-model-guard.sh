@@ -5,7 +5,13 @@
 #
 # D-2（設計-v1.1.1.md §3）: 許容別名の集合と委任実績マーカーの置き方は
 # claude/hooks/lib/guard_common.sh を正本とし、ここでは複製しない（NFR-7・
-# AC-10②）。判定式（^Agent$・8職種・FORCE_OVERRIDE の扱い）自体は変えない。
+# AC-10②）。判定式（^Agent$・管理職種・FORCE_OVERRIDE の扱い）自体は変えない。
+#
+# D-1（roles-config-only 設計 v1.2 §2）: 管理職種の集合はコード内に列挙せず、
+# 自身の実体パスから解決した repo claude/agents/ 直下の *.md（`-f` で見える
+# 実体＝symlink は辿る・dangling は数えない）のファイル名そのものとする。
+# 内容は読まない。一覧が取れない／空のときは fail-close（AGENTS_DIR_UNREADABLE
+# ／AGENTS_DIR_EMPTY で deny）。名前は jq の --args で JSON 配列として渡す。
 #
 # D-2（設計v1.2 §3.1〜§3.2・OQ-4案B）: 名前無し subagent だけで運用する
 # セッションでも delegation-gate-v2.sh が「委任実績あり」と認められるよう、
@@ -58,6 +64,26 @@ command -v jq >/dev/null 2>&1 || guard_error JQ_UNAVAILABLE
 input=$(cat)
 [ -n "$input" ] || guard_error INPUT_INVALID
 
+# D-1（設計 v1.2 §2.1）: 管理職種の一覧＝repo claude/agents/ 直下の *.md。
+# SELF_DIR は <repo>/claude/hooks の物理パスなので、`..` を使わず文字列で
+# 1 段上がる。配布先 ~/.claude/agents/ と $HOME は読まない。env 差替口は
+# 置かない（I2-M2 裁定の継続・テストは複製配置で差し替える）。
+# 一覧は tool_name に関係なく毎回評価する（破損した配置では Agent 起動を
+# 全部止める＝fail-close）。外部コマンド（ls・find）は使わない（HF-03 の
+# 「jq だけ無い PATH」でも同じ経路を通る）。
+AGENTS_DIR="${SELF_DIR%/*}/agents"
+{ [ -d "$AGENTS_DIR" ] && [ -r "$AGENTS_DIR" ] && [ -x "$AGENTS_DIR" ]; } || guard_error AGENTS_DIR_UNREADABLE
+managed_roles=()
+for _agent_file in "$AGENTS_DIR"/*.md; do
+  # [ -f ] は symlink を辿る（profile_resolve.py の os.path.isfile・installer
+  # の -e と同じ見え方）。dangling symlink・ディレクトリ・glob 不一致時の
+  # リテラル "*.md" はいずれも偽＝数えない。
+  [ -f "$_agent_file" ] || continue
+  _agent_name="${_agent_file##*/}"
+  managed_roles+=("${_agent_name%.md}")
+done
+[ "${#managed_roles[@]}" -gt 0 ] || guard_error AGENTS_DIR_EMPTY
+
 # セッション固有マーカーの名前に使う session_id を1回だけ取り出す（判定
 # ロジックの`jq -rs`とは別口・既存の判定式は一切変えない）。
 sid=$(printf '%s' "$input" | jq -r '.session_id // ""' 2>/dev/null)
@@ -75,6 +101,8 @@ sid=$(printf '%s' "$input" | jq -r '.session_id // ""' 2>/dev/null)
 # 値〈例: "0"〉を設定した場合も安全側でdenyする）。
 force_override_env="${CLAUDE_CODE_SUBAGENT_MODEL_FORCE-}"
 
+# D-1: 管理職種は $ARGS.positional（--args で渡した JSON 配列。空白入りの名前
+# も 1 要素のまま）。--args は以降の引数を全部 positional にするので末尾に置く。
 result=$(printf '%s' "$input" | jq -rs --arg force "$force_override_env" --arg aliases "$(guard_allowed_model_aliases)" '
   if length != 1 or (.[0] | type) != "object" then "ERROR:INPUT_INVALID"
   else .[0] as $event |
@@ -85,14 +113,14 @@ result=$(printf '%s' "$input" | jq -rs --arg force "$force_override_env" --arg a
     elif $event.tool_name != "Agent" then "ERROR:TOOL_NAME_UNEXPECTED"
     elif ($event.tool_input | type) != "object" then "ERROR:TOOL_INPUT_INVALID"
     elif ($event.tool_input.subagent_type | type) != "string" or $event.tool_input.subagent_type == "" then "ERROR:TOOL_INPUT_INVALID"
-    elif (["adoption-critic","implementer","operator","requirements-analyst","researcher","system-designer","vault-scribe","verifier"] | index($event.tool_input.subagent_type)) == null then "PASS"
+    elif ($ARGS.positional | index($event.tool_input.subagent_type)) == null then "PASS"
     elif $force != "" then "FORCE_OVERRIDE"
     elif ($event.tool_input | has("model") | not) then "REQUIRED"
     elif ($event.tool_input.model | type) == "string" and (($aliases | split(" ")) | index($event.tool_input.model)) != null then "PASS"
     else "INVALID"
     end
   end
-' 2>/dev/null) || guard_error JQ_FAILED
+' --args "${managed_roles[@]}" 2>/dev/null) || guard_error JQ_FAILED
 
 case "$result" in
   PASS)

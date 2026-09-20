@@ -68,7 +68,7 @@ TEAMS_DIR="${GATE_TEAMS_DIR:-$HOME/.claude/teams}"
 MARKER_DIR="${GATE_MARKER_DIR:-/tmp}"
 ALLOW_PREFIXES=(
   # 外部脳($HOME/Data/obsidian)は 2026-08-12 本人指示で許可パスから除外
-  # （執筆は vault-scribe 必須＝下の 2.5 で専用 deny）
+  # （執筆は Vault 書込を宣言した記録職（例: vault-scribe）へ委任＝下の 2.5 で専用 deny）
   "$HOME/.claude"             # 自環境の設定・フック
   "$HOME/.claude.json"        # Claude Code 本体設定（~/.claude/ の外にあるが同じ設定ドメイン。2026-07-05 追加）
   "/tmp"                      # scratchpad・一時ファイル
@@ -116,7 +116,7 @@ fi
 if guard_is_vault_ai_path "$fpath"; then
   vault_marker="$MARKER_DIR/claude-vault-direct-ok-$sid"
   [ -f "$vault_marker" ] && exit 0
-  reason="delegation-gate: Vault の AI 向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への書き込みは vault-scribe へ委任してください（subagent_type は必ず \"vault-scribe\"）。緊急時のみ理由を応答に明示して: touch $vault_marker"
+  reason="delegation-gate: Vault の AI 向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への書き込みは Vault 書込を宣言した記録職（例: subagent_type vault-scribe）へ委任してください。緊急時のみ理由を応答に明示して: touch $vault_marker"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
   exit 0
 fi

@@ -1950,26 +1950,46 @@ PYEOF
 
 echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行の全ロール構成でresolve()を通してもADVISORY:V1-aが出ない（57.の単体確認をCLI経由でも裏付け。2026-09-03本人裁定・方針変更対応） ==="
 {
-  # 実AGENTS_DIR（claude/agents/、vault-scribe.md収録後）を使い、現行の
-  # コア職種マニフェスト全件（CORE_ROLES_WITHOUT_REPO_AGENT_FILE 3件（3モード
-  # 体制対応でprimary-reviewerがverifierへ統合されたため4件→3件） +
-  # claude/agents/*.md 8件＝ファイル名そのまま、計11件）ちょうどをrole.表へ
-  # 宣言する。leader以外は状態を"unknown"にして属性検証（V9-b等）を回避し、
-  # V1-aの対称差判定だけに焦点を絞る（他ロールのstateはV1-aの結果に影響
-  # しない＝role_and_core_manifest_diff()はparsed.rolesのキーのみを見る）。
+  # 実AGENTS_DIR（claude/agents/）を使い、現行のコア職種マニフェスト全件
+  # （CORE_ROLES_WITHOUT_REPO_AGENT_FILE + claude/agents/*.md＝ファイル名
+  # そのまま）ちょうどをrole.表へ宣言する。leader以外は状態を"unknown"に
+  # して属性検証（V9-b等）を回避し、V1-aの対称差判定だけに焦点を絞る
+  # （他ロールのstateはV1-aの結果に影響しない＝role_and_core_manifest_diff()
+  # はparsed.rolesのキーのみを見る）。
+  #
+  # ロースター行は職種名をハードコードせず、CORE_ROLES_WITHOUT_REPO_AGENT_FILE
+  # と AGENTS_DIR の *.md の stem から生成する（2026-09-20 設計 §4.4: 職種の
+  # 追加・削除でこのテストの改修が要らないようにする）。bash 3.2 のため
+  # 連想配列は使わず通常配列で組む。
+  CORE_ROLE_NAMES="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c \
+    'import profile_resolve as pr; print("\n".join(sorted(pr.CORE_ROLES_WITHOUT_REPO_AGENT_FILE)))')"
+  AGENT_FILE_STEMS=""
+  for f in "$AGENTS_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    stem="${f##*/}"; stem="${stem%.md}"
+    AGENT_FILE_STEMS="${AGENT_FILE_STEMS}${stem}"$'\n'
+  done
+  # 生成の前提（空虚な真の禁止）: claude/agents/*.md が0件ならロースターが
+  # 成立しないので、後続の判定に進む前にここで fail にする。
+  stems_present=0
+  [ -n "$AGENT_FILE_STEMS" ] && stems_present=1
+  assert_true "生成の前提: claude/agents/*.md が1件以上ある（0件ならロースター生成不能）" "$stems_present"
+
+  ROSTER_LINES=()
+  while IFS= read -r role_name; do
+    [ -n "$role_name" ] || continue
+    if [ "$role_name" = "leader" ]; then
+      ROSTER_LINES+=("role.leader: configured model=t-opus-high")
+    else
+      ROSTER_LINES+=("role.${role_name}: unknown")
+    fi
+  done <<ROSTER_EOF
+$CORE_ROLE_NAMES
+$AGENT_FILE_STEMS
+ROSTER_EOF
+
   COMPLETE_ROSTER="$(mktemp -d)/complete-roster.md"
-  make_v2_profile "$COMPLETE_ROSTER" \
-    "role.leader: configured model=t-opus-high" \
-    "role.navi: unknown" \
-    "role.ja-doc: unknown" \
-    "role.adoption-critic: unknown" \
-    "role.implementer: unknown" \
-    "role.operator: unknown" \
-    "role.requirements-analyst: unknown" \
-    "role.researcher: unknown" \
-    "role.system-designer: unknown" \
-    "role.verifier: unknown" \
-    "role.vault-scribe: unknown"
+  make_v2_profile "$COMPLETE_ROSTER" "${ROSTER_LINES[@]}"
 
   out="$(resolve_v2 "$COMPLETE_ROSTER")"  || true
   # bash 3.2(macOS既定)では`$(case ... esac)`のような command substitution
@@ -1985,22 +2005,22 @@ echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行�
 
 echo "=== 58b. V1-aマニフェスト(結合・回帰防止・対照実験): 完全ロースターのうち'role.vault-scribe'の1行だけを旧キー'role.scribe'へ差し替えると、他は一切変えていないのにADVISORY:V1-aが出るようになる（受入条件どおり・2026-09-03本人裁定: 特別な互換処理は入れない＝'行を書かなかった職種はunknown'の既存規則に従い、vault-scribeはVACANT_UNKNOWN・scribeはマニフェストに無いキーとしてV1-a advisoryに出る。Codexレビュー指摘・Minor対応: 当初はleaderとscribeの2行だけの疎なプロファイルで検証しており、他の10職種が欠けていること自体でもV1-aが出てしまうため『role.scribeへの置換だけが原因』というこの受入条件を厳密に隔離できていなかった。58.の完全ロースターから1行だけ差し替える対照実験にすることで、原因を旧キーの使用だけに絞り込む） ==="
 {
-  # 58.と全く同じ完全ロースターから、'role.vault-scribe'の行だけを
-  # 'role.scribe'（旧キー）へ差し替える。他の10行（leader含む）は58.と
-  # 完全に同一。
+  # 58.で生成した完全ロースター（ROSTER_LINES）から、'role.vault-scribe'の
+  # 行だけを'role.scribe'（旧キー）へ差し替える。他の行（leader含む）は58.と
+  # 完全に同一。vault-scribeは固定職種なのでここでの名指しは可。
+  OLD_KEY_LINES=()
+  replaced=0
+  for line in "${ROSTER_LINES[@]}"; do
+    if [ "$line" = "role.vault-scribe: unknown" ]; then
+      OLD_KEY_LINES+=("role.scribe: unknown"); replaced=1
+    else
+      OLD_KEY_LINES+=("$line")
+    fi
+  done
+  assert_true "対照実験の前提: 58.のロースターに role.vault-scribe の行がある（差し替え対象が存在する）" "$replaced"
+
   OLD_KEY_ROSTER="$(mktemp -d)/old-key-roster.md"
-  make_v2_profile "$OLD_KEY_ROSTER" \
-    "role.leader: configured model=t-opus-high" \
-    "role.navi: unknown" \
-    "role.ja-doc: unknown" \
-    "role.adoption-critic: unknown" \
-    "role.implementer: unknown" \
-    "role.operator: unknown" \
-    "role.requirements-analyst: unknown" \
-    "role.researcher: unknown" \
-    "role.system-designer: unknown" \
-    "role.verifier: unknown" \
-    "role.scribe: unknown"
+  make_v2_profile "$OLD_KEY_ROSTER" "${OLD_KEY_LINES[@]}"
 
   out="$(resolve_v2 "$OLD_KEY_ROSTER")"  || true
   assert_contains "58.の完全ロースターと1行しか違わないのに、旧キー'role.scribe'のままではADVISORY:V1-aが出る（改名を促す）" "$out" "ADVISORY:V1-a"

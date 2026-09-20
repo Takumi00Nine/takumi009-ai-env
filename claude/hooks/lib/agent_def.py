@@ -35,16 +35,24 @@ class AgentDefError(Exception):
 
 # 検証1巡目 I1-m6 対応（検証2巡目 I2-m1 でコメント訂正）: --role をそのまま
 # ファイル名へ連結すると `../` 等の走査を弾けない。ファイル名として使う前に
-# 形式を検査する（`../`・絶対パス・空文字・空白等をすべて弾く程度の緩さ）。
-# 職種名は先頭英字＝`^[a-z][a-z0-9-]*$`（scripts/claude-exec.sh の
-# task-id 規則 `^[a-z0-9][a-z0-9-]*$` より厳しくしている＝先頭に数字を許さない）。
-_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9-]*$")
+# 形式を検査する（`../`・絶対パス・空文字・空白等をすべて弾く）。
+# 職種名は定義ファイル契約 (a)＝公式の name 規則（英小文字とハイフンのみ・
+# 先頭は英字・数字と `:` は不可）＝`^[a-z][a-z-]*$`（職種の追加・削除を設定
+# だけで完結させる設計 2026-09-20 §6.3。scripts/claude-exec.sh の task-id
+# 規則 `^[a-z0-9][a-z0-9-]*$` とは別物＝職種名には数字を許さない）。
+_ROLE_PATTERN = re.compile(r"^[a-z][a-z-]*$")
+
+# 本 repo の拡張 frontmatter キーの名前空間（公式キーは camelCase の単語で、
+# ハイフン付き・接頭辞付きの名前と衝突しない＝設計 2026-09-20 §3.1）。
+_AIENV_KEY_PREFIX = "aienv-"
+_VAULT_WRITE_KEY = "aienv-vault-write"
+_VAULT_WRITE_ALLOWED = "allowed"
 
 
 def _validate_role(role: str) -> None:
     if not _ROLE_PATTERN.match(role):
         raise AgentDefError(
-            f"ROLE_INVALID: --role の形式が不正です（^[a-z][a-z0-9-]*$ に一致しない）: {role!r}"
+            f"ROLE_INVALID: --role の形式が不正です（^[a-z][a-z-]*$ に一致しない）: {role!r}"
         )
 
 
@@ -132,6 +140,58 @@ def load_agent_def(agents_dir: str, role: str) -> dict:
         raise AgentDefError(f"BODY_EMPTY: {role}.md")
 
     return {"description": description, "tools": tools, "prompt": prompt}
+
+
+def vault_declared_writable(agents_dir: str, role: str) -> bool:
+    """職種 role が Vault 書込を宣言しているか（設計 2026-09-20 §3.1・D-2）。
+
+    frontmatter の `aienv-vault-write: allowed` がちょうど 1 行あれば True、
+    キーが無ければ False。それ以外は AgentDefError（fail-close）:
+      VAULT_WRITE_DECLARATION_DUPLICATE … 同じキーが 2 行以上（値を問わない）
+      AIENV_KEY_UNKNOWN                 … `aienv-` で始まる別のキーがある
+      VAULT_WRITE_DECLARATION_INVALID   … 値が `allowed` 以外（空を含む）
+    評価順＝重複→未知キー→値。判定は frontmatter の**生の行**を数える
+    （_parse_frontmatter_fields の辞書＝後勝ちには依存しない＝検証 V1-01）。
+    宣言の解釈はこの関数 1 か所だけに置き、claude_exec.py child-settings と
+    tests/test-agent-definitions.sh の契約検査はこれを呼ぶだけにする。
+    """
+    _validate_role(role)
+    raw = _read_source(agents_dir, role)
+    fm_text, _body = _split_frontmatter(raw)
+
+    declared_values: list[str] = []
+    unknown_keys: list[str] = []
+    for line in fm_text.split("\n"):
+        if not line or line[0] in (" ", "\t"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        if key == _VAULT_WRITE_KEY:
+            declared_values.append(value.strip())
+        elif key.startswith(_AIENV_KEY_PREFIX):
+            unknown_keys.append(key)
+
+    if len(declared_values) >= 2:
+        raise AgentDefError(
+            f"VAULT_WRITE_DECLARATION_DUPLICATE: {_VAULT_WRITE_KEY} が "
+            f"{len(declared_values)} 行あります（1 行だけ）({role}.md)"
+        )
+    if unknown_keys:
+        raise AgentDefError(
+            f"AIENV_KEY_UNKNOWN: 未知の aienv- キー {unknown_keys[0]}"
+            f"（本 repo の拡張キーは {_VAULT_WRITE_KEY} だけ）({role}.md)"
+        )
+    if not declared_values:
+        return False
+    value = declared_values[0]
+    if value != _VAULT_WRITE_ALLOWED:
+        raise AgentDefError(
+            f"VAULT_WRITE_DECLARATION_INVALID: {_VAULT_WRITE_KEY}={value} は不正です"
+            f"（許容値: {_VAULT_WRITE_ALLOWED}）({role}.md)"
+        )
+    return True
 
 
 def cmd_agents_json(agents_dir: str, role: str) -> str:
