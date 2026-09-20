@@ -505,45 +505,63 @@ elif ! python3 -c "import os, sys; os.rename(sys.argv[1], sys.argv[2])" "$TMP_LA
 fi
 
 # --sinceに渡す日付の算出（fragments_log.py --sinceは日付部分のみ解釈する契約）。
-# 前回成功実行が無い/形式不正/未来日時/30日超過はいずれも7日前へfail-openで
-# フォールバックする（fragments_log.py自身のresolve_since()と同じ閾値）。
+# 候補は [fragments_reviewed_at, last_success_at] の順（昇格の締めCLI＝
+# scripts/fragments-reviewed.sh が書くfragments_reviewed_atを優先する＝
+# 「対応したら消える」を実現するため。設計書§2.2）。どちらも無い/形式不正/
+# 未来日時/30日超過はいずれも7日前へfail-openでフォールバックする
+# （fragments_log.py自身のresolve_since()と同じ閾値）。候補値の検証ロジックは
+# 1か所にまとめ、候補ごとに複製しない。
+REVIEWED_AT="$(read_last_run_field fragments_reviewed_at)"
 PREV_SUCCESS_AT="$(read_last_run_field last_success_at)"
-SINCE_DATE="$(python3 -c "
+SINCE_RESULT="$(python3 -c "
 import datetime, re, sys
-raw = sys.argv[1].strip()
-# last_success_atはUTC（date -u）で保存されるため、今日の日付判定もUTC基準に
-# 揃える（ローカル日付（datetime.date.today()）のままだと、UTCとローカルTZの
-# 日付が食い違う時間帯（例: 週次実行予定のJST 06:00はUTCでは前日）で未来日
-# 判定・30日境界が1日ずれうるため）。
-today = datetime.datetime.now(datetime.timezone.utc).date()
-fallback = (today - datetime.timedelta(days=7)).isoformat()
-parsed = None
-if raw:
+
+def validate(raw, today):
+    # last_success_at/fragments_reviewed_atはUTC（date -u）で保存されるため、
+    # 今日の日付判定もUTC基準に揃える（ローカル日付（datetime.date.today()）
+    # のままだと、UTCとローカルTZの日付が食い違う時間帯（例: 週次実行予定の
+    # JST 06:00はUTCでは前日）で未来日判定・30日境界が1日ずれうるため）。
+    raw = (raw or '').strip()
+    if not raw:
+        return None
     # write_last_run_field()が書く形式（date -u +%Y-%m-%dT%H:%M:%SZ）に加え、
     # 日付のみの形式も許容するが、末尾に無関係な文字列が付いた壊れた値
     # （例: '2026-07-16broken'）は正規表現で構造ごと弾く（先頭10文字を
     # 切り出すだけだとraw[:10]がたまたま有効な日付形式に見えれば通過して
     # しまうため）。
     m = re.match(r'^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2}))?\$', raw)
-    if m:
-        try:
-            if m.group(2):
-                # 時刻部分を含む場合は文字列全体を厳密に解析する（日付部分
-                # （m.group(1)）だけをfromisoformat()に渡すと、
-                # '2026-07-16T99:99:99Z'のような不正な時刻値でも正規表現の
-                # 桁数チェックさえ満たせば日付部分は正常に解析され、時刻の
-                # 妥当性が一切検証されないまま通過してしまうため）。
-                parsed = datetime.datetime.fromisoformat(raw.replace('Z', '+00:00')).date()
-            else:
-                parsed = datetime.date.fromisoformat(m.group(1))
-        except ValueError:
-            parsed = None
-if parsed is None or parsed > today or (today - parsed).days > 30:
-    print(fallback)
-else:
-    print(parsed.isoformat())
-" "$PREV_SUCCESS_AT")"
-log "前回成功時刻: ${PREV_SUCCESS_AT:-なし（初回相当）} / --since に使う日付: $SINCE_DATE"
+    if not m:
+        return None
+    try:
+        if m.group(2):
+            # 時刻部分を含む場合は文字列全体を厳密に解析する（日付部分
+            # （m.group(1)）だけをfromisoformat()に渡すと、
+            # '2026-07-16T99:99:99Z'のような不正な時刻値でも正規表現の
+            # 桁数チェックさえ満たせば日付部分は正常に解析され、時刻の
+            # 妥当性が一切検証されないまま通過してしまうため）。
+            parsed = datetime.datetime.fromisoformat(raw.replace('Z', '+00:00')).date()
+        else:
+            parsed = datetime.date.fromisoformat(m.group(1))
+    except ValueError:
+        return None
+    if parsed > today or (today - parsed).days > 30:
+        return None
+    return parsed
+
+today = datetime.datetime.now(datetime.timezone.utc).date()
+fallback = (today - datetime.timedelta(days=7)).isoformat()
+chosen_raw, chosen_date = '', None
+for raw in sys.argv[1:]:
+    parsed = validate(raw, today)
+    if parsed is not None:
+        chosen_raw, chosen_date = raw, parsed.isoformat()
+        break
+if chosen_date is None:
+    chosen_date = fallback
+print(chosen_date + '\t' + chosen_raw)
+" "$REVIEWED_AT" "$PREV_SUCCESS_AT")"
+IFS=$'\t' read -r SINCE_DATE SINCE_SOURCE <<< "$SINCE_RESULT"
+log "起点: ${SINCE_SOURCE:-なし（初回相当）} / --since に使う日付: $SINCE_DATE"
 
 # =============================================================================
 # Phase 0: Vault書込ロック取得＋直前スナップショット＋export-public-vault再試行
@@ -766,7 +784,7 @@ print(v)
   add_info_note "Phase1①: check-drift.sh②がconfig.tomlの未知キーを${UNKNOWN_CONFIG_KEYS_COUNT}件検出しました（テンプレにも既知アプリ管理キー一覧にも無い・driftには数えません。詳細: ${RUN_DIR}）"
 fi
 
-# --- ②fragments_log.py --since <前回成功時刻> --json ---
+# --- ②fragments_log.py --since <起点> --json ---
 # fragments_log.py/vault_inventory.pyはVaultパスを$HOME/Data/obsidianに固定
 # しており--vault相当のオプションを持たない（本スクリプトは現状追随）。
 # 成功時は候補件数（len(fragments)・truncatedは含めない）をlast-run.jsonの
@@ -929,9 +947,9 @@ append_fragments_summary() {
 }
 
 # 昇格候補の件数（Phase1②）。昇格そのものは在席時にvault-scribeが行う（無人では
-# 動かない）ため、サマリ行は件数と窓（前回成功以降）だけを残す。
+# 動かない）ため、サマリ行は件数と窓（起点以降）だけを残す。
 if [[ -n "$FRAGMENTS_CANDIDATES" ]]; then
-  CANDIDATES_SEGMENT="昇格候補${FRAGMENTS_CANDIDATES}件（前回成功 ${SINCE_DATE} 以降・Dock の Project 枠参照）"
+  CANDIDATES_SEGMENT="昇格候補${FRAGMENTS_CANDIDATES}件（起点 ${SINCE_DATE} 以降・Dock の Project 枠参照）"
 else
   CANDIDATES_SEGMENT="昇格候補 不明（fragments_log 失敗）"
 fi

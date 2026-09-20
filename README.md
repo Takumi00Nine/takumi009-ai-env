@@ -47,6 +47,7 @@ takumi009-ai-env/
 │   ├── usage-fetch.sh         # Claude/Codex usage → cache read by dotfiles' cmux-usage-watch.sh
 │   ├── maintenance.sh         # Weekly maintenance runner (main only)
 │   ├── maintenance-kick.sh    # Manual kick of the weekly runner via launchd (same record as the scheduled run)
+│   ├── fragments-reviewed.sh  # Closes out a Fragments promotion (see below)
 │   ├── update-sub.sh          # Refreshes the sub's rules (sub only, manual)
 │   ├── export-public-vault.sh # Vault public folder → vault-public/
 │   ├── check-drift.sh         # Manual "drift" report tool
@@ -153,6 +154,8 @@ cmux Dock's "Project"/"Task" panes — details = `Decisions/2026-09-15-cmux-dock
 - `ack` — the leader AI's "handled, judge on the next run" note (see *Acknowledging a finding*). The runner deletes it on the next fully-clean completion and keeps it on a re-failure (the judge then reports "re-failed after ack" because `ack.run_id != completed.run_id`).
 
 **Manual kick (`scripts/maintenance-kick.sh`)** — runs the weekly runner through launchd (`launchctl kickstart` without `-k`), so it uses the same executable, environment (plist `HOME` / `PATH` / `USER`) and record as the scheduled run; it leaves a marker so the record says `trigger: manual` (a raw `launchctl kickstart` is recorded as `scheduled`). It refuses to start when the LaunchAgent is not loaded (`KICK_REFUSED:not_loaded`, exit 2), when the Vault write-lock is held or `run.status` is `running` within `stale_after_seconds` (`KICK_REFUSED:busy`, exit 3), or when the marker cannot be written (exit 4); `KICK_FAILED` (5) if kickstart fails, `KICK_TIMEOUT` (6) if no new `run.run_id` appears within 30 s (this also removes the marker — a run that starts late past this point is recorded as `scheduled`, not `manual`). On success it prints `RUN_ID:<id>` and `STATE_FILE:<path>`; with `--wait` it also waits until `run.status != running` and prints `STATUS:<completed|skipped>` plus `FULLY_OK:<true|false>` (or `SKIP_REASON:<busy:…>` — a busy-skip is not a failure; re-run a few minutes later). `KICK_WAIT_TIMEOUT` (7) if the completion record never appears.
+
+**Closing out a promotion (`scripts/fragments-reviewed.sh`)** — run this once you've finished handling the Fragments promotion candidates the Dock's weekly line counted (after the recorder has marked each handled entry `status: promoted`), so the count returns to 0 without waiting for the next weekly run. It re-counts unprocessed Fragments starting exclusively from today (`fragments_log.py --since <today>`; today's own entries aren't counted — see the known limitation below), then writes `fragments_reviewed_at` (now, UTC), `fragments_candidates` and `fragments_since` to `last-run.json` atomically; the next weekly run's `--since` prefers `fragments_reviewed_at` over `last_success_at` when it's valid (not malformed, not in the future, within 30 days — otherwise it falls back the same way `last_success_at` always has). On any failure (the detector script failing/timing out, malformed JSON, or a contract violation) it writes nothing and exits non-zero with a one-line reason on stderr. `--dry-run` shows the 3 values it would write without writing them. Env vars for testing: `LAST_RUN_FILE`, `FRAGMENTS_LOG_PY`, `TIMEOUT_FRAGMENTS_LOG` (same defaults as `maintenance.sh`). Known limitation: because the window is date-granularity (`since_date < d`), Fragments added the *same day* the CLI runs won't be counted until the next day — run it last, after all promotions for the session are done.
 
 **Acknowledging a finding (`health_judge.py ack`)** — the leader AI records "handled; judge on the next production run" in `last-run.json`'s `ack`:
 
@@ -290,6 +293,7 @@ takumi009-ai-env/
 │   ├── usage-fetch.sh         # 使用率 → cmux-usage-watch.sh 用キャッシュ
 │   ├── maintenance.sh         # 週次メンテナンスランナー（メイン専用）
 │   ├── maintenance-kick.sh    # 週次ランナーの手動起動（launchd 経由・定期実行と同じ記録先）
+│   ├── fragments-reviewed.sh  # 昇格の締め（後述）
 │   ├── update-sub.sh          # サブのルール更新（サブ専用・手動）
 │   ├── export-public-vault.sh # public フォルダ → vault-public/
 │   ├── check-drift.sh         # 「ズレ」の手動レポート
@@ -396,6 +400,8 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 - `ack` — リーダー AI の対処済み申告（後述）。次の完全正常終了でランナーが削除し、再失敗なら残す（`ack.run_id != completed.run_id` を判定機が「申告後に再失敗」と読む）。
 
 **手動起動（`scripts/maintenance-kick.sh`）** — launchd 経由（`launchctl kickstart`・`-k` は付けない）で週次ランナーを起動するので、定期実行と同じ実行体・同じ環境（plist の `HOME`／`PATH`／`USER`）・同じ記録先を通ります。起動前に印ファイルを置き、記録には `trigger: manual` と載ります（`launchctl kickstart` を直接叩いた起動は `scheduled` と記録される＝監査用の既知の限界）。LaunchAgent が未ロード（`KICK_REFUSED:not_loaded`・終了 2）、Vault 書込ロック保持中または `run.status` が `running` で `stale_after_seconds` 未満（`KICK_REFUSED:busy`・終了 3）、印ファイルを作れない（終了 4）のときは起動しません。kickstart 失敗＝`KICK_FAILED`（5）、30 秒以内に新しい `run.run_id` が現れない＝`KICK_TIMEOUT`（6・この場合も印ファイルを消します＝この後に遅れて開始した run は `manual` ではなく `scheduled` として記録されうる）。成功時は `RUN_ID:<id>` と `STATE_FILE:<path>` を印字し、`--wait` を付けると `run.status != running` まで待って `STATUS:<completed|skipped>` と `FULLY_OK:<true|false>`（`skipped` なら `SKIP_REASON:<busy:…>`＝失敗ではなく再実行の対象。数分後に再実行）を印字します。完了記録が現れなければ `KICK_WAIT_TIMEOUT`（7）。
+
+**昇格の締め（`scripts/fragments-reviewed.sh`）** — Dock の週次行が数えた昇格候補への対応が終わったら（記録職が対応済みの各エントリへ `status: promoted` を付けた後に）実行し、次の週次を待たずに候補数を 0 件へ戻します。今日を排他的な起点として未処理 Fragments を数え直し（`fragments_log.py --since <今日>`・当日分は数えない。下記の既知の限界を参照）、`fragments_reviewed_at`（UTC の今）・`fragments_candidates`・`fragments_since` を `last-run.json` へ原子的に書きます。次回の週次メンテの `--since` は、`fragments_reviewed_at` が有効（形式正・未来でない・30 日以内）ならそれを優先し、無効なら従来どおり `last_success_at` へフォールバックします。失敗時（検出スクリプトの失敗/timeout・JSON 破損・契約違反のいずれか）は何も書かずに非 0 で終わり、理由を stderr へ 1 行出します。`--dry-run` は書く予定の 3 値を表示するだけで書き込みません。テスト用 env は `LAST_RUN_FILE`・`FRAGMENTS_LOG_PY`・`TIMEOUT_FRAGMENTS_LOG`（既定は `maintenance.sh` と同じ）。既知の限界＝窓は日付単位（`since_date < d`）なので、CLI を実行した**その日**に足した Fragments は翌日以降まで数えられません（昇格対応の一連の最後に実行してください）。
 
 **対処済み申告（`health_judge.py ack`）** — リーダー AI が「対処した・次回の本番実行で判定する」を `last-run.json` の `ack` に残します:
 
