@@ -9,6 +9,9 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="$SCRIPT_DIR/../cmux/cmux-next-model.sh"
 
+# 外側シェルの env から独立させる（R2-1）。--recall-stale-days の期待値 7 は固定。
+unset VAULT_AGENT_LOG_STALE_DAYS
+
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cmux-next-model-test.XXXXXX")" || {
   echo "FATAL: mktemp -d に失敗しました" >&2
   exit 1
