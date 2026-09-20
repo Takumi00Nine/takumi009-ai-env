@@ -715,7 +715,7 @@ echo "=== 15. Phase3: サマリ行に昇格候補の件数と窓（--sinceの日
   assert_eq "exit 0" "0" "$rc"
   FRAG_TEXT="$(cat "$(find "$VAULT/Fragments" -name '20*.md' | head -1)")"
   assert_contains "昇格候補3件" "$FRAG_TEXT" "昇格候補3件"
-  assert_contains "前回成功以降の窓が出る" "$FRAG_TEXT" "前回成功 $(date -u -v-7d +%Y-%m-%d) 以降"
+  assert_contains "起点以降の窓が出る" "$FRAG_TEXT" "起点 $(date -u -v-7d +%Y-%m-%d) 以降"
   assert_not_contains "マージ・見送り・提案の表記はもう出ない(Phase2退役)" "$FRAG_TEXT" "マージ"
   assert_not_contains "Preferences未確認提案の表記はもう出ない(Phase2退役)" "$FRAG_TEXT" "Preferences未確認提案"
 }
@@ -819,6 +819,62 @@ echo "=== 19d. --sinceの算出: 前回last_success_atがちょうど30日前は
   run_maintenance
   assert_contains "ちょうど30日前は境界内としてそのまま使われる" \
     "$(cat "$LAST_STDOUT")" "--since に使う日付: $OLD30"
+}
+
+echo "=== 19e. --sinceの算出(AC-2a): fragments_reviewed_atが有効(3日前)ならlast_success_at(10日前)より優先される ==="
+{
+  T="$WORK_ROOT/t19e"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  mkdir -p "$LOG_ROOT"
+  REVIEWED3="$(date -u -v-3d +%Y-%m-%dT%H:%M:%SZ)"
+  SUCCESS10="$(date -u -v-10d +%Y-%m-%dT%H:%M:%SZ)"
+  echo "{\"fragments_reviewed_at\": \"${REVIEWED3}\", \"last_success_at\": \"${SUCCESS10}\"}" > "$LOG_ROOT/last-run.json"
+  run_maintenance
+  EXPECTED="$(date -u -v-3d +%Y-%m-%d)"
+  assert_contains "fragments_reviewed_at(3日前)の日付がsinceに採用される" \
+    "$(cat "$LAST_STDOUT")" "--since に使う日付: $EXPECTED"
+  assert_contains "起点欄にfragments_reviewed_atの生値が使われる" \
+    "$(cat "$LAST_STDOUT")" "起点: ${REVIEWED3}"
+}
+
+echo "=== 19f. --sinceの算出(AC-2b): fragments_reviewed_atが不正(壊れた形式/未来日/31日前=30日超過)ならlast_success_at(1日前)へフォールバックする ==="
+{
+  S1="$(date -u -v-1d +%Y-%m-%dT%H:%M:%SZ)"
+  EXPECTED="$(date -u -v-1d +%Y-%m-%d)"
+  TOMORROW="$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)"
+  OLD31="$(date -u -v-31d +%Y-%m-%dT%H:%M:%SZ)"
+  badlabels=("malformed" "future" "over30days")
+  badvals=("2026-13-99T00:00:00Z" "$TOMORROW" "$OLD31")
+  i=0
+  while [[ "$i" -lt 3 ]]; do
+    label="${badlabels[$i]}"; val="${badvals[$i]}"
+    T="$WORK_ROOT/t19f-$label"; mkdir -p "$T"
+    setup_test_env "$T"
+    LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+    mkdir -p "$LOG_ROOT"
+    echo "{\"fragments_reviewed_at\": \"${val}\", \"last_success_at\": \"${S1}\"}" > "$LOG_ROOT/last-run.json"
+    run_maintenance
+    assert_contains "fragments_reviewed_atが不正(${label})ならlast_success_atへフォールバックする" \
+      "$(cat "$LAST_STDOUT")" "--since に使う日付: $EXPECTED"
+    i=$((i + 1))
+  done
+}
+
+echo "=== 19g. --sinceの算出(AC-2c): fragments_reviewed_atキー自体が無ければ従来どおりlast_success_atを使う ==="
+{
+  T="$WORK_ROOT/t19g"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  mkdir -p "$LOG_ROOT"
+  S2="$(date -u -v-2d +%Y-%m-%dT%H:%M:%SZ)"
+  echo "{\"last_success_at\": \"${S2}\"}" > "$LOG_ROOT/last-run.json"
+  run_maintenance
+  EXPECTED="$(date -u -v-2d +%Y-%m-%d)"
+  assert_contains "fragments_reviewed_atキー欠落時はlast_success_atの日付が使われる" \
+    "$(cat "$LAST_STDOUT")" "--since に使う日付: $EXPECTED"
+  assert_contains "起点欄にlast_success_atの生値が使われる" \
+    "$(cat "$LAST_STDOUT")" "起点: ${S2}"
 }
 
 echo "=== 20. Vault書込ロック: 生存中のロックが既にあれば今回はbusyで穏当にskipする ==="
