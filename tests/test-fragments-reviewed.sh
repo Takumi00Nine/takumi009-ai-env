@@ -56,6 +56,15 @@ sha_of() {
   # ファイルが無ければ固定文字列「absent」を返す（存在しないこと自体もsha比較対象にする）。
   if [[ -f "$1" ]]; then shasum -a256 "$1" | awk '{print $1}'; else echo "absent"; fi
 }
+assert_stderr_one_line() {
+  # 「stderrに理由1行」契約の厳密検査。文字列包含だけでは、traceback等が
+  # 追加で混ざっていても検出できないため、行数そのものをwc -lで比較する
+  # （検証1巡目MAJOR指摘#2対応）。
+  local desc="$1" err_file="$2"
+  local n
+  n="$(wc -l < "$err_file" | tr -d ' ')"
+  assert_eq "$desc" "1" "$n"
+}
 
 # FAKE fragments_log.py（Python・環境変数でJSON出力/終了コード/sleepを制御）。
 # test-maintenance.shのFAKE検出器スタブと同じ流儀（契約＝scan_error_count・
@@ -132,6 +141,7 @@ echo "=== 2. AC-3b①: fragments_log.pyが非0で終了 → last-run.jsonは1バ
   assert_eq "exit 1" "1" "$rc"
   assert_unchanged "last-run.jsonは不変" "$BEFORE" "$AFTER"
   assert_contains "stderrに理由が1行出る" "$(cat "$ERR")" "fragments_log.py"
+  assert_stderr_one_line "stderrは厳密に1行（traceback等が混ざらない）" "$ERR"
 }
 
 echo "=== 3. AC-3b②: fragments_log.pyがtimeout → last-run.jsonは1バイトも変わらずexit 1・stderrに理由1行 ==="
@@ -145,6 +155,7 @@ echo "=== 3. AC-3b②: fragments_log.pyがtimeout → last-run.jsonは1バイト
   assert_eq "exit 1" "1" "$rc"
   assert_unchanged "last-run.jsonは不変" "$BEFORE" "$AFTER"
   assert_contains "stderrにtimeoutの理由が出る" "$(cat "$ERR")" "timeout"
+  assert_stderr_one_line "stderrは厳密に1行（traceback等が混ざらない）" "$ERR"
 }
 
 echo "=== 4. AC-3b③: fragments_log.pyの出力が壊れたJSON(exit 0) → last-run.jsonは1バイトも変わらずexit 2・stderrに理由1行 ==="
@@ -158,6 +169,7 @@ echo "=== 4. AC-3b③: fragments_log.pyの出力が壊れたJSON(exit 0) → las
   assert_eq "exit 2" "2" "$rc"
   assert_unchanged "last-run.jsonは不変" "$BEFORE" "$AFTER"
   assert_contains "stderrに契約違反の理由が出る" "$(cat "$ERR")" "契約に違反"
+  assert_stderr_one_line "stderrは厳密に1行（traceback等が混ざらない）" "$ERR"
 }
 
 echo "=== 5. AC-3b④: fragments_log.pyの出力にキー欠落(scan_error_count無し・契約違反) → last-run.jsonは1バイトも変わらずexit 2 ==="
@@ -170,6 +182,7 @@ echo "=== 5. AC-3b④: fragments_log.pyの出力にキー欠落(scan_error_count
   AFTER="$(sha_of "$LAST_RUN_FILE")"
   assert_eq "exit 2" "2" "$rc"
   assert_unchanged "last-run.jsonは不変" "$BEFORE" "$AFTER"
+  assert_stderr_one_line "stderrは厳密に1行（traceback等が混ざらない）" "$ERR"
 }
 
 echo "=== 6. AC-3c①: last-run.jsonが無い → {}から作る(fail-open)・3キーが書かれる ==="
@@ -227,6 +240,25 @@ echo "=== 10. 不明な引数はusageをstderrへ出しexit 2で終わる ==="
   rc=$?
   assert_eq "exit 2" "2" "$rc"
   assert_contains "stderrにusageが出る" "$(cat "$ERR")" "usage"
+}
+
+echo "=== 11. AC-3b（書込失敗）: LAST_RUN_FILEの親ディレクトリが読み取り専用 → last-run.jsonは1バイトも変わらずexit 3・stderrに理由1行（検証1巡目MAJOR指摘#2対応） ==="
+{
+  setup_case "$WORK_ROOT/t11"
+  RO_DIR="$T/readonly_dir"
+  mkdir -p "$RO_DIR"
+  LAST_RUN_FILE="$RO_DIR/last-run.json"
+  echo '{"last_success_at": "2026-09-01T00:00:00Z"}' > "$LAST_RUN_FILE"
+  BEFORE="$(sha_of "$LAST_RUN_FILE")"
+  chmod 0500 "$RO_DIR"
+  FAKE_FRAGMENTS_LOG_JSON='{"scan_error_count": 0, "fragments": [], "truncated": []}' run_cli
+  rc=$?
+  chmod 0700 "$RO_DIR" 2>/dev/null || true
+  AFTER="$(sha_of "$LAST_RUN_FILE")"
+  assert_eq "exit 3" "3" "$rc"
+  assert_unchanged "last-run.jsonは不変" "$BEFORE" "$AFTER"
+  assert_contains "stderrに書込失敗の理由が出る" "$(cat "$ERR")" "書込みに失敗"
+  assert_stderr_one_line "stderrは厳密に1行（traceback等が混ざらない）" "$ERR"
 }
 
 echo

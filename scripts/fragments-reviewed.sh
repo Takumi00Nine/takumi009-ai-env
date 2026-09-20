@@ -8,8 +8,9 @@
 # 次の週次まで候補が0件にならなかった。本CLIはlast-run.jsonへ
 # fragments_reviewed_at（今この瞬間）を書き、maintenance.shのsince決定
 # （候補=[fragments_reviewed_at, last_success_at]の順で最初に有効なもの）へ割り込む。
-# CLI自身は候補件数を数え直して表示するだけで、Dockの0件反映は次回の週次
-# （または本CLI実行後60秒以内に読み直すDock側の既存経路＝設計書AC-7）に委ねる。
+# 本CLIはfragments_reviewed_at・fragments_candidates・fragments_sinceの3キーを
+# last-run.jsonへ書き込むところまでを担う。Dock側（cmux-next-watch.sh等・
+# 無改修＝FR-7）は既存の再読込経路で60秒以内に読み直して候補数へ反映する。
 #
 # 使い方:
 #   scripts/fragments-reviewed.sh             # last-run.jsonへ記録し1行出力
@@ -57,7 +58,7 @@ esac
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SINCE_DATE="${NOW%%T*}"
 
-TMPDIR_CLI="$(mktemp -d "${TMPDIR:-/tmp}/fragments-reviewed.XXXXXX")" || {
+TMPDIR_CLI="$(mktemp -d "${TMPDIR:-/tmp}/fragments-reviewed.XXXXXX" 2>/dev/null)" || {
   echo "fragments-reviewed.sh: 一時ディレクトリを作成できません" >&2
   exit 1
 }
@@ -91,7 +92,7 @@ elif d.get('usage_error'):
     print('WRAPPER_FAIL usage_error')
 else:
     print('OK ' + str(d.get('returncode')))
-" "$STATUS_FILE")"
+" "$STATUS_FILE" 2>/dev/null)"
 
 if [[ "$STEP_RESULT" != "OK 0" ]]; then
   echo "fragments-reviewed.sh: fragments_log.pyが失敗/timeoutしました（${STEP_RESULT}）: $(tail -n1 "$ERR_FILE" 2>/dev/null)" >&2
@@ -143,7 +144,7 @@ data['fragments_since'] = sys.argv[4]
 tmp = path.parent / ('.' + path.name + '.tmp-' + str(os.getpid()))
 tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
 os.replace(str(tmp), str(path))
-" "$LAST_RUN_FILE" "$NOW" "$CANDIDATES" "$SINCE_DATE"; then
+" "$LAST_RUN_FILE" "$NOW" "$CANDIDATES" "$SINCE_DATE" 2>/dev/null; then
   echo "fragments-reviewed.sh: last-run.jsonへの書込みに失敗しました: ${LAST_RUN_FILE}" >&2
   exit 3
 fi
