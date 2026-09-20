@@ -14,6 +14,7 @@ role.implementer:          configured model=sonnet-medium,sonnet-high,opus-mediu
 role.researcher:           configured model=haiku,sonnet-medium,sonnet-high,fable-high
 role.operator:             configured model=haiku,sonnet-low,sonnet-medium,sonnet-high
 role.vault-scribe:         configured model=haiku,sonnet-low
+role.vault-scribe-light:   configured model=haiku
 role.verifier:             configured model=opus-high,codex-sol-high,codex-terra-medium
 role.ja-doc:               unknown
 team_mode:        configured value=full
