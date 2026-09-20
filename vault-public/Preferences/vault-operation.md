@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-09-19
+updated: 2026-09-20
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 related:
@@ -8,6 +8,7 @@ related:
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
   - "[[Decisions/2026-09-17-effort-per-role-v2]]"
   - "[[Decisions/2026-09-18-task-pane-format-v4]]"
+  - "[[Decisions/2026-09-20-health-self-explain-error-only-autofix]]"
 aliases:
   - "外部脳運用チートシート"
   - "public執筆の掟"
@@ -40,7 +41,7 @@ aliases:
 ## AI主導の想起（キーワード1本化）
 - 検索仕様は**フック1つだけ**（aliases・ファイル名照合。別ツール/別閾値/別モード禁止）。候補不足なら同じフックをクエリ言い換えで再実行（コマンド＝[[Knowledge/external-brain-guide]]）。工夫は「聞き方」のみ。
 ## 起動時ヘルス警告・綻びの扱い
-- SessionStart 注入のヘルス行の ⚠️ は**最初の応答で報告し対処を提案**（黙って本題に入らない）。
+- SessionStart 注入の【外部脳ヘルス】は `stage=ERROR` のときだけ最初の応答で「直しましょう」と述べ、ERROR を生んだ源の主体 `AI` の項目を対処して本番経路（読込・想起＝同セッション内の読み直し）を 1 回だけ再実行し、失敗したら診断結果と対処案の提示に切り替える。`WARNING` は本人が対処を求めるまで言及しない（放置防止は Dock の `外部脳 WARNING` 表示＝本人が引き受ける）。詳細＝[[Decisions/2026-09-20-health-self-explain-error-only-autofix]]。
 - **綻びは読み時（気づいた時点）で直す**: 鮮度（`review_by` 超過・古い外部可変情報＝一次情報で再確認→`updated` 引き直し。内部の決定ノートは対象外）／リンク切れ（張り直す or 除去）／alias（欠落・汎用/短すぎ＝想起に効く語へ）。⚠️ サブ機で Preferences 内のリンク先が無いのは常態＝リンク切れに数えない（[[Preferences/core-workflow]] §4）。
 - **撤回・白紙化バナー**: 失効ノート（Decisions 含む）は冒頭に「⚠️白紙化済み/撤回済み（日付＋出典）」バナー（本文は書き換えない・単体で失効が分かる）。**バナー付きノートを新文脈の材料に使わない**（再採用は本人の明示指示のみ）。
 - **撤去済みシステムの退役**: 撤去したら関連 Knowledge ノートを想起から退役させる＝aliases・review_by を除去し `retired: true`＋冒頭に退役バナー（本文は温存）。判定は読み時・棚卸し時に個別（ルールの根拠ノートは対象外）。
