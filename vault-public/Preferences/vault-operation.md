@@ -9,6 +9,7 @@ related:
   - "[[Decisions/2026-09-17-effort-per-role-v2]]"
   - "[[Decisions/2026-09-18-task-pane-format-v4]]"
   - "[[Decisions/2026-09-20-health-self-explain-error-only-autofix]]"
+  - "[[Decisions/2026-09-20-fragments-reviewed-close-command]]"
 aliases:
   - "外部脳運用チートシート"
   - "public執筆の掟"
@@ -16,7 +17,7 @@ aliases:
 # 外部脳 運用チートシート（起動必読・ルーティング表）
 詳細・実例＝[[Knowledge/external-brain-guide]]。public 公開＝リンク先が読めなくても単体でルールとして完結するよう書く。
 ## どのフォルダに何を書くか
-- **Fragments/**＝未確定・副産物の入口（append-only・日次 `Fragments/YYYY-MM/YYYY-MM-DD.md`）。断片は応答前にその場で短く追記・確定したら昇格。
+- **Fragments/**＝未確定・副産物の入口（append-only・日次 `Fragments/YYYY-MM/YYYY-MM-DD.md`）。断片は応答前にその場で短く追記・確定したら昇格。昇格の締め（印・締めコマンド・Dock 確認）＝[[Preferences/fragments-workflow]] §4。
 - **Knowledge/**＝技術知見・背景／**Decisions/**＝選んだ判断と理由（`YYYY-MM-DD-topic.md`）／**Projects/**＝進行状態と next_action／**Preferences/**＝運用ルール（⚠️public）／**Personal/**＝個人情報。**Blogs/**・**Explorations/**＝外部脳の対象外（人間向け）。6フォルダはAI向け＝トークン効率優先。
 ## public 執筆の掟（public＝Preferences/ のみ・他は private）
 1. 個人情報・経緯・エピソードを書かない（理由・経緯は Decisions へ、個人の事実は Personal へ）。
