@@ -4,7 +4,8 @@
 # 1本に統合した（2026-09-19 着手順5 σ・設計 docs/design-step5.md §3）。
 # プロンプトに「番」と、「Project／プロジェクト」または「Task／タスク」
 # （表記ゆれ・大小文字非依存）が含まれるとき、cmux-next-model.sh --list
-# （番号<TAB>正式プロジェクト名<TAB>next値<TAB>区分）／cmux-task-model.sh
+# （v5・5列＝番号<TAB>正式プロジェクト名<TAB>next値<TAB>区分（稼働中／待ち／
+# 保留）<TAB>待ち日時）／cmux-task-model.sh
 # --list（v4・5列＝版番号<TAB>版名<TAB>分数<TAB>状態<TAB>タスク本文）の出力を
 # 1つの additionalContext として注入する（Project表→空行→Task表の順・
 # 発火した側だけ。片方の --list が失敗・空ならその表だけ落とし、もう片方
@@ -176,7 +177,7 @@ emit_table() {
   local list heading
   if [ "$1" = "project" ]; then
     list=$("$PROJECT_LIST_CMD" --list 2>/dev/null) || return 1
-    heading='Project番号対応表（この瞬間の表示順。ユーザーの「Project の N 番」はこの表で解決する）:'
+    heading='Project番号対応表（この瞬間の表示順。ユーザーの「Project の N 番」はこの表で解決する。列＝番号・正式プロジェクト名・next 値・区分（稼働中／待ち／保留）・待ち日時（待ちの行だけ YYYY-MM-DDTHH:MM・他は空））:'
   else
     list="$(CMUX_TASK_CALL_TIMEOUT=1 "$TASK_LIST_CMD" --list 2>/dev/null)" || return 1
     heading='Task番号対応表（番号は版を指す・この瞬間の表示順。ユーザーの「Task の N 番」は同じ番号の行の版で解決する。列＝番号・版名・分数・状態・本文）:'

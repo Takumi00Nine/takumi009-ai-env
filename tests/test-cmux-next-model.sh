@@ -16,7 +16,7 @@ WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cmux-next-model-test.XXXXXX")" || {
   echo "FATAL: mktemp -d に失敗しました" >&2
   exit 1
 }
-trap 'rm -rf "$WORKDIR"' EXIT
+trap 'chmod -R u+rwx "$WORKDIR" 2>/dev/null; rm -rf "$WORKDIR"' EXIT   # chmod 000 の fixture が残っても片付く
 
 # shellcheck source=./lib-cmux-fixtures.sh
 . "$SCRIPT_DIR/lib-cmux-fixtures.sh"
@@ -89,7 +89,10 @@ assert_order() {
 
 # 既定が実ファイルの env 5 本（設計 v1.2 §10.1）を必ず fixture／存在しないパスへ向ける。
 # 観測記録・想起ログ・plist は本ファイルの基底ケースでは使わない＝存在しないパス固定。
+# v5: 判定時刻の固定口 CMUX_NEXT_JUDGE_NOW は $JUDGE_NOW（空＝未設定＝実時刻）で渡す。
+JUDGE_NOW=""
 run_list_raw() {
+  CMUX_NEXT_JUDGE_NOW="$JUDGE_NOW" \
   CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" CMUX_NEXT_MAINT_STATE="$MAINT_FILE" \
     CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
     CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
@@ -100,6 +103,7 @@ run_list_raw() {
 }
 
 run_frame_raw() {
+  CMUX_NEXT_JUDGE_NOW="$JUDGE_NOW" \
   CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" CMUX_NEXT_MAINT_STATE="$MAINT_FILE" \
     CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
     CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
@@ -144,7 +148,7 @@ frame_next="$(awk -F '\t' '$1=="P"{print $4}' "$WORKDIR/frame_stdout")"
 assert_eq "next値がframeと--listで完全一致" "$list_next" "$frame_next"
 
 echo "=== 基底: --frame の #V/E 行 ==="
-assert_eq "基底: #V行（契約 /3）" "#V	cmux-dock-frame/3	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "基底: #V行（契約 /4）" "#V	cmux-dock-frame/4	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
 p_n="$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
 b_n="$(awk -F '\t' '$1=="B"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
 assert_eq "基底: E行が P行数+B行数と一致" "$(( p_n + b_n ))" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
@@ -167,7 +171,7 @@ FIELD3_N6="$(printf '%s\n' "$LINE_N6" | awk -F '\t' '{print $3}')"
 NCOLS_N6="$(printf '%s\n' "$LINE_N6" | awk -F '\t' '{print NF}')"
 EXPECT_N6="タスク 本文 続き [31m"
 assert_eq "AC-48: TAB/CR/ESC無害化後の値が期待と一致" "$EXPECT_N6" "$FIELD3_N6"
-assert_eq "AC-48: TAB混入行が4列のまま" "4" "$NCOLS_N6"
+assert_eq "AC-48: TAB混入行が5列のまま（v5 読み替え R-v5-3）" "5" "$NCOLS_N6"
 python3 -c "
 import sys
 data = open('$WORKDIR/list_stdout', 'rb').read()
@@ -179,15 +183,15 @@ assert_not_contains "AC-49: completedノートは--listに現れない" "$(cat "
 assert_not_contains "AC-49: completedノートのタスク本文も--listに現れない" "$(cat "$WORKDIR/list_stdout")" "completedなので出ないはず"
 
 assert_order "AC-50: N-0がN-8よりupdated降順で前に並ぶ" "$(cat "$WORKDIR/list_stdout")" "proj-n0-base" "proj-n8-older"
-BAD_NCOLS_ROWS="$(awk -F '\t' 'NF && NF!=4' "$WORKDIR/list_stdout" | wc -l | tr -d ' ')"
-assert_eq "AC-50/FR-44④: --list に4列でない行が0件" "0" "$BAD_NCOLS_ROWS"
+BAD_NCOLS_ROWS="$(awk -F '\t' 'NF && NF!=5' "$WORKDIR/list_stdout" | wc -l | tr -d ' ')"
+assert_eq "AC-50/FR-44④: --list に5列でない行が0件（v5 読み替え R-v5-3）" "0" "$BAD_NCOLS_ROWS"
 
 echo "=== next: 無し・Tasks節も無し → next欄が空（(next未設定)は描画側の責務） ==="
 FIELD3_N4="$(awk -F '\t' '$2=="proj-n4-none" {print $3}' "$WORKDIR/list_stdout")"
 assert_eq "next:もTasks節も無ければnext欄が空文字" "" "$FIELD3_N4"
 
 # ==========================================================================
-# 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）＝契約 cmux-dock-frame/3。
+# 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）＝契約 cmux-dock-frame/4（v5）。
 # B 行は判定機（claude/hooks/lib/health_judge.py）の写し＝1 行 3 値＋末尾付記。
 # 判定は tests/test-health-judge.sh が 23 本を閉じる。ここでは供給側＝B 行の文法・
 # 付記・判定機不在の 0 行・E の整合・HEALTH_JUDGE_NOW を検査する。
@@ -210,17 +214,17 @@ run_frame_fixture() {
 }
 b_rows() { awk -F '\t' '$1=="B"' "$WORKDIR/frame_stdout"; }
 
-echo "=== frame_v3_header: #V 行の契約版が cmux-dock-frame/3（理由フレームも同じ版） ==="
+echo "=== frame_v3_header: #V 行の契約版が cmux-dock-frame/4（理由フレームも同じ版・v5 で /3→/4） ==="
 reset_vault
 mk_note_N0 "$VAULT"
 run_frame_fixture S-1
-assert_eq "frame_v3_header: #V 行" "#V	cmux-dock-frame/3	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "frame_v3_header: #V 行" "#V	cmux-dock-frame/4	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
 assert_eq "frame_v3_header: 旧版 /1 は出ない" "0" "$(grep -c 'cmux-dock-frame/1' "$WORKDIR/frame_stdout")"
 STUBBIN_SORT_V3="$WORKDIR/stubbin-sort-v3"
 mkdir -p "$STUBBIN_SORT_V3"
 printf '#!/bin/bash\nexit 1\n' > "$STUBBIN_SORT_V3/sort"; chmod +x "$STUBBIN_SORT_V3/sort"
 PATH="$STUBBIN_SORT_V3:$PATH" run_frame_raw
-assert_eq "frame_v3_header: 理由フレームも /3" "#V	cmux-dock-frame/3	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "frame_v3_header: 理由フレームも /4" "#V	cmux-dock-frame/4	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
 
 echo "=== frame_b_row_ok（AC-4 供給側）: S-1 → B 行 1 行＝外部脳／ok／OK＋候補12件 ==="
 reset_vault
@@ -302,7 +306,7 @@ CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="$d/last-run.json" CMUX_NEXT_INVE
   bash "$NOJUDGE/cmux-next-model.sh" --frame > "$WORKDIR/frame_stdout" 2>"$WORKDIR/frame_stderr"
 assert_eq "判定機不在: rc=0（フレームは正当）" "0" "$?"
 assert_eq "判定機不在: B 行 0 行" "0" "$(b_rows | wc -l | tr -d ' ')"
-assert_eq "判定機不在: #V は /3 のまま" "#V	cmux-dock-frame/3	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "判定機不在: #V は /4 のまま" "#V	cmux-dock-frame/4	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
 p_n="$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
 assert_eq "判定機不在: E＝P 行数（8）" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
 assert_eq "判定機不在: P 行は 8 行そろう" "8" "$p_n"
@@ -502,6 +506,223 @@ for combo in "" "--once" "--plain" "--list --frame" "--frame extra"; do
   assert_true "未知引数[$combo]: stdout0バイト" "$([ -z "$out" ] && echo 1 || echo 0)"
   assert_true "未知引数[$combo]: 使い方がstderrに出る" "$(grep -q '使い方' "$WORKDIR/unk_err" && echo 1 || echo 0)"
 done
+
+# ==========================================================================
+# v5: Project 枠「待ち」区分（requirements-v5.md §7 fixture WU-*・§8.1 AC-135〜138・
+# §8.3 AC-146 ①②③・設計 §40.9 DT-17 ①②）。判定時刻は T0／T0s／T1 を
+# CMUX_NEXT_JUDGE_NOW（テスト専用の固定口）で渡す。WU-N だけは固定口なし（NFR-16）。
+# ==========================================================================
+T0="2026-09-20T12:00"; T0S="2026-09-20T12:00:30"; T1="2026-09-25T10:00"
+tab="$(printf '\t')"
+AC135_EXPECTED="1${tab}p-active${tab}次を進める${tab}稼働中${tab}
+2${tab}p-past${tab}返答を反映${tab}稼働中${tab}
+3${tab}p-wait${tab}返事待ち${tab}待ち${tab}2026-09-25T10:00
+4${tab}p-waitday${tab}再開${tab}待ち${tab}2026-09-25T00:00
+5${tab}p-paused${tab}${tab}保留${tab}"
+AC136_EXPECTED="1${tab}p-active${tab}次を進める${tab}稼働中${tab}
+2${tab}p-past${tab}返答を反映${tab}稼働中${tab}
+3${tab}p-edge${tab}境界${tab}稼働中${tab}
+4${tab}p-badday${tab}暦外${tab}稼働中${tab}
+5${tab}p-badtxt${tab}文字${tab}稼働中${tab}
+6${tab}p-tz${tab}時差${tab}稼働中${tab}
+7${tab}p-empty${tab}空値${tab}稼働中${tab}
+8${tab}p-sameday${tab}当日${tab}稼働中${tab}
+9${tab}p-wait${tab}返事待ち${tab}待ち${tab}2026-09-25T10:00
+10${tab}p-waitday${tab}再開${tab}待ち${tab}2026-09-25T00:00
+11${tab}p-quoted${tab}引用${tab}待ち${tab}2026-09-25T10:00
+12${tab}p-nextyear${tab}年跨ぎ${tab}待ち${tab}2027-01-05T09:00
+13${tab}p-squote${tab}単引${tab}待ち${tab}2026-09-25T10:00
+14${tab}p-spaces${tab}空白${tab}待ち${tab}2026-09-25T10:00
+15${tab}p-paused${tab}${tab}保留${tab}
+16${tab}p-pausedbad${tab}保留無効${tab}保留${tab}"
+
+echo "=== v5_ac135_list_5cols_T0: WU-A × T0 で --list が 5 行リテラル一致・rc=0 ==="
+reset_vault
+mk_notes_WU_A "$VAULT"
+JUDGE_NOW="$T0" run_list_raw
+assert_eq "v5_ac135: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v5_ac135: 5 行リテラル一致" "$AC135_EXPECTED" "$(cat "$WORKDIR/list_stdout")"
+assert_eq "v5_ac135: stderr 0 行（WU-A に無効値は無い）" "0" "$(wc -l < "$WORKDIR/list_stderr" | tr -d ' ')"
+
+echo "=== v5_ac136_classes_T0: WU-B × T0 で 16 行リテラル一致・非表示 4 件・--frame は理由フレームにならない・無効値の診断（A-v5-3） ==="
+reset_vault
+mk_notes_WU_B "$VAULT"
+JUDGE_NOW="$T0" run_list_raw
+assert_eq "v5_ac136: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v5_ac136: 16 行リテラル一致" "$AC136_EXPECTED" "$(cat "$WORKDIR/list_stdout")"
+for hidden in p-done p-nostatus p-closed p-unknown; do
+  assert_not_contains "v5_ac136: 非表示 $hidden が出ない" "$(cat "$WORKDIR/list_stdout")" "$hidden"
+done
+# A-v5-3: 診断はキーあり＋非空＋正規化失敗の 3 件（WU-5・WU-6・WU-11）だけ。欠落（WU-10）・空値（WU-15）・保留（WU-16）は無し。
+assert_eq "v5_ac136: 無効 wait_until の stderr が 3 行" "3" "$(grep -c 'wait_until が無効です' "$WORKDIR/list_stderr")"
+assert_eq "v5_ac136: stderr は診断 3 行だけ" "3" "$(wc -l < "$WORKDIR/list_stderr" | tr -d ' ')"
+for slug in p-badday p-badtxt p-tz; do
+  assert_contains "v5_ac136: 診断に $slug" "$(cat "$WORKDIR/list_stderr")" ": $slug: "
+done
+for slug in p-empty p-active p-pausedbad; do
+  assert_not_contains "v5_ac136: 診断なし $slug" "$(cat "$WORKDIR/list_stderr")" "$slug"
+done
+JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v5_ac136: --frame rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v5_ac136: --frame に R 行が無い（無効値で理由フレームにしない）" "0" "$(awk -F '\t' '$1=="R"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v5_ac136: --frame の P 行 16" "16" "$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+
+echo "=== v5_ac136_minute_precision_T0s: T0s（12:00:30）でも同じ 16 行（p-edge は同時刻＝稼働中） ==="
+JUDGE_NOW="$T0S" run_list_raw
+assert_eq "v5_ac136_T0s: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v5_ac136_T0s: 16 行リテラル一致" "$AC136_EXPECTED" "$(cat "$WORKDIR/list_stdout")"
+
+echo "=== v5_ac137_time_only_T1: WU-A × T1 で待ちが稼働中へ戻る（並び p-active・p-past・p-wait・p-waitday・保留 5） ==="
+reset_vault
+mk_notes_WU_A "$VAULT"
+before_v5="$(vault_snapshot "$VAULT")"
+JUDGE_NOW="$T0" run_list_raw
+t0_out="$(cat "$WORKDIR/list_stdout")"
+JUDGE_NOW="$T1" run_list_raw
+assert_eq "v5_ac137: T1 rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v5_ac137: T1 の 5 行" "1${tab}p-active${tab}次を進める${tab}稼働中${tab}
+2${tab}p-past${tab}返答を反映${tab}稼働中${tab}
+3${tab}p-wait${tab}返事待ち${tab}稼働中${tab}
+4${tab}p-waitday${tab}再開${tab}稼働中${tab}
+5${tab}p-paused${tab}${tab}保留${tab}" "$(cat "$WORKDIR/list_stdout")"
+assert_eq "v5_ac137: T0 は AC-135 の 5 行（同じ Vault・判定時刻だけの差）" "$AC135_EXPECTED" "$t0_out"
+after_v5="$(vault_snapshot "$VAULT")"
+assert_true "v5_ac137_vault_immutable: T0／T1 の実行前後で Vault がバイト不変" "$([ "$before_v5" = "$after_v5" ] && echo 1 || echo 0)"
+
+echo "=== v5_ac137_realtime_WU_N: 固定口なし（実時刻）で t＋2 分が待ち・t−1 分が稼働中（NFR-16） ==="
+reset_vault
+wu_n_t="$(mk_notes_WU_N "$VAULT")"
+JUDGE_NOW="" run_list_raw
+assert_eq "v5_ac137_WU_N: rc=0（t=${wu_n_t}）" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v5_ac137_WU_N: p-plus2 が待ち" "待ち" "$(awk -F '\t' '$2=="p-plus2"{print $4}' "$WORKDIR/list_stdout")"
+assert_eq "v5_ac137_WU_N: p-minus1 が稼働中・第 5 列空" "稼働中${tab}" "$(awk -F '\t' '$2=="p-minus1"{print $4 "\t" $5}' "$WORKDIR/list_stdout")"
+assert_eq "v5_ac137_WU_N: p-plus2 の待ち日時は正規化形" "1" "$(awk -F '\t' '$2=="p-plus2"{print $5}' "$WORKDIR/list_stdout" | grep -c '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]$')"
+
+echo "=== v5_ac138_frame_v4: WU-A × T0 の --frame＝#V /4・P 6 欄が --list と一致・B 1 行・E＝P＋B・理由フレームも /4 ==="
+reset_vault
+mk_notes_WU_A "$VAULT"
+JUDGE_NOW="$T0" run_list_raw
+JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v5_ac138: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v5_ac138: 1 行目が #V /4" "#V${tab}cmux-dock-frame/4${tab}Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "v5_ac138: P 行 5 行" "5" "$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v5_ac138: P 行は全行 6 欄" "0" "$(awk -F '\t' '$1=="P" && NF!=6' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v5_ac138: P 行の第 2〜6 欄が --list の 5 行と順序含め完全一致" "$(cat "$WORKDIR/list_stdout")" \
+  "$(awk -F '\t' '$1=="P"{printf "%s\t%s\t%s\t%s\t%s\n", $2, $3, $4, $5, $6}' "$WORKDIR/frame_stdout")"
+assert_eq "v5_ac138: 待ち行だけ待ち日時が非空" "3 4" "$(awk -F '\t' '$1=="P" && $6!=""{printf "%s%s", (n++?" ":""), $2}' "$WORKDIR/frame_stdout")"
+p_n="$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+b_n="$(awk -F '\t' '$1=="B"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v5_ac138: B 行 1 行" "1" "$b_n"
+assert_eq "v5_ac138: E＝P＋B" "$(( p_n + b_n ))" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
+# 理由フレーム＝Projects ディレクトリを読めない状態そのもの（AC-138）＝①chmod 000 ②ディレクトリ不在。
+chmod 000 "$VAULT/Projects"
+JUDGE_NOW="$T0" run_frame_raw
+JUDGE_NOW="$T0" run_list_raw
+chmod 755 "$VAULT/Projects"
+assert_eq "v5_ac138: Projects 読取不可（chmod 000）: 理由フレームの #V も /4" "#V${tab}cmux-dock-frame/4${tab}Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "v5_ac138: Projects 読取不可: R 行 1 行（既存の理由文）" "R${tab}外部脳応答なし" "$(awk -F '\t' '$1=="R"' "$WORKDIR/frame_stdout")"
+assert_eq "v5_ac138: Projects 読取不可: P 行 0 行（空の正常フレームにしない）" "0" "$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v5_ac138: Projects 読取不可: --frame rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v5_ac138: Projects 読取不可: --list は非0" "1" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v5_ac138: Projects 読取不可: --list stdout 0 バイト" "0" "$(wc -c < "$WORKDIR/list_stdout" | tr -d ' ')"
+assert_eq "v5_ac138: Projects 読取不可: --list stderr 1 行" "1" "$(wc -l < "$WORKDIR/list_stderr" | tr -d ' ')"
+rm -rf "$VAULT/Projects"
+JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v5_ac138: Projects 不在: 理由フレームの #V も /4" "#V${tab}cmux-dock-frame/4${tab}Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "v5_ac138: Projects 不在: R 行 1 行" "R${tab}外部脳応答なし" "$(awk -F '\t' '$1=="R"' "$WORKDIR/frame_stdout")"
+assert_eq "v5_ac138: Projects 不在: E 1" "1" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
+
+echo "=== v5_ac138_no_v3_literal_aienv: ai-env の追跡ファイルで旧版リテラルが行単位 0 件（マーカー行を除く・マーカー行は ai-env では 0 行） ==="
+# リテラルは分割して書く（本テスト自身が検査に引っかからないように）。
+V3_LIT='cmux-dock-frame/'"3"
+V3_MARK='# legacy-frame-version'" fixture"
+REPO_ROOT_V5="$(cd "$SCRIPT_DIR/.." && pwd)"
+v3_hits="$(git -C "$REPO_ROOT_V5" ls-files -z | xargs -0 grep -n -F -- "$V3_LIT" 2>/dev/null \
+  | grep -v -E '^docs/[^:]*archive|^[^:]*requirements-v5(-notes)?\.md:' || true)"
+v3_marked="$(printf '%s\n' "$v3_hits" | grep -F -- "$V3_MARK" | grep -c . || true)"
+v3_unmarked="$(printf '%s\n' "$v3_hits" | grep -v -F -- "$V3_MARK" | grep -c . || true)"
+assert_eq "v5_ac138: マーカー無しの旧版リテラル行が 0 件${v3_hits:+（実測: $v3_hits）}" "0" "$v3_unmarked"
+assert_eq "v5_ac138: ai-env 側のマーカー行は 0 行（WU-Z (g) は dotfiles 側）" "0" "$v3_marked"
+
+echo "=== v5_ac146: 不変（WU-B を Next Project 基底に加えた入力）＝①cmux 0 回 ②Vault バイト不変 ③20 回の中央値 0.8 秒・最大値 1.2 秒以下（NFR-15 v5.8） ==="
+reset_vault
+mk_notes_N_all "$VAULT"
+mk_notes_WU_B "$VAULT"
+mk_inventory_report "$INV_DIR" "2026-09-08" 3
+mk_maintenance_state "$MAINT_FILE" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+STUBBIN_V5="$WORKDIR/stubbin-v5"; mkdir -p "$STUBBIN_V5"
+CMUX_CALL_LOG_V5="$WORKDIR/cmux_calls_v5.log"; : > "$CMUX_CALL_LOG_V5"
+cat > "$STUBBIN_V5/cmux" <<STUB
+#!/bin/bash
+echo "cmux \$*" >> "$CMUX_CALL_LOG_V5"
+exit 0
+STUB
+chmod +x "$STUBBIN_V5/cmux"
+before_v5="$(vault_snapshot "$VAULT")"
+PATH="$STUBBIN_V5:$PATH" JUDGE_NOW="$T0" run_list_raw
+PATH="$STUBBIN_V5:$PATH" JUDGE_NOW="$T0" run_frame_raw
+after_v5="$(vault_snapshot "$VAULT")"
+assert_eq "v5_ac146_no_cmux_call: cmux の呼び出し 0 件" "0" "$(wc -l < "$CMUX_CALL_LOG_V5" | tr -d ' ')"
+assert_true "v5_ac146_vault_bytes: 実行前後で Vault がバイト不変" "$([ "$before_v5" = "$after_v5" ] && echo 1 || echo 0)"
+assert_eq "v5_ac146: --list の行数＝基底 8＋WU-B 16" "24" "$(wc -l < "$WORKDIR/list_stdout" | tr -d ' ')"
+if command -v python3 >/dev/null 2>&1; then
+  # NFR-15 v5.8＝29 ノート入力で中央値 0.8 秒以下・最大値 1.2 秒以下（20 回・単調時計）。計時は python 1 プロセスの
+  # 中で供給側を 20 回起動して行う＝python 自身の起動時間（1 回 30〜40 ms）を供給側の
+  # 所要に混ぜない（AC-117 の「python3 -c を前後で起こす」形はそれを含んでいた）。
+  V5_STATS="$(CMUX_NEXT_JUDGE_NOW="$T0" CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" \
+    CMUX_NEXT_MAINT_STATE="$MAINT_FILE" CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
+    CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
+    CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+    CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
+    python3 - "$TARGET" <<'PY'
+import statistics, subprocess, sys, time
+vals, ok = [], 1
+for _ in range(20):
+    t0 = time.monotonic()
+    r = subprocess.run(["bash", sys.argv[1], "--list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    vals.append(time.monotonic() - t0)
+    if r.returncode != 0:
+        ok = 0
+print(ok, statistics.median(vals), max(vals))
+PY
+)"
+  set -- $V5_STATS
+  echo "v5_ac146_perf_20runs: 実測 中央値=${2}秒 最大値=${3}秒"
+  assert_true "v5_ac146_perf_20runs: 20 回とも rc=0" "$1"
+  assert_true "v5_ac146_perf_20runs: 中央値 0.8 秒以下（実測 ${2}秒）" "$(python3 -c "print(1 if $2 <= 0.8 else 0)")"
+  assert_true "v5_ac146_perf_20runs: 最大値 1.2 秒以下（実測 ${3}秒）" "$(python3 -c "print(1 if $3 <= 1.2 else 0)")"
+else
+  echo "SKIP: python3 が無いため v5_ac146_perf_20runs を省略します"
+fi
+
+echo "=== v5_dt17_judge_now_invalid: 固定口の不正 5 値は --list/--frame とも rc=1・stdout 0 バイト・stderr 1 行（理由フレームにしない）。境界 :59 は可 ==="
+reset_vault
+mk_notes_WU_B "$VAULT"
+for bad in "来週" "2026-02-30T12:00" "2026-09-20T99:99" "2026-09-20T12:00:60" "2026-09-20T12:00:99"; do
+  JUDGE_NOW="$bad" run_list_raw
+  assert_eq "v5_dt17[$bad]: --list rc=1" "1" "$(cat "$WORKDIR/list_rc")"
+  assert_eq "v5_dt17[$bad]: --list stdout 0 バイト" "0" "$(wc -c < "$WORKDIR/list_stdout" | tr -d ' ')"
+  assert_eq "v5_dt17[$bad]: --list stderr 1 行" "1" "$(wc -l < "$WORKDIR/list_stderr" | tr -d ' ')"
+  JUDGE_NOW="$bad" run_frame_raw
+  assert_eq "v5_dt17[$bad]: --frame rc=1" "1" "$(cat "$WORKDIR/frame_rc")"
+  assert_eq "v5_dt17[$bad]: --frame stdout 0 バイト（#V も R も出ない）" "0" "$(wc -c < "$WORKDIR/frame_stdout" | tr -d ' ')"
+  assert_eq "v5_dt17[$bad]: --frame stderr 1 行" "1" "$(wc -l < "$WORKDIR/frame_stderr" | tr -d ' ')"
+done
+JUDGE_NOW="2026-09-20T12:00:59" run_list_raw
+assert_eq "v5_dt17[:59]: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v5_dt17[:59]: T0 と同じ 16 行" "$AC136_EXPECTED" "$(cat "$WORKDIR/list_stdout")"
+
+echo "=== v5_dt17_date_failure: 固定口なしで実時刻の date が失敗（PATH 先頭の偽 date）でも rc=1・stdout 0・stderr 1 行 ==="
+STUBBIN_DATE="$WORKDIR/stubbin-date"; mkdir -p "$STUBBIN_DATE"
+printf '#!/bin/bash\nexit 1\n' > "$STUBBIN_DATE/date"; chmod +x "$STUBBIN_DATE/date"
+PATH="$STUBBIN_DATE:$PATH" JUDGE_NOW="" run_list_raw
+assert_eq "v5_dt17_date: --list rc=1" "1" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v5_dt17_date: --list stdout 0 バイト" "0" "$(wc -c < "$WORKDIR/list_stdout" | tr -d ' ')"
+assert_eq "v5_dt17_date: --list stderr 1 行" "1" "$(wc -l < "$WORKDIR/list_stderr" | tr -d ' ')"
+PATH="$STUBBIN_DATE:$PATH" JUDGE_NOW="" run_frame_raw
+assert_eq "v5_dt17_date: --frame rc=1" "1" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v5_dt17_date: --frame stdout 0 バイト" "0" "$(wc -c < "$WORKDIR/frame_stdout" | tr -d ' ')"
+assert_eq "v5_dt17_date: --frame stderr 1 行" "1" "$(wc -l < "$WORKDIR/frame_stderr" | tr -d ' ')"
 
 echo
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="

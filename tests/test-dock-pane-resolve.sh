@@ -45,13 +45,18 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 STDERR_TMP="$WORK_DIR/stderr.tmp"
 
-# --list スタブ（Project側・cmux-next-model.sh --list 相当・4列TSV）。
+# --list スタブ（Project側・cmux-next-model.sh --list 相当・v5・5列TSV＝番号・
+# 正式プロジェクト名・next値・区分（稼働中／待ち／保留）・待ち日時）。行は
+# 要件 v5 AC-135 の 5 行そのまま（AC-145・AC-147 の注記＝5列）。
 PROJECT_STUB="$WORK_DIR/cmux-next-model-stub.sh"
 cat >"$PROJECT_STUB" <<'EOF'
 #!/bin/bash
 if [ "$1" = "--list" ]; then
-  printf '1\tcmux-session-todo\tv2 1/3\t稼働中\n'
-  printf '2\tother-project\t(next未設定)\t保留\n'
+  printf '1\tp-active\t次を進める\t稼働中\t\n'
+  printf '2\tp-past\t返答を反映\t稼働中\t\n'
+  printf '3\tp-wait\t返事待ち\t待ち\t2026-09-25T10:00\n'
+  printf '4\tp-waitday\t再開\t待ち\t2026-09-25T00:00\n'
+  printf '5\tp-paused\t\t保留\t\n'
 fi
 EOF
 chmod +x "$PROJECT_STUB"
@@ -165,7 +170,7 @@ assert_no_injection() {
   assert_fail_silent "$desc"
 }
 
-PROJECT_HEADING='Project番号対応表（この瞬間の表示順。ユーザーの「Project の N 番」はこの表で解決する）:'
+PROJECT_HEADING='Project番号対応表（この瞬間の表示順。ユーザーの「Project の N 番」はこの表で解決する。列＝番号・正式プロジェクト名・next 値・区分（稼働中／待ち／保留）・待ち日時（待ちの行だけ YYYY-MM-DDTHH:MM・他は空））:'
 TASK_HEADING='Task番号対応表（番号は版を指す・この瞬間の表示順。ユーザーの「Task の N 番」は同じ番号の行の版で解決する。列＝番号・版名・分数・状態・本文）:'
 
 # 直前の run_hook の結果を検査し、additionalContext を大域変数 CTX に置く。
@@ -194,7 +199,7 @@ extract_ctx() {
 assert_injected_side() {
   local desc="$1" prompt="$2" side="$3" heading other_heading list_mark
   if [ "$side" = "project" ]; then
-    heading="$PROJECT_HEADING"; other_heading="$TASK_HEADING"; list_mark="cmux-session-todo"
+    heading="$PROJECT_HEADING"; other_heading="$TASK_HEADING"; list_mark="p-active"
   else
     heading="$TASK_HEADING"; other_heading="$PROJECT_HEADING"; list_mark="要件定義"
   fi
@@ -234,7 +239,7 @@ if extract_ctx "両語同時発火"; then
   blank_before_task="$(printf '%s\n' "$CTX" | sed -n "$((${task_ln:-1} - 1))p")"
   if [ "$firstline" = "$PROJECT_HEADING" ] && [ -n "$task_ln" ] && [ "${project_ln:-0}" -lt "$task_ln" ] \
      && [ -z "$blank_before_task" ] \
-     && printf '%s' "$CTX" | grep -qF "cmux-session-todo" && printf '%s' "$CTX" | grep -qF "要件定義"; then
+     && printf '%s' "$CTX" | grep -qF "p-active" && printf '%s' "$CTX" | grep -qF "要件定義"; then
     pass "「Project の2番と Task の3番」は1 JSONにProject表→空行→Task表の順で両表が入る（実測 ${both_elapsed}s）"
   else
     fail_case "両語同時発火の合成 (project_ln=$project_ln task_ln=$task_ln blank=[$blank_before_task] ctx=[$CTX])"
@@ -354,6 +359,38 @@ if [ -z "$sigterm_out" ] && [ -z "$sigterm_err" ] && [ "$leftover_count" -eq 0 ]
   pass "hook自身がSIGTERMで終了しても一時ファイルが残らない（無出力・stderrなし）"
 else
   fail_case "hook自身がSIGTERMで終了しても一時ファイルが残らない (out=[$sigterm_out] err=[$sigterm_err] leftover=$leftover_count)"
+fi
+
+echo "=== v5. AC-145: 5列スタブの逐語注入（待ち行と第5列が落ちない）・Project見出し固定文 ==="
+run_hook "Project の 3 番"
+if extract_ctx "v5_ac145_verbatim_5cols"; then
+  v5_expected="$(printf '1\tp-active\t次を進める\t稼働中\t\n2\tp-past\t返答を反映\t稼働中\t\n3\tp-wait\t返事待ち\t待ち\t2026-09-25T10:00\n4\tp-waitday\t再開\t待ち\t2026-09-25T00:00\n5\tp-paused\t\t保留\t')"
+  v5_body="$(printf '%s\n' "$CTX" | sed -n '2,6p')"
+  if [ "$v5_body" = "$v5_expected" ]; then
+    pass "v5_ac145_verbatim_5cols: 注入文の 2〜6 行目が AC-135 の 5 行と逐語一致（TAB・空の第5列を含む）"
+  else
+    fail_case "v5_ac145_verbatim_5cols (body=[$v5_body])"
+  fi
+  if [ "$(printf '%s' "$CTX" | head -1)" = "$PROJECT_HEADING" ] \
+     && printf '%s' "$PROJECT_HEADING" | grep -q '番号' && printf '%s' "$PROJECT_HEADING" | grep -q 'next' \
+     && printf '%s' "$PROJECT_HEADING" | grep -q '区分（稼働中／待ち／保留）' && printf '%s' "$PROJECT_HEADING" | grep -q '待ち日時'; then
+    pass "v5_ac145_project_heading: Project 見出し固定文に列の説明（番号・名前・next・区分 3 値・待ち日時）が入る"
+  else
+    fail_case "v5_ac145_project_heading (firstline=[$(printf '%s' "$CTX" | head -1)])"
+  fi
+fi
+
+echo "=== v5_ac147_stub_note_5cols: Project側スタブの注記が 5 列（AC-147・静的） ==="
+# スタブ定義の直前の注記（`# --list スタブ（Project側`〜`PROJECT_STUB=` の前）に 5 列の説明が残ること。
+stub_note="$(sed -n '/^# --list スタブ（Project側/,/^PROJECT_STUB=/p' "$TESTS_DIR/test-dock-pane-resolve.sh" | grep '^#')"
+ac147_ok=1
+for word in "5列" "番号" "正式プロジェクト名" "next値" "区分（稼働中／待ち／保留）" "待ち日時"; do
+  printf '%s\n' "$stub_note" | grep -qF -- "$word" || { ac147_ok=0; echo "  missing: $word"; }
+done
+if [ "$ac147_ok" -eq 1 ] && [ -n "$stub_note" ]; then
+  pass "v5_ac147_stub_note_5cols: スタブ注記に 5列・番号・正式プロジェクト名・next値・区分（稼働中／待ち／保留）・待ち日時 がある"
+else
+  fail_case "v5_ac147_stub_note_5cols (note=[$stub_note])"
 fi
 
 echo "=== 7. bash 3.2 互換の静的検査 ==="

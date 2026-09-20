@@ -503,6 +503,75 @@ mk_notes_N_all() {
 }
 
 # ==========================================================================
+# WU群: Project 側「待ち」の Vault ノート fixture（WU-1〜WU-20・要件 v5 §7・
+# 設計 §40.9.2）。`wait_until:` の値は要件の表のリテラル（引用符・前後空白を
+# 含む）。Tasks 節は持たない（WU-4 は next: も無い）。
+# ==========================================================================
+
+# _mk_note_WU <vault> <slug> <status行（空なら書かない）> <updated> <next行（空なら書かない）> <wait_until行（空なら書かない）>
+# 行はそのまま frontmatter に書く（例＝'wait_until: "2026-09-25T10:00"'）。
+_mk_note_WU() {
+  local vault="$1" slug="$2" status_line="$3" updated="$4" next_line="$5" wait_line="$6"
+  {
+    printf -- '---\n'
+    printf 'date: 2026-08-01\n'
+    printf 'updated: %s\n' "$updated"
+    [ -n "$status_line" ] && printf '%s\n' "$status_line"
+    [ -n "$next_line" ] && printf '%s\n' "$next_line"
+    [ -n "$wait_line" ] && printf '%s\n' "$wait_line"
+    printf -- '---\n'
+    printf '# %s\n' "$slug"
+  } > "$vault/Projects/$slug.md"
+}
+
+mk_note_WU1()  { _mk_note_WU "$1" p-wait      'status: active'    2026-09-17 'next: 返事待ち'   'wait_until: 2026-09-25T10:00'; }
+mk_note_WU2()  { _mk_note_WU "$1" p-past      'status: active'    2026-09-18 'next: 返答を反映' 'wait_until: 2026-09-19T09:00'; }
+mk_note_WU3()  { _mk_note_WU "$1" p-edge      'status: active'    2026-09-15 'next: 境界'       'wait_until: 2026-09-20T12:00'; }
+mk_note_WU4()  { _mk_note_WU "$1" p-paused    'status: paused'    2026-09-14 ''                 'wait_until: 2026-09-25T10:00'; }
+mk_note_WU5()  { _mk_note_WU "$1" p-badday    'status: active'    2026-09-13 'next: 暦外'       'wait_until: 2026-02-30T10:00'; }
+mk_note_WU6()  { _mk_note_WU "$1" p-badtxt    'status: active'    2026-09-12 'next: 文字'       'wait_until: 来週'; }
+mk_note_WU7()  { _mk_note_WU "$1" p-waitday   'status: active'    2026-09-16 'next: 再開'       'wait_until: 2026-09-25'; }
+mk_note_WU8()  { _mk_note_WU "$1" p-done      'status: completed' 2026-09-08 'next: 終'         'wait_until: 2026-09-25T10:00'; }
+mk_note_WU9()  { _mk_note_WU "$1" p-quoted    'status: active'    2026-09-11 'next: 引用'       'wait_until: "2026-09-25T10:00"'; }
+mk_note_WU10() { _mk_note_WU "$1" p-active    'status: active'    2026-09-19 'next: 次を進める' ''; }
+mk_note_WU11() { _mk_note_WU "$1" p-tz        'status: active'    2026-09-10 'next: 時差'       'wait_until: 2026-09-25T10:00+09:00'; }
+mk_note_WU12() { _mk_note_WU "$1" p-nextyear  'status: active'    2026-09-09 'next: 年跨ぎ'     'wait_until: 2027-01-05T09:00'; }
+mk_note_WU13() { _mk_note_WU "$1" p-squote    'status: active'    2026-09-07 'next: 単引'       "wait_until: '2026-09-25T10:00'"; }
+mk_note_WU14() { _mk_note_WU "$1" p-spaces    'status: active'    2026-09-06 'next: 空白'       'wait_until:   2026-09-25T10:00  '; }
+mk_note_WU15() { _mk_note_WU "$1" p-empty     'status: active'    2026-09-05 'next: 空値'       'wait_until:'; }
+mk_note_WU16() { _mk_note_WU "$1" p-pausedbad 'status: paused'    2026-09-04 'next: 保留無効'   'wait_until: 来週'; }
+mk_note_WU17() { _mk_note_WU "$1" p-nostatus  ''                  2026-09-03 'next: 無状態'     'wait_until: 2026-09-25T10:00'; }
+mk_note_WU18() { _mk_note_WU "$1" p-sameday   'status: active'    2026-09-02 'next: 当日'       'wait_until: 2026-09-20'; }
+mk_note_WU19() { _mk_note_WU "$1" p-closed    'status: closed'    2026-09-01 'next: 閉'         'wait_until: 2026-09-25T10:00'; }
+mk_note_WU20() { _mk_note_WU "$1" p-unknown   'status: waiting'   2026-08-31 'next: 未知'       'wait_until: 2026-09-25T10:00'; }
+
+# WU-A ＝ {WU-10・WU-2・WU-1・WU-7・WU-4}（AC-135・AC-137・AC-138）。
+mk_notes_WU_A() {
+  mk_note_WU10 "$1"; mk_note_WU2 "$1"; mk_note_WU1 "$1"; mk_note_WU7 "$1"; mk_note_WU4 "$1"
+}
+
+# WU-B ＝ WU-1〜WU-20 の全部（AC-136・AC-146）。
+mk_notes_WU_B() {
+  local i=1
+  while [ "$i" -le 20 ]; do
+    "mk_note_WU$i" "$1"
+    i=$(( i + 1 ))
+  done
+}
+
+# WU-N（実時刻用・NFR-16）＝呼び出し時点の分単位の時刻 t に対し、wait_until が
+# t＋2 分の p-plus2 と t−1 分の p-minus1（BSD date の -v で作る）。stdout に t を返す。
+mk_notes_WU_N() {
+  local t plus2 minus1
+  t="$(date '+%Y-%m-%dT%H:%M')"
+  plus2="$(date -j -v+2M -f '%Y-%m-%dT%H:%M' "$t" '+%Y-%m-%dT%H:%M')"
+  minus1="$(date -j -v-1M -f '%Y-%m-%dT%H:%M' "$t" '+%Y-%m-%dT%H:%M')"
+  _mk_note_WU "$1" p-plus2  'status: active' 2026-09-19 'next: 二分後' "wait_until: $plus2"
+  _mk_note_WU "$1" p-minus1 'status: active' 2026-09-18 'next: 一分前' "wait_until: $minus1"
+  printf '%s' "$t"
+}
+
+# ==========================================================================
 # S群: cmux スタブ（設計 §11.2 の契約・v1/v2 と同一挙動）
 # ==========================================================================
 

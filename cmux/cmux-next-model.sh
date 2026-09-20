@@ -6,7 +6,15 @@
 # 表示）は一切行わない＝dotfiles 側の cmux-next-watch.sh が受け取って
 # 描くだけ（FR-61・FR-62）。
 #
-# 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）: 契約 cmux-dock-frame/3。
+# 契約 cmux-dock-frame/4（v5・設計 §40.4）。区分は 3 値＝稼働中／待ち／保留。
+# 「待ち」は frontmatter の `wait_until:`（`YYYY-MM-DDTHH:MM` か `YYYY-MM-DD`＝
+# その日の 00:00・ローカル時刻・分精度）が有効で、判定時刻 < 待ち日時のとき
+# （status: active のまま・FR-91）。無効な値（秒・オフセット付き・文字列・暦外日）
+# は稼働中として扱い（隠さない側）、キーあり＋非空のときだけ stderr に 1 行。
+# 判定時刻はテスト専用 env CMUX_NEXT_JUDGE_NOW（`YYYY-MM-DDTHH:MM[:SS]`・
+# ローカル・秒は切り捨て）で固定でき、未設定なら実時刻（設計 §40.5.1）。
+#
+# 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）:
 # B 行は判定機（claude/hooks/lib/health_judge.py＝唯一の判定ロジック）の写し＝
 #   B<TAB>外部脳<TAB><ok|warn|error><TAB><OK|WARNING|ERROR>[ 候補N件]
 # を 0〜1 行。判定機が動かないときは 0 行（3 値の外の機構障害＝FR-15 の例外）。
@@ -14,9 +22,12 @@
 #
 # 引数:
 #   --list  ＝ 表示と同じ順序で「番号<TAB>正式プロジェクト名<TAB>next値
-#             <TAB>区分（稼働中/保留）」を出す（v1/v2 と同一契約）。
-#   --frame ＝ 1 ティック分のフレーム（§29 の行指向 TSV）を stdout へ出す
-#             （rc は常に 0）。
+#             <TAB>区分（稼働中/待ち/保留）<TAB>待ち日時（待ちの行だけ
+#             YYYY-MM-DDTHH:MM・他は空）」の 5 列を出す（v1/v2 の 4 列の
+#             位置と意味は不変＝FR-95）。
+#   --frame ＝ 1 ティック分のフレーム（§29 の行指向 TSV・P 行は 6 欄）を
+#             stdout へ出す（rc は常に 0。例外＝判定時刻の固定口が不正な
+#             ときだけ rc=1・stdout 0 バイト＝§40.5.1）。
 #
 # bash 3.2 互換（macOS標準bash）。連想配列・mapfileは使わない。
 # cmux は一度も呼ばない（ワークスペースに依存しない＝設計 §30.2）。
@@ -81,6 +92,54 @@ is_valid_date() {
   [ "$normalized" = "$1" ]
 }
 
+# --- v5: 待ち日時（設計 §40.5） ------------------------------------------------
+
+# `wait_until:` の値 $1（fm_field 済み）を `YYYY-MM-DDTHH:MM` へ正規化して stdout
+# へ出す（無効なら空）。rc は常に 0。日付形は T00:00 を補う（FR-89）。形の照合
+# （case）→ TZ=UTC の date -j -f で往復させ入力と一致するかで暦の妥当性を見る
+# （is_valid_date と同型＝暦外日 02-30→03-02・24:00・10:60 を弾く）。秒・
+# オフセット付き・文字列は case で落ちる。
+normalize_wait() {
+  local v="$1" n
+  case "$v" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) v="${v}T00:00" ;;
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]) : ;;
+    *) printf ''; return 0 ;;
+  esac
+  n="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M' "$v" '+%Y-%m-%dT%H:%M' 2>/dev/null)" || { printf ''; return 0; }
+  if [ "$n" = "$v" ]; then printf '%s' "$v"; else printf ''; fi
+}
+
+# frontmatter ブロック $1 に key "$2" の行があるか（値の有無は見ない）。
+# fm_field はキー欠落も空値も空文字を返すので、診断（A-v5-3）の切り分け用。
+fm_has_key() {
+  printf '%s\n' "$1" | grep -q "^${2}:"
+}
+
+# 判定時刻を大域変数 JUDGE_NOW（`YYYY-MM-DDTHH:MM`・ローカル・分精度）へ固定する
+# （1 回の呼び出しで 1 回だけ・全ノートが同じ判定時刻で分類される）。
+# テスト専用 env CMUX_NEXT_JUDGE_NOW が非空ならそれ（16 文字形か、秒欄が
+# [0-5][0-9] の 19 文字形＝先頭 16 文字に切り捨て）。未設定・空なら実時刻。
+# どちらも normalize_wait と同じ突合で形と暦を検証し、不正・date 失敗は
+# rc=1（呼び出し側が stderr 1 行・stdout 0 バイトで止める＝F-82）。
+JUDGE_NOW=""
+resolve_judge_now() {
+  local v="${CMUX_NEXT_JUDGE_NOW:-}" n
+  if [ -n "$v" ]; then
+    case "$v" in
+      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]) : ;;
+      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-5][0-9]) v="${v:0:16}" ;;
+      *) return 1 ;;
+    esac
+  else
+    v="$(date '+%Y-%m-%dT%H:%M' 2>/dev/null)" || return 1
+  fi
+  n="$(normalize_wait "$v")"
+  [ -n "$n" ] && [ "$n" = "$v" ] || return 1
+  JUDGE_NOW="$n"
+  return 0
+}
+
 # frontmatter の next: が無い／空文字列のノートについて、同じノートの
 # Tasks 節から先頭未完タスク（状態が x でない最初のタスク。記載順のまま）
 # の本文を取り出す（FR-31）。Tasks 節が無い・未完タスクが無い・ノートが
@@ -94,14 +153,23 @@ derive_next_from_tasks() {
   '
 }
 
-# セクション1: Projects/*.md の frontmatter を走査し、status をグループ判定
-# （A=稼働中／H=保留）。"グループ<TAB>sortkey<TAB>名前<TAB>next値" を
-# A→H・各グループ内は更新日降順で標準出力へ並べる（表示と --list の共通
-# データ源。number_entries() が読む唯一の入口）。mktemp 失敗時は非0。
+# セクション1: Projects/*.md の frontmatter を走査し、区分を順位で判定
+# （1=稼働中／2=待ち／3=保留・FR-91 の順で先勝ち・設計 §40.5.3）。
+# "順位<TAB>sortkey<TAB>名前<TAB>next値<TAB>待ち日時" を 1→2→3・各区分内は
+# 更新日降順で標準出力へ並べる（表示と --list の共通データ源。
+# number_entries() が読む唯一の入口）。判定時刻は main が JUDGE_NOW に固定済み。
+# 待ち日時は normalize_wait の ASCII 固定形か空しか入らない（sanitize 不要）。
+# Projects ディレクトリが列挙不能（無い・ディレクトリでない・読めない）なら
+# stderr 1 行＋非0（--list は非0・--frame は既存経路で理由フレーム＝AC-138）。
+# glob 不成立を「0 件の正常な表」と取り違えない。mktemp 失敗時も非0。
 collect_entries() {
   local projects_dir="$VAULT/Projects" f base fm status nextval
-  local tmpfile sortkey grp derived
+  local tmpfile sortkey rank derived wait_raw wait
 
+  if [ ! -d "$projects_dir" ] || [ ! -r "$projects_dir" ] || [ ! -x "$projects_dir" ]; then
+    echo "Projects ディレクトリを読めません: $projects_dir" >&2
+    return 1
+  fi
   tmpfile="$(mktemp "${TMPDIR:-/tmp}/cmux-next-model.XXXXXX" 2>/dev/null)"
   [ -n "$tmpfile" ] || return 1
   for f in "$projects_dir"/*.md; do
@@ -109,14 +177,26 @@ collect_entries() {
     fm="$(fm_extract <"$f")" || continue
     [ -z "$fm" ] && continue
     status="$(fm_field "$fm" status)"
+    base="$(sanitize_str "$(basename "$f" .md)")"
+    wait=""
     if status_allowed "$status" "$STATUS_ALLOW"; then
-      grp="A"
+      wait_raw="$(fm_field "$fm" wait_until)"
+      wait="$(normalize_wait "$wait_raw")"
+      if [ -n "$wait" ] && [ "$JUDGE_NOW" \< "$wait" ]; then
+        rank=2                                 # 待ち＝判定時刻 < 待ち日時（同じ分は稼働中）
+      else
+        # 無効値は稼働中へ倒す（隠さない側）。診断はキーあり＋非空＋正規化失敗だけ（A-v5-3）。
+        if [ -z "$wait" ] && [ -n "$wait_raw" ] && fm_has_key "$fm" wait_until; then
+          echo "wait_until が無効です（稼働中として扱う）: ${base}: ${wait_raw}" >&2
+        fi
+        rank=1
+        wait=""
+      fi
     elif status_allowed "$status" "$STATUS_HOLD"; then
-      grp="H"
+      rank=3                                   # 保留＝wait_until を読まない
     else
       continue
     fi
-    base="$(sanitize_str "$(basename "$f" .md)")"
     nextval="$(sanitize_str "$(fm_field "$fm" next)")"
     if [ -z "$nextval" ]; then
       derived="$(derive_next_from_tasks "$f")"
@@ -127,7 +207,7 @@ collect_entries() {
     sortkey="$(fm_field "$fm" updated)"
     is_valid_date "$sortkey" || sortkey="$(fm_field "$fm" date)"
     is_valid_date "$sortkey" || sortkey="0000-00-00"
-    printf '%s\t%s\t%s\t%s\n' "$grp" "$sortkey" "$base" "$nextval" >>"$tmpfile"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$rank" "$sortkey" "$base" "$nextval" "$wait" >>"$tmpfile"
   done
   # 検証1巡目 MAJOR #7: 以前は `rm -f` の成功がこの関数自体の戻り値に
   # なっており、sort が失敗しても（PATH汚染等）rc=0のまま伝播していた
@@ -141,15 +221,19 @@ collect_entries() {
 }
 
 # 表示番号の正本（設計 §19.1・N-1・§30.3の「唯一の実装変更」）。
-# collect_entries の出力（grp<TAB>sortkey<TAB>name<TAB>next）を記載順に
-# 1 から番号付けし、"番号<TAB>grp<TAB>name<TAB>next" を stdout へ出す。
+# collect_entries の出力（rank<TAB>sortkey<TAB>name<TAB>next<TAB>wait）を記載順に
+# 1 から番号付けし、"番号<TAB>rank<TAB>name<TAB>next<TAB>wait" を stdout へ出す。
 # --list も --frame もこの関数の出力だけを読み、自分では数えない
 # （DT-10。render_next() の idx を移さない）。純関数（stdin/stdout のみ）。
 number_entries() {
-  awk -F '\t' 'NF { n++; printf "%d\t%s\t%s\t%s\n", n, $1, $3, $4 }'
+  awk -F '\t' 'NF { n++; printf "%d\t%s\t%s\t%s\t%s\n", n, $1, $3, $4, $5 }'
 }
 
-# --- `--list`（v1/v2 と同一契約） ------------------------------------------
+# 順位→区分ラベルの awk 関数（--list と --frame の両方の awk に前置する＝
+# 正本 1 か所・設計 §40.5.4）。
+LABEL_AWK='function label(r) { return (r == 3) ? "保留" : (r == 2) ? "待ち" : "稼働中" }'
+
+# --- `--list`（v1/v2 の 4 列＋待ち日時の第 5 列＝FR-95） ------------------------------------------
 # 検証1巡目 MAJOR #7: `collect_entries | number_entries | awk ...` という
 # 素通しのパイプでは、pipefail無しの既定シェルでは最後尾の awk の rc しか
 # 見えず、collect_entries（sort失敗等）の失敗が0バイト・rc=0の「空だが
@@ -169,9 +253,8 @@ run_list() {
     return 1
   fi
   local list_rc
-  number_entries < "$raw" | awk -F '\t' 'NF {
-    label = ($2 == "H") ? "保留" : "稼働中"
-    printf "%s\t%s\t%s\t%s\n", $1, $3, $4, label
+  number_entries < "$raw" | awk -F '\t' "$LABEL_AWK"' NF {
+    printf "%s\t%s\t%s\t%s\t%s\n", $1, $3, $4, label($2), $5
   }'
   list_rc=$?
   rm -f "$raw"
@@ -182,7 +265,7 @@ run_list() {
 
 print_reason_frame() {
   local reason="$1"
-  printf '#V\tcmux-dock-frame/3\tProject\n'
+  printf '#V\tcmux-dock-frame/4\tProject\n'
   printf 'R\t%s\n' "$reason"
   printf 'E\t1\n'
 }
@@ -277,8 +360,8 @@ run_frame() {
   b_n="$(wc -l < "$health_tmp" | tr -d ' ')"
   body_n=$(( p_n + b_n ))
 
-  printf '#V\tcmux-dock-frame/3\tProject\n'
-  awk -F '\t' '{ printf "P\t%s\t%s\t%s\t%s\n", $1, $3, $4, ($2=="H")?"保留":"稼働中" }' "$entries_tmp"
+  printf '#V\tcmux-dock-frame/4\tProject\n'
+  awk -F '\t' "$LABEL_AWK"' { printf "P\t%s\t%s\t%s\t%s\t%s\n", $1, $3, $4, label($2), $5 }' "$entries_tmp"
   cat "$health_tmp"
   printf 'E\t%s\n' "$body_n"
 
@@ -289,8 +372,9 @@ run_frame() {
 usage() {
   cat >&2 <<'EOF'
 使い方:
-  cmux-next-model.sh --list
-  cmux-next-model.sh --frame
+  cmux-next-model.sh --list    番号・正式プロジェクト名・next値・区分（稼働中/待ち/保留）・待ち日時 の 5 列 TSV
+  cmux-next-model.sh --frame   1 ティック分のフレーム（cmux-dock-frame/4）
+環境変数（テスト専用）: CMUX_NEXT_JUDGE_NOW=YYYY-MM-DDTHH:MM[:SS]（待ち判定の判定時刻・ローカル）
 EOF
 }
 
@@ -305,6 +389,14 @@ main() {
   esac
   shift || true
   [ $# -eq 0 ] || { usage; exit 1; }
+
+  # 判定時刻の固定はモード分岐の前（設計 §40.5.1・D-v5-3）。不正な固定値・
+  # 実時刻の date 失敗は --list/--frame 共通で rc=1・stdout 0 バイト・stderr 1 行
+  # （run_frame の「失敗を理由フレーム rc=0 に変換する」経路に入る前に止める）。
+  if ! resolve_judge_now; then
+    echo "判定時刻を決められません（CMUX_NEXT_JUDGE_NOW=${CMUX_NEXT_JUDGE_NOW:-}・形は YYYY-MM-DDTHH:MM[:SS]）" >&2
+    exit 1
+  fi
 
   if [ "$mode" = "list" ]; then
     # 検証1巡目 MAJOR #7: 以前は `exit 0` を無条件に固定しており、
