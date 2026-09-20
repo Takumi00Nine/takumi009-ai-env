@@ -66,7 +66,7 @@ takumi009-ai-env/
 `claude/agents/` and this environment's workflow are built around three role words:
 
 - **Orchestrator (leader)**: The main Claude Code session. It makes decisions, talks with the user, and directs the overall workflow — it delegates implementation/investigation/testing to workers rather than doing them itself.
-- **Worker**: A subagent launched from one of the role definitions under `claude/agents/` (one `.md` per role; the set is whatever the directory holds — currently requirements-analyst, system-designer, implementer, verifier, researcher, operator, adoption-critic, vault-scribe). Adding or removing a role = editing that directory and the local profile only (contract and steps: see 日本語 §「職種定義の契約と設定変更の手順」).
+- **Worker**: A subagent launched from one of the role definitions under `claude/agents/` (one `.md` per role; the set is whatever the directory holds — currently requirements-analyst, system-designer, test-writer, implementer, verifier, test-runner, researcher, operator, adoption-critic, vault-scribe, vault-scribe-light). Adding or removing a role = editing that directory and the local profile only (contract and steps: see 日本語 §「職種定義の契約と設定変更の手順」).
 - **Codex**: The default cast for the verifier role, invoked via `scripts/codex-exec.sh` (a Bash wrapper around `codex exec`; continuation of a review thread uses the wrapper's `--resume` flag). Workers don't invoke it themselves — the orchestrator starts verification once a stage's deliverable is complete, and workers only apply the resulting findings.
 
 How a worker is launched (`resolve-candidate`, in-process `Agent` rejection, `claude-exec.sh`) — details = the comment at the top of `scripts/claude-exec.sh`.
