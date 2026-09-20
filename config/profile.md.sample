@@ -9,6 +9,8 @@ role.leader:               configured model=fable-high
 role.navi:                 unknown
 role.requirements-analyst: configured model=opus-high,codex-astra-low
 role.system-designer:      configured model=opus-medium,opus-high,codex-astra-low
+role.test-writer:          configured model=sonnet-medium,sonnet-high,opus-medium,opus-high,codex-sol-medium
+role.test-runner:          configured model=haiku
 role.adoption-critic:      configured model=opus-high,fable-high
 role.implementer:          configured model=sonnet-medium,sonnet-high,opus-medium,opus-high,codex-sol-medium
 role.researcher:           configured model=haiku,sonnet-medium,sonnet-high,fable-high

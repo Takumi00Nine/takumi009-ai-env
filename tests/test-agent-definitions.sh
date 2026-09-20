@@ -376,10 +376,9 @@ echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）
     f="$AGENTS_DIR/${role}.md"
     assert_contains_file "${role}.md にsandbox: ${expected}が境界つきで書かれている" "$f" "\`sandbox: $expected\`"
   done
-  # verifierは成果物の種別で2経路（read-only／workspace-write の両方）。
-  # verifier.mdはCLIフラグ形式（--sandbox <値>）で記述している。
+  # verifierは指摘のみ（テスト実行は test-runner・2026-09-21 テスト3職分割）
+  # ＝Codex 経路は read-only 一律。verifier.mdはCLIフラグ形式（--sandbox <値>）で記述している。
   assert_contains_file "verifier.md にread-only経路が境界つきで書かれている" "$AGENTS_DIR/verifier.md" "\`--sandbox read-only\`"
-  assert_contains_file "verifier.md にworkspace-write経路が境界つきで書かれている" "$AGENTS_DIR/verifier.md" "\`--sandbox workspace-write\`"
   # vault-scribeはCodexが演じない＝「対象外」の1行があればよい。
   assert_contains_file "vault-scribe.md は「Codexは演じない/対象外」と書かれている" "$AGENTS_DIR/vault-scribe.md" "Codex はこの職種を演じない"
 }
