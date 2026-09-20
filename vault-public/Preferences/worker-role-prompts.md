@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-20
+updated: 2026-09-21
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -29,27 +29,30 @@ related:
   - "[[Decisions/2026-09-17-verifier-review-before-tests]]"
   - "[[Decisions/2026-09-17-worker-wrapper-b1]]"
   - "[[Decisions/2026-09-20-roles-config-only]]"
+  - "[[Decisions/2026-09-21-test-three-roles]]"
 aliases:
-  - "7ロール運用"
+  - "9ロール運用"
   - "requirements-analyst"
   - "adoption-critic"
 ---
 
-# ワーカー工程ロール運用（7ロール・agents定義＋本ノートSSOT）
+# ワーカー工程ロール運用（9ロール・agents定義＋本ノートSSOT）
 
 ワーカー/チームメイトへの委任は**工程ロール定義**（`~/.claude/agents/*.md`）を名指しで使う。定義本文＝ロールの行動規範（機械的にシステムプロンプトへ付加し、toolsを適用）、本ノート＝リーダー側の運用ルール。モデルはspawn時に指定する。
 
 > **2026-08-07 改定（in-process 恒久化＝[[Decisions/2026-08-07-teammate-in-process-permanent]]）**: チームメイトはペインを持たない（エージェントパネル内で動作）。本ノートの「ペイン実査」（`cmux read-screen`・`list-panes`・ペイン消滅確認）は **`TaskOutput`／エージェントパネル（↑↓選択・Enter でトランスクリプト）での実査に読み替える**。名前付き起動は 2026-09-17 に例外へ縮小（下の起動形態の節）。ペイン運用に戻した場合（`cct --teammate-mode auto`）のみ原文の手順を使う。
 
-## 7ロール一覧（職種と職務）
+## 9ロール一覧（職種と職務）
 
 ワーカーモデルは配役表の候補からリーダーがspawnごとに選ぶ。上流工程向けの判断目安は [[Preferences/coding-delegation]] と [[Preferences/model-catalog]] を参照する。命名は実際に選んだ配役に合わせる。
 | ロール名 | 工程 | 要旨 |
 |---|---|---|
 | `requirements-analyst` | 要件定義 | 検証可能な受入条件・スコープ外・OSS先行調査（「作らない」提案含む）。**要件定義の成果物は「要件定義書（確定事項のみ）」と「検討経緯（論点・代替案比較・レビュー録）」の2ファイル構成を既定とする**（正本＝[[Preferences/coding-doc-style]] §3・[[Decisions/2026-08-30-doc-body-archive-split]]） |
 | `system-designer` | 設計 | 代替案比較（A vs B＋根拠＋リスク）・構成・テスト戦略。合議参加もこれ。**リスク部分（永続状態・人間承認/却下・複数部品連携）は詳細設計まで＝状態遷移(失敗/却下/滞留/復活含む)・source of truth・失敗モードを必ず落とす**（2026-07-18・手戻り前倒し）。**設計成果物は「設計書（確定事項のみ）」と「検討経緯（論点・代替案比較・レビュー録）」の2ファイル構成を既定とする**（正本＝[[Preferences/coding-doc-style]] §3・[[Decisions/2026-08-30-doc-body-archive-split]]。委任プロンプト頼みにせずロール規範側で担保＝2026-09-01 本人指示）。**要件の許可表（使ってよい外部コマンド等）に無い道具が要るとき、道具を諦めて要件の粒度を曲げる前に「許可表へ 1 語足せば済まないか」を先に見て、読み替えとしてリーダー承認を求める**（2026-09-15 設計 3 巡の自己反省＝[[Decisions/2026-09-15-cmux-dock-two-repo-split]]） |
-| `implementer` | 実装 | 担当ファイル範囲限定・既存様式遵守・ユニットテスト併作。**文書改修も対象** |
-| `verifier` | 検証 | 読んで指摘する・受入条件を実行して突合する・成果物には書かない・不足テストは指摘まで。**順序＝レビュー先行**（BLOCKING が1件でもあれば受入条件テストを実走せず即報告・実走時は出力の要約だけ読む＝[[Decisions/2026-09-17-verifier-review-before-tests]]） |
+| `implementer` | 実装 | 担当ファイル範囲限定・既存様式遵守・**test-writer のテストを緑にする**（追加テスト可・置換/弱体化不可・test-writer 不在時のみ併作）。**文書改修も対象** |
+| `test-writer` | テスト作成 | 確定した受入条件から**実装より先に**テストを書く（実装者とは別個体・実装本体は書かない・未実装で赤／仕様どおりで緑・条件 ID と 1 対 1）。曖昧な受入条件は差し戻す（[[Decisions/2026-09-21-test-three-roles]]） |
+| `test-runner` | テスト実行 | 指定スイートを**そのまま**実行し集計行・失敗行だけ報告。判断・指摘・修正なし。固定スイートはリーダー直叩きで代替可 |
+| `verifier` | 検証 | 読んで指摘する**だけ**（本体・テストコード・文書）・成果物には書かない・不足テストは指摘まで（受入条件のテストは test-writer が書く）・**テストは実行しない**（test-runner の結果を渡されたら受入条件と突合）。**順序＝レビュー先行**（BLOCKING が1件でもあれば test-runner を回さず即報告＝[[Decisions/2026-09-17-verifier-review-before-tests]]・[[Decisions/2026-09-21-test-three-roles]]） |
 | `researcher` | 調査（横断） | 裏取り/OSS/作者意図/デバッグ/振り返り分析の5モード。出典URL・確度必須 |
 | `operator` | 運用 | ヘルスチェック・障害一次調査・メンテ点検。**診断のみ・破壊的操作は提案止まり** |
 | `adoption-critic` | 採用判定（ゲート） | 敵対的レビューで「採用する価値があるか」の判定案。3モード＝着手判定（アイデア・要件定義より前）／採用判定（成果物・外部ツール）／継続判定（運用結果）。**品質レビュー（Codex）とは別軸**・最終決定はリーダー→ユーザー |
@@ -59,8 +62,10 @@ aliases:
 
 | 職種 | 成果物への書込 | テスト | 実行 | Codex が演じるときの `sandbox` |
 |---|---|---|---|---|
-| `implementer` | **担当ファイル範囲**に書ける | 書ける | できる | `workspace-write`（`cwd`＝担当範囲へ最小化）|
-| `verifier` | **書かない**（指摘のみ）| **書かない**（指摘まで）| できる | ⚠️ **成果物の種別で2経路**＝**文書＝`read-only`**（何も書かない）／**コード＝`workspace-write`**（書けるのは **worktree 内の `.verify/` と、リーダーが指定した指摘リストの出力先**の2箇所だけ）|
+| `implementer` | **担当ファイル範囲**に書ける | 書ける（追加のみ・test-writer のテスト・fixture の置換/弱体化は不可） | 担当範囲のみ | `workspace-write`（`cwd`＝担当範囲へ最小化）|
+| `test-writer` | **担当テストファイル範囲**に書ける（テスト本体と受入条件用の fixture。実装本体は書かない） | 書ける | 担当範囲のみ | `workspace-write`（`cwd`＝担当テスト範囲へ最小化）|
+| `test-runner` | **書かない**（結果ファイルのみ） | **書かない** | できる（指定コマンドのみ） | `workspace-write`（`cwd`＝使い捨て worktree・書けるのは結果の出力先だけ）|
+| `verifier` | **書かない**（指摘のみ）| **書かない**（指摘まで）| **しない**（Bash は読取に限る・実行は test-runner）| **`read-only`** 一律（文書・コードとも。指摘リストは最終メッセージで返す）|
 | `requirements-analyst` | 自分の成果物に書ける | — | — | `workspace-write`（`cwd`＝成果物の置き場）|
 | `system-designer` | 自分の成果物に書ける | — | — | 同上 |
 | `adoption-critic` | 自分の成果物に書ける | — | — | 同上 |
@@ -70,7 +75,7 @@ aliases:
 
 **全職種に共通**＝①Vault の AI 向け6フォルダへは `vault-scribe` 以外書かない ②**`cwd` に `$HOME` 全体を渡すときは職種を問わず `read-only`**（広い `cwd` と `workspace-write` を組み合わせない）。
 
-補助ロール（7工程外）: **`vault-scribe`**（執筆代行）＝リーダーが確定した内容の Vault 書き込み専任。内容の新規判断はしない・Codex 一次レビュー対象外（リーダーが diff 実査）。記録職＝Vault 書込を宣言した職種（既定 `subagent_type: vault-scribe`）・既定は名前無し subagent（起動形態に依存しない）。同一個体への続行は Agent ID 宛の SendMessage で可。**停止条件＝工程の区切りか、依頼なしで 30 分**（名前無し subagent は常駐コストを持たないが、依頼なしの放置は続行しない・[[Decisions/2026-09-16-worker-context-recycle]]）。運用の詳細＝[[Preferences/vault-operation]]・[[Decisions/2026-08-10-vault-scribe]]。
+補助ロール（9工程外）: **`vault-scribe`**（執筆代行）＝リーダーが確定した内容の Vault 書き込み専任。内容の新規判断はしない・Codex 一次レビュー対象外（リーダーが diff 実査）。記録職＝Vault 書込を宣言した職種（既定 `subagent_type: vault-scribe`）・既定は名前無し subagent（起動形態に依存しない）。同一個体への続行は Agent ID 宛の SendMessage で可。**停止条件＝工程の区切りか、依頼なしで 30 分**（名前無し subagent は常駐コストを持たないが、依頼なしの放置は続行しない・[[Decisions/2026-09-16-worker-context-recycle]]）。運用の詳細＝[[Preferences/vault-operation]]・[[Decisions/2026-08-10-vault-scribe]]。
 
 ## 職種定義を新設・改訂するときの掟（2026-09-01 本人指示）
 **共通部と固有部の分離（2026-09-06 本人決定）**: 全職種に共通の型（着手前の Read・事実の扱い・成果物の2ファイル構成とシンプルさ・Vault の扱い・安全則・一次レビュー・報告形式・指示の優先）は [[Preferences/core-worker]] に1本で持ち、職種定義（`agents/*.md`）には「absolute-rules と core-worker を Read する」の2行と、その職種固有の手順・出力形式だけを書く。共通部を職種定義へ複製しない。職種定義には日付・決定ノート参照・理由を書かず（ルールだけ）、なぜ・いつは Decisions 側に置く。
@@ -105,7 +110,7 @@ aliases:
 
 **ラッパーの呼び出しは必ずバックグラウンドで起動する（本人指示 2026-09-18）**: `scripts/claude-exec.sh` は Bash ツールの `run_in_background: true` で呼び、完了は通知で受けて `--out` の `result` を読む。前面（同期待ち）で呼ばない＝子が終わるまでリーダーの応答が塞がり本人が話しかけられなくなる上、Bash の上限（10分）で子ごと強制終了され成果物が失われる。記録職の短い依頼も例外にしない（[[Decisions/2026-09-18-wrapper-launch-background-only]]）。
 
-**例外（名前付きチームメイト）**: 本人指示があるとき・delegation-gate-v2 rule 4 の例外運用に限り、名前付きチームメイトを使ってよい。そのときの**命名規則（2026-07-20 本人指示・2026-09-16 定義名へ統一）＝`<職種名>-<配役（定義名）>[-識別子]`**：名前の先頭に職種名、ハイフンの後に配役表の定義名（7ロール: requirements-analyst/system-designer/implementer/verifier/researcher/operator/adoption-critic）。例: `implementer-sonnet-high`・`researcher-sonnet-high`・`system-designer-opus-high`・並行時 `implementer-sonnet-high-op-keyframes`。一覧・通知・ペインで「どの配役がどの職種か」を一目で判別するため。名前の配役部分は、明示して起動した配役に合わせる。末尾に**タスク識別子を任意で付けてよい（リーダー裁量・2026-07-20 本人確認）**: 例 `sonnet-implementer-op-keyframes`。同ロール並行時は衝突回避のため必須。cmux では名前付きだけが分割ペインに表示され、本人が進行を目視できる。
+**例外（名前付きチームメイト）**: 本人指示があるとき・delegation-gate-v2 rule 4 の例外運用に限り、名前付きチームメイトを使ってよい。そのときの**命名規則（2026-07-20 本人指示・2026-09-16 定義名へ統一）＝`<職種名>-<配役（定義名）>[-識別子]`**：名前の先頭に職種名、ハイフンの後に配役表の定義名（9ロール: requirements-analyst/system-designer/implementer/test-writer/test-runner/verifier/researcher/operator/adoption-critic）。例: `implementer-sonnet-high`・`researcher-sonnet-high`・`system-designer-opus-high`・並行時 `implementer-sonnet-high-op-keyframes`。一覧・通知・ペインで「どの配役がどの職種か」を一目で判別するため。名前の配役部分は、明示して起動した配役に合わせる。末尾に**タスク識別子を任意で付けてよい（リーダー裁量・2026-07-20 本人確認）**: 例 `sonnet-implementer-op-keyframes`。同ロール並行時は衝突回避のため必須。cmux では名前付きだけが分割ペインに表示され、本人が進行を目視できる。
 
 **ラッパー経路の終了**: ラッパーの終了コード（0＝成功）と `--out` の受領で終わる。
 

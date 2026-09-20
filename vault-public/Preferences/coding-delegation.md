@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-09-19
+updated: 2026-09-21
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 related:
@@ -11,6 +11,7 @@ related:
   - "[[Decisions/2026-09-10-leader-free-model-choice]]"
   - "[[Decisions/2026-09-10-verifier-lineage-recommended]]"
   - "[[Decisions/2026-09-17-tests-rough-not-strict]]"
+  - "[[Decisions/2026-09-21-test-three-roles]]"
 aliases:
   - "Claudeに残す4つ"
   - "オーケストレーター強制"
@@ -24,10 +25,11 @@ aliases:
 ## 基本構図
 - **Claude 本体（リーダー・オーケストレーター）**: ①最終意思決定 ②外部脳記録 ③ユーザー対話 ④実環境が要る結合検証、＋各工程の采配。実装・調査・テスト等の「作る工程」は自分でやらず着手前にワーカーへ委任。
 - **モデル割り当て（2026-07-21 本人決定・2026-09-01 配役表解凍で痩身化）**: リーダー・ワーカーの実際の配役とモデル実値は**正本は配役表（ローカルプロファイル）**（[[Preferences/core-workflow]]・経緯＝[[Decisions/2026-09-01-role-cast-table-unfreeze]]・旧マシン別実値の経緯＝[[Decisions/2026-08-21-machine-role-model-assignment]]）。Preferences にはマシン別のモデル実値を書かない。モデルの選択はリーダーが候補から行い、Fable も含めて既定・禁止は持たない（2026-09-10 撤回＝[[Decisions/2026-09-10-leader-free-model-choice]]。Fable は両方の週次枠を進めるので使用率を見て選ぶ）。
-- **Claude ワーカー**: 作る工程の実働。`~/.claude/agents/` の7工程ロールを名指しで委任（正本＝[[Preferences/worker-role-prompts]]）。使うモデルは配役表の候補からリーダーが spawn ごとに選ぶ（既定は持たない・判断材料＝[[Preferences/model-catalog]]。2026-09-10 既定撤回＝[[Decisions/2026-09-10-leader-free-model-choice]]）。候補を選ぶときの目安（工程ごとの向き不向き）は [[Preferences/model-catalog]] にだけ置く（職種→モデルの固定はしない＝[[Decisions/2026-09-16-rules-bind-to-roles-not-models]]）。起動は `cct`・チームメイトは in-process（[[Decisions/2026-08-07-teammate-in-process-permanent]]）。
+- **Claude ワーカー**: 作る工程の実働。`~/.claude/agents/` の9工程ロールを名指しで委任（正本＝[[Preferences/worker-role-prompts]]）。使うモデルは配役表の候補からリーダーが spawn ごとに選ぶ（既定は持たない・判断材料＝[[Preferences/model-catalog]]。2026-09-10 既定撤回＝[[Decisions/2026-09-10-leader-free-model-choice]]）。候補を選ぶときの目安（工程ごとの向き不向き）は [[Preferences/model-catalog]] にだけ置く（職種→モデルの固定はしない＝[[Decisions/2026-09-16-rules-bind-to-roles-not-models]]）。起動は `cct`・チームメイトは in-process（[[Decisions/2026-08-07-teammate-in-process-permanent]]）。
 - **Codex 経路**: 検証職・実装・調査のいずれも、配役表の候補に並べておけばリーダーが spawn ごとに選ぶ（別系統の検証は推奨＝[[Decisions/2026-09-10-verifier-lineage-recommended]]・候補が使えないときは同じ行の別候補）（2026-09-10 既定撤回＝[[Decisions/2026-09-10-leader-free-model-choice]]。Codex 委任の再開自体の経緯＝[[Decisions/2026-07-23-codex-delegation-reopened]]）。**ビジュアル素材生成（画像・3D/Blender・ボクセル）は最初から Codex（gpt-5.6-sol）へ一気通貫**（[[Decisions/2026-07-21-image-tasks-codex-end-to-end]]・最終検収は Claude・⚠️独立チェックは本人評価か Claude レビュー）。**デザイン系成果物の案件は要件定義・設計の上流工程も Codex 主担当**（2026-08-10 本人決定＝[[Decisions/2026-08-10-codex-upstream-for-design]]。この場合の検証職は別系統の候補を選ぶのが推奨（上限時は同系統でよい＝[[Decisions/2026-09-10-verifier-lineage-recommended]]）。デザイン上流に向く定義の目安は [[Preferences/model-catalog]]（経緯＝[[Decisions/2026-09-05-astra-for-design-upstream-only]]）。ただし**案件内の非デザイン部品（JS・ロジック・データ集計等の仕組み部分）は通常ルール＝Claudeワーカーへ委任**し Codex は一次レビュアーに戻す（部品単位の分割＝[[Decisions/2026-08-13-design-project-component-split]]・本人明示 2026-08-13）。**Codex に実装を振るときの起動手順（ラッパーワーカー不要・`codex exec` 背景実行）＝[[Preferences/codex-exec-worker]]**（2026-09-03）。
 ## 工程フロー（正本＝[[Preferences/codex-review-protocol]]）
 各工程で**ワーカーが成果物を作成 → リーダーが工程の完了時に検証職を1回起動 → 指摘は作成者が反映 → リーダーが却下希望の採否と全体確認**→ ユーザー最終レビュー。締め（検証職の検証後・本人レビュー前）は2ゲート必須: ①**工程横断の全体構成レビュー**（Codex・手順＝正本「工程横断・全体構成の最終レビュー」）②**リーダーの本番経路 end-to-end スモーク**＝テスト環境と異なる実行環境（launchd/cron・別PATH/権限等）の成果物は**本番と同じ起動経路で最低1回通し実走**してから「完了」と言う（初回実走は本人が見ている場で）。
+- **実装工程はテスト先行・別個体**＝要件確定後に test-writer が受入条件からテストを書き、implementer がそれを緑にする。テストの実行は test-runner（固定スイートはリーダー直叩き可）、verifier は指摘のみ（[[Decisions/2026-09-21-test-three-roles]]）。
 - テストは厳密にやりすぎない＝不変条件だけを恒久テストに残し、案件の受入条件は締めで1回確認して退役する。repo のテストは repo の中で完結（実体・Vault・private repo を読まない）。値でなく形・全件でなく経路ごとに代表1件（[[Decisions/2026-09-17-tests-rough-not-strict]]）。
 ## 運用ルール
 - **着手時のループ適用判定（2026-07-21 本人指示）**: まとまったタスクの着手前に「ループ型（自動検証で回す）か・人間チェック挟み込み型か」を判定し**本人に確認してから進める**。基準＝**ゴールが機械的に計測・数値化できるか**（テスト/リント/型/バイト一致＝向く⇔主観のみ＝向かない）。詳細・聞き方の例文＝[[Knowledge/loop-engineering]]。
