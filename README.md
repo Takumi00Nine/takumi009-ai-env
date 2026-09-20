@@ -322,7 +322,7 @@ takumi009-ai-env/
 **職種定義の契約**（`claude/agents/<職種>.md` 1 本の中で全部満たせる。検査＝`bash tests/test-agent-definitions.sh`）
 (a) 職種名（ファイル名＝`name`）は `^[a-z][a-z-]*$`（英小文字とハイフンのみ・先頭は英字・数字と `:` は不可） (b) frontmatter `name:` がファイル名（拡張子除く）と一致 (c) 組込み種別名（Explore・Plan・general-purpose・claude・statusline-setup・claude-code-guide）と衝突しない (d) `description:`・`tools:` が非空・本文が非空 (e) frontmatter に `model:`・`effort:` を書かない (f) 本文に `## 権限` 見出しがちょうど 1 件・`worker-role-prompts` への参照 0 件 (g) Vault の AI 向け 6 フォルダへ書く職種だけ frontmatter に `aienv-vault-write: allowed` を**ちょうど 1 行**（値はこれのみ・行末コメント不可・同じキーを 2 行以上書かない・`aienv-` で始まる他のキーは不可）。宣言の無い職種はラッパー経路で柵（`vault-write-gate.sh`）が載る。
 
-**設定変更の手順**（追加・削除・改名とも）: ① `claude/agents/<職種>.md` を書く／消す ② `~/.config/takumi009-ai-env/profile.md` の `role.<職種>: …` 行を足す／消す（`config/profile.md.sample` が当該職種を参照していればそちらも） ③ `bash tests/test-agent-definitions.sh` が exit 0（数秒） ④ 追加は `bash scripts/install-main.sh` を再実行して `~/.claude/agents/<職種>.md` を配置・削除は `rm ~/.claude/agents/<職種>.md`（dangling symlink の除去）。改名＝削除＋追加。コア規範が名指す職種（工程 7 職＋vault-scribe）の削除・改名は規範改訂を伴う通常の変更。
+**設定変更の手順**（追加・削除・改名とも）: ① `claude/agents/<職種>.md` を書く／消す ② `~/.config/takumi009-ai-env/profile.md` の `role.<職種>: …` 行を足す／消す（`config/profile.md.sample` が当該職種を参照していればそちらも） ③ `bash tests/test-agent-definitions.sh` が exit 0（数秒） ④ 追加は `bash scripts/install-main.sh` を再実行して `~/.claude/agents/<職種>.md` を配置・削除は `rm ~/.claude/agents/<職種>.md`（dangling symlink の除去）。Agent 経路は次に起動するセッションから有効（起動中のセッションは追随しない）。ラッパー経路は即時。改名＝削除＋追加。コア規範が名指す職種（工程 7 職＋vault-scribe）の削除・改名は規範改訂を伴う通常の変更。
 
 ### vault-public/ について
 
