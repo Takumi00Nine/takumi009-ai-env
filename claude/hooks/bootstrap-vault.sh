@@ -7,15 +7,22 @@
 VAULT="${BOOTSTRAP_VAULT:-$HOME/Data/obsidian}"
 TEAMS_DIR="${BOOTSTRAP_TEAMS_DIR:-$HOME/.claude/teams}"
 
-# 外部脳ヘルス行（fail-open・軽量: check-drift.sh は再実行しない。ファイル1件への jq／ログの tail 程度に留める）。
+# 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §5）: ①観測記録を書く → ②判定機（lib/health_judge.py＝唯一の
+# 判定ロジック）を呼ぶ → ③注入ブロックのヘルス節を描く。fail-open＝ここで何が起きてもブートストラップ本文は必ず出す。
+# 旧判定（8 日線・「N 日成功していません」・「前回の週次メンテ結果」・「フック死の疑い」）は退役。
+# ⚠️ 既定が実ファイルの env 6 本（VAULT_READS_LOG・VAULT_RECALL_LOG・VAULT_INVENTORY_LOG_DIR・
+# MAINTENANCE_LAST_RUN_FILE・MAINTENANCE_PLIST_FILE・HEALTH_OBSERVATION_FILE）はテストで必ず fixture へ向ける。
 : "${VAULT_READS_LOG:=$HOME/.claude/logs/vault-reads.tsv}"
 : "${VAULT_RECALL_LOG:=$HOME/.claude/logs/vault-recall.tsv}"
-: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"  # scripts/check-drift.sh ⑥ と同じ既定値
+: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"  # scripts/check-drift.sh ⑥ と同じ既定値＝想起の疑い判定の現行の線（据え置き）
 # vault_inventory.py の OUT_DIR と同じ既定値（直下の latest.json を読む）。
 : "${VAULT_INVENTORY_LOG_DIR:=$HOME/.claude/logs/vault-inventory}"
-# maintenance.sh（週次）の状態ファイル。started_at は毎回無条件更新の契約＝古いままなら週次メンテ自体が起動していない。
+# maintenance.sh（週次）の状態記録（schema 2＝run／completed／ack。旧 6 キーは互換のため残る）。
 : "${MAINTENANCE_LAST_RUN_FILE:=$HOME/.claude/logs/maintenance/last-run.json}"
-: "${MAINTENANCE_STALE_DAYS:=8}"
+# 配置済み LaunchAgent＝直近の予定時刻の正本（判定機が plistlib で直接読む。派生コピーは持たない）。
+: "${MAINTENANCE_PLIST_FILE:=$HOME/Library/LaunchAgents/com.takumi009.maintenance.plist}"
+# SessionStart の観測記録（読込・前セッションの想起）。書き手＝本フック（想起の実行体以外の観測者）。
+: "${HEALTH_OBSERVATION_FILE:=$HOME/.claude/logs/health/session-observation.json}"
 
 # ローカル実体プロファイル（正本＝各マシンの $HOME/.config/takumi009-ai-env/profile.md・repo 管理外）。
 : "${BOOTSTRAP_ENABLE_LOCAL_PROFILE:=1}"
@@ -37,6 +44,8 @@ resolve_bootstrap_self_dir() {
 }
 BOOTSTRAP_SELF_DIR="$(resolve_bootstrap_self_dir)"
 : "${PROFILE_RESOLVE_LIB:=$BOOTSTRAP_SELF_DIR/lib/profile_resolve.py}"
+# 外部脳ヘルスの判定機（repo パス運用＝profile_resolve.py と同じ。$HOME へ symlink しない）。
+: "${HEALTH_JUDGE_LIB:=$BOOTSTRAP_SELF_DIR/lib/health_judge.py}"
 # Bedrock のピン留め実値ファイル（install-main.sh と同じ既定値。特定キーの有無だけ見る＝値は読まない）。
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
 # コア職種マニフェストの実体側入力。claude/hooks/../agents。
@@ -155,137 +164,181 @@ resolve_local_profile() {
   fi
 }
 
-# 外部脳ヘルス行。fail-open＝ここで何が起きてもブートストラップ本文は必ず出す（呼び出し側は 2>/dev/null で出力を捨てるだけ）。
-# $machine_role は呼び出し前に代入済み（下部の resolve 出力からの取り出し）。
-compute_health_lines() {
-  local lines="" now_epoch stale_names=""
+# ---------------------------------------------------------------------------
+# 外部脳ヘルス（設計 v1.2 §5）＝①観測記録 → ②判定機 → ③描画。
+# ---------------------------------------------------------------------------
 
-  # ① 最新棚卸し＝latest.json（書き手＝vault_inventory.py）。不在→行なし／JSON 破損・date/actionable 欠落・型違反→⚠️1行。
-  # jq が無ければ行なし（④と同じ fail-open）。last-run.json の fragments_candidates は読まない（AI へ注入しない）。
-  local inv_json="$VAULT_INVENTORY_LOG_DIR/latest.json"
-  if [ -f "$inv_json" ] && command -v jq >/dev/null 2>&1; then
-    local inv_fields inv_path inv_n inv_date inv_rest
-    inv_fields="$(jq -r 'select(type == "object" and (.date | type) == "string" and (.actionable | type) == "number" and .actionable >= 0 and (.actionable | floor) == .actionable) | [(.report_path // "" | tostring), (.actionable | tostring), .date] | join("\t")' "$inv_json" 2>/dev/null)"
-    if [ -n "$inv_fields" ]; then
-      inv_path="${inv_fields%%$'\t'*}"
-      inv_rest="${inv_fields#*$'\t'}"
-      inv_n="${inv_rest%%$'\t'*}"
-      inv_date="${inv_rest#*$'\t'}"
-      [ -n "$inv_path" ] || inv_path="$inv_json"
-      lines="${lines}- 棚卸し最新: ${inv_path}（要確認 ${inv_n} 件・${inv_date}）
-"
-    else
-      lines="${lines}- ⚠️ 棚卸しの状態記録が壊れています（latest.json: ${inv_json}）
-"
+# write_health_observation — ①観測記録（health-observation/1）を書く（D-6）。
+# 引数: $1=required（改行区切り・LOCAL_ONLY を除く必読集合） $2=missing（改行区切り・想定外の欠落）。
+# 前セッション＝最後に観測記録を書いたセッション（既存ファイルの session_id。無ければ null）。
+# `injected`＝recall_valid_rows ≥ 1 → true／reads_rows ≥ 1 ∧ recall_valid_rows == 0 → false／それ以外 → null。
+# 書けたら HEALTH_OBS_PATH=$HEALTH_OBSERVATION_FILE・HEALTH_OBS_WRITE_FAILED=0。
+# 書けなければ（F-9）一時ファイルへ書いて判定は続け、HEALTH_OBS_WRITE_FAILED=1。
+HEALTH_OBS_PATH=""
+HEALTH_OBS_WRITE_FAILED=0
+HEALTH_OBS_TMP=""
+write_health_observation() {
+  local required_nl="$1" missing_nl="$2"
+  local prev_sid="" counts reads_rows=0 recall_valid=0 recall_err=0 injected="null" root_readable="false"
+  local observed_at json tmp
+  [ -d "$VAULT" ] && [ -r "$VAULT" ] && root_readable="true"
+  if [ -f "$HEALTH_OBSERVATION_FILE" ]; then
+    prev_sid="$(jq -r 'if type == "object" then (.session_id // empty) else empty end' "$HEALTH_OBSERVATION_FILE" 2>/dev/null)"
+  fi
+  if [ -n "$prev_sid" ]; then
+    # reads: 2 列目が前 sid の行数／recall: 2 列目が前 sid かつ 3 列目非空（候補提示＋heartbeat）／ERROR 行: 2 列目 ERROR かつ 4 列目が前 sid。
+    # awk 1 回（存在するログだけを渡す＝外部プロセスを増やさない）。
+    local awk_prog='
+        FILENAME == reads { if ($2 == sid) r++; next }
+        { if ($2 == sid && $3 != "") v++; else if ($2 == "ERROR" && $4 == sid) e++ }
+        END { printf "%d\t%d\t%d\n", r, v, e }'
+    counts=""
+    if [ -f "$VAULT_READS_LOG" ] && [ -f "$VAULT_RECALL_LOG" ]; then
+      counts="$(awk -F '\t' -v sid="$prev_sid" -v reads="$VAULT_READS_LOG" "$awk_prog" "$VAULT_READS_LOG" "$VAULT_RECALL_LOG" 2>/dev/null)"
+    elif [ -f "$VAULT_READS_LOG" ]; then
+      counts="$(awk -F '\t' -v sid="$prev_sid" -v reads="$VAULT_READS_LOG" "$awk_prog" "$VAULT_READS_LOG" 2>/dev/null)"
+    elif [ -f "$VAULT_RECALL_LOG" ]; then
+      counts="$(awk -F '\t' -v sid="$prev_sid" -v reads="$VAULT_READS_LOG" "$awk_prog" "$VAULT_RECALL_LOG" 2>/dev/null)"
+    fi
+    if [ -n "$counts" ]; then
+      reads_rows="${counts%%	*}"; counts="${counts#*	}"
+      recall_valid="${counts%%	*}"; recall_err="${counts#*	}"
+      case "$reads_rows" in ''|*[!0-9]*) reads_rows=0 ;; esac
+      case "$recall_valid" in ''|*[!0-9]*) recall_valid=0 ;; esac
+      case "$recall_err" in ''|*[!0-9]*) recall_err=0 ;; esac
+    fi
+    if [ "$recall_valid" -ge 1 ]; then
+      injected="true"
+    elif [ "$reads_rows" -ge 1 ]; then
+      injected="false"
     fi
   fi
-
-  now_epoch="$(date -u +%s 2>/dev/null)"
-
-  # ④ 死活検知（last-run.json）。サブ機（machine_role が厳密に "sub"）には maintenance.sh が無いのでスキップ。
-  # それ以外（解決失敗・欠落・main）はメイン機とみなして判定する（fail-closed）。
-  if [ "$machine_role" != "sub" ]; then
-  # started_at が ${MAINTENANCE_STALE_DAYS} 日以上前＝週次メンテが動いていない。
-  #   (a) started_at は新しいが last_success_at が古い＝起動はするが成功していない。
-  #   (b) 不在・JSON 破損・両フィールド未記録・実在する値が解析不能/未来日時＝状態記録が無い/壊れている。
-  # has() でキーの実在を確認し、実在するのに解析できない値だけを broken にする
-  # （キーが無い＝初回未成功の正常な過渡状態とは区別する。`.field // empty` だけでは空文字列/null と区別できない）。
-  if [ -n "$now_epoch" ]; then
-    local started_at last_success_at started_epoch success_epoch started_age success_age
-    local started_broken=0 success_broken=0 has_started="" has_success=""
-    started_at=""
-    last_success_at=""
-    if [ -f "$MAINTENANCE_LAST_RUN_FILE" ]; then
-      started_at="$(jq -r '.started_at // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
-      last_success_at="$(jq -r '.last_success_at // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
-      has_started="$(jq -r 'has("started_at")' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
-      has_success="$(jq -r 'has("last_success_at")' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
-    fi
-
-    started_epoch=""
-    if [ "$has_started" = "true" ]; then
-      [ -n "$started_at" ] && started_epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${started_at%Z}" +%s 2>/dev/null)"
-      if [ -z "$started_epoch" ] || [ "$started_epoch" -gt "$now_epoch" ]; then
-        started_broken=1
-        started_epoch=""
-      fi
-    fi
-    success_epoch=""
-    if [ "$has_success" = "true" ]; then
-      [ -n "$last_success_at" ] && success_epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${last_success_at%Z}" +%s 2>/dev/null)"
-      if [ -z "$success_epoch" ] || [ "$success_epoch" -gt "$now_epoch" ]; then
-        success_broken=1
-        success_epoch=""
-      fi
-    fi
-
-    # ⚠️ macOS の bash 3.2 は二重引用符内で `$VAR）`（波括弧無し＋全角）が化ける。必ず `${VAR}）` の形で書く。
-    if { [ -z "$started_at" ] && [ -z "$last_success_at" ]; } \
-       || [ "$started_broken" -eq 1 ] || [ "$success_broken" -eq 1 ]; then
-      lines="${lines}- ⚠️ 週次メンテの状態記録が無い/壊れています（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
-"
-    else
-      [ -n "$started_epoch" ] && started_age=$(( (now_epoch - started_epoch) / 86400 ))
-      [ -n "$success_epoch" ] && success_age=$(( (now_epoch - success_epoch) / 86400 ))
-      if [ -n "$started_epoch" ] && [ "$started_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
-        lines="${lines}- ⚠️ 週次メンテが${started_age}日動いていません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
-"
-      elif [ -z "$started_epoch" ] && [ -n "$success_epoch" ] && [ "$success_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
-        # started_at キー自体が無いときだけ last_success_at へフォールバックする。
-        lines="${lines}- ⚠️ 週次メンテが${success_age}日動いていません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
-"
-      elif [ -n "$started_epoch" ] && [ -n "$success_epoch" ] && [ "$success_age" -ge "$MAINTENANCE_STALE_DAYS" ]; then
-        lines="${lines}- ⚠️ 週次メンテが起動はするが${success_age}日成功していません（要確認。last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
-"
-      fi
-    fi
+  observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  json="$(jq -n --arg at "$observed_at" --arg sid "$SESSION_ID" --arg src "$HOOK_SOURCE" \
+    --argjson root "$root_readable" --arg required "$required_nl" --arg missing "$missing_nl" \
+    --arg prev "$prev_sid" --argjson reads "$reads_rows" --argjson valid "$recall_valid" \
+    --argjson err "$recall_err" --argjson injected "$injected" \
+    '{schema: "health-observation/1", observed_at: $at, session_id: $sid, source: $src,
+      load: {vault_root_readable: $root,
+             required: ($required | split("\n") | map(select(length > 0))),
+             missing: ($missing | split("\n") | map(select(length > 0)))},
+      recall_prev: {session_id: (if $prev == "" then null else $prev end), reads_rows: $reads,
+                    recall_valid_rows: $valid, recall_error_rows: $err, injected: $injected}}' 2>/dev/null)"
+  [ -n "$json" ] || json='{"schema":"health-observation/1","load":null,"recall_prev":null}'
+  tmp="$HEALTH_OBSERVATION_FILE.tmp.$$"
+  if mkdir -p "$(dirname "$HEALTH_OBSERVATION_FILE")" 2>/dev/null \
+     && printf '%s\n' "$json" > "$tmp" 2>/dev/null \
+     && mv -f "$tmp" "$HEALTH_OBSERVATION_FILE" 2>/dev/null; then
+    HEALTH_OBS_PATH="$HEALTH_OBSERVATION_FILE"
+    return 0
   fi
-
-  # last_result（success|warn|fail＝maintenance.sh が書く3値）: warn/fail は ⚠️、success＋summary 非空は ℹ️。
-  # それ以外の値・キー欠落・ファイル不在・jq 不在は fail-open で無視する。
-  if [ -f "$MAINTENANCE_LAST_RUN_FILE" ]; then
-    local last_result last_result_summary
-    last_result="$(jq -r '.last_result // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
-    last_result_summary="$(jq -r '.last_result_summary // empty' "$MAINTENANCE_LAST_RUN_FILE" 2>/dev/null)"
-    if [ "$last_result" = "warn" ] || [ "$last_result" = "fail" ]; then
-      lines="${lines}- ⚠️ 前回の週次メンテ結果: ${last_result}${last_result_summary:+（${last_result_summary}）}（last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
-"
-    elif [ "$last_result" = "success" ] && [ -n "$last_result_summary" ]; then
-      lines="${lines}- ℹ️ 前回の週次メンテ結果: success（${last_result_summary}）（last-run.json: ${MAINTENANCE_LAST_RUN_FILE}）
-"
-    fi
+  rm -f "$tmp" 2>/dev/null
+  HEALTH_OBS_WRITE_FAILED=1
+  HEALTH_OBS_TMP="${TMPDIR:-/tmp}/health-observation.$$.json"
+  if printf '%s\n' "$json" > "$HEALTH_OBS_TMP" 2>/dev/null; then
+    HEALTH_OBS_PATH="$HEALTH_OBS_TMP"
+  else
+    HEALTH_OBS_PATH="/nonexistent-dir/health-observation.json"
   fi
-  fi  # machine_role != sub
+  return 1
+}
 
-  # ③ check-drift.sh ⑥相当の簡易死活。reads/recall ログの「最終有効行」（3列目非空）の経過日数が閾値超なら死の疑い。
-  # tail の範囲内に有効行が無ければ判定を諦める（fail-open。詳細判定は check-drift.sh の役目）。
-  if [ -n "$now_epoch" ]; then
-    local pair name f ts epoch age
-    for pair in "vault-reads.tsv|$VAULT_READS_LOG" "vault-recall.tsv|$VAULT_RECALL_LOG"; do
-      name="${pair%%|*}"
-      f="${pair#*|}"
-      [ -f "$f" ] || continue
-      ts="$(tail -n 50 "$f" 2>/dev/null | awk -F'\t' 'NF>=3 && $3!="" {t=$1} END{if (t!="") print t}')"
-      [ -n "$ts" ] || continue
-      ts="${ts%Z}"
-      epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" +%s 2>/dev/null)" || continue
-      age=$(( (now_epoch - epoch) / 86400 ))
-      if [ "$age" -gt "$VAULT_AGENT_LOG_STALE_DAYS" ]; then
-        stale_names="${stale_names}${stale_names:+・}${name}"
-      fi
-    done
-  fi
-  if [ -n "$stale_names" ]; then
-    lines="${lines}- ⚠️ フック死の疑い: ${stale_names}（直近${VAULT_AGENT_LOG_STALE_DAYS}日以内の有効な記録なし。詳細は scripts/check-drift.sh を実行して確認）
-"
-  fi
+# ③描画（jq 1 回）: 機械可読＝固定 ASCII キー・値は日本語・値が無ければ「該当なし」（設計 §5）。
+# ヘッダに stage= を 1 回だけ。項目行は全項目に severity=。行末の now=injected はテスト専用 env の残留を可視化（F-19）。
+HEALTH_RENDER_JQ='
+def na: if . == null or . == "" then "該当なし" else (. | tostring) end;
+def q: "「" + ((. | na) | gsub("[\t\r\n]"; " ")) + "」";
+def src_label: {maintenance: "週次メンテ", inventory: "棚卸し", load: "読込", recall: "想起"}[.] // .;
+def ack_text: if . == null then "該当なし"
+  elif .state == "pending" then "対処済み・次回判定待ち（\(.at | na): \(.note | na)）"
+  else "申告後に再失敗（\(.at | na): \(.note | na)）" end;
+def maint_text: .sources.maintenance as $m
+  | if $m.state == "completed" then "completed(\($m.run_id | na), trigger=\($m.trigger | na), streak=\($m.success_streak // 0), info=\($m.info_count // 0))"
+    elif $m.state == "running" then "running(開始 \($m.started_at | na)・以下の週次メンテ項目は前回 \($m.prev_completed_run_id // "なし") の完了記録)"
+    elif $m.state == "skipped" then "skipped(\($m.skipped | na)・前回 \($m.prev_completed_run_id // "なし") の完了記録)"
+    elif $m.state == "interrupted" then "interrupted(開始 \($m.started_at | na))"
+    elif $m.state == "broken" then "broken(\($m.broken_reason | na))"
+    elif $m.state == "legacy" then "legacy(旧形式の記録・run/completed なし)"
+    else "absent" end;
+def inv_text: .sources.inventory as $i
+  | if $i.readable then "\($i.actionable | na)(\($i.date | na), \($i.report_path | na))\(if $i.legacy then " legacy" else "" end)" else "none" end;
+def load_text: .sources.load as $l
+  | if ($l.observed | not) then "none" elif $l.vault_root_readable == false then "root_unreadable"
+    elif ($l.missing_count // 0) > 0 then "missing(\($l.missing_count))" else "ok" end;
+def recall_text: .sources.recall as $r
+  | if ($r.observed | not) then "none" else "observed(injected=\(if $r.injected == null then "null" else ($r.injected | tostring) end))" end;
+("【外部脳ヘルス】stage=\(.stage) items=\(.n_items) judged_at=\(.judged_at) maintenance=\(maint_text) inventory=\(inv_text) load=\(load_text) recall=\(recall_text)"
+  + (if .extras.now_injected then " now=injected" else "" end)),
+(.items[] | "- [\(.n)] source=\(.source | src_label) severity=\(.severity) "
+  + (if .source == "maintenance" then "step=\(.name | na) result=\(.result | na) actor=\(.actor | na) reason=\(.reason | q) "
+     elif .source == "inventory" then "kind=\(.kind | na) target=\(.target | na) detail=\(.detail | q) actor=\(.actor | na) "
+     elif .source == "load" then "target=\(.target | na) result=\(.result | na) actor=\(.actor | na) "
+     else "result=\(.result | na) actor=\(.actor | na) " end)
+  + "ok_when=\(.ok_when | q) ack=\(.ack | ack_text) log=\(.log_ref | na)"),
+(if .extras.reads_log_stale == true then "INFO:reads_log_stale" else empty end)
+'
 
-  printf '%s' "$lines"
+# compute_health_section — ②判定機 → ③描画。グローバルへ置く:
+#   HEALTH_SECTION＝ヘルス節（ヘッダ 1 行＋項目行 0〜N 行＋F-9 の ⚠️ 行）。
+#   HEALTH_INFO_LINE＝ヘルス源外の ℹ️ 行（節の外に置く・段階に影響しない＝F-17・SO-8）。
+# 判定機が動かない（不在・python3 不在・例外・非 0・JSON でない）ときは固定 1 行「判定不能」（段階を出さない＝F-10・NFR-2）。
+HEALTH_SECTION=""
+HEALTH_INFO_LINE=""
+compute_health_section() {
+  local py verdict rendered rc
+  HEALTH_SECTION=""
+  HEALTH_INFO_LINE=""
+  if [ ! -f "$HEALTH_JUDGE_LIB" ]; then
+    HEALTH_SECTION="【外部脳ヘルス】判定不能（health_judge.py: 判定機が見つかりません ${HEALTH_JUDGE_LIB}）"
+    return 0
+  fi
+  py="$(command -v python3 2>/dev/null)"
+  [ -n "$py" ] || py="/usr/bin/python3"
+  verdict="$("$py" "$HEALTH_JUDGE_LIB" judge \
+    --last-run "$MAINTENANCE_LAST_RUN_FILE" \
+    --inventory-latest "$VAULT_INVENTORY_LOG_DIR/latest.json" \
+    --observation "$HEALTH_OBS_PATH" \
+    --recall-log "$VAULT_RECALL_LOG" \
+    --reads-log "$VAULT_READS_LOG" \
+    --plist "$MAINTENANCE_PLIST_FILE" \
+    --recall-stale-days "$VAULT_AGENT_LOG_STALE_DAYS" \
+    ${HEALTH_JUDGE_NOW:+--now "$HEALTH_JUDGE_NOW"} 2>/dev/null)"
+  rc=$?
+  if [ "$rc" != "0" ] || [ -z "$verdict" ]; then
+    HEALTH_SECTION="【外部脳ヘルス】判定不能（health_judge.py: 判定機が終了コード ${rc} で失敗）"
+    return 0
+  fi
+  rendered="$(printf '%s' "$verdict" | jq -r "$HEALTH_RENDER_JQ" 2>/dev/null)"
+  if [ -z "$rendered" ]; then
+    HEALTH_SECTION="【外部脳ヘルス】判定不能（health_judge.py: 出力が health-verdict/1 として読めません）"
+    return 0
+  fi
+  # ヘルス源外（SO-8・L-3）: HEALTH_RENDER_JQ が末尾に出す印 1 行（extras.reads_log_stale が
+  # true のときだけ）を剥がしてヘルス節の外の ℹ️ 行へ写す（段階に影響しない）。json.dump の区切り
+  # 文字列一致に頼らない＝判定機の出力形式の変更に対して脆くしない（外部プロセス +0）。
+  case "$rendered" in
+    *$'\n'INFO:reads_log_stale)
+      HEALTH_INFO_LINE="ℹ️ vault-reads.tsv に直近 ${VAULT_AGENT_LOG_STALE_DAYS} 日の有効な記録なし（ヘルス源外・段階に影響しない）"
+      rendered="${rendered%$'\n'INFO:reads_log_stale}"
+      ;;
+  esac
+  HEALTH_SECTION="$rendered"
+  if [ "$HEALTH_OBS_WRITE_FAILED" = "1" ]; then
+    HEALTH_SECTION="${HEALTH_SECTION}
+⚠️ 観測記録の保存に失敗（Dock と食い違う可能性: ${HEALTH_OBSERVATION_FILE}）"
+  fi
+  return 0
 }
 
 INPUT=$(cat 2>/dev/null || true)
-SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // ""' 2>/dev/null)
-AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // ""' 2>/dev/null)
+# session_id・agent_type・source（startup／resume／…＝観測記録の監査用）を jq 1 回で取る（外部プロセスを増やさない）。
+INPUT_FIELDS=$(printf '%s' "$INPUT" | jq -r '[(.session_id // ""), (.agent_type // ""), (.source // "")] | @tsv' 2>/dev/null)
+SESSION_ID="${INPUT_FIELDS%%	*}"
+INPUT_FIELDS_REST="${INPUT_FIELDS#*	}"
+AGENT_TYPE="${INPUT_FIELDS_REST%%	*}"
+HOOK_SOURCE="${INPUT_FIELDS_REST#*	}"
+[ "$INPUT_FIELDS" = "$INPUT_FIELDS_REST" ] && { AGENT_TYPE=""; HOOK_SOURCE=""; }
+[ "$INPUT_FIELDS_REST" = "$AGENT_TYPE" ] && HOOK_SOURCE=""
 
 is_worker=0
 [ -n "$AGENT_TYPE" ] && is_worker=1
@@ -333,8 +386,12 @@ else
   missing_count=0
   unexpected_missing=""
   unexpected_missing_count=0
+  obs_required_nl=""
+  obs_missing_nl=""
   for f in "${FILES[@]}"; do
     abs="$VAULT/$f"
+    is_local_only_file "$f" || obs_required_nl="${obs_required_nl}${f}
+"
     if [ -f "$abs" ]; then
       lines=$(wc -l < "$abs" | tr -d ' ')
       list="$list
@@ -346,6 +403,8 @@ else
       unexpected_missing="$unexpected_missing
   - $abs"
       unexpected_missing_count=$((unexpected_missing_count + 1))
+      obs_missing_nl="${obs_missing_nl}${f}
+"
     fi
   done
   if [ "$missing_count" -gt 0 ]; then
@@ -435,8 +494,11 @@ else
     fi
   fi
 
-  # 外部脳ヘルス行（fail-open: 失敗してもブートストラップ本文は必ず出す）。
-  HEALTH_LINES="$(compute_health_lines 2>/dev/null)" || HEALTH_LINES=""
+  # 外部脳ヘルス（fail-open: 失敗してもブートストラップ本文は必ず出す）＝①観測記録 → ②判定機 → ③描画。
+  write_health_observation "$obs_required_nl" "$obs_missing_nl" 2>/dev/null
+  compute_health_section 2>/dev/null
+  [ -n "$HEALTH_SECTION" ] || HEALTH_SECTION='【外部脳ヘルス】判定不能（health_judge.py: 描画に失敗）'
+  [ -n "$HEALTH_OBS_TMP" ] && rm -f "$HEALTH_OBS_TMP" 2>/dev/null
 
   read -r -d '' DIRECTIVE <<EOF
 【セッション開始ブートストラップ｜ハーネス強制注入】
@@ -457,9 +519,10 @@ ${TEAM_MODE_DIRECTIVE5}
 ⑥ プロジェクトが確定したら1回だけ宣言する: ~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>（宣言済みなら呼び直さない・実行はリーダーであってフックではない）
 ${MACHINE_ROLE_HOLD_LINE:+
 ${MACHINE_ROLE_HOLD_LINE}}
-${HEALTH_LINES:+
-【外部脳ヘルス】（scripts/check-drift.sh ⑥の簡易版。詳細確認は本体を実行）
-$HEALTH_LINES}
+
+${HEALTH_SECTION}${HEALTH_INFO_LINE:+
+
+${HEALTH_INFO_LINE}}
 ${LOCAL_PROFILE_WARNING:+
 【ローカル実体プロファイル】
 $LOCAL_PROFILE_WARNING}

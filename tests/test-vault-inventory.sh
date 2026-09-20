@@ -1487,6 +1487,114 @@ review_by: $(d_date 10)"
   rm -rf "$VAULT_HOME"
 }
 
+echo "=== HI-1. items（health-self-explain 設計 v1.2 §3.5）: items_len_equals_actionable / items_kind_in_sections_vocab / items_target_detail_match_report — 8 種別を 1 件ずつ置いた Vault で latest.json の items が要確認 1 件ごとに {kind,target,detail} を持つ ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+  # broken_links（1）＋ missing_aliases（1）: aliases 無し・リンク切れ 1 つ
+  write_note "$V" "Knowledge/hi1-broken.md" $'date: 2026-01-01' "本文 [[hi1-no-such-target]]。"
+  # date_drift（1）: frontmatter 2026-01-01 ＜ 本文 2026-02-01
+  write_note "$V" "Knowledge/hi1-drift.md" $'date: 2026-01-01\naliases: [hi1-drift-alias]' "2026-02-01 に更新した本文。"
+  # missing_updated（1）: Preferences で updated 無し
+  write_note "$V" "Preferences/hi1-noupdated.md" $'date: 2026-01-01\naliases: [hi1-noupdated-alias]' "本文"
+  # generic_aliases（1）: 短すぎる ASCII alias
+  write_note "$V" "Knowledge/hi1-generic.md" $'date: 2026-01-01\naliases: [ab]' "本文"
+  # review_overdue（1）・review_invalid（1）
+  write_note "$V" "Decisions/2026-01-01-hi1-overdue.md" $'date: 2026-01-01\naliases: [hi1-overdue-alias]\nreview_by: 2026-01-10' "本文"
+  write_note "$V" "Decisions/2026-01-01-hi1-invalid.md" $'date: 2026-01-01\naliases: [hi1-invalid-alias]\nreview_by: someday' "本文"
+  # status_future_dated（1）: status ノートの updated が未来日
+  write_note "$V" "Projects/hi1-future.md" "date: 2026-01-01
+updated: $(d_date 30)
+status: active
+aliases: [hi1-future-alias]"
+  # unreadable（1・health-self-explain 検証 A-7）: 壊れたsymlink（既存テスト
+  # 46/47 と同じ既定の再現法＝chmod 000 は実行ユーザーがroot等では効かず
+  # 不安定・非UTF-8はエンコーディング前提に依存するため、より安定した
+  # is_file()==False の経路を使う）。target=rel（行番号なし）・detail=固定の
+  # 理由文という unreadable 独自の形を検査する。
+  ln -s "$V/Knowledge/hi1-does-not-exist.md" "$V/Knowledge/hi1-unreadable.md"
+  # stale_keywords（1・health-self-explain 検証 A-7）: 旧語ヒット。aliases を
+  # 付けて missing_aliases の二重計上を避ける（他のHI-1ノートと同じ流儀）。
+  write_note "$V" "Knowledge/hi1-stale.md" $'date: 2026-01-01\naliases: [hi1-stale-alias]' "使用率ベースでルーティングする方針についての記述。"
+
+  out="$(run_inventory "$VAULT_HOME")"
+  LATEST="$VAULT_HOME/.claude/logs/vault-inventory/latest.json"
+  actionable="$(jq -r '.actionable' "$LATEST")"
+  assert_eq "HI-1: 要確認 10 件（レポート冒頭）" "10" "$(extract_actionable "$out")"
+  assert_eq "items_len_equals_actionable: len(items) == actionable" "$actionable" "$(jq -r '.items | length' "$LATEST")"
+  assert_eq "items_len_equals_actionable: 種別ごとの件数の合計（sections）とも一致" "$(jq -r '[.sections[]] | add' "$LATEST")" "$(jq -r '.items | length' "$LATEST")"
+  assert_eq "items_kind_in_sections_vocab: items[].kind はすべて sections のキー" "true" \
+    "$(jq -r '(.sections | keys) as $k | [.items[].kind] | all(. as $x | $k | index($x) != null)' "$LATEST")"
+  assert_eq "items_kind_in_sections_vocab: kind ごとの件数が sections と一致" "true" \
+    "$(jq -r '. as $d | [$d.sections | to_entries[] | .key as $k | .value == ([$d.items[] | select(.kind == $k)] | length)] | all' "$LATEST")"
+  assert_eq "items_kind_in_sections_vocab: 10 種別が 1 件ずつ" "broken_links date_drift generic_aliases missing_aliases missing_updated review_invalid review_overdue stale_keywords status_future_dated unreadable" \
+    "$(jq -r '[.items[].kind] | sort | join(" ")' "$LATEST")"
+  # target／detail は md レポートの各節の行と同じ材料
+  assert_eq "items_target_detail_match_report: broken_links の target/detail" "Knowledge/hi1-broken.md|[[hi1-no-such-target]]" \
+    "$(jq -r '.items[] | select(.kind=="broken_links") | "\(.target)|\(.detail)"' "$LATEST")"
+  assert_contains "items_target_detail_match_report: md §3 にも同じ行" "$out" '- `Knowledge/hi1-broken.md` → `[[hi1-no-such-target]]`'
+  assert_eq "items_target_detail_match_report: date_drift の detail" "Knowledge/hi1-drift.md|frontmatter: 2026-01-01 ＜ 本文最新: 2026-02-01" \
+    "$(jq -r '.items[] | select(.kind=="date_drift") | "\(.target)|\(.detail)"' "$LATEST")"
+  assert_contains "items_target_detail_match_report: md §2 にも同じ行" "$out" '- `Knowledge/hi1-drift.md` — frontmatter: 2026-01-01 ＜ 本文最新: 2026-02-01'
+  assert_eq "items_target_detail_match_report: review_overdue の target" "Decisions/2026-01-01-hi1-overdue.md" \
+    "$(jq -r '.items[] | select(.kind=="review_overdue") | .target' "$LATEST")"
+  assert_contains "items_target_detail_match_report: review_overdue の detail は review_by と超過日数" \
+    "$(jq -r '.items[] | select(.kind=="review_overdue") | .detail' "$LATEST")" "review_by 2026-01-10（"
+  assert_eq "items_target_detail_match_report: review_invalid の detail" "review_by: someday" \
+    "$(jq -r '.items[] | select(.kind=="review_invalid") | .detail' "$LATEST")"
+  assert_eq "items_target_detail_match_report: generic_aliases の detail" "alias \`ab\`（短すぎ）" \
+    "$(jq -r '.items[] | select(.kind=="generic_aliases") | .detail' "$LATEST")"
+  assert_eq "items_target_detail_match_report: status_future_dated の target" "Projects/hi1-future.md" \
+    "$(jq -r '.items[] | select(.kind=="status_future_dated") | .target' "$LATEST")"
+  assert_eq "items_target_detail_match_report: missing_updated / missing_aliases の target" "Preferences/hi1-noupdated.md Knowledge/hi1-broken.md" \
+    "$(jq -r '[(.items[] | select(.kind=="missing_updated") | .target), (.items[] | select(.kind=="missing_aliases") | .target)] | join(" ")' "$LATEST")"
+  # health-self-explain 検証 A-7: unreadable（target=rel・行番号なし・detail=固定の理由文）
+  assert_eq "items_target_detail_match_report: unreadable の target/detail" "Knowledge/hi1-unreadable.md|ファイルが見つかりません（壊れたsymlink等の可能性）" \
+    "$(jq -r '.items[] | select(.kind=="unreadable") | "\(.target)|\(.detail)"' "$LATEST")"
+  # health-self-explain 検証 A-7: stale_keywords（target=rel:line_no・detail=【label】 snippet）
+  assert_eq "items_target_detail_match_report: stale_keywords の target は rel:line_no の形" "Knowledge/hi1-stale.md:6" \
+    "$(jq -r '.items[] | select(.kind=="stale_keywords") | .target' "$LATEST")"
+  assert_eq "items_target_detail_match_report: stale_keywords の detail は【label】 snippet の形" "【使用率ルーティング】 使用率ベースでルーティングする方針についての記述。" \
+    "$(jq -r '.items[] | select(.kind=="stale_keywords") | .detail' "$LATEST")"
+  assert_eq "items の各要素は kind/target/detail の 3 キー（文字列）" "true" \
+    "$(jq -r '[.items[] | (keys == ["detail","kind","target"]) and (.kind|type=="string") and (.target|type=="string") and (.detail|type=="string")] | all' "$LATEST")"
+  assert_eq "既存キー（date/report_path/actionable/n_notes/sections）は不変" "true" \
+    "$(jq -r 'has("date") and has("report_path") and has("actionable") and has("n_notes") and has("sections")' "$LATEST")"
+  rm -rf "$VAULT_HOME"
+}
+
+echo "=== HI-2. items_exclude_stale_projects_and_size: 停滞プロジェクト・review_by 到来（14 日以内）・必読サイズ超過・未読（要観察）は items に載らず、actionable=0 なら items は空配列 ==="
+{
+  VAULT_HOME="$(mktemp -d)"
+  V="$VAULT_HOME/Data/obsidian"
+  make_clean_vault "$V"
+  write_note "$V" "Projects/hi2-stalled.md" "date: $(d_date -40)
+updated: $(d_date -40)
+status: active
+aliases: [hi2-stalled-alias]"
+  write_note "$V" "Decisions/2026-01-01-hi2-soon.md" "date: 2026-01-01
+aliases: [hi2-soon-alias]
+review_by: $(d_date 10)"
+  {
+    echo "---"; echo "date: 2026-01-01"; echo "updated: 2026-01-01"
+    echo "aliases: [clean-vault-alias-vault-operation]"; echo "---"; echo
+    for i in $(seq 1 125); do echo "line $i"; done
+  } > "$V/Preferences/vault-operation.md"
+  # 未読（要観察）: ログが浅い reads 記録を 1 行置く
+  mkdir -p "$VAULT_HOME/.claude/logs"
+  printf '%s\tsid-hi2\tKnowledge/README.md\n' "$(d_ts -3)" > "$VAULT_HOME/.claude/logs/vault-reads.tsv"
+
+  out="$(run_inventory "$VAULT_HOME")"
+  LATEST="$VAULT_HOME/.claude/logs/vault-inventory/latest.json"
+  assert_eq "HI-2: actionable=0" "0" "$(jq -r '.actionable' "$LATEST")"
+  assert_eq "items_exclude_stale_projects_and_size: items は空配列" "[]" "$(jq -c '.items' "$LATEST")"
+  assert_eq "items_exclude_stale_projects_and_size: 停滞・サイズ・要観察の語は items に現れない" "0" \
+    "$(jq -r '[.items[] | select(.target | test("hi2-stalled|vault-operation|hi2-soon"))] | length' "$LATEST")"
+  assert_contains "停滞プロジェクトは md §6 の情報表示のまま" "$out" "Projects/hi2-stalled.md\`"
+  rm -rf "$VAULT_HOME"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

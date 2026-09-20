@@ -365,6 +365,31 @@ latest_run_dir() {
   python3 -c "import pathlib,sys; p=pathlib.Path(sys.argv[1]); print(p.resolve() if p.is_symlink() else '')" "$LOG_ROOT/latest"
 }
 
+# $1 を根とするプロセス木を SIGKILL する（health-self-explain 検証 A-1）。
+# main チェックアウトから走らせたときにも安全であること＝殺す対象を
+# パターン一致（pkill -f <パス>）にすると、実 launchd の週次メンテや実
+# check-drift.sh が走っていれば SIGKILL してしまいうる（NFR-5）。ここでは
+# $1（run_maintenance をバックグラウンド起動したジョブの PID）を根に、
+# pgrep -P で子孫を再帰収集してから殺す（bash 3.2 互換＝配列と while ループの
+# BFS。連想配列・mapfile は使わない）。$1 自身も対象に含める。
+# 実プロセスに当たらない根拠＝殺す対象が $BG_PID の子孫（と $BG_PID 自身）に
+# 限られる＝ここで走らせた run_maintenance の木以外は一致しようがない。
+kill_process_tree() {
+  local root_pid="$1"
+  local queue=("$root_pid") pids=() i=0 pid child
+  while [[ "$i" -lt "${#queue[@]}" ]]; do
+    pid="${queue[$i]}"
+    i=$(( i + 1 ))
+    pids+=("$pid")
+    for child in $(pgrep -P "$pid" 2>/dev/null); do
+      queue+=("$child")
+    done
+  done
+  for pid in "${pids[@]}"; do
+    kill -9 "$pid" 2>/dev/null || true
+  done
+}
+
 echo "=== 1. 正常系: 全Phase成功・anomalyなし・last_success_at更新・候補件数記録・通知なし ==="
 {
   T="$WORK_ROOT/t1"; mkdir -p "$T"
@@ -1451,6 +1476,544 @@ WRAPEOF
     [[ "$WRITE_CALL_COUNT" =~ ^[0-9]+$ ]] || WRITE_CALL_COUNT=0
     assert_eq "cmuxの書込系コマンドは1度も呼ばれない(AC-34・X-1)" "0" "$WRITE_CALL_COUNT"
   fi
+}
+
+# =============================================================================
+# health-self-explain（設計 v1.2 §3・§10.1・§16.2 実装 A）: 状態記録 schema 2 の
+# 書き手契約。run（6 経路）・completed（4 経路）・steps の結果種別／主体／理由・
+# success_streak・ack の失効・trigger。
+#
+# B 向け書き手注入 fixture の書き出し（設計 §10.1 V-17）: 環境変数
+# HEALTH_FIXTURE_OUT が非空なら、該当ケース（S-1・S-2・S-3・S-4・S-6・S-7・S-9・
+# S-10・S-11・S-17 の 10 本）の last-run.json を $HEALTH_FIXTURE_OUT/S-<n>/last-run.json
+# へ写す。
+#   HEALTH_FIXTURE_OUT=/tmp/health-fixtures bash tests/test-maintenance.sh
+# S-13 は S-2 と同じ記録（判定時刻だけが違う）、S-22 は S-2 の actor を未知値に
+# 書き換えたもの（書き手は未知値を書かない＝設計 §3.4）＝B が S-2 から派生させる。
+# =============================================================================
+
+# last-run.json のフィールドを jq で読む（$1＝jq フィルタ）。
+lr() { jq -S -r "$1" "$LOG_ROOT/last-run.json"; }
+
+export_fixture() {
+  local sid="$1"
+  [[ -n "${HEALTH_FIXTURE_OUT:-}" ]] || return 0
+  mkdir -p "$HEALTH_FIXTURE_OUT/$sid" \
+    && cp "$LOG_ROOT/last-run.json" "$HEALTH_FIXTURE_OUT/$sid/last-run.json" \
+    && echo "  fixture - $sid -> $HEALTH_FIXTURE_OUT/$sid/last-run.json"
+}
+
+# 前回の完了記録として使う fixture（busy-skip 経路で completed が「前回のまま」で
+# あることをバイト単位で検査するための種）。
+SEED_COMPLETED='{"schema": 2, "started_at": "2026-01-05T06:00:00Z", "last_success_at": "2026-01-05T06:07:00Z", "last_result": "success", "last_result_summary": "", "run": {"run_id": "2026-01-05/060000-1", "run_dir": "/prev/2026-01-05/060000-1", "started_at": "2026-01-05T06:00:00Z", "trigger": "scheduled", "status": "completed", "stale_after_seconds": 7200, "skip_reason": null, "finished_at": "2026-01-05T06:07:00Z"}, "completed": {"run_id": "2026-01-05/060000-1", "run_dir": "/prev/2026-01-05/060000-1", "trigger": "scheduled", "started_at": "2026-01-05T06:00:00Z", "finished_at": "2026-01-05T06:07:00Z", "fully_ok": true, "steps": [], "info": []}, "success_streak": 3}'
+
+echo "=== H-1. writer_run_written_on_all_six_endings (a) 完走 / writer_completed_run_id_equals_run / writer_legacy_keys_kept / writer_trigger（既定=scheduled） ==="
+{
+  T="$WORK_ROOT/h1"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "(a) exit 0" "0" "$rc"
+  assert_eq "writer_run_written_on_all_six_endings (a): run.status=completed" "completed" "$(lr '.run.status')"
+  assert_eq "(a) run.skip_reason=null" "null" "$(lr '.run.skip_reason')"
+  assert_eq "(a) run.finished_at が入る" "true" "$(lr '.run.finished_at != null')"
+  assert_eq "(a) schema=2" "2" "$(lr '.schema')"
+  assert_eq "writer_completed_run_id_equals_run: completed.run_id == run.run_id" "true" "$(lr '.completed.run_id == .run.run_id')"
+  assert_eq "(a) run_id は <日付>/<時刻-pid> の形" "true" "$(lr '.run.run_id | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}/[0-9]{6}-[0-9]+$")')"
+  # latest symlink の実体（realpath＝/private/var/...）と RUN_DIR（/var/...）は macOS の
+  # /var → /private/var で綴りが違うため、symlink の指す先そのものと比較する。
+  assert_eq "(a) run.run_dir は RUN_DIR の絶対パス（latest symlink の指す先）" "$(readlink "$LOG_ROOT/latest")" "$(lr '.run.run_dir')"
+  assert_eq "(a) run.stale_after_seconds は MAINTENANCE_STALE_LOCK_SECONDS の写し（テスト既定 3600）" "3600" "$(lr '.run.stale_after_seconds')"
+  assert_eq "(a) completed.fully_ok=true" "true" "$(lr '.completed.fully_ok')"
+  assert_eq "(a) completed.steps は空（正常な工程は書かない）" "0" "$(lr '.completed.steps | length')"
+  assert_eq "(a) completed.info は配列" "true" "$(lr '.completed.info | type == "array"')"
+  assert_eq "writer_trigger: 印ファイルも env も無ければ scheduled" "scheduled" "$(lr '.run.trigger')"
+  assert_eq "(a) completed.trigger も scheduled" "scheduled" "$(lr '.completed.trigger')"
+  assert_eq "(a) success_streak=1（初回の完全正常終了）" "1" "$(lr '.success_streak')"
+  for k in started_at last_success_at last_result last_result_summary fragments_candidates fragments_since; do
+    assert_eq "writer_legacy_keys_kept: 旧キー $k が残る" "true" "$(lr "has(\"$k\")")"
+  done
+  assert_eq "writer_legacy_keys_kept: started_at == run.started_at" "true" "$(lr '.started_at == .run.started_at')"
+  export_fixture "S-1"
+}
+
+echo "=== H-2. writer_run_written_on_all_six_endings (b) Phase0 直前スナップショット失敗 → completed に phase0-backup fail 1 件 ==="
+{
+  T="$WORK_ROOT/h2"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  git -C "$VAULT" checkout -q -b other-branch
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "(b) exit 1" "1" "$rc"
+  assert_eq "writer_run_written_on_all_six_endings (b): run.status=completed" "completed" "$(lr '.run.status')"
+  assert_eq "(b) completed.run_id == run.run_id" "true" "$(lr '.completed.run_id == .run.run_id')"
+  assert_eq "(b) fully_ok=false" "false" "$(lr '.completed.fully_ok')"
+  assert_eq "(b) steps ちょうど 1 件" "1" "$(lr '.completed.steps | length')"
+  assert_eq "(b) steps[0].id=phase0-backup" "phase0-backup" "$(lr '.completed.steps[0].id')"
+  assert_eq "(b) steps[0].result=fail" "fail" "$(lr '.completed.steps[0].result')"
+  assert_eq "(b) steps[0].actor=AI" "AI" "$(lr '.completed.steps[0].actor')"
+  assert_eq "(b) steps[0].log_ref は backup0 の stderr ログ" "$(readlink "$LOG_ROOT/latest")/backup0-stderr.log" "$(lr '.completed.steps[0].log_ref')"
+  assert_eq "(b) success_streak=0" "0" "$(lr '.success_streak')"
+}
+
+echo "=== H-3. writer_run_written_on_all_six_endings (c) Vault 書込ロック取得失敗（回収ミューテックス競合・exit 1）→ completed に phase0-lock fail 1 件 ==="
+{
+  T="$WORK_ROOT/h3"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  mkdir -p "$LOG_ROOT"
+  echo "999999" > "$LOG_ROOT/vault-writer.lock"
+  mkdir -p "$LOG_ROOT/vault-writer.lock.reclaim"
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "(c) exit 1（EXIT trap を経ても終了コードは変わらない）" "1" "$rc"
+  assert_eq "writer_run_written_on_all_six_endings (c): run.status=completed" "completed" "$(lr '.run.status')"
+  assert_eq "(c) completed.run_id == run.run_id" "true" "$(lr '.completed.run_id == .run.run_id')"
+  assert_eq "(c) steps[0].id=phase0-lock" "phase0-lock" "$(lr '.completed.steps[0].id')"
+  assert_eq "(c) steps[0].result=fail・actor=AI" "fail/AI" "$(lr '.completed.steps[0] | "\(.result)/\(.actor)"')"
+  assert_eq "(c) acquire_pid_lock が status_file に error を書いている" "error" "$(cat "$(latest_run_dir)/lock-status.txt")"
+  assert_file_exists "(c) 現行の通知も維持" "$OSASCRIPT_LOG"
+  assert_contains "(c) last_result=fail も維持（旧読み手互換）" "$(cat "$LOG_ROOT/last-run.json")" "\"last_result\": \"fail\""
+}
+
+echo "=== H-4. writer_dir_fail_writes_run_and_completed (d) 実行ディレクトリ作成失敗 → run（仮 run_id）と completed（phase0-dir fail）を同じ run_id で書く ==="
+{
+  T="$WORK_ROOT/h4"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  DATE_COMPONENT="$(date +%Y-%m-%d)"
+  mkdir -p "$LOG_ROOT"
+  : > "$LOG_ROOT/$DATE_COMPONENT"    # DATE_DIR の位置に通常ファイル＝mkdir -p が失敗する
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "(d) exit 1" "1" "$rc"
+  assert_eq "writer_dir_fail_writes_run_and_completed: run.status=completed" "completed" "$(lr '.run.status')"
+  assert_eq "writer_dir_fail_writes_run_and_completed: completed.run_id == run.run_id（「run は前回・completed は今回」を作らない）" "true" "$(lr '.completed.run_id == .run.run_id')"
+  assert_eq "(d) run_id は仮値でも <日付>/<時刻-pid> の形" "true" "$(lr '.run.run_id | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}/[0-9]{6}-[0-9]+$")')"
+  assert_eq "(d) run_dir は作れなかったパス（DATE_DIR 配下）" "true" "$(lr ".run.run_dir | startswith(\"$LOG_ROOT/$DATE_COMPONENT/\")")"
+  assert_eq "(d) steps[0].id=phase0-dir・fail・AI" "phase0-dir/fail/AI" "$(lr '.completed.steps[0] | "\(.id)/\(.result)/\(.actor)"')"
+  assert_eq "(d) log_ref は run_dir（工程ログが無い工程）" "true" "$(lr '.completed.steps[0].log_ref == .run.run_dir')"
+}
+
+echo "=== H-5. writer_busy_backup0_writes_skipped (e) Phase0 backup busy → run.status=skipped(busy:backup0)・completed は前回のまま・通知なし ==="
+{
+  T="$WORK_ROOT/h5"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  mkdir -p "$LOG_ROOT"
+  echo "$SEED_COMPLETED" > "$LOG_ROOT/last-run.json"
+  PREV_COMPLETED="$(lr '.completed')"
+  echo "$$" > "$TEST_TMPDIR/aienv-backup-vault.lock"
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "(e) exit 0" "0" "$rc"
+  assert_eq "writer_busy_backup0_writes_skipped: run.status=skipped" "skipped" "$(lr '.run.status')"
+  assert_eq "writer_busy_backup0_writes_skipped: run.skip_reason=busy:backup0" "busy:backup0" "$(lr '.run.skip_reason')"
+  assert_eq "(e) run.finished_at が入る" "true" "$(lr '.run.finished_at != null')"
+  assert_eq "(e) run.run_id は今回の開始（前回の run_id ではない）" "false" "$(lr '.run.run_id == "2026-01-05/060000-1"')"
+  assert_eq "(e) completed は前回のまま（丸ごと一致）" "$PREV_COMPLETED" "$(lr '.completed')"
+  assert_eq "(e) success_streak も前回のまま" "3" "$(lr '.success_streak')"
+  assert_file_not_exists "(e) busy は通知しない" "$OSASCRIPT_LOG"
+}
+
+echo "=== H-6. writer_busy_lock_writes_skipped_via_status_file (f) Vault 書込ロック busy（acquire_pid_lock 内の exit 0）→ guard が status_file を読み run.status=skipped(busy:lock)・rc 0 ==="
+{
+  T="$WORK_ROOT/h6"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  mkdir -p "$LOG_ROOT"
+  echo "$SEED_COMPLETED" > "$LOG_ROOT/last-run.json"
+  PREV_COMPLETED="$(lr '.completed')"
+  echo "$$" > "$LOG_ROOT/vault-writer.lock"
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "(f) exit 0（busy の exit 0 が EXIT trap の合成後も保たれる）" "0" "$rc"
+  assert_eq "(f) acquire_pid_lock が第 4 引数の status_file に busy を書いている" "busy" "$(cat "$(latest_run_dir)/lock-status.txt")"
+  assert_eq "writer_busy_lock_writes_skipped_via_status_file: run.status=skipped" "skipped" "$(lr '.run.status')"
+  assert_eq "writer_busy_lock_writes_skipped_via_status_file: run.skip_reason=busy:lock" "busy:lock" "$(lr '.run.skip_reason')"
+  assert_eq "(f) completed は前回のまま" "$PREV_COMPLETED" "$(lr '.completed')"
+  assert_file_not_exists "(f) busy は通知しない" "$OSASCRIPT_LOG"
+  assert_file_not_exists "(f) Phase1 は実行されない" "$(latest_run_dir)/step-status-drift.json"
+  assert_eq "(f) 他プロセスのロックは消されない（guard が cleanup を壊さない）" "$$" "$(cat "$LOG_ROOT/vault-writer.lock")"
+}
+
+echo "=== H-7. writer_lock_status_unknown_is_fail_not_silent: 区間内で exit 0 したのに status_file が読めない → phase0-lock fail「ロック状態が不明」として記録（静かに通さない） ==="
+{
+  T="$WORK_ROOT/h7"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  mkdir -p "$LOG_ROOT"
+  echo "$$" > "$LOG_ROOT/vault-writer.lock"
+  rc=0
+  # status_file を書込不能な場所へ向ける＝write_status_file は WARN だけで exit 0 のまま
+  # acquire_pid_lock が busy の exit 0 をする＝guard から見ると「rc 0 なのに状態不明」。
+  MAINTENANCE_LOCK_STATUS_FILE="/nonexistent-dir/health-h7/lock-status.txt" run_maintenance || rc=$?
+  assert_eq "run.status=completed（skipped ではない）" "completed" "$(lr '.run.status')"
+  assert_eq "writer_lock_status_unknown_is_fail_not_silent: steps[0].id=phase0-lock・fail" "phase0-lock/fail" "$(lr '.completed.steps[0] | "\(.id)/\(.result)"')"
+  assert_contains "理由に「ロック状態が不明」" "$(lr '.completed.steps[0].reason')" "ロック状態が不明"
+  assert_file_exists "通知される（静かに通さない）" "$OSASCRIPT_LOG"
+}
+
+echo "=== H-8. writer_interrupted_S4_run_only: 強制終了（kill -9＝電源断相当）→ run.status=running のまま・completed 無し（読み手が余裕で実行中／中断を分ける） ==="
+{
+  T="$WORK_ROOT/h8"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  FAKE_DRIFT_SLEEP=30 TIMEOUT_CHECK_DRIFT=60 run_maintenance &
+  BG_PID=$!
+  started=0
+  for _ in $(seq 1 100); do
+    if [[ -f "$LOG_ROOT/last-run.json" && "$(lr '.run.status' 2>/dev/null)" == "running" && -f "$(latest_run_dir)/drift-stderr.log" ]]; then
+      started=1; break
+    fi
+    sleep 0.1
+  done
+  assert_eq "check-drift 実行中に run.status=running を観測できた" "1" "$started"
+  # 電源断相当＝trap を走らせずに runner・wrapper・子（maintenance.sh →
+  # maintenance_run_step.py → FAKE check-drift.sh → sleep）を全部 -9 で止める。
+  # $BG_PID を根とするプロセス木だけを殺す（A-1＝パターン一致はしない）。
+  kill_process_tree "$BG_PID"
+  wait "$BG_PID" 2>/dev/null || true
+  assert_eq "writer_interrupted_S4_run_only: run.status=running のまま" "running" "$(lr '.run.status')"
+  assert_eq "run.finished_at=null" "null" "$(lr '.run.finished_at')"
+  assert_eq "completed は無い（開始の記録のみ）" "false" "$(lr 'has("completed")')"
+  assert_eq "run.stale_after_seconds が読み手の線として載っている" "3600" "$(lr '.run.stale_after_seconds')"
+  export_fixture "S-4"
+}
+
+echo "=== H-9. writer_run_rewritten_whole_on_finish: 実行中に別プロセス（後発の busy-skip）が run を上書きしても、完了時に自分の内容で丸ごと書き戻す ==="
+{
+  T="$WORK_ROOT/h9"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # Phase3 冒頭の宣言掃除の入口を「run を外部から上書きするスタブ」に差し替える
+  # （後発の手動／定期起動が busy-skip で run を上書きした状況の模擬）。
+  OVERWRITE_STUB="$T/overwrite-run.sh"
+  cat > "$OVERWRITE_STUB" <<EOF
+#!/usr/bin/env bash
+LR="$LOG_ROOT/last-run.json"
+jq '.run = {"run_id": "foreign/000000-1", "run_dir": "/foreign", "started_at": "2026-01-01T00:00:00Z", "trigger": "manual", "status": "skipped", "stale_after_seconds": 1, "skip_reason": "busy:lock", "finished_at": "2026-01-01T00:00:01Z", "extra": "zzz"}' "\$LR" > "\$LR.tmp" && mv "\$LR.tmp" "\$LR"
+exit 0
+EOF
+  chmod +x "$OVERWRITE_STUB"
+  rc=0
+  MAINTENANCE_TASK_PRUNE_CMD="$OVERWRITE_STUB" run_maintenance || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  assert_eq "writer_run_rewritten_whole_on_finish: run.run_id は自分の run_id（foreign ではない）" "true" "$(lr '.run.run_id == .completed.run_id and .run.run_id != "foreign/000000-1"')"
+  assert_eq "run.status=completed・skip_reason=null・trigger=scheduled" "completed/null/scheduled" "$(lr '.run | "\(.status)/\(.skip_reason)/\(.trigger)"')"
+  assert_eq "patch ではなく丸ごと書き直し（外部が足した extra キーが残らない）" "false" "$(lr '.run | has("extra")')"
+}
+
+echo "=== H-10. writer_steps_result_actor_from_table: 固定表（設計 §3.3）の全行＝step_name／step_actor を runner から抽出して検査（phase0-export=AI＝本人裁定 OQ-2・phase1-drift は warn=本人／fail=AI・表に無い id=本人） ==="
+{
+  # runner 本体は実行せず、表の関数定義だけを抽出して評価する（表の全行を 1 回の
+  # 実行で発生させることはできないため）。抽出範囲は関数定義の開始行から
+  # 直後の「^}」まで。
+  TABLE_FUNCS="$(sed -n '/^step_name() {/,/^}/p; /^step_actor() {/,/^}/p' "$REPO_ROOT/scripts/maintenance.sh")"
+  eval "$TABLE_FUNCS"
+  for pair in "phase0-dir:AI" "phase0-lock:AI" "phase0-backup:AI" "phase0-export:AI" \
+              "phase1-fragments:AI" "phase1-inventory:AI" "phase3-summary:AI" "phase3-backup:AI" "phase3-record:AI"; do
+    sid="${pair%%:*}"; expected="${pair##*:}"
+    assert_eq "writer_steps_result_actor_from_table: $sid (fail) → $expected" "$expected" "$(step_actor "$sid" fail)"
+  done
+  assert_eq "writer_drift_rc1_warn_person_rc2_fail_ai（表）: phase1-drift warn → 本人" "本人" "$(step_actor phase1-drift warn)"
+  assert_eq "writer_drift_rc1_warn_person_rc2_fail_ai（表）: phase1-drift fail → AI" "AI" "$(step_actor phase1-drift fail)"
+  assert_eq "表に無い step_id は本人に倒す（§3.4）" "本人" "$(step_actor no-such-step fail)"
+  assert_eq "step_name: 表に無い id はそのまま返す" "no-such-step" "$(step_name no-such-step)"
+  assert_eq "step_name: phase1-drift" "Phase1① check-drift" "$(step_name phase1-drift)"
+  unset -f step_name step_actor
+}
+
+echo "=== H-11. writer_steps_result_actor_from_table（実走）: 1 回の完走で phase0-export・phase1-drift(warn)・phase1-fragments・phase1-inventory・phase3-summary・phase3-backup の 6 工程が結果種別・主体・log_ref つきで独立に残る ==="
+{
+  T="$WORK_ROOT/h11"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  # phase3-summary: Fragments ディレクトリを書込不能にして月ディレクトリ作成を失敗させる。
+  chmod 0500 "$VAULT/Fragments"
+  # phase3-backup: Phase3 冒頭（宣言掃除の入口）で Vault のブランチを変えて最終 commit を error にする。
+  BRANCH_STUB="$T/switch-branch.sh"
+  printf '#!/usr/bin/env bash\ngit -C "%s" checkout -q -b other-branch\nexit 0\n' "$VAULT" > "$BRANCH_STUB"
+  chmod +x "$BRANCH_STUB"
+  rc=0
+  FAKE_EXPORT_EXIT=1 FAKE_DRIFT_EXIT=1 FAKE_DRIFT_JSON='{"total_drift": 2, "item4_drift": 0, "drift_excluding_item4": 2, "unknown_config_keys": 1}' \
+    FAKE_FRAGMENTS_LOG_EXIT=1 FAKE_VAULT_INVENTORY_EXIT=1 MAINTENANCE_TASK_PRUNE_CMD="$BRANCH_STUB" \
+    run_maintenance || rc=$?
+  chmod 0700 "$VAULT/Fragments" 2>/dev/null || true
+  assert_eq "exit 0（隔離して継続）" "0" "$rc"
+  assert_eq "steps ちょうど 6 件" "6" "$(lr '.completed.steps | length')"
+  assert_eq "id の並びは発生順" "phase0-export phase1-drift phase1-fragments phase1-inventory phase3-summary phase3-backup" "$(lr '[.completed.steps[].id] | join(" ")')"
+  assert_eq "phase0-export: fail/AI" "fail/AI" "$(lr '.completed.steps[] | select(.id=="phase0-export") | "\(.result)/\(.actor)"')"
+  assert_eq "phase1-drift: warn/本人（rc=1）" "warn/本人" "$(lr '.completed.steps[] | select(.id=="phase1-drift") | "\(.result)/\(.actor)"')"
+  assert_eq "phase1-fragments: fail/AI" "fail/AI" "$(lr '.completed.steps[] | select(.id=="phase1-fragments") | "\(.result)/\(.actor)"')"
+  assert_eq "phase1-inventory: fail/AI" "fail/AI" "$(lr '.completed.steps[] | select(.id=="phase1-inventory") | "\(.result)/\(.actor)"')"
+  assert_eq "phase3-summary: fail/AI・log_ref は run_dir" "fail/AI/$(readlink "$LOG_ROOT/latest")" "$(lr '.completed.steps[] | select(.id=="phase3-summary") | "\(.result)/\(.actor)/\(.log_ref)"')"
+  assert_eq "phase3-backup: fail/AI・log_ref は backup3 の stderr" "fail/AI/$(readlink "$LOG_ROOT/latest")/backup3-stderr.log" "$(lr '.completed.steps[] | select(.id=="phase3-backup") | "\(.result)/\(.actor)/\(.log_ref)"')"
+  assert_eq "各工程に name が付く" "Phase1① check-drift" "$(lr '.completed.steps[] | select(.id=="phase1-drift") | .name')"
+  assert_eq "info[] に未知 config キーの参考情報（工程ではない）が 1 件" "1" "$(lr '[.completed.info[] | select(contains("未知キー"))] | length')"
+  assert_eq "fully_ok=false・success_streak=0" "false/0" "$(lr '"\(.completed.fully_ok)/\(.success_streak)"')"
+}
+
+echo "=== H-12. writer_drift_rc1_warn_person_rc2_fail_ai（実走）: rc=2（実行異常）は fail／AI・timeout（WRAPPER_FAIL）も fail／AI ==="
+{
+  T="$WORK_ROOT/h12"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  FAKE_DRIFT_EXIT=2 run_maintenance || true
+  assert_eq "rc=2 → phase1-drift fail/AI" "fail/AI" "$(lr '.completed.steps[] | select(.id=="phase1-drift") | "\(.result)/\(.actor)"')"
+  T="$WORK_ROOT/h12b"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  FAKE_DRIFT_SLEEP=5 run_maintenance || true
+  assert_eq "timeout → phase1-drift fail/AI" "fail/AI" "$(lr '.completed.steps[] | select(.id=="phase1-drift") | "\(.result)/\(.actor)"')"
+  assert_contains "timeout の理由は工程の固定文＋ラッパの結果語" "$(lr '.completed.steps[0].reason')" "WRAPPER_FAIL timeout"
+  # health-self-explain 検証 A-6: JSON を出す前に timeout したので最終行は
+  # 人間向けの見出し行＝ラベルは「JSON:」ではなく「stdout 最終行:」。
+  assert_contains "timeout: 理由のラベルは JSON でなく stdout 最終行" "$(lr '.completed.steps[0].reason')" "stdout 最終行: [fake-check-drift] human readable line"
+  assert_not_contains "timeout: 「JSON:」ラベルは付かない" "$(lr '.completed.steps[0].reason')" "JSON:"
+}
+
+echo "=== H-13. S17_child_failure_is_fail / writer_scan_error_count_is_fail: 子（fragments_log.py）が exit 0 で scan_error_count>0 → 実行体は警告として完走するが結果種別は fail（09-14 型・AC-19 の書き手側） ==="
+{
+  T="$WORK_ROOT/h13"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  FAKE_FRAGMENTS_LOG_JSON='{"scan_error_count": 2, "fragments": [{"title": "a"}], "truncated": []}' run_maintenance || rc=$?
+  assert_eq "exit 0（完走）" "0" "$rc"
+  assert_eq "S17_child_failure_is_fail: steps ちょうど 1 件" "1" "$(lr '.completed.steps | length')"
+  assert_eq "S17_child_failure_is_fail: phase1-fragments・result=fail（warn ではない）・AI" "phase1-fragments/fail/AI" "$(lr '.completed.steps[0] | "\(.id)/\(.result)/\(.actor)"')"
+  assert_contains "writer_scan_error_count_is_fail: 理由に子の失敗理由（読み取れなかったファイル 2 件）" "$(lr '.completed.steps[0].reason')" "読み取れなかったFragmentsファイルが2件"
+  assert_eq "完走はしている（run.status=completed・last_result=warn）" "completed/warn" "$(lr '"\(.run.status)/\(.last_result)"')"
+  assert_eq "候補件数は記録される（1 件）" "1" "$(lr '.fragments_candidates')"
+  assert_eq "last_success_at は進まない" "false" "$(lr 'has("last_success_at")')"
+  export_fixture "S-17"
+}
+
+echo "=== H-13b. writer_completed_record_two_fail_same_step_folds（A-2 派生・H-13 の実走）: 件数書込失敗＋scan_error_count>0 が同じ実行で起きる → steps 1 件・理由は両文（／連結）・result=fail・log_ref は fragments.json のまま ==="
+{
+  T="$WORK_ROOT/h13b"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  # fragments が list でない（契約違反）→ 候補件数を last-run.json に書けず
+  # add_anomaly が1回（L775）。同時に scan_error_count>0 → add_anomaly がもう
+  # 1回（L780）。同じ実行で同じ step_id（phase1-fragments）に fail が2回積まれる
+  # ＝現行コードで畳み込みが実際に起こる唯一の経路（impl-A-notes 判断4）。
+  FAKE_FRAGMENTS_LOG_JSON='{"scan_error_count": 2, "fragments": "not-a-list", "truncated": []}' run_maintenance || rc=$?
+  assert_eq "exit 0（完走）" "0" "$rc"
+  assert_eq "H-13b: steps はちょうど 1 件に畳まれる" "1" "$(lr '.completed.steps | length')"
+  assert_eq "H-13b: result=fail・actor=AI" "phase1-fragments/fail/AI" "$(lr '.completed.steps[0] | "\(.id)/\(.result)/\(.actor)"')"
+  assert_contains "H-13b: 理由に件数書込失敗の文" "$(lr '.completed.steps[0].reason')" "候補件数を last-run.json に書けませんでした"
+  assert_contains "H-13b: 理由に scan_error_count の文（／連結）" "$(lr '.completed.steps[0].reason')" "読み取れなかったFragmentsファイルが2件"
+  assert_eq "H-13b: 理由は「／」で連結（2文とも残る＝FR-10）" "1" "$(lr '.completed.steps[0].reason' | grep -c '／')"
+  assert_eq "H-13b: log_ref は fragments.json のまま（畳み込みで消えない）" "$(readlink "$LOG_ROOT/latest")/fragments.json" "$(lr '.completed.steps[0].log_ref')"
+}
+
+echo "=== H-13c. writer_completed_record_log_ref_follows_fail_on_fold（A-2・単体）: write_completed_record を実行本体から抽出し、warn→fail の畳み込みで log_ref も fail 側（後の呼び出し）へ更新されることを直接検査 ==="
+{
+  T="$WORK_ROOT/h13c"; mkdir -p "$T"
+  # write_completed_record は他の関数を呼ばない自己完結の関数（date・python3
+  # だけを使う）ため、H-10 と同じ手法（sed で抽出→eval）で単体検査できる。
+  # 現行コード（phase1-fragments L775＋L780）はどちらも fail なので、
+  # 「fail が warn を上書きするとき log_ref も更新される」という A-2 の分岐は
+  # 実走では通らない（impl-A-notes 判断4・現行は実害なし）。この分岐自体を
+  # 狙い撃ちで検査するため、同じ step_id へ warn→fail の順で異なる log_ref を
+  # 積んだ STEP_RECORDS を直接与える。
+  RECORD_FUNC="$(sed -n '/^write_completed_record() {/,/^}/p' "$REPO_ROOT/scripts/maintenance.sh")"
+  eval "$RECORD_FUNC"
+  LAST_RUN_FILE="$T/last-run.json"
+  RUN_ID="2026-09-20/000000-1"
+  RUN_DIR="$T/rundir"
+  STARTED_AT="2026-09-20T00:00:00Z"
+  MAINTENANCE_TRIGGER="scheduled"
+  MAINTENANCE_STALE_LOCK_SECONDS="3600"
+  RUN_FULLY_OK=0
+  INFO_NOTES=()
+  STEP_RECORDS=(
+    "test-step"$'\t'"テスト工程"$'\t'"warn"$'\t'"AI"$'\t'"最初の理由（warn）"$'\t'"$T/log-A.txt"
+    "test-step"$'\t'"テスト工程"$'\t'"fail"$'\t'"AI"$'\t'"二番目の理由（fail）"$'\t'"$T/log-B.txt"
+  )
+  write_completed_record
+  assert_eq "H-13c: steps はちょうど 1 件に畳まれる" "1" "$(jq -r '.completed.steps | length' "$LAST_RUN_FILE")"
+  assert_eq "H-13c: result は fail が warn に勝つ" "fail" "$(jq -r '.completed.steps[0].result' "$LAST_RUN_FILE")"
+  assert_eq "H-13c: 理由は「／」で両文とも残る" "最初の理由（warn）／二番目の理由（fail）" "$(jq -r '.completed.steps[0].reason' "$LAST_RUN_FILE")"
+  assert_eq "H-13c: log_ref は fail 側（後の呼び出し）に更新される（A-2）" "$T/log-B.txt" "$(jq -r '.completed.steps[0].log_ref' "$LAST_RUN_FILE")"
+  unset -f write_completed_record
+  unset LAST_RUN_FILE RUN_ID RUN_DIR STARTED_AT MAINTENANCE_TRIGGER RUN_FULLY_OK INFO_NOTES STEP_RECORDS
+}
+
+echo "=== H-14. writer_reason_verbatim_no_truncate: 200 文字を超える理由も steps[].reason は逐語（last_result_summary だけが 200 文字で切れる） ==="
+{
+  T="$WORK_ROOT/h14"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  LONG_TAIL="$(printf 'x%.0s' $(seq 1 260))"
+  LONG_JSON="{\"total_drift\": 1, \"item4_drift\": 0, \"drift_excluding_item4\": 1, \"detail\": \"${LONG_TAIL}END-OF-REASON\"}"
+  FAKE_DRIFT_EXIT=1 FAKE_DRIFT_JSON="$LONG_JSON" run_maintenance || true
+  assert_contains "writer_reason_verbatim_no_truncate: reason に JSON 末尾の印まで残る" "$(lr '.completed.steps[0].reason')" "${LONG_TAIL}END-OF-REASON"
+  assert_eq "reason の長さは 200 文字超" "true" "$([[ "$(lr '.completed.steps[0].reason | length')" -gt 200 ]] && echo true || echo false)"
+  assert_eq "last_result_summary は 200 文字（旧読み手専用の切り詰め）" "200" "$(lr '.last_result_summary | length')"
+}
+
+echo "=== H-15. writer_reason_control_chars_normalized: 子の出力に TAB・CR・ESC が混じっても reason は空白へ正規化（値は切り詰めない） ==="
+{
+  T="$WORK_ROOT/h15"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  CTRL_JSON=$'{"total_drift": 1, "item4_drift": 0, "drift_excluding_item4": 1, "note": "A\tB\rC\033[31mD"}'
+  FAKE_DRIFT_EXIT=1 FAKE_DRIFT_JSON="$CTRL_JSON" run_maintenance || true
+  REASON="$(lr '.completed.steps[0].reason')"
+  assert_not_contains "TAB が残らない" "$REASON" $'\t'
+  assert_not_contains "CR が残らない" "$REASON" $'\r'
+  assert_not_contains "ESC が残らない" "$REASON" $'\033'
+  assert_contains "文字自体は落ちない（A B C [31mD の並び）" "$REASON" "A B C [31mD"
+}
+
+echo "=== H-16. writer_S2_then_S9_clears（AC-5 の書き手側）: S-2＝単一の異常工程（子コマンドの一時失敗型・AI）→ S-9＝手動起動の完全正常終了で steps が空・ack 無し・trigger=manual ==="
+{
+  T="$WORK_ROOT/h16"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  FAKE_VAULT_INVENTORY_EXIT=1 run_maintenance || true
+  assert_eq "S-2: steps ちょうど 1 件・phase1-inventory・fail・AI" "1/phase1-inventory/fail/AI" "$(lr '"\(.completed.steps | length)/\(.completed.steps[0].id)/\(.completed.steps[0].result)/\(.completed.steps[0].actor)"')"
+  assert_eq "S-2: fully_ok=false・last_success_at 無し" "false/false" "$(lr '"\(.completed.fully_ok)/\(has("last_success_at"))"')"
+  export_fixture "S-2"
+  S2_RUN_ID="$(lr '.completed.run_id')"
+  sleep 1   # run_id（秒精度）を確実に変える
+  mkdir -p "$LOG_ROOT"; : > "$LOG_ROOT/.manual-trigger"
+  rc=0
+  run_maintenance || rc=$?
+  assert_eq "S-9: exit 0" "0" "$rc"
+  assert_eq "writer_S2_then_S9_clears: fully_ok=true・steps 空" "true/0" "$(lr '"\(.completed.fully_ok)/\(.completed.steps | length)"')"
+  assert_eq "S-9: trigger=manual（印ファイル経由）" "manual/manual" "$(lr '"\(.run.trigger)/\(.completed.trigger)"')"
+  assert_eq "S-9: completed.run_id が S-2 から進んでいる" "false" "$(lr ".completed.run_id == \"$S2_RUN_ID\"")"
+  assert_eq "S-9: last_success_at が入る・success_streak=1" "true/1" "$(lr '"\(has("last_success_at"))/\(.success_streak)"')"
+  assert_eq "S-9: ack 無し" "false" "$(lr 'has("ack")')"
+  export_fixture "S-9"
+}
+
+echo "=== H-17. writer_ack_cleared_on_fully_ok / writer_ack_kept_on_refail（AC-7 の書き手側）: S-2 に申告を加えた記録 → 完全正常終了で ack 削除（S-6）／再失敗で ack 残置・completed.run_id は進む（S-7）。別理由 Y での再失敗（S-10） ==="
+{
+  T="$WORK_ROOT/h17"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  FAKE_VAULT_INVENTORY_EXIT=1 run_maintenance || true
+  S2_RUN_ID="$(lr '.completed.run_id')"
+  # 申告（health_judge.py ack が書く形＝設計 §8）を書き手テストでは直接置く。
+  jq --arg rid "$S2_RUN_ID" '.ack = {"at": "2026-09-21T10:00:00Z", "note": "vault_inventory.py の一時失敗を確認・再実行", "session_id": "sid-ack", "run_id": $rid}' \
+    "$LOG_ROOT/last-run.json" > "$LOG_ROOT/last-run.json.tmp" && mv "$LOG_ROOT/last-run.json.tmp" "$LOG_ROOT/last-run.json"
+  cp "$LOG_ROOT/last-run.json" "$T/s2-with-ack.json"
+  export_fixture "S-11"
+  sleep 1
+  run_maintenance || true
+  assert_eq "writer_ack_cleared_on_fully_ok: fully_ok=true で ack が消える（S-6）" "true/false" "$(lr '"\(.completed.fully_ok)/\(has("ack"))"')"
+  export_fixture "S-6"
+  # S-7: 同じ申告つき記録から再失敗（同じ理由 X）
+  cp "$T/s2-with-ack.json" "$LOG_ROOT/last-run.json"
+  sleep 1
+  FAKE_VAULT_INVENTORY_EXIT=1 run_maintenance || true
+  assert_eq "writer_ack_kept_on_refail: ack が残る（S-7）" "true" "$(lr 'has("ack")')"
+  assert_eq "writer_ack_kept_on_refail: ack.run_id は申告時の run_id のまま・completed.run_id は進む（読み手が不一致で「申告後に再失敗」と読む）" "true/false" \
+    "$(jq -r --arg rid "$S2_RUN_ID" '"\(.ack.run_id == $rid)/\(.completed.run_id == $rid)"' "$LOG_ROOT/last-run.json")"
+  assert_eq "S-7: 理由は新しい実行の理由 X（phase1-inventory）" "phase1-inventory" "$(lr '.completed.steps[0].id')"
+  export_fixture "S-7"
+  # S-10: S-2 の後、別理由 Y（fragments_log の失敗）で再失敗＝X は残らない
+  cp "$T/s2-with-ack.json" "$LOG_ROOT/last-run.json"
+  jq 'del(.ack)' "$LOG_ROOT/last-run.json" > "$LOG_ROOT/last-run.json.tmp" && mv "$LOG_ROOT/last-run.json.tmp" "$LOG_ROOT/last-run.json"
+  sleep 1
+  FAKE_FRAGMENTS_LOG_EXIT=1 run_maintenance || true
+  assert_eq "S-10: steps は Y（phase1-fragments）だけ・X（phase1-inventory）は残らない" "1/phase1-fragments" "$(lr '"\(.completed.steps | length)/\(.completed.steps[0].id)"')"
+  export_fixture "S-10"
+}
+
+echo "=== H-18. writer_success_streak_increments_and_resets（FR-24）: 完全正常終了で +1・異常で 0・壊れた値（文字列）は 0 から数え直す ==="
+{
+  T="$WORK_ROOT/h18"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  run_maintenance || true
+  assert_eq "1 回目 OK → 1" "1" "$(lr '.success_streak')"
+  sleep 1
+  run_maintenance || true
+  assert_eq "2 回目 OK → 2" "2" "$(lr '.success_streak')"
+  sleep 1
+  FAKE_VAULT_INVENTORY_EXIT=1 run_maintenance || true
+  assert_eq "writer_success_streak_increments_and_resets: 異常 → 0" "0" "$(lr '.success_streak')"
+  jq '.success_streak = "seven"' "$LOG_ROOT/last-run.json" > "$LOG_ROOT/last-run.json.tmp" && mv "$LOG_ROOT/last-run.json.tmp" "$LOG_ROOT/last-run.json"
+  sleep 1
+  run_maintenance || true
+  assert_eq "壊れた値の後の OK → 1（0 から数え直す）" "1" "$(lr '.success_streak')"
+}
+
+echo "=== H-19. writer_trigger_marker_consumed_and_env（FR-22）: 印ファイルは manual と記録して消費される／env MAINTENANCE_TRIGGER が優先／不正な env は無視 ==="
+{
+  T="$WORK_ROOT/h19"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  mkdir -p "$LOG_ROOT"; : > "$LOG_ROOT/.manual-trigger"
+  run_maintenance || true
+  assert_eq "印ファイルあり → manual" "manual" "$(lr '.run.trigger')"
+  assert_file_not_exists "writer_trigger_marker_consumed_and_env: 印ファイルは消費される" "$LOG_ROOT/.manual-trigger"
+  sleep 1
+  run_maintenance || true
+  assert_eq "次の起動は scheduled（持ち越さない）" "scheduled" "$(lr '.run.trigger')"
+  sleep 1
+  MAINTENANCE_TRIGGER=manual run_maintenance || true
+  assert_eq "env MAINTENANCE_TRIGGER=manual → manual（印ファイル不要）" "manual" "$(lr '.run.trigger')"
+  sleep 1
+  MAINTENANCE_TRIGGER=bogus run_maintenance || true
+  assert_eq "不正な env は無視して scheduled" "scheduled" "$(lr '.run.trigger')"
+  sleep 1
+  # health-self-explain 検証 A-4: env で trigger が確定していても、印ファイルが
+  # あれば読んで削除する（「読んだら削除」を env の有無に依らず適用）。
+  : > "$LOG_ROOT/.manual-trigger"
+  MAINTENANCE_TRIGGER=scheduled run_maintenance || true
+  assert_eq "env=scheduled でも trigger は scheduled のまま" "scheduled" "$(lr '.run.trigger')"
+  assert_file_not_exists "env=scheduled＋印あり→印が消える（A-4）" "$LOG_ROOT/.manual-trigger"
+}
+
+echo "=== H-20. S-3（AC-2 の書き手側）: 複数の異常工程＝drift 検知（warn・本人）＋子コマンド失敗（fail・AI）。2 工程の理由の合計が 200 文字を超えても両方が逐語で残る ==="
+{
+  T="$WORK_ROOT/h20"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  LONG_JSON="{\"total_drift\": 3, \"item4_drift\": 0, \"drift_excluding_item4\": 3, \"items\": [\"$(printf 'd%.0s' $(seq 1 120))\"]}"
+  FAKE_DRIFT_EXIT=1 FAKE_DRIFT_JSON="$LONG_JSON" FAKE_VAULT_INVENTORY_EXIT=1 run_maintenance || true
+  assert_eq "S-3: steps ちょうど 2 件" "2" "$(lr '.completed.steps | length')"
+  assert_eq "S-3: 結果種別と主体が warn/本人 と fail/AI に分かれる" "phase1-drift:warn:本人 phase1-inventory:fail:AI" "$(lr '[.completed.steps[] | "\(.id):\(.result):\(.actor)"] | join(" ")')"
+  assert_eq "S-3: 2 工程の理由の合計が 200 文字を超える" "true" "$([[ "$(lr '[.completed.steps[].reason | length] | add')" -gt 200 ]] && echo true || echo false)"
+  assert_contains "S-3: drift の理由に JSON が逐語で残る" "$(lr '.completed.steps[0].reason')" "$(printf 'd%.0s' $(seq 1 120))"
+  export_fixture "S-3"
+}
+
+echo "=== H-21. writer_stale_lock_seconds_invalid_fails_fast（A-9）: MAINTENANCE_STALE_LOCK_SECONDS が ^[1-9][0-9]*\$ でない → started_at/run を書く前に fail-fast（終了 1・stale_after_seconds=null を作らない） ==="
+{
+  T="$WORK_ROOT/h21"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  MAINTENANCE_STALE_LOCK_SECONDS="abc" run_maintenance || rc=$?
+  assert_eq "非数値は終了 1" "1" "$rc"
+  assert_contains "stderr に FAIL: MAINTENANCE_STALE_LOCK_SECONDS の案内" "$(cat "$LAST_STDERR")" "MAINTENANCE_STALE_LOCK_SECONDSが正の整数ではありません"
+  assert_eq "last-run.json に run は書かれない（started_at より前に止まる）" "false" "$(jq -r 'has("run")' "$LOG_ROOT/last-run.json" 2>/dev/null || echo false)"
+  assert_eq "last_result=fail は記録される（fail-open の通知経路は生きている）" "fail" "$(lr '.last_result')"
+
+  T="$WORK_ROOT/h21b"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  MAINTENANCE_STALE_LOCK_SECONDS="0" run_maintenance || rc=$?
+  assert_eq "0 は正の整数でない → 終了 1" "1" "$rc"
+
+  T="$WORK_ROOT/h21c"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  rc=0
+  MAINTENANCE_STALE_LOCK_SECONDS="-5" run_maintenance || rc=$?
+  assert_eq "負数は正の整数でない → 終了 1" "1" "$rc"
 }
 
 echo

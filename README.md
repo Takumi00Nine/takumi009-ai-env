@@ -46,6 +46,7 @@ takumi009-ai-env/
 │   ├── backup-vault.sh        # Git commits (+pushes) the Vault
 │   ├── usage-fetch.sh         # Claude/Codex usage → cache read by dotfiles' cmux-usage-watch.sh
 │   ├── maintenance.sh         # Weekly maintenance runner (main only)
+│   ├── maintenance-kick.sh    # Manual kick of the weekly runner via launchd (same record as the scheduled run)
 │   ├── update-sub.sh          # Refreshes the sub's rules (sub only, manual)
 │   ├── export-public-vault.sh # Vault public folder → vault-public/
 │   ├── check-drift.sh         # Manual "drift" report tool
@@ -142,7 +143,26 @@ cmux Dock's "Project"/"Task" panes — details = `Decisions/2026-09-15-cmux-dock
 
 ### Weekly Maintenance Runner (main only)
 
-`scripts/maintenance.sh` is the single weekly runner (Monday 03:00, installed by `scripts/install-maintenance.sh`). Details = the comment at the top of the script.
+`scripts/maintenance.sh` is the single weekly runner (Monday 06:00, installed by `scripts/install-maintenance.sh`). Details = the comment at the top of the script.
+
+**State record contract (schema 2)** — `~/.claude/logs/maintenance/last-run.json` is the single source of truth for the weekly runner's result, read by the health judge (`claude/hooks/lib/health_judge.py`, via the SessionStart hook and the Dock). The legacy 6 keys (`started_at` / `last_success_at` / `last_result` / `last_result_summary` / `fragments_candidates` / `fragments_since`) are still written for the older readers; the new readers use only the keys below.
+
+- `run` — the most recent **start** and how it ended. Written unconditionally at start (`status: running`, together with `started_at`), and rewritten **as a whole with the runner's own content** on every one of the 6 endings: completed (finish / Phase 0 snapshot failure / Vault write-lock failure / run-dir creation failure) → `status: completed`; busy-skip (Phase 0 backup busy → `skipped` + `skip_reason: busy:backup0`; Vault write-lock busy → `skipped` + `busy:lock`). Fields = `run_id` (`<date>/<HHMMSS-pid>`), `run_dir`, `started_at`, `trigger` (`scheduled` / `manual`), `status`, `stale_after_seconds` (a copy of `MAINTENANCE_STALE_LOCK_SECONDS`; the reader uses it to tell "still running" from "interrupted"), `skip_reason`, `finished_at`. A record left at `running` past `stale_after_seconds` means the runner died without a completion record.
+- `completed` — the most recent **completion record** (only the 4 completed endings write it; busy-skips leave the previous one). `fully_ok` is true only for a fully clean run. `steps[]` holds **one entry per abnormal step** (clean steps are not listed): `id` (`phase0-dir` / `phase0-lock` / `phase0-backup` / `phase0-export` / `phase1-drift` / `phase1-fragments` / `phase1-inventory` / `phase3-summary` / `phase3-backup` / `phase3-record`), `name`, `result` (`fail` / `warn` — a child's failure the runner continued past is still `fail`; `warn` is only a drift finding), `reason` (verbatim, never truncated; control characters normalized to spaces), `actor` (`AI` / `本人` from the runner's fixed table — drift findings are `本人`, everything else `AI`, unknown ids fall to `本人`), `log_ref` (that step's log under `run_dir`). `info[]` = informational notes that are not steps (unknown `config.toml` keys, declaration prune not performed).
+- `success_streak` — number of consecutive fully-clean completions (reset to 0 on any abnormal completion).
+- `ack` — the leader AI's "handled, judge on the next run" note (see *Acknowledging a finding*). The runner deletes it on the next fully-clean completion and keeps it on a re-failure (the judge then reports "re-failed after ack" because `ack.run_id != completed.run_id`).
+
+**Manual kick (`scripts/maintenance-kick.sh`)** — runs the weekly runner through launchd (`launchctl kickstart` without `-k`), so it uses the same executable, environment (plist `HOME` / `PATH` / `USER`) and record as the scheduled run; it leaves a marker so the record says `trigger: manual` (a raw `launchctl kickstart` is recorded as `scheduled`). It refuses to start when the LaunchAgent is not loaded (`KICK_REFUSED:not_loaded`, exit 2), when the Vault write-lock is held or `run.status` is `running` within `stale_after_seconds` (`KICK_REFUSED:busy`, exit 3), or when the marker cannot be written (exit 4); `KICK_FAILED` (5) if kickstart fails, `KICK_TIMEOUT` (6) if no new `run.run_id` appears within 30 s (this also removes the marker — a run that starts late past this point is recorded as `scheduled`, not `manual`). On success it prints `RUN_ID:<id>` and `STATE_FILE:<path>`; with `--wait` it also waits until `run.status != running` and prints `STATUS:<completed|skipped>` plus `FULLY_OK:<true|false>` (or `SKIP_REASON:<busy:…>` — a busy-skip is not a failure; re-run a few minutes later). `KICK_WAIT_TIMEOUT` (7) if the completion record never appears.
+
+**Acknowledging a finding (`health_judge.py ack`)** — the leader AI records "handled; judge on the next production run" in `last-run.json`'s `ack`:
+
+```
+python3 ~/work/takumi009-ai-env/claude/hooks/lib/health_judge.py ack \
+  --last-run <path> --note "<what was done, one line>" \
+  [--session-id <sid>] [--observation <session-observation.json>]
+```
+
+`--session-id` is optional; when omitted the current leader session id is read from the observation record (`${HEALTH_OBSERVATION_FILE:-$HOME/.claude/logs/health/session-observation.json}`, written by the SessionStart hook — there is no `CLAUDE_CODE_SESSION_ID` environment variable). If that cannot be read either, `session_id: null` is written (the ack still counts; the sid is for audit). It writes `{"at", "note", "session_id", "run_id"}` (`run_id` = the current `completed.run_id`) atomically. **Accepted only when** the record parses, `completed` exists, `completed.fully_ok == false` with at least one step, the runner is not running (`run.status == running` within `stale_after_seconds`) and the write-lock is not held; only `completed.steps` items can be acked (not-started / interrupted / broken / legacy / inventory / load / recall items have no ack — their OK condition is judged automatically on the next run or next session). Otherwise it prints one fixed line `ACK_REFUSED:<running|locked|broken|no_completed|nothing_to_ack>` and exits non-zero without touching the file. An ack never changes the health stage; only a production run does (expiry = deleted on the next fully-clean completion, kept on a re-failure).
 
 ### Usage Monitoring (usage_snapshot.py)
 
@@ -269,6 +289,7 @@ takumi009-ai-env/
 │   ├── backup-vault.sh        # Vault を git commit（+push）
 │   ├── usage-fetch.sh         # 使用率 → cmux-usage-watch.sh 用キャッシュ
 │   ├── maintenance.sh         # 週次メンテナンスランナー（メイン専用）
+│   ├── maintenance-kick.sh    # 週次ランナーの手動起動（launchd 経由・定期実行と同じ記録先）
 │   ├── update-sub.sh          # サブのルール更新（サブ専用・手動）
 │   ├── export-public-vault.sh # public フォルダ → vault-public/
 │   ├── check-drift.sh         # 「ズレ」の手動レポート
@@ -365,7 +386,26 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 
 ### 週次メンテナンスランナー（メイン専用機能）
 
-`scripts/maintenance.sh` は単一の週次ランナーです（毎週月曜03:00・`scripts/install-maintenance.sh` が設置。詳細＝スクリプト冒頭のコメント）。
+`scripts/maintenance.sh` は単一の週次ランナーです（毎週月曜06:00・`scripts/install-maintenance.sh` が設置。詳細＝スクリプト冒頭のコメント）。
+
+**状態記録の契約（schema 2）** — `~/.claude/logs/maintenance/last-run.json` が週次ランナーの実行結果の正本で、判定機（`claude/hooks/lib/health_judge.py`＝SessionStart フックと Dock が呼ぶ）が読みます。旧 6 キー（`started_at`／`last_success_at`／`last_result`／`last_result_summary`／`fragments_candidates`／`fragments_since`）は旧読み手のため従来どおり書きますが、新しい読み手は下のキーだけを使います。
+
+- `run` — **直近の開始**とその終わり方。開始時に無条件で書き（`status: running`・`started_at` と同時）、**終わり方 6 経路すべてでランナー自身の内容で丸ごと書き直します**: 完了記録に到達する 4 経路（完走／Phase 0 直前スナップショット失敗／Vault 書込ロック取得失敗／実行ディレクトリ作成失敗）→ `status: completed`、busy-skip の 2 経路（Phase 0 backup が busy → `skipped`＋`skip_reason: busy:backup0`、Vault 書込ロックが busy → `skipped`＋`busy:lock`）。フィールド＝`run_id`（`<日付>/<HHMMSS-pid>`）・`run_dir`・`started_at`・`trigger`（`scheduled`／`manual`）・`status`・`stale_after_seconds`（`MAINTENANCE_STALE_LOCK_SECONDS` の写し。読み手はこの値で「実行中」と「中断」を分ける）・`skip_reason`・`finished_at`。`running` のまま `stale_after_seconds` を過ぎた記録＝完了記録に到達せずランナーが止まった（中断）。
+- `completed` — **直近の完了記録**（完了記録に到達する 4 経路だけが書く。busy-skip は前回のまま残す）。`fully_ok` は完全正常終了のときだけ true。`steps[]` は**異常工程 1 つにつき 1 要素**（正常な工程は書かない）＝`id`（`phase0-dir`／`phase0-lock`／`phase0-backup`／`phase0-export`／`phase1-drift`／`phase1-fragments`／`phase1-inventory`／`phase3-summary`／`phase3-backup`／`phase3-record`）・`name`・`result`（`fail`／`warn`。子の失敗をランナーが警告として継続し完走しても `fail`。`warn` は drift 検知だけ）・`reason`（逐語・切り詰めない・制御文字は空白へ正規化）・`actor`（`AI`／`本人`＝ランナーの固定表。drift 検知は `本人`、他は `AI`、表に無い id は `本人`）・`log_ref`（その工程のログ＝`run_dir` 配下）。`info[]`＝工程ではない参考情報（`config.toml` の未知キー・宣言掃除の未実施）。
+- `success_streak` — 完全正常終了の連続回数（異常な完了で 0 に戻る）。
+- `ack` — リーダー AI の対処済み申告（後述）。次の完全正常終了でランナーが削除し、再失敗なら残す（`ack.run_id != completed.run_id` を判定機が「申告後に再失敗」と読む）。
+
+**手動起動（`scripts/maintenance-kick.sh`）** — launchd 経由（`launchctl kickstart`・`-k` は付けない）で週次ランナーを起動するので、定期実行と同じ実行体・同じ環境（plist の `HOME`／`PATH`／`USER`）・同じ記録先を通ります。起動前に印ファイルを置き、記録には `trigger: manual` と載ります（`launchctl kickstart` を直接叩いた起動は `scheduled` と記録される＝監査用の既知の限界）。LaunchAgent が未ロード（`KICK_REFUSED:not_loaded`・終了 2）、Vault 書込ロック保持中または `run.status` が `running` で `stale_after_seconds` 未満（`KICK_REFUSED:busy`・終了 3）、印ファイルを作れない（終了 4）のときは起動しません。kickstart 失敗＝`KICK_FAILED`（5）、30 秒以内に新しい `run.run_id` が現れない＝`KICK_TIMEOUT`（6・この場合も印ファイルを消します＝この後に遅れて開始した run は `manual` ではなく `scheduled` として記録されうる）。成功時は `RUN_ID:<id>` と `STATE_FILE:<path>` を印字し、`--wait` を付けると `run.status != running` まで待って `STATUS:<completed|skipped>` と `FULLY_OK:<true|false>`（`skipped` なら `SKIP_REASON:<busy:…>`＝失敗ではなく再実行の対象。数分後に再実行）を印字します。完了記録が現れなければ `KICK_WAIT_TIMEOUT`（7）。
+
+**対処済み申告（`health_judge.py ack`）** — リーダー AI が「対処した・次回の本番実行で判定する」を `last-run.json` の `ack` に残します:
+
+```
+python3 ~/work/takumi009-ai-env/claude/hooks/lib/health_judge.py ack \
+  --last-run <path> --note "<対処内容 1 行>" \
+  [--session-id <sid>] [--observation <session-observation.json>]
+```
+
+`--session-id` は任意。省略時は観測記録（`${HEALTH_OBSERVATION_FILE:-$HOME/.claude/logs/health/session-observation.json}`＝SessionStart フックが書く）の `session_id`＝今回のリーダーセッションを読みます（`CLAUDE_CODE_SESSION_ID` という環境変数は存在しません）。観測記録も読めなければ `session_id: null` で書きます（申告は成立させる・sid は監査用）。書く内容＝`{"at", "note", "session_id", "run_id"}`（`run_id`＝そのときの `completed.run_id`）を原子的に。**受理条件（すべて満たすときだけ書く）**＝記録が解析できる ∧ `completed` がある ∧ `completed.fully_ok == false` かつ `steps` が 1 件以上 ∧ 実行中でない（`run.status == running` かつ経過 < `stale_after_seconds` ではない）∧ Vault 書込ロック保持中でない。申告対象は `completed.steps` の項目だけ（未起動・中断・破損・旧形式・棚卸し・読込・想起は申告を持たない＝各源の OK 条件は次回の本番実行・次セッションで自動的に判定される）。拒否時は固定文 `ACK_REFUSED:<running|locked|broken|no_completed|nothing_to_ack>` を 1 行出して非 0 で終わり、ファイルには触れません。申告は段階を変えません（OK は本番経路の実行結果だけが作る。失効＝次の完全正常終了で削除・再失敗なら残置）。
 
 ### 使用率の見える化（usage_snapshot.py）
 

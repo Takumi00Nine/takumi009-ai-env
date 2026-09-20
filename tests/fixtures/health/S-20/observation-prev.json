@@ -1,0 +1,23 @@
+{
+  "schema": "health-observation/1",
+  "observed_at": "2026-08-30T06:00:00Z",
+  "session_id": null,
+  "source": "startup",
+  "load": {
+    "vault_root_readable": true,
+    "required": [
+      "Preferences/absolute-rules.md",
+      "Preferences/core-conduct.md",
+      "Preferences/core-workflow.md",
+      "Preferences/vault-operation.md"
+    ],
+    "missing": []
+  },
+  "recall_prev": {
+    "session_id": null,
+    "reads_rows": 0,
+    "recall_valid_rows": 0,
+    "recall_error_rows": 0,
+    "injected": null
+  }
+}

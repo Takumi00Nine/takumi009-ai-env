@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# 週次メンテナンスランナー（LaunchAgent com.takumi009.maintenance・月曜 03:00・無人）。
+# 週次メンテナンスランナー（LaunchAgent com.takumi009.maintenance・月曜 06:00・無人。手動起動＝scripts/maintenance-kick.sh）。
 # Phase0: backup-vault.sh（直前スナップショット）→ Vault 書込ロック → export-public-vault.sh 再試行
 # Phase1: ① check-drift.sh --json（drift は警告・止めない）② fragments_log.py --since <last_success_at> --json
 #         ③ vault_inventory.py --json（各ステップは maintenance_run_step.py で timeout 隔離・1 本の失敗で止めない）
 # Phase3: cmux-task-declare.sh prune → Fragments 当日ファイルへサマリ 1 行 → backup-vault.sh → last-run.json → 異常時のみ macOS 通知 → 30 日整理
-# 出力: ~/.claude/logs/maintenance/<日付>/<時刻-pid>/（latest symlink）と last-run.json（契約＝design-step2 §6・読み手＝bootstrap-vault.sh ④・cmux-next-model.sh）
+# 出力: ~/.claude/logs/maintenance/<日付>/<時刻-pid>/（latest symlink）と last-run.json（契約＝README「状態記録の契約（schema 2）」・
+#       health-self-explain 設計 v1.2 §3。読み手＝claude/hooks/lib/health_judge.py（bootstrap-vault.sh・cmux-next-model.sh 経由）。
+#       旧 6 キー（started_at・last_success_at・last_result・last_result_summary・fragments_*）は旧読み手（check-drift.sh ⑥・
+#       fragments_log.py）互換のため従来どおり書き、run／completed／success_streak／ack を足す＝終わり方 6 経路すべてで run を書く）
 # 環境変数で全パス・timeout を上書き可（テスト用）。経緯＝Decisions/2026-08-10-round6-rulings・2026-09-19-ai-env-optimization-rulings
 #
 # 補足（README「Weekly Maintenance Runner」から 2026-09-19 に移設・原文）:
 # Phase 0 — takes a pre-run snapshot via `backup-vault.sh`, acquires a Vault write-lock (PID file, held through Phase 3), and retries `export-public-vault.sh` if the `vault-public/Preferences` snapshot is behind.
 # Phase 1 (detection only, read-only) — runs, in order, `check-drift.sh` (environment health check; since 2026-08-10, a drift finding, execution error, or timeout no longer aborts the run — it's recorded as a warning and the run continues. The sole gate for Vault write safety is Phase 0's pre-run snapshot), `fragments_log.py`, and `vault_inventory.py`. The 3 steps are isolated from each other's failures. `vault_inventory.py` writes `~/.claude/logs/vault-inventory/latest.json` (`actionable` = number of fixable findings), which the SessionStart health line and the Dock read.
 # Phase 3 — appends a one-line summary to today's Fragments file, updates `last-run.json` (`last_success_at` only on a fully clean run; `last_result` — success/warn/fail — is always recorded, and a warning or failure shows up as a ⚠️ line in the next session's startup health check; `fragments_candidates` = number of unprocessed Fragments since the last successful run, shown by the Dock's Project pane weekly line as "候補N件" — it is never injected into the AI, and nothing moves until the user says "昇格して"), takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
-# `scripts/maintenance.sh` is the single weekly runner (Monday 03:00, installed by `scripts/install-maintenance.sh`) that replaced the older separate Vault-cultivation LaunchAgents on 2026-07-16. The unattended headless-Claude apply step (Fragments promotion / Knowledge merge / Decision propagation) was retired on 2026-09-19 — the runner now only detects and counts; promotion happens while the user is present, via `vault-scribe`.
+# `scripts/maintenance.sh` is the single weekly runner (Monday 06:00 since 2026-09-20 (03:00 before), installed by `scripts/install-maintenance.sh`) that replaced the older separate Vault-cultivation LaunchAgents on 2026-07-16. The unattended headless-Claude apply step (Fragments promotion / Knowledge merge / Decision propagation) was retired on 2026-09-19 — the runner now only detects and counts; promotion happens while the user is present, via `vault-scribe`.
 # All intermediate files and machine-readable status files for a given run live under `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/`, with `~/.claude/logs/maintenance/latest` always pointing at the most recent run.
 #
 # 実行方法: scripts/maintenance.sh
@@ -59,8 +62,59 @@ RUN_FULLY_OK=1
 # 異常理由の蓄積（Phase3「異常時のみmacOS通知」用）。呼ぶたびにRUN_FULLY_OKも
 # 0へ倒す＝「隔離して継続する異常」でも1件あればlast_success_atは進めない
 # （fragments_log.pyの--sinceが次回も同じ窓を再走査できるようにする）。
+#
+# 2026-09-20 health-self-explain（設計 v1.2 §3.3）: 引数を
+#   add_anomaly <step_id> <result> <message> [<log_ref>]
+# へ拡張した。通知用の ANOMALIES と並行して、完了記録 last-run.json の
+# completed.steps[] の材料 STEP_RECORDS（TSV 1 行／件＝id・name・result・actor・
+# reason・log_ref）へ積む。result は fail／warn の 2 値（interrupted は書き手が
+# 書けない＝読み手が導く）。理由は切り詰めず（200 文字の last_result_summary は
+# 旧読み手専用）、TAB・CR・LF だけここで空白へ正規化する（TSV の列ずれ防止。
+# ESC 等の残りの制御文字は write_completed_record の Python 側で正規化する）。
+# 理由文の材料は「工程の固定文＋子の stdout の要約行」に限る（NFR-4。env・引数・
+# URL・ロックファイルの中身は載せない＝各呼び出し箇所の一覧は変更記録
+# impl-A-v1.md）。主体は下の固定表 step_actor（表に無い step_id は本人＝§3.4）。
 ANOMALIES=()
-add_anomaly() { ANOMALIES+=("$1"); warn "$1"; RUN_FULLY_OK=0; }
+STEP_RECORDS=()
+add_anomaly() {
+  local step_id="$1" result="$2" message="$3" log_ref="${4:-}"
+  local reason="$message"
+  [[ "$result" == "warn" ]] || result="fail"
+  reason="${reason//$'\t'/ }"; reason="${reason//$'\r'/ }"; reason="${reason//$'\n'/ }"
+  ANOMALIES+=("$message"); warn "$message"; RUN_FULLY_OK=0
+  STEP_RECORDS+=("${step_id}"$'\t'"$(step_name "$step_id")"$'\t'"${result}"$'\t'"$(step_actor "$step_id" "$result")"$'\t'"${reason}"$'\t'"${log_ref}")
+}
+
+# 工程の固定表（設計 v1.2 §3.3 の表・主体の付与元＝書き手の固定表 §3.4）。
+# 読み手（health_judge.py）は理由文から主体を推定しない＝ここで付与済みの値だけ
+# を使う。表に無い step_id は「判定できない項目は本人に倒す」（要件 §1）。
+step_name() {
+  case "$1" in
+    phase0-dir)       echo "Phase0 実行ディレクトリ作成" ;;
+    phase0-lock)      echo "Phase0 Vault書込ロック取得" ;;
+    phase0-backup)    echo "Phase0 直前スナップショット" ;;
+    phase0-export)    echo "Phase0 公開スナップショット再試行" ;;
+    phase1-drift)     echo "Phase1① check-drift" ;;
+    phase1-fragments) echo "Phase1② fragments_log" ;;
+    phase1-inventory) echo "Phase1③ vault_inventory" ;;
+    phase3-summary)   echo "Phase3 Fragmentsサマリ追記" ;;
+    phase3-backup)    echo "Phase3 最終commit" ;;
+    phase3-record)    echo "Phase3 last_success_at更新" ;;
+    *)                echo "$1" ;;
+  esac
+}
+step_actor() {
+  case "$1" in
+    # drift 検知（rc=1・warn）は人に見せて判断させる＝本人（Decision 08-05）。
+    # 実行異常・timeout（fail）は drift の判断ではなく実行の失敗＝AI（V-15）。
+    phase1-drift) if [[ "$2" == "warn" ]]; then echo "本人"; else echo "AI"; fi ;;
+    # phase0-export＝公開スナップショット再試行は承認済み export の再実行＝AI
+    # （本人裁定 OQ-2・2026-09-20。本人ゲートは公開の可否＝push に掛かる）。
+    phase0-dir|phase0-lock|phase0-backup|phase0-export|phase1-fragments|phase1-inventory|phase3-summary|phase3-backup|phase3-record)
+      echo "AI" ;;
+    *) echo "本人" ;;
+  esac
+}
 
 # informationalな注記の蓄積。add_anomaly()と違いRUN_FULLY_OKは倒さない＝
 # last_result/last_success_atの判定には影響しない「参考情報」専用チャネル
@@ -154,6 +208,140 @@ os.replace(str(tmp), str(path))
     || warn "last-run.jsonのlast_result/last_result_summary更新に失敗しました（value=${value}）"
 }
 
+# --- 状態記録 schema 2（health-self-explain 設計 v1.2 §3.1〜§3.3・2026-09-20） ---
+# run＝直近の開始とその終わり方（status: running→completed／skipped）・
+# completed＝直近の完了記録（工程ごとの結果種別・理由・主体・ログ所在）・
+# success_streak（FR-24）・ack（リーダー AI の対処済み申告＝health_judge.py ack が
+# 書き、完全正常終了で失効＝FR-9）。旧 6 キーは旧読み手の互換のため従来どおり書く。
+#
+# write_run_record <status> [<skip_reason>] [<finished_at>]
+#   run を「自分の run_id の内容」で丸ごと書き直す（status だけを patch しない＝
+#   定期と手動が重なって後発の busy-skip が run を上書きしていても、先発の完了で
+#   先発の run に戻る＝§3.2・F-4）。開始時（status=running）は旧キー started_at と
+#   schema=2 も同じ 1 回の Python 起動で書く（2 回に分けると片方だけ成功しうる）。
+#   stale_after_seconds＝MAINTENANCE_STALE_LOCK_SECONDS をそのまま写す（読み手は
+#   この値で「実行中」と「中断」を分ける。線を読み手側に複製しない＝C-6）。
+write_run_record() {
+  local status="$1" skip_reason="${2:-}" finished_at="${3:-}"
+  python3 -c "
+import json, os, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+run_id, run_dir, started_at, trigger, stale, status, skip_reason, finished_at = sys.argv[2:10]
+data['schema'] = 2
+if status == 'running':
+    data['started_at'] = started_at
+data['run'] = {
+    'run_id': run_id, 'run_dir': run_dir, 'started_at': started_at, 'trigger': trigger,
+    'status': status, 'stale_after_seconds': int(stale) if stale.isdigit() else None,
+    'skip_reason': skip_reason or None, 'finished_at': finished_at or None,
+}
+tmp = path.parent / ('.' + path.name + '.tmp-' + str(os.getpid()))
+tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
+os.replace(str(tmp), str(path))
+" "$LAST_RUN_FILE" "$RUN_ID" "$RUN_DIR" "$STARTED_AT" "$MAINTENANCE_TRIGGER" \
+    "$MAINTENANCE_STALE_LOCK_SECONDS" "$status" "$skip_reason" "$finished_at"
+}
+
+# write_run_status skipped <busy:backup0|busy:lock>
+#   busy-skip の終わり方 (e)(f)＝「開始したが当該予定の仕事をしていない」を中断
+#   （status=running のまま）と区別して書く。completed は書かない（前回のまま）。
+#   fail-open（書けなくても warn だけ＝読み手には中断として現れる＝正直な失敗）。
+write_run_status() {
+  write_run_record "$1" "${2:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    || warn "last-run.jsonのrun.status更新に失敗しました（status=${1}${2:+ ・$2}）"
+}
+
+# write_completed_record
+#   完了記録に到達する 4 経路（(a) 完走・(b) Phase0 直前スナップショット失敗・
+#   (c) Vault 書込ロック取得失敗・(d) 実行ディレクトリ作成失敗）で同じ形の
+#   completed を書く（書き手契約 FR-10・NFR-6＝経路で形を変えない）。同じ 1 回の
+#   Python 起動で run を自分の内容（status=completed・finished_at）に書き戻し
+#   （completed.run_id == run.run_id を書き手が保証）、success_streak（fully_ok
+#   なら +1・でなければ 0）と ack の失効（fully_ok なら削除・再失敗なら残す→
+#   読み手が run_id の不一致で「申告後に再失敗」と読む）も処理する。
+#   completed.steps[] の 1 要素＝異常工程 1 つ（正常な工程は書かない＝fully_ok の
+#   とき steps は空）。理由は切り詰めず、制御文字（C0・DEL）を空白へ正規化する。
+#   同じ step_id が複数回積まれた場合（例: Phase1② の件数書込失敗と
+#   scan_error_count>0 が同じ実行で起きる）は 1 工程 1 件に畳む（理由は「／」で
+#   連結・fail が warn に勝つ）。fail-open（書けなければ warn＝run.status は
+#   running のまま残り、次回判定で中断として現れる＝F-2）。
+write_completed_record() {
+  local finished_at
+  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  python3 -c "
+import json, os, pathlib, re, sys
+CTRL = re.compile(r'[\x00-\x1f\x7f]')
+path = pathlib.Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+run_id, run_dir, started_at, trigger, stale, finished_at, fully_ok_raw, n_steps_raw = sys.argv[2:10]
+n_steps = int(n_steps_raw)
+rest = sys.argv[10:]
+step_rows, info_rows = rest[:n_steps], rest[n_steps:]
+fully_ok = fully_ok_raw == '1'
+steps, index = [], {}
+for row in step_rows:
+    parts = row.split('\t')
+    while len(parts) < 6:
+        parts.append('')
+    sid, name, result, actor, reason, log_ref = parts[:6]
+    rec = {'id': sid, 'name': name, 'result': 'warn' if result == 'warn' else 'fail',
+           'reason': CTRL.sub(' ', reason), 'actor': actor if actor in ('AI', '本人') else '本人',
+           'log_ref': log_ref or run_dir}
+    if sid in index:
+        prev = steps[index[sid]]
+        prev['reason'] = prev['reason'] + '／' + rec['reason']
+        if prev['result'] == 'warn' and rec['result'] == 'fail':
+            prev['result'] = 'fail'
+            prev['actor'] = rec['actor']
+            # health-self-explain 検証 A-2: fail が warn を上書きするとき、
+            # 読み手が参照するログ所在（log_ref）も fail 側（今の異常の材料）へ
+            # 差し替える。actor だけ差し替えて log_ref を先の warn のままにすると、
+            # 読み手が fail の詳細を warn 側のログから探すことになる。
+            prev['log_ref'] = rec['log_ref']
+    else:
+        index[sid] = len(steps)
+        steps.append(rec)
+if not fully_ok and not steps:
+    # 書き手契約（FR-10）: 成功時刻が進まなかった実行の要対処項目が空になることはない。
+    steps.append({'id': 'unknown', 'name': 'unknown', 'result': 'fail',
+                  'reason': '異常工程の記録が無いまま完全正常終了しませんでした（runner のバグの疑い）',
+                  'actor': '本人', 'log_ref': run_dir})
+data['schema'] = 2
+data['completed'] = {'run_id': run_id, 'run_dir': run_dir, 'trigger': trigger,
+                     'started_at': started_at, 'finished_at': finished_at,
+                     'fully_ok': fully_ok, 'steps': steps,
+                     'info': [CTRL.sub(' ', x) for x in info_rows]}
+data['run'] = {'run_id': run_id, 'run_dir': run_dir, 'started_at': started_at, 'trigger': trigger,
+               'status': 'completed', 'stale_after_seconds': int(stale) if stale.isdigit() else None,
+               'skip_reason': None, 'finished_at': finished_at}
+streak = data.get('success_streak')
+if not (isinstance(streak, int) and not isinstance(streak, bool) and streak >= 0):
+    streak = 0
+data['success_streak'] = streak + 1 if fully_ok else 0
+if fully_ok:
+    data.pop('ack', None)
+tmp = path.parent / ('.' + path.name + '.tmp-' + str(os.getpid()))
+tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
+os.replace(str(tmp), str(path))
+" "$LAST_RUN_FILE" "$RUN_ID" "$RUN_DIR" "$STARTED_AT" "$MAINTENANCE_TRIGGER" \
+    "$MAINTENANCE_STALE_LOCK_SECONDS" "$finished_at" "$RUN_FULLY_OK" "${#STEP_RECORDS[@]}" \
+    ${STEP_RECORDS[@]+"${STEP_RECORDS[@]}"} ${INFO_NOTES[@]+"${INFO_NOTES[@]}"} \
+    || warn "last-run.jsonのcompleted更新に失敗しました（run.statusはrunningのまま＝次回の判定で中断として現れます）"
+}
+
 # maintenance_run_step.pyの--status-file出力を読み、"OK <returncode>" または
 # "WRAPPER_FAIL <reason>" を返す（設計書§1.2「Python subprocess.run(cmd,
 # timeout=N, start_new_session=True)」の起動元。呼び出し側は終了コードだけでは
@@ -201,9 +389,84 @@ DATE_COMPONENT="$(date +%Y-%m-%d)"
 TIME_COMPONENT="$(date +%H%M%S)"
 DATE_DIR="$MAINTENANCE_LOG_ROOT/$DATE_COMPONENT"
 RUN_DIR="$DATE_DIR/${TIME_COMPONENT}-$$"
+# run_id＝RUN_DIR の MAINTENANCE_LOG_ROOT からの相対（<日付>/<時刻-pid>・設計 §3.2）。
+RUN_ID="$DATE_COMPONENT/${TIME_COMPONENT}-$$"
+# Vault 書込ロック取得の結果語（busy／error）を acquire_pid_lock が書く一時の印
+# （guard が読む＝設計 §3.3 (f)）。テストで書込不能な場所へ向けて「状態不明」経路を再現できる。
+: "${MAINTENANCE_LOCK_STATUS_FILE:=$RUN_DIR/lock-status.txt}"
+
+# --- 起動元の印（FR-22・設計 §3.2・§7.1） ---
+# MAINTENANCE_TRIGGER が scheduled／manual ならその値。無ければ手動起動の口
+# （scripts/maintenance-kick.sh）が置く印ファイル .manual-trigger が在れば manual
+# （読んだら削除＝次の定期起動へ持ち越さない）・無ければ scheduled。
+# `launchctl kickstart` を直接叩いた起動は scheduled と記録される（監査用の既知の限界）。
+#
+# health-self-explain 検証 A-4: 印ファイルは MAINTENANCE_TRIGGER が env で
+# 与えられているときも読んだら削除する（「読んだら削除」を env の有無に依らず
+# 一貫して適用する）。env=scheduled で印だけが残ると、次の env 無し起動が
+# 誤って manual と記録される（テスト経路のみで起きる＝本番 plist は
+# MAINTENANCE_TRIGGER を設定しない）。
+MANUAL_TRIGGER_MARKER="$MAINTENANCE_LOG_ROOT/.manual-trigger"
+MANUAL_TRIGGER_MARKER_PRESENT=0
+[[ -f "$MANUAL_TRIGGER_MARKER" ]] && MANUAL_TRIGGER_MARKER_PRESENT=1
+if [[ "$MANUAL_TRIGGER_MARKER_PRESENT" == "1" ]]; then
+  rm -f "$MANUAL_TRIGGER_MARKER" || warn "手動起動の印ファイルを削除できませんでした（次回も manual と記録されうる可能性があります）: $MANUAL_TRIGGER_MARKER"
+fi
+if [[ "${MAINTENANCE_TRIGGER:-}" != "scheduled" && "${MAINTENANCE_TRIGGER:-}" != "manual" ]]; then
+  if [[ "$MANUAL_TRIGGER_MARKER_PRESENT" == "1" ]]; then
+    MAINTENANCE_TRIGGER="manual"
+  else
+    MAINTENANCE_TRIGGER="scheduled"
+  fi
+fi
+
+# --- 設定不正の検査（health-self-explain 検証 A-9） ---
+# MAINTENANCE_STALE_LOCK_SECONDS は run.stale_after_seconds へそのまま写す値
+# （§3.2・線を読み手側に複製しない＝C-6）。不正なら write_run_record／
+# write_completed_record は stale.isdigit() が偽になって stale_after_seconds に
+# null を書いてしまい、読み手には型違反（④ 破損）に見えうる。acquire_pid_lock
+# 側（scripts/lib/pid-lock.sh の同じ ^[1-9][0-9]*$ 検査）も非数値を exit 1 で
+# 拒むが、それより前に null が書かれてしまう経路を断つため、開始時に
+# fail-fast する（started_at／run が書けないときと同じ型＝L431 相当）。
+if [[ ! "$MAINTENANCE_STALE_LOCK_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[maintenance] FAIL: MAINTENANCE_STALE_LOCK_SECONDSが正の整数ではありません: '${MAINTENANCE_STALE_LOCK_SECONDS}'" >&2
+  write_last_result "fail" "MAINTENANCE_STALE_LOCK_SECONDSの設定が不正です（${MAINTENANCE_STALE_LOCK_SECONDS}）"
+  notify_macos "maintenance.sh 異常終了" "MAINTENANCE_STALE_LOCK_SECONDSの設定が不正なため中断しました: ${MAINTENANCE_STALE_LOCK_SECONDS}"
+  exit 1
+fi
+
+# --- last-run.json の started_at と run を無条件で最初に書く（自己ロックアウト対策） ---
+# check-drift.sh⑥相当の「定常メンテ自体が動いているか」の死活監視が、
+# started_atの経過日数だけで判定できるようにする（設計書§4「レポート未処理
+# 検知・ALERT監視を削除、maintenance新鮮度チェック（started_atの経過日数のみで
+# 判定）に置換」）。busy/errorで即座に終了する経路でもここまでは必ず到達する。
+# 2026-09-20: 実行ディレクトリ作成より前へ前倒しした（設計 v1.2 §3.3 (d)＝ディレクトリ
+# 作成失敗の経路でも run を書き、「run は前回・completed は今回」の記録を作らない）。
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if ! write_run_record running; then
+  # started_at／run はcheck-drift.sh⑥相当の死活監視と health_judge.py が依拠する
+  # 自己ロックアウト対策の要であり、これが書けない環境（ディスク枯渇・権限異常等）
+  # では以降の処理を続けても同種の書込みが軒並み失敗する可能性が高いため、
+  # ここだけはfail-fastする（戻り値を見ないと書込失敗が黙って握り潰されたまま
+  # 「started_atは記録済み」という前提で処理が進んでしまうため）。記録は前回の
+  # まま→予定を過ぎれば未起動として現れる（設計 §4.5 F-1）。
+  echo "[maintenance] FAIL: last-run.jsonのstarted_at/run更新に失敗しました: $LAST_RUN_FILE" >&2
+  # last_resultも同じファイルへの書込みのため、started_at同様に失敗しうる
+  # （write_last_result自体はfail-openでwarn()するだけ＝二重に中断はしない）。
+  # それでも書ける環境（started_atの書込みだけがたまたま失敗した等）では
+  # 次回起動時のヘルス行に反映させたい。
+  write_last_result "fail" "last-run.jsonのstarted_at更新に失敗しました"
+  notify_macos "maintenance.sh 異常終了" "last-run.jsonへの書込みに失敗したため中断しました。詳細: $RUN_DIR"
+  exit 1
+fi
+
+# 終わり方 (d)＝日付／実行ディレクトリ作成失敗。run は上で書けているので、
+# completed（phase0-dir fail 1 件）を同じ run_id で書いて中断する。
 mkdir -p "$DATE_DIR" || {
   echo "[maintenance] FAIL: 日付ディレクトリを作成できません: $DATE_DIR" >&2
+  add_anomaly phase0-dir fail "Phase0: 日付ディレクトリを作成できませんでした（${DATE_DIR}）"
   write_last_result "fail" "日付ディレクトリを作成できませんでした（${DATE_DIR}）"
+  write_completed_record
   exit 1
 }
 # RUN_DIRは`$$`(PID)を含むため通常は衝突しないが、`mkdir -p`は既存ディレクトリを
@@ -212,7 +475,9 @@ mkdir -p "$DATE_DIR" || {
 # 衝突検知として使う。
 if ! mkdir "$RUN_DIR"; then
   echo "[maintenance] FAIL: 実行ディレクトリの作成に失敗しました（既に存在する可能性があります）: $RUN_DIR" >&2
+  add_anomaly phase0-dir fail "Phase0: 実行ディレクトリの作成に失敗しました（既に存在する可能性があります・${RUN_DIR}）"
   write_last_result "fail" "実行ディレクトリの作成に失敗しました（${RUN_DIR}）"
+  write_completed_record
   exit 1
 fi
 chmod 0700 "$MAINTENANCE_LOG_ROOT" "$DATE_DIR" "$RUN_DIR" 2>/dev/null || true
@@ -239,28 +504,6 @@ elif ! python3 -c "import os, sys; os.rename(sys.argv[1], sys.argv[2])" "$TMP_LA
   rm -f "$TMP_LATEST_LINK" 2>/dev/null || true
 fi
 
-# --- last-run.json の started_at を無条件で最初に更新（自己ロックアウト対策） ---
-# check-drift.sh⑥相当の「定常メンテ自体が動いているか」の死活監視が、
-# started_atの経過日数だけで判定できるようにする（設計書§4「レポート未処理
-# 検知・ALERT監視を削除、maintenance新鮮度チェック（started_atの経過日数のみで
-# 判定）に置換」）。busy/errorで即座に終了する経路でもここまでは必ず到達する。
-STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-if ! write_last_run_field started_at "$STARTED_AT"; then
-  # started_atはcheck-drift.sh⑥相当の死活監視が依拠する自己ロックアウト
-  # 対策の要であり、これが書けない環境（ディスク枯渇・権限異常等）では
-  # 以降の処理を続けても同種の書込みが軒並み失敗する可能性が高いため、
-  # ここだけはfail-fastする（戻り値を見ないと書込失敗が黙って握り潰されたまま
-  # 「started_atは記録済み」という前提で処理が進んでしまうため）。
-  echo "[maintenance] FAIL: last-run.jsonのstarted_at更新に失敗しました: $LAST_RUN_FILE" >&2
-  # last_resultも同じファイルへの書込みのため、started_at同様に失敗しうる
-  # （write_last_result自体はfail-openでwarn()するだけ＝二重に中断はしない）。
-  # それでも書ける環境（started_atの書込みだけがたまたま失敗した等）では
-  # 次回起動時のヘルス行に反映させたい。
-  write_last_result "fail" "last-run.jsonのstarted_at更新に失敗しました"
-  notify_macos "maintenance.sh 異常終了" "last-run.jsonへの書込みに失敗したため中断しました。詳細: $RUN_DIR"
-  exit 1
-fi
-
 # --sinceに渡す日付の算出（fragments_log.py --sinceは日付部分のみ解釈する契約）。
 # 前回成功実行が無い/形式不正/未来日時/30日超過はいずれも7日前へfail-openで
 # フォールバックする（fragments_log.py自身のresolve_since()と同じ閾値）。
@@ -270,7 +513,7 @@ import datetime, re, sys
 raw = sys.argv[1].strip()
 # last_success_atはUTC（date -u）で保存されるため、今日の日付判定もUTC基準に
 # 揃える（ローカル日付（datetime.date.today()）のままだと、UTCとローカルTZの
-# 日付が食い違う時間帯（例: 週次実行予定のJST 03:00はUTCでは前日）で未来日
+# 日付が食い違う時間帯（例: 週次実行予定のJST 06:00はUTCでは前日）で未来日
 # 判定・30日境界が1日ずれうるため）。
 today = datetime.datetime.now(datetime.timezone.utc).date()
 fallback = (today - datetime.timedelta(days=7)).isoformat()
@@ -336,20 +579,42 @@ log "=== Phase 0: ロック＋バックアップ ==="
 # （MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE）で「今チェックすべき区間か」だけ
 # を切り替える（成功/busyで区間を抜けた後はフラグ0でこの関数は何もしない
 # no-opになるだけで、合成後のtrap文字列自体はそのまま有効であり続ける）。
+#
+# 2026-09-20 health-self-explain（設計 v1.2 §3.3 (c)(f)・V-1）: 区間内で EXIT したら
+# rc に関わらず、acquire_pid_lock が第 4 引数 status_file へ書いた結果語を読んで
+# 終わり方を分ける（busy の exit 0 は maintenance.sh 側に戻らないため、ここが
+# 「開始したが仕事をしていない」を記録できる唯一の場所）:
+#   status_file == busy            → run.status=skipped(busy:lock)（通知なし・completed は書かない）
+#   status_file == error ∨ rc ≠ 0  → completed に phase0-lock fail 1 件（現行の通知も維持）
+#   それ以外（status 無し ∧ rc == 0）→ 起こらないはず（成功時は区間を抜けてからしか exit
+#                                     しない）。起きたら phase0-lock fail「ロック状態が不明」
+#                                     として記録する（静かに通さない）。
 _maintenance_lock_acquire_guard() {
   local rc=$?
-  if [[ "${MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE:-0}" = "1" && "$rc" -ne 0 ]]; then
+  [[ "${MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE:-0}" = "1" ]] || return 0
+  local lock_word
+  lock_word="$(read_status_file "$MAINTENANCE_LOCK_STATUS_FILE" 2>/dev/null)" || lock_word="missing"
+  if [[ "$lock_word" == "busy" ]]; then
+    log "Vault書込ロックがbusyのため、今回の週次実行を穏当にskipします（run.status=skipped・busy:lock）"
+    write_run_status skipped busy:lock
+  elif [[ "$lock_word" == "error" || "$rc" -ne 0 ]]; then
+    add_anomaly phase0-lock fail "Phase0: Vault書込ロックの取得に失敗しました（回収ミューテックス競合が解消しませんでした・status=${lock_word}・rc=${rc}。詳細: ${VAULT_WRITER_LOCK_FILE}.reclaim）"
     write_last_result "fail" "Vault書込ロックの取得に失敗しました（回収ミューテックス競合が解消しませんでした。詳細: ${VAULT_WRITER_LOCK_FILE}.reclaim）"
+    write_completed_record
     notify_macos "maintenance.sh 異常終了" "Vault書込ロックの取得に失敗したため中断しました。手動確認: rmdir ${VAULT_WRITER_LOCK_FILE}.reclaim"
+  else
+    add_anomaly phase0-lock fail "Phase0: Vault書込ロックの取得区間で終了しましたがロック状態が不明です（status_file=${MAINTENANCE_LOCK_STATUS_FILE} が読めない・rc=${rc}）"
+    write_last_result "fail" "Vault書込ロックの取得区間で終了しましたがロック状態が不明です（${MAINTENANCE_LOCK_STATUS_FILE}）"
+    write_completed_record
+    notify_macos "maintenance.sh 異常終了" "Vault書込ロックの取得区間で終了しましたがロック状態が不明です。詳細: $RUN_DIR"
   fi
 }
 MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE=1
 trap _maintenance_lock_acquire_guard EXIT
-acquire_pid_lock "$VAULT_WRITER_LOCK_FILE" "$MAINTENANCE_STALE_LOCK_SECONDS" "maintenance" ""
+acquire_pid_lock "$VAULT_WRITER_LOCK_FILE" "$MAINTENANCE_STALE_LOCK_SECONDS" "maintenance" "$MAINTENANCE_LOCK_STATUS_FILE"
 # ここへ到達するのはロック取得成功時のみ（busy/errorはacquire_pid_lock内で
-# 既にプロセスごとexit済み）。以後の通常のexit経路（busy-skip等は含まれない
-# ＝本ファイル冒頭の「busy-skipはlast_result対象外」方針どおり）でこの
-# guardが誤発火しないよう区間を抜ける。
+# 既にプロセスごとexit済み＝guardが run／completed を書いている）。以後の通常の
+# exit経路でこのguardが誤発火しないよう区間を抜ける。
 MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE=0
 
 # backup-vault.shへ渡す「このロックを保持しているのは自分自身だ」という
@@ -375,9 +640,11 @@ log "Phase0直前スナップショット: $BACKUP0_RESULT (status-file=$BACKUP0
 # busy/completed/no-change/error/missingを個別に判定する（"error"/"missing"
 # だけを弾くと"busy"が素通りしてPhase1以降へ進んでしまうため。設計書は
 # 「busyなら今回の週次実行を穏当にskip」と明記している）。
+# 終わり方 (b)＝Phase0 直前スナップショットの失敗・異常終了（completed に phase0-backup fail 1 件）。
 if [[ "$BACKUP0_RESULT" != "OK 0" ]]; then
-  add_anomaly "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）"
+  add_anomaly phase0-backup fail "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）" "$RUN_DIR/backup0-stderr.log"
   write_last_result "fail" "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）"
+  write_completed_record
   notify_macos "maintenance.sh 異常終了" "Phase0のバックアップ起動に失敗したため中断しました。詳細: $RUN_DIR"
   exit 1
 fi
@@ -388,14 +655,17 @@ case "$BACKUP0_STATUS_WORD" in
   busy)
     # 他プロセス（毎時LaunchAgentのbackup-vault.sh等）と競合した場合の
     # 穏当なskip。異常ではないため通知しない（設計書「busyなら今回の週次
-    # 実行を穏当にskip」）。last-run.jsonのstarted_atは既に更新済みなので
-    # 死活監視は正しく機能し続ける。
+    # 実行を穏当にskip」）。終わり方 (e)＝run.status=skipped(busy:backup0) を書く
+    # （「開始したが当該予定の仕事をしていない」を中断と区別する。定期起動なら
+    # 読み手が未起動 1 件として数える＝要件 T-14）。completed は前回のまま。
     log "Phase0直前スナップショットがbusyのため、今回の週次実行を穏当にskipします"
+    write_run_status skipped busy:backup0
     exit 0
     ;;
   *)
-    add_anomaly "Phase0: 直前スナップショット(backup-vault.sh)が異常終了しました（status=${BACKUP0_STATUS_WORD}）"
+    add_anomaly phase0-backup fail "Phase0: 直前スナップショット(backup-vault.sh)が異常終了しました（status=${BACKUP0_STATUS_WORD}）" "$RUN_DIR/backup0-stderr.log"
     write_last_result "fail" "Phase0: 直前スナップショット(backup-vault.sh)が異常終了しました（status=${BACKUP0_STATUS_WORD}）"
+    write_completed_record
     notify_macos "maintenance.sh 異常終了" "Phase0のバックアップに失敗したため中断しました。詳細: $RUN_DIR"
     exit 1
     ;;
@@ -435,7 +705,7 @@ run_export_retry() {
     # 2026-08-10にPhase1①自体のfail-fastを廃止した現在は「④はエラー隔離の
     # 対象＝失敗を検知しても中断せず警告として記録し先へ進む」という、より
     # 単純な一般則の一部として扱われている。ここでもその趣旨を徹底する）。
-    add_anomaly "$label: export-public-vault.sh再試行に失敗しました（${export_result}・残差分=$([[ -n "$remaining_diff" ]] && echo あり || echo なし)）"
+    add_anomaly phase0-export fail "$label: export-public-vault.sh再試行に失敗しました（${export_result}・残差分=$([[ -n "$remaining_diff" ]] && echo あり || echo なし)）" "$RUN_DIR/export-${label}-stderr.log"
   fi
 }
 
@@ -463,7 +733,18 @@ if [[ "$DRIFT_RESULT" != "OK 0" ]]; then
   # rc=1(drift>0)・rc>=2(実行エラー)・WRAPPER_FAIL(timeout等)のいずれも警告として
   # 記録するだけで②以降は継続する。
   DRIFT_JSON_LINE="$(tail -n 1 "$RUN_DIR/drift-stdout.log" 2>/dev/null || true)"
-  add_anomaly "Phase1①: check-drift.shがdrift/実行異常を検知しました（${DRIFT_RESULT}・警告として記録し継続します）。JSON: $DRIFT_JSON_LINE"
+  # 結果種別（設計 §3.3 表）: rc=1＝drift 検知＝仕事は完了＝warn（主体は本人）／
+  # rc≥2・WRAPPER_FAIL（実行異常・timeout）＝fail（主体は AI）。
+  DRIFT_STEP_RESULT="fail"
+  [[ "$DRIFT_RESULT" == "OK 1" ]] && DRIFT_STEP_RESULT="warn"
+  # health-self-explain 検証 A-6: check-drift.sh --json の契約は最終行が件数
+  # JSON（§1.2・L140〜146 相当）だが、rc≥2・WRAPPER_FAIL（実行異常・timeout）の
+  # ときは JSON を出す前に終わっていることがあり、その最終行は人間向けの見出し
+  # 行（NFR-4＝材料は件数 JSON か見出し行に限る・中身は変えない）。ラベルは
+  # 中身（`{` で始まるか）で書き分け、JSON でないものを「JSON:」と名乗らない。
+  DRIFT_LINE_LABEL="stdout 最終行"
+  [[ "$DRIFT_JSON_LINE" == \{* ]] && DRIFT_LINE_LABEL="JSON"
+  add_anomaly phase1-drift "$DRIFT_STEP_RESULT" "Phase1①: check-drift.shがdrift/実行異常を検知しました（${DRIFT_RESULT}・警告として記録し継続します）。${DRIFT_LINE_LABEL}: $DRIFT_JSON_LINE" "$RUN_DIR/drift-stdout.log"
 fi
 
 # --- ①相当: check-drift.sh②(config.toml三分類)の未知キー件数をinformationalとして拾う ---
@@ -528,20 +809,22 @@ print(len(v))
       FRAGMENTS_CANDIDATES=""
       write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
       write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-      add_anomaly "Phase1②: 候補件数を last-run.json に書けませんでした"
+      add_anomaly phase1-fragments fail "Phase1②: 候補件数を last-run.json に書けませんでした" "$FRAGMENTS_JSON"
     fi
     if [[ "$FRAGMENTS_SCAN_ERROR_COUNT" -gt 0 ]]; then
-      add_anomaly "Phase1②: fragments_log.pyが読み取れなかったFragmentsファイルが${FRAGMENTS_SCAN_ERROR_COUNT}件あります（scan_error_count>0・候補件数は記録しつつ継続しますが、翌週再走査させるためlast_success_atは進めません）"
+      # 子の失敗を実行体が警告として継続し完走する 09-14 型（要件 S-17）。実行体が
+      # 継続することは結果種別を変えない＝子の処理の結果が失敗を含む＝fail（V-4・W-1）。
+      add_anomaly phase1-fragments fail "Phase1②: fragments_log.pyが読み取れなかったFragmentsファイルが${FRAGMENTS_SCAN_ERROR_COUNT}件あります（scan_error_count>0・候補件数は記録しつつ継続しますが、翌週再走査させるためlast_success_atは進めません）" "$FRAGMENTS_JSON"
     fi
   else
     write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
     write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-    add_anomaly "Phase1②: fragments_log.pyのJSON出力からscan_error_countを取得できませんでした（契約違反/JSON破損の疑い・候補件数は記録せず継続します）"
+    add_anomaly phase1-fragments fail "Phase1②: fragments_log.pyのJSON出力からscan_error_countを取得できませんでした（契約違反/JSON破損の疑い・候補件数は記録せず継続します）" "$FRAGMENTS_JSON"
   fi
 else
   write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
   write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-  add_anomaly "Phase1②: fragments_log.pyが失敗/timeoutしました（${FRAGMENTS_RESULT}・継続します）"
+  add_anomaly phase1-fragments fail "Phase1②: fragments_log.pyが失敗/timeoutしました（${FRAGMENTS_RESULT}・継続します）" "$RUN_DIR/fragments-stderr.log"
 fi
 
 # --- ③vault_inventory.py --json ---
@@ -554,7 +837,7 @@ run_wrapped_step "$TIMEOUT_VAULT_INVENTORY" "$INVENTORY_STATUS_FILE" \
 INVENTORY_RESULT="$(parse_step_status "$INVENTORY_STATUS_FILE")"
 log "③vault_inventory.py: $INVENTORY_RESULT"
 if [[ "$INVENTORY_RESULT" != "OK 0" ]]; then
-  add_anomaly "Phase1③: vault_inventory.pyが失敗/timeoutしました（${INVENTORY_RESULT}・継続します）"
+  add_anomaly phase1-inventory fail "Phase1③: vault_inventory.pyが失敗/timeoutしました（${INVENTORY_RESULT}・継続します）" "$RUN_DIR/inventory-stderr.log"
 fi
 
 # =============================================================================
@@ -609,7 +892,7 @@ else
   if [[ "$TASK_PRUNE_RESULT" != "OK 0" ]]; then
     # rc=1/2/3・WRAPPER_FAILのいずれも、掃除の失敗はadd_info_noteに積む。
     # add_anomalyは使わない＝last_success_atはPhase1②の--since算出の起点なので、
-    # 毎週の掃除失敗が毎週の再走査を引き起こす二次被害が出る。月曜03:00にcmuxが
+    # 毎週の掃除失敗が毎週の再走査を引き起こす二次被害が出る。月曜06:00にcmuxが
     # 起動していないのは普通に起こる状態で、異常扱いにすると警告が常態化する。
     # 掃除が失敗しても記録は元のまま（run_wrapped_stepの隔離＋prune側の
     # 「取得に失敗したら1件も消さない」契約）。
@@ -656,7 +939,7 @@ SUMMARY_LINE="定常メンテ(週次): ${CANDIDATES_SEGMENT}${TASK_PRUNE_SEGMENT
 if append_fragments_summary "$SUMMARY_LINE"; then
   log "Fragmentsサマリ追記: $SUMMARY_LINE"
 else
-  add_anomaly "Phase3: Fragmentsサマリの追記に失敗しました"
+  add_anomaly phase3-summary fail "Phase3: Fragmentsサマリの追記に失敗しました"
 fi
 
 # --- backup-vault.shを再度呼び即commit（Fragmentsサマリを捕捉） ---
@@ -671,7 +954,7 @@ log "Phase3最終commit: $BACKUP3_RESULT (status-file=$BACKUP3_STATUS_WORD)"
 case "$BACKUP3_STATUS_WORD" in
   completed|no-change)
     if [[ "$BACKUP3_RESULT" != "OK 0" ]]; then
-      add_anomaly "Phase3: 最終commit(backup-vault.sh)の起動自体に失敗しました（${BACKUP3_RESULT}）"
+      add_anomaly phase3-backup fail "Phase3: 最終commit(backup-vault.sh)の起動自体に失敗しました（${BACKUP3_RESULT}）" "$RUN_DIR/backup3-stderr.log"
     fi
     ;;
   *)
@@ -679,7 +962,7 @@ case "$BACKUP3_STATUS_WORD" in
     # まま呼ぶため、bypassが正しく機能していればbusyにはならない＝busyはバイパスの
     # 不整合を示す異常）。Fragmentsサマリが未commitのまま残りうるので
     # last_success_atは更新しない。
-    add_anomaly "Phase3: 最終commit(backup-vault.sh)が異常終了しました（${BACKUP3_RESULT}・status=${BACKUP3_STATUS_WORD}）"
+    add_anomaly phase3-backup fail "Phase3: 最終commit(backup-vault.sh)が異常終了しました（${BACKUP3_RESULT}・status=${BACKUP3_STATUS_WORD}）" "$RUN_DIR/backup3-stderr.log"
     ;;
 esac
 
@@ -695,7 +978,7 @@ if [[ "$RUN_FULLY_OK" -eq 1 ]]; then
     # 古いままの値を使うことになり実害は小さい（fail-open）が、書込失敗
     # 自体は運用上気付けるようにanomaly化する。スクリプト自体はここでは中断しない（Phase3の最後の
     # ステップであり、これ以上ロールバックすべき後続処理も無いため）。
-    add_anomaly "Phase3: last-run.jsonのlast_success_at更新に失敗しました"
+    add_anomaly phase3-record fail "Phase3: last-run.jsonのlast_success_at更新に失敗しました"
   fi
 else
   log "今回は完全正常終了ではないため last_success_at は更新しません（次回も同じ--sinceから再試行）"
@@ -745,6 +1028,10 @@ if [[ "${#SUMMARY_PARTS[@]}" -gt 0 ]]; then
   LAST_RESULT_SUMMARY="${LAST_RESULT_SUMMARY:0:200}"
 fi
 write_last_result "$LAST_RESULT_VALUE" "$LAST_RESULT_SUMMARY"
+
+# --- 終わり方 (a)＝完走: completed（異常工程ごとの steps・info）・run の書き戻し・
+#     success_streak・ack の失効を 1 回の原子更新で書く（設計 v1.2 §3.3） ---
+write_completed_record
 
 # --- 異常時のみmacOS通知（正常時は通知しない＝本人「通知は見ていない」指摘） ---
 if [[ "${#ANOMALIES[@]}" -gt 0 ]]; then

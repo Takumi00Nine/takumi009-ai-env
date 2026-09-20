@@ -1,11 +1,16 @@
 #!/bin/bash
 # cmux Dock「Project」枠の供給側（cmux-session-todo 設計 §28〜§30）。
-# Vault の Projects/*.md の frontmatter と Tasks 節、外部脳ログ
-# （vault-inventory・週次メンテの last-run.json）を読み、対応表
+# Vault の Projects/*.md の frontmatter と Tasks 節を読み、対応表
 # （--list・v1/v2 と同一契約）と 1 ティック分のフレーム（--frame・
 # 設計 §29。外部脳ヘルスを同居させる＝FR-61 ⑦）を作る。描画（Dock への
 # 表示）は一切行わない＝dotfiles 側の cmux-next-watch.sh が受け取って
 # 描くだけ（FR-61・FR-62）。
+#
+# 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）: 契約 cmux-dock-frame/3。
+# B 行は判定機（claude/hooks/lib/health_judge.py＝唯一の判定ロジック）の写し＝
+#   B<TAB>外部脳<TAB><ok|warn|error><TAB><OK|WARNING|ERROR>[ 候補N件]
+# を 0〜1 行。判定機が動かないときは 0 行（3 値の外の機構障害＝FR-15 の例外）。
+# 旧判定（8 日線・棚卸し n/a・週次 ✅/⚠）は退役。
 #
 # 引数:
 #   --list  ＝ 表示と同じ順序で「番号<TAB>正式プロジェクト名<TAB>next値
@@ -39,12 +44,16 @@ VAULT="${CMUX_NEXT_VAULT:-$HOME/Data/obsidian}"
 STATUS_ALLOW="${CMUX_NEXT_STATUS_ALLOW:-active}"
 STATUS_HOLD="${CMUX_NEXT_STATUS_HOLD:-paused}"
 INVENTORY_DIR="${CMUX_NEXT_INVENTORY_DIR:-$HOME/.claude/logs/vault-inventory}"
+# 判定機の入力 4 本＋配置済み plist（既定は各実ファイル＝テストは必ず fixture へ向ける・設計 §10.1）。
 # 棚卸しの正本（design-step2 §3.1/§6.1）。書き手は vault_inventory.py だけ。
 INVENTORY_LATEST="${CMUX_NEXT_INVENTORY_LATEST:-$INVENTORY_DIR/latest.json}"
 MAINT_STATE_FILE="${CMUX_NEXT_MAINT_STATE:-$HOME/.claude/logs/maintenance/last-run.json}"
-MAINT_STALE_DAYS="${CMUX_NEXT_MAINT_STALE_DAYS:-8}"
-
-case "$MAINT_STALE_DAYS" in ''|*[!0-9]*|0) MAINT_STALE_DAYS=8 ;; esac
+HEALTH_OBSERVATION="${CMUX_NEXT_HEALTH_OBSERVATION:-$HOME/.claude/logs/health/session-observation.json}"
+RECALL_LOG="${CMUX_NEXT_RECALL_LOG:-$HOME/.claude/logs/vault-recall.tsv}"
+MAINT_PLIST="${CMUX_NEXT_MAINT_PLIST:-$HOME/Library/LaunchAgents/com.takumi009.maintenance.plist}"
+: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"  # 判定機の既定と同値（bootstrap-vault.sh と同じ渡し方＝設計 §4.1・想起の疑い判定の線）
+# 判定機の所在（repo パス運用＝$LIB_DIR/../claude/hooks/lib/）。無ければ B 行 0 行・stderr に 1 行。
+HEALTH_JUDGE="$LIB_DIR/../claude/hooks/lib/health_judge.py"
 STATUS_ALLOW="$(printf '%s' "$STATUS_ALLOW" | tr -d '[:space:]')"
 [ -z "$STATUS_ALLOW" ] && STATUS_ALLOW="active"
 STATUS_HOLD="$(printf '%s' "$STATUS_HOLD" | tr -d '[:space:]')"
@@ -140,63 +149,6 @@ number_entries() {
   awk -F '\t' 'NF { n++; printf "%d\t%s\t%s\t%s\n", n, $1, $3, $4 }'
 }
 
-# 棚卸しの正本 latest.json（design-step2 §3.2）から「date<TAB>actionable」を
-# jqで読む。見つかれば "count<TAB>M/D" を標準出力へ、抽出失敗時
-# （不在・破損・date/actionable欠落・型違反）は何も出さず非0を返す
-# （呼び出し側 emit_health_rows が「棚卸し n/a」を出す）。
-inventory_status() {
-  local out date count mm dd
-  out="$(jq -r '[.date, .actionable] | @tsv' "$INVENTORY_LATEST" 2>/dev/null)" || return 1
-  date="${out%%$(printf '\t')*}"; count="${out#*$(printf '\t')}"
-  is_valid_date "$date" || return 1
-  is_number "$count" || return 1
-  mm=$(( 10#${date:5:2} )); dd=$(( 10#${date:8:2} ))
-  printf '%s\t%d/%d\n' "$count" "$mm" "$dd"
-}
-
-# 棚卸しの「データ源」の有無だけを判定する（latest.jsonが存在するか）。
-# 件数抽出（inventory_status）の成否とは独立させる（v1/v2 と同一契約・
-# design-step2 §6.3: 不在＝行なし、破損＝⚠️相当の「棚卸し n/a」）。
-inventory_has_source() {
-  [ -f "$INVENTORY_LATEST" ]
-}
-
-# 週次メンテ（maintenance.sh）の死活状態を last-run.json の last_success_at
-# （無ければ started_at）から判定する。見つかれば
-# "ok_or_warn<TAB>表示テキスト" を標準出力へ、状態ファイルが無い／壊れて
-# いる場合は何も出さず非0を返す。
-maintenance_status() {
-  local raw ts epoch now age_days disp kind cand
-  [ -f "$MAINT_STATE_FILE" ] || return 1
-  raw="$(jq -r '.last_success_at // empty' "$MAINT_STATE_FILE" 2>/dev/null)"
-  [ -n "$raw" ] || raw="$(jq -r '.started_at // empty' "$MAINT_STATE_FILE" 2>/dev/null)"
-  [ -n "$raw" ] || return 1
-  ts="$raw"
-  case "$ts" in *.*Z) ts="${ts%%.*}Z" ;; esac
-  epoch="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$ts" '+%s' 2>/dev/null)"
-  is_number "$epoch" || return 1
-  now="$(date '+%s')"
-  age_days=$(( (now - epoch) / 86400 ))
-  [ "$age_days" -lt 0 ] && age_days=0
-  if [ "$age_days" -ge "$MAINT_STALE_DAYS" ]; then
-    kind="warn"
-    disp="$(printf '⚠%d日前' "$age_days")"
-  else
-    disp="$(date -r "$epoch" '+%-m/%-d' 2>/dev/null)"
-    [ -n "$disp" ] || disp="?"
-    kind="ok"
-    disp="✅${disp}"
-  fi
-  # 候補件数（design-step2 §3.2・S9 A-3）: last-run.json の
-  # fragments_candidates が非負整数のときだけ末尾へ「候補N件」を足す
-  # （0件も表示＝本人裁定⑤・§10-5）。キー無し・型違反はそのまま何も
-  # 足さない（「不明」とは区別せずDockには出さない契約＝design-step2 §6.3）。
-  cand="$(jq -r 'if (.fragments_candidates|type)=="number" and .fragments_candidates>=0
-                 then (.fragments_candidates|floor) else empty end' "$MAINT_STATE_FILE" 2>/dev/null)"
-  [ -n "$cand" ] && disp="${disp} 候補${cand}件"
-  printf '%s\t%s\n' "$kind" "$disp"
-}
-
 # --- `--list`（v1/v2 と同一契約） ------------------------------------------
 # 検証1巡目 MAJOR #7: `collect_entries | number_entries | awk ...` という
 # 素通しのパイプでは、pipefail無しの既定シェルでは最後尾の awk の rc しか
@@ -230,46 +182,58 @@ run_list() {
 
 print_reason_frame() {
   local reason="$1"
-  printf '#V\tcmux-dock-frame/1\tProject\n'
+  printf '#V\tcmux-dock-frame/3\tProject\n'
   printf 'R\t%s\n' "$reason"
   printf 'E\t1\n'
 }
 
-# ヘルス（外部脳）の B 行を stdout へ出す（0〜2 行）。棚卸し→週次の順
-# （v1/v2 の表示順と同じ）。データ源が無い側は行そのものを省略する。
-# 棚卸しの件数抽出に失敗した（データ源はあるが「要確認 N件」パターンが
-# 無い）場合は "棚卸し n/a" を warn 欄 ok で出す（n/a 自体は警告ではない。
-# 描画側は表示テキストが n/a のときだけ配色を DIM にする＝§31.4）。
+# ヘルス（外部脳）の B 行を stdout へ出す（0〜1 行・設計 §6）。判定機
+# health_judge.py を呼び、stage（OK／WARNING／ERROR）を warn 欄（ok／warn／
+# error）と表示テキスト（3 値）に写す。判定機が無い・python3 が無い・非 0・
+# JSON でない・stage が 3 値でない、のいずれでも 0 行（stderr に 1 行）＝
+# 誤った段階を見せない（FR-15 の例外・NFR-2 fail-open）。
+# 末尾付記＝extras.fragments_candidates が非負整数のときだけ「 候補N件」
+# （0 件も表示＝本人裁定 R-2。段階に影響しない）。
+# テスト専用 env HEALTH_JUDGE_NOW が非空なら --now に写す（bootstrap と同名・設計 §4.1）。
 emit_health_rows() {
-  local inv_src=0 maint_src=0
-  inventory_has_source && inv_src=1
-  [ -f "$MAINT_STATE_FILE" ] && maint_src=1
-  [ "$inv_src" -eq 0 ] && [ "$maint_src" -eq 0 ] && return 0
-
-  if [ "$inv_src" -eq 1 ]; then
-    local inv_out inv_count inv_date
-    inv_out="$(inventory_status)"
-    if [ -n "$inv_out" ]; then
-      inv_count="${inv_out%%$(printf '\t')*}"
-      inv_date="${inv_out#*$(printf '\t')}"
-      if [ "$inv_count" -ge 1 ] 2>/dev/null; then
-        printf 'B\t棚卸し\twarn\t要確認%s件 (%s)\n' "$inv_count" "$inv_date"
-      else
-        printf 'B\t棚卸し\tok\t要確認%s件 (%s)\n' "$inv_count" "$inv_date"
-      fi
-    else
-      printf 'B\t棚卸し\tok\tn/a\n'
-    fi
+  local py verdict rc fields stage cand warn
+  if [ ! -f "$HEALTH_JUDGE" ]; then
+    echo "health_judge.py が見つかりません（B 行を省略）: $HEALTH_JUDGE" >&2
+    return 0
   fi
-
-  if [ "$maint_src" -eq 1 ]; then
-    local maint_out maint_kind maint_disp
-    maint_out="$(maintenance_status)"
-    if [ -n "$maint_out" ]; then
-      maint_kind="${maint_out%%$(printf '\t')*}"
-      maint_disp="${maint_out#*$(printf '\t')}"
-      printf 'B\t週次\t%s\t%s\n' "$maint_kind" "$maint_disp"
-    fi
+  py="$(command -v python3 2>/dev/null)"
+  [ -n "$py" ] || py="/usr/bin/python3"
+  verdict="$("$py" "$HEALTH_JUDGE" judge \
+    --last-run "$MAINT_STATE_FILE" \
+    --inventory-latest "$INVENTORY_LATEST" \
+    --observation "$HEALTH_OBSERVATION" \
+    --recall-log "$RECALL_LOG" \
+    --plist "$MAINT_PLIST" \
+    --recall-stale-days "$VAULT_AGENT_LOG_STALE_DAYS" \
+    ${HEALTH_JUDGE_NOW:+--now "$HEALTH_JUDGE_NOW"} 2>/dev/null)"
+  rc=$?
+  if [ "$rc" != "0" ] || [ -z "$verdict" ]; then
+    echo "health_judge.py が失敗しました（rc=${rc}・B 行を省略）" >&2
+    return 0
+  fi
+  fields="$(printf '%s' "$verdict" | jq -r 'select(type == "object" and .schema == "health-verdict/1")
+    | [(.stage // ""), (if (.extras.fragments_candidates | type) == "number" and .extras.fragments_candidates >= 0
+                         then (.extras.fragments_candidates | floor | tostring) else "" end)] | @tsv' 2>/dev/null)"
+  stage="${fields%%$(printf '\t')*}"
+  cand="${fields#*$(printf '\t')}"
+  [ "$fields" = "$stage" ] && cand=""
+  case "$stage" in
+    OK) warn="ok" ;;
+    WARNING) warn="warn" ;;
+    ERROR) warn="error" ;;
+    *)
+      echo "health_judge.py の stage が 3 値でありません（B 行を省略）" >&2
+      return 0 ;;
+  esac
+  if [ -n "$cand" ]; then
+    printf 'B\t外部脳\t%s\t%s 候補%s件\n' "$warn" "$stage" "$cand"
+  else
+    printf 'B\t外部脳\t%s\t%s\n' "$warn" "$stage"
   fi
 }
 
@@ -313,7 +277,7 @@ run_frame() {
   b_n="$(wc -l < "$health_tmp" | tr -d ' ')"
   body_n=$(( p_n + b_n ))
 
-  printf '#V\tcmux-dock-frame/1\tProject\n'
+  printf '#V\tcmux-dock-frame/3\tProject\n'
   awk -F '\t' '{ printf "P\t%s\t%s\t%s\t%s\n", $1, $3, $4, ($2=="H")?"保留":"稼働中" }' "$entries_tmp"
   cat "$health_tmp"
   printf 'E\t%s\n' "$body_n"

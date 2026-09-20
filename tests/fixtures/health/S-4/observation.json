@@ -1,0 +1,23 @@
+{
+  "schema": "health-observation/1",
+  "observed_at": "2026-09-15T08:00:01Z",
+  "session_id": "sess-cur-0002",
+  "source": "startup",
+  "load": {
+    "vault_root_readable": true,
+    "required": [
+      "Preferences/absolute-rules.md",
+      "Preferences/core-conduct.md",
+      "Preferences/core-workflow.md",
+      "Preferences/vault-operation.md"
+    ],
+    "missing": []
+  },
+  "recall_prev": {
+    "session_id": "sess-prev-0001",
+    "reads_rows": 3,
+    "recall_valid_rows": 2,
+    "recall_error_rows": 0,
+    "injected": true
+  }
+}

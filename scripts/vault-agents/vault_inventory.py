@@ -813,6 +813,37 @@ def main():
         "review_invalid": len(review_invalid),
     }
     actionable = sum(sections.values())
+    # items＝要確認 1 件ごとの {kind, target, detail}（health-self-explain 設計 v1.2 §3.5・
+    # 2026-09-20）。kind は sections のキーと同じ語彙、並びは sections と同じ順、
+    # target／detail は md レポートの各節の行と同じ材料（読み手＝health_judge.py が
+    # 注入ブロックの棚卸し項目 4 点＝種別・対象・主体・減る条件に写す）。
+    # 検出ロジックは不変（SO-3）＝actionable に数える 10 種別の行をそのまま並べる
+    # だけなので len(items) == actionable を書き手が保証する（テストで検査）。
+    # 停滞プロジェクト・サイズ超過・未読・要観察は actionable に数えないので載せない（R-1）。
+    items = []
+    items.extend({"kind": "unreadable", "target": rel, "detail": reason}
+                 for rel, reason in unreadable_notes)
+    items.extend({"kind": "missing_updated", "target": rel, "detail": "updated が無い（Preferences）"}
+                 for rel in missing_updated)
+    items.extend({"kind": "date_drift", "target": rel,
+                  "detail": f"frontmatter: {fm_date} ＜ 本文最新: {body_date}"}
+                 for rel, fm_date, body_date in date_drift)
+    items.extend({"kind": "broken_links", "target": rel, "detail": f"[[{target}]]"}
+                 for rel, target in broken_links)
+    items.extend({"kind": "stale_keywords", "target": f"{rel}:{line_no}", "detail": f"【{label}】 {snippet}"}
+                 for rel, line_no, label, snippet in stale_hits)
+    items.extend({"kind": "status_future_dated", "target": rel,
+                  "detail": f"{status}（{ref}は今日から見て未来日）"}
+                 for rel, status, ref, _age in status_future_dated)
+    items.extend({"kind": "missing_aliases", "target": rel, "detail": "aliases が無い（想起されない）"}
+                 for rel in missing_aliases)
+    items.extend({"kind": "generic_aliases", "target": rel, "detail": f"alias `{alias}`（{why}）"}
+                 for rel, alias, why in generic_alias_hits)
+    items.extend({"kind": "review_overdue", "target": rel, "detail": f"review_by {rb}（{days}日超過）"}
+                 for rel, rb, days in review_overdue)
+    items.extend({"kind": "review_invalid", "target": rel, "detail": f"review_by: {rb}"}
+                 for rel, rb in review_invalid)
+    assert len(items) == actionable, f"items({len(items)}) != actionable({actionable})"
     L = []
     L.append("---")
     L.append(f"date: {today.isoformat()}")
@@ -1032,6 +1063,7 @@ def main():
         "actionable": actionable,
         "n_notes": len(notes),
         "sections": sections,
+        "items": items,
     })
 
     if args.json:

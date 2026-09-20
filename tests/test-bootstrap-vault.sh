@@ -44,6 +44,15 @@ assert_eq() {
   fi
 }
 
+assert_true() {
+  local desc="$1" cond="$2"
+  if [ "$cond" = "1" ]; then
+    pass "$desc"
+  else
+    fail_case "$desc"
+  fi
+}
+
 assert_contains() {
   local desc="$1" haystack="$2" needle="$3"
   if [[ "$haystack" == *"$needle"* ]]; then
@@ -125,23 +134,38 @@ make_full_vault() {
   done
 }
 
-# run_bootstrap <vault> [reads_log] [recall_log] [inv_log_dir] [last_run_file] —
+# run_bootstrap <vault> [reads_log] [recall_log] [inv_log_dir] [last_run_file] [plist] [observation_file] [session_json] —
 # bootstrap-vault.sh を実行し additionalContext を返す（単独セッション相当＝agent_type 無し・チーム未所属）。
-# ログ・棚卸し・last-run.json は既定で存在しないパス＝実機の $HOME/.claude/logs/* に依存しない。
+# ログ・棚卸し・last-run.json・plist は既定で存在しないパス＝実機の $HOME/.claude/logs/*・$HOME/Library に依存しない。
+# 観測記録（HEALTH_OBSERVATION_FILE）は既定で呼び出しごとの一時ディレクトリ（実機の $HOME/.claude/logs/health に書かない）。
 # BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 固定（実機の profile.md を読まない。P1 機構は run_bootstrap_with_profile() で検証）。
+# ⚠️ 既定が実ファイルの env 6 本（設計 v1.2 §10.1）をすべて渡す。新規ケースはこのヘルパを経由する（直接起動を書かない）。
+RUN_BOOTSTRAP_DEFAULT_SESSION_JSON='{"session_id":"test-session-0000"}'
 run_bootstrap() {
   local vault="$1"
   local reads_log="${2:-/nonexistent-dir/vault-reads.tsv}"
   local recall_log="${3:-/nonexistent-dir/vault-recall.tsv}"
   local inv_log_dir="${4:-/nonexistent-dir/vault-inventory}"
   local last_run_file="${5:-/nonexistent-dir/last-run.json}"
-  echo '{"session_id":"test-session-0000"}' \
+  local plist="${6:-/nonexistent-dir/com.takumi009.maintenance.plist}"
+  local obs_file="${7:-}"
+  local session_json="${8:-$RUN_BOOTSTRAP_DEFAULT_SESSION_JSON}"
+  local obs_tmp=""
+  if [ -z "$obs_file" ]; then
+    obs_tmp="$(mktemp -d)"
+    obs_file="$obs_tmp/session-observation.json"
+  fi
+  printf '%s\n' "$session_json" \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="$reads_log" VAULT_RECALL_LOG="$recall_log" \
       VAULT_INVENTORY_LOG_DIR="$inv_log_dir" \
       MAINTENANCE_LAST_RUN_FILE="$last_run_file" \
+      MAINTENANCE_PLIST_FILE="$plist" HEALTH_OBSERVATION_FILE="$obs_file" \
+      HEALTH_JUDGE_NOW="${HEALTH_JUDGE_NOW:-}" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
+  [ -n "$obs_tmp" ] && rm -rf "$obs_tmp"
+  return 0
 }
 
 # 2026-09-08 モデル定義ファイルと候補指定対応: 役割の行がmodel=<定義名>だけに
@@ -247,6 +271,8 @@ export AIENV_MODEL_DEFS_FILE="$SHARED_MODELS_CONF"
 
 # run_bootstrap_with_profile <vault> <profile_path> [models_conf] — P1 機構（ローカル実体プロファイル）
 # のテスト専用ヘルパー。BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 を明示して実行する。
+# 判定時刻はテスト専用 env HEALTH_JUDGE_NOW で固定する（2 回の本文を diff するケース＝76・78 が judged_at の
+# 秒差で汚れないため。F-19＝この env を export するのは test ヘルパだけ）。
 run_bootstrap_with_profile() {
   local vault="$1" profile_path="$2"
   local models_conf="${3:-$SHARED_MODELS_CONF}"
@@ -255,6 +281,9 @@ run_bootstrap_with_profile() {
       VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
       VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
       MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
+      MAINTENANCE_PLIST_FILE="/nonexistent-dir/com.takumi009.maintenance.plist" \
+      HEALTH_OBSERVATION_FILE="/nonexistent-dir/health/session-observation.json" \
+      HEALTH_JUDGE_NOW="${HEALTH_JUDGE_NOW:-2026-09-15T06:01:01Z}" \
       AIENV_MODEL_DEFS_FILE="$models_conf" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
@@ -295,6 +324,8 @@ run_bootstrap_health4() {
       VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
       VAULT_INVENTORY_LOG_DIR="$inv_dir" \
       MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
+      MAINTENANCE_PLIST_FILE="/nonexistent-dir/com.takumi009.maintenance.plist" \
+      HEALTH_OBSERVATION_FILE="$fake_home/.claude/logs/health/session-observation.json" \
       BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$profile_path" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
   rm -rf "$fake_home"
@@ -327,11 +358,14 @@ run_bootstrap_worker() {
   local recall_log="${3:-/nonexistent-dir/vault-recall.tsv}"
   local inv_log_dir="${4:-/nonexistent-dir/vault-inventory}"
   local last_run_file="${5:-/nonexistent-dir/last-run.json}"
+  local obs_file="${6:-/nonexistent-dir/health/session-observation.json}"
   echo '{"session_id":"test-session-worker","agent_type":"worker"}' \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
       VAULT_READS_LOG="$reads_log" VAULT_RECALL_LOG="$recall_log" \
       VAULT_INVENTORY_LOG_DIR="$inv_log_dir" \
-      MAINTENANCE_LAST_RUN_FILE="$last_run_file" "$SCRIPT" \
+      MAINTENANCE_LAST_RUN_FILE="$last_run_file" \
+      MAINTENANCE_PLIST_FILE="/nonexistent-dir/com.takumi009.maintenance.plist" \
+      HEALTH_OBSERVATION_FILE="$obs_file" "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 
@@ -416,473 +450,354 @@ echo "=== 3b. 必須publicノート(core-conduct.md)だけが欠落 → private�
   rm -rf "$VAULT_DIR"
 }
 
-echo "=== 4. 外部脳ヘルス行①: latest.json が正常なら report_path・要確認件数・日付が出る（0 件も出す） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  INV_DIR="$(mktemp -d)"
-  printf '{"date":"2026-06-01","report_path":"%s/2026-06-01.md","actionable":3,"n_notes":42,"sections":{"broken_links":3}}\n' "$INV_DIR" > "$INV_DIR/latest.json"
-  # 日付付き md は読まない（latest.json が正本）＝本文の件数が違っても影響しない。
-  echo "自動生成。ノート 42 件を検査し、**要確認 99 件**。" > "$INV_DIR/2026-06-01.md"
+# ============================================================================
+# 4〜8: 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §5・§10.2）。
+# bootstrap は ①観測記録 → ②判定機（lib/health_judge.py）→ ③描画 の 3 段。段階の判定は判定機 1 か所
+# （tests/test-health-judge.sh が 23 本を閉じる）。ここでは「判定機の写し」であること（描画・観測・fail-open）を検査する。
+# 旧判定（8 日線・「N 日成功していません」・「前回の週次メンテ結果」・「フック死の疑い」）の検査は退役。
+# ============================================================================
+HEALTH_FX_ROOT="$TESTS_DIR/fixtures/health"
+CMUX_NEXT_MODEL="$REPO_ROOT/cmux/cmux-next-model.sh"
+HEALTH_SHARED_VAULT="$(mktemp -d)"
+make_full_vault "$HEALTH_SHARED_VAULT"
+HEALTH_EMPTY_PROJECTS="$(mktemp -d)"
+mkdir -p "$HEALTH_EMPTY_PROJECTS/Projects"
 
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
-  assert_contains "ヘルス見出しが出る" "$ctx" "【外部脳ヘルス】"
-  assert_contains "report_path・件数・日付が出る" "$ctx" "棚卸し最新: ${INV_DIR}/2026-06-01.md（要確認 3 件・2026-06-01）"
-  assert_not_contains "md 本文の件数(99)は読まない" "$ctx" "要確認 99 件"
-  assert_not_contains "破損の警告は出ない" "$ctx" "棚卸しの状態記録が壊れています"
-
-  printf '{"date":"2026-06-02","report_path":"%s/2026-06-02.md","actionable":0}\n' "$INV_DIR" > "$INV_DIR/latest.json"
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
-  assert_contains "要確認 0 件でも行が出る" "$ctx" "（要確認 0 件・2026-06-02）"
-
-  rm -rf "$VAULT_DIR" "$INV_DIR"
+# fixture_vault_dir <fixture dir> — fixture の vault/ があればそれ、observation.json が「ルート不在」なら存在しないパス、
+# それ以外は共有の完全な Vault（fixtures/health/README.md の規則）。
+fixture_vault_dir() {
+  local d="$1"
+  if [ -d "$d/vault" ]; then
+    printf '%s' "$d/vault"
+  elif [ "$(jq -r '.load.vault_root_readable' "$d/observation.json" 2>/dev/null)" = "false" ]; then
+    printf '%s' "/nonexistent-dir/vault"
+  else
+    printf '%s' "$HEALTH_SHARED_VAULT"
+  fi
 }
 
-echo "=== 5. 外部脳ヘルス行①: latest.json が破損・必須キー欠落なら⚠️1行、不在なら行なし ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  INV_DIR="$(mktemp -d)"
+# run_bootstrap_fixture <fixture名> [session_json] — fixture の入力を全部向けて bootstrap を回し additionalContext を返す。
+# 観測記録＝fixture の observation-prev.json を一時ファイルへ写して HEALTH_OBSERVATION_FILE に渡す（bootstrap が上書きする）。
+# 書かれた観測記録は $BOOT_OBS_FILE に残す（呼び出し側が検査してから消す）。HEALTH_JUDGE_NOW＝fixture の now。
+HEALTH_FIXTURE_SESSION_JSON='{"session_id":"sess-cur-0002","source":"startup"}'
+HEALTH_OBS_WORK="$(mktemp -d)"
+BOOT_OBS_FILE="$HEALTH_OBS_WORK/session-observation.json"
+run_bootstrap_fixture() {
+  local fx="$1" session_json="${2:-$HEALTH_FIXTURE_SESSION_JSON}"
+  local d="$HEALTH_FX_ROOT/$fx" plist="/nonexistent-dir/com.takumi009.maintenance.plist"
+  [ -f "$d/plist" ] && plist="$d/plist"
+  rm -f "$BOOT_OBS_FILE"
+  [ -f "$d/observation-prev.json" ] && cp "$d/observation-prev.json" "$BOOT_OBS_FILE"
+  HEALTH_JUDGE_NOW="$(cat "$d/now")" \
+    run_bootstrap "$(fixture_vault_dir "$d")" "$d/vault-reads.tsv" "$d/vault-recall.tsv" "$d" "$d/last-run.json" \
+      "$plist" "$BOOT_OBS_FILE" "$session_json"
+}
 
+# run_dock_fixture <fixture名> — cmux-next-model.sh --frame を fixture の入力（判定機の入力 4 本＋plist）で回す。
+# 既定が実ファイルの env 5 本をすべて fixture／存在しないパスへ向ける（設計 §10.1）。
+run_dock_fixture() {
+  local fx="$1" d="$HEALTH_FX_ROOT/$fx" plist="/nonexistent-dir/com.takumi009.maintenance.plist"
+  [ -f "$d/plist" ] && plist="$d/plist"
+  CMUX_NEXT_VAULT="$HEALTH_EMPTY_PROJECTS" CMUX_NEXT_MAINT_STATE="$d/last-run.json" \
+    CMUX_NEXT_INVENTORY_LATEST="$d/latest.json" CMUX_NEXT_HEALTH_OBSERVATION="$d/observation.json" \
+    CMUX_NEXT_RECALL_LOG="$d/vault-recall.tsv" CMUX_NEXT_MAINT_PLIST="$plist" \
+    HEALTH_JUDGE_NOW="$(cat "$d/now")" bash "$CMUX_NEXT_MODEL" --frame 2>/dev/null
+}
+
+# health_section <ctx> — ヘルス節（【外部脳ヘルス】の行から、続く「- [」項目行・⚠️ 行まで）だけを取り出す。
+health_section() {
+  printf '%s\n' "$1" | awk '/^【外部脳ヘルス】/{flag=1; print; next} flag && (/^- \[/ || /^⚠️ 観測記録/){print; next} flag{exit}'
+}
+health_header() { printf '%s\n' "$1" | grep '^【外部脳ヘルス】' | head -1; }
+
+echo "=== 4. ok_health_section_is_one_line（NFR-3・AC-4）: S-1＝ヘルス節は全体で 1 行・stage=OK items=0・⚠️ を含まない ==="
+{
+  ctx="$(run_bootstrap_fixture S-1)"
+  sec="$(health_section "$ctx")"
+  assert_eq "S-1: ヘルス節が 1 行" "1" "$(printf '%s\n' "$sec" | wc -l | tr -d ' ')"
+  assert_contains "S-1: stage=OK items=0" "$sec" "stage=OK items=0"
+  assert_not_contains "S-1: ⚠️ を含まない（FR-5）" "$sec" "⚠️"
+  s1_run_id="$(jq -r '.completed.run_id' "$HEALTH_FX_ROOT/S-1/last-run.json")"; s1_streak="$(jq -r '.success_streak' "$HEALTH_FX_ROOT/S-1/last-run.json")"
+  assert_contains "S-1: 週次の状態（completed・run_id・trigger・streak）" "$sec" "maintenance=completed(${s1_run_id}, trigger=scheduled, streak=${s1_streak}, info=0)"
+  s1_report_path="$(jq -r '.report_path' "$HEALTH_FX_ROOT/S-1/latest.json")"
+  assert_contains "S-1: 棚卸し 0 件と report_path" "$sec" "inventory=0(2026-09-15, ${s1_report_path})"
+  assert_contains "S-1: load=ok recall=observed(injected=true)" "$sec" "load=ok recall=observed(injected=true)"
+  assert_not_contains "S-1: 旧見出し（check-drift ⑥ の簡易版）は退役" "$ctx" "簡易版"
+  assert_not_contains "S-1: 旧文言「動いていません」は退役" "$ctx" "動いていません"
+  assert_contains "S-1: 本文は健在" "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
+}
+
+echo "=== 4b. fragments_candidates_not_injected: S-1 は候補 12 件だが AI へは注入しない（現行契約・SO-8） ==="
+{
+  ctx="$(run_bootstrap_fixture S-1)"
+  assert_not_contains "S-1: 「候補」を注入しない" "$ctx" "候補"
+  assert_not_contains "S-1: fragments_candidates を注入しない" "$ctx" "fragments_candidates"
+}
+
+echo "=== 5. render_item_keys_fixed（AC-1）: S-2＝項目行ちょうど 1 行・固定キーの並び・result=失敗・actor=AI・ack=該当なし ==="
+{
+  ctx="$(run_bootstrap_fixture S-2)"
+  sec="$(health_section "$ctx")"
+  items="$(printf '%s\n' "$sec" | grep '^- \[')"
+  assert_eq "S-2: 項目行が 1 行" "1" "$(printf '%s\n' "$items" | grep -c '^- \[')"
+  assert_contains "S-2: ヘッダ stage=WARNING items=1" "$(health_header "$ctx")" "stage=WARNING items=1"
+  # V-17 差し替え後、S-2 の実際の工程・log_ref は実生成物（phase1-inventory・temp パス）に変わる
+  # （設計 §10.1「run_dir／log_ref は temp の絶対パス（fixture では任意に置換してよい）」）。
+  # 固定キーの並び自体（順序）はワイルドカードで検査し、step 名・log の逐語一致は別に検査する。
+  expected_re='^- \[1\] source=週次メンテ severity=WARNING step=.+ result=失敗 actor=AI reason=「[^」]+」 ok_when=「[^」]+」 ack=該当なし log=.+$'
+  assert_eq "S-2: 固定キーの並び（source severity step result actor reason ok_when ack log）" "1" \
+    "$(printf '%s\n' "$items" | grep -Ec "$expected_re")"
+  assert_contains "S-2: step 名が逐語（V-17 差し替え後の実物）" "$items" "step=$(jq -r '.completed.steps[0].name' "$HEALTH_FX_ROOT/S-2/last-run.json")"
+  assert_contains "S-2: log が逐語（V-17 差し替え後の実物）" "$items" "log=$(jq -r '.completed.steps[0].log_ref' "$HEALTH_FX_ROOT/S-2/last-run.json")"
+  assert_contains "S-2: 理由 X が逐語" "$items" "$(jq -r '.completed.steps[0].reason' "$HEALTH_FX_ROOT/S-2/last-run.json")"
+  assert_contains "S-2: ③ OK に戻る条件" "$items" "ok_when=「次回の本番経路の実行（定期起動または scripts/maintenance-kick.sh）が完全正常終了する」"
+  assert_not_contains "S-2: 項目行に stage= は無い（V-5）" "$items" "stage="
+}
+
+echo "=== 5b. S-3（AC-2）: 2 行・理由の合計 >200 文字が両方とも逐語（切り詰め 0）・警告/失敗・本人/AI ==="
+{
+  ctx="$(run_bootstrap_fixture S-3)"
+  items="$(health_section "$ctx" | grep '^- \[')"
+  assert_eq "S-3: 項目行が 2 行" "2" "$(printf '%s\n' "$items" | grep -c '^- \[')"
+  assert_contains "S-3: [1] drift の理由が逐語" "$items" "reason=「$(jq -r '.completed.steps[0].reason' "$HEALTH_FX_ROOT/S-3/last-run.json")」"
+  assert_contains "S-3: [2] 理由 X が逐語" "$items" "reason=「$(jq -r '.completed.steps[1].reason' "$HEALTH_FX_ROOT/S-3/last-run.json")」"
+  assert_contains "S-3: [1] result=警告 actor=本人" "$items" "result=警告 actor=本人"
+  assert_contains "S-3: [2] result=失敗 actor=AI" "$items" "result=失敗 actor=AI"
+}
+
+echo "=== 5c. 4 状態の明示（AC-3）: S-4＝interrupted・S-5＝broken・S-21＝未起動（前回の完了結果として出ない） ==="
+{
+  ctx="$(run_bootstrap_fixture S-4)"
+  assert_contains "S-4: ヘッダ maintenance=interrupted(開始 …)" "$(health_header "$ctx")" "maintenance=interrupted(開始 2026-09-15T06:00:01Z)"
+  assert_contains "S-4: 項目 result=中断・開始したが完了記録が無い" "$ctx" "result=中断 actor=AI reason=「開始したが完了記録が無い"
+  assert_not_contains "S-4: 前回の理由 X は出ない" "$ctx" "理由X"
+  ctx="$(run_bootstrap_fixture S-5)"
+  assert_contains "S-5: ヘッダ maintenance=broken(" "$(health_header "$ctx")" "maintenance=broken("
+  assert_contains "S-5: 項目 result=破損" "$ctx" "result=破損 actor=AI"
+  ctx="$(run_bootstrap_fixture S-21)"
+  assert_contains "S-21: 項目 result=未起動・予定時刻を過ぎて開始していない" "$ctx" "result=未起動 actor=AI reason=「予定時刻を過ぎて開始していない"
+  assert_eq "S-21: 項目行 1 行" "1" "$(health_section "$ctx" | grep -c '^- \[')"
+}
+
+echo "=== 5d. 棚卸し・読込・想起の項目行の固定キー（S-8・S-15・S-19）と ack の描画（S-11・S-7） ==="
+{
+  ctx="$(run_bootstrap_fixture S-8)"
+  items="$(health_section "$ctx" | grep '^- \[')"
+  assert_eq "S-8: 棚卸し 2 行（kind target detail actor ok_when ack log）" "2" \
+    "$(printf '%s\n' "$items" | grep -Ec '^- \[[12]\] source=棚卸し severity=WARNING kind=[a-z_]+ target=[^ ]+ detail=「[^」]+」 actor=(AI|本人) ok_when=「[^」]+」 ack=該当なし log=[^ ]+$')"
+  s8_report_path="$(jq -r '.report_path' "$HEALTH_FX_ROOT/S-8/latest.json")"
+  assert_eq "S-8: log が report_path と逐語一致（2 行とも）" "2" \
+    "$(printf '%s\n' "$items" | grep -Fc "log=${s8_report_path}")"
+  assert_contains "S-8: date_drift は AI" "$items" "kind=date_drift target=Knowledge/x.md detail=「frontmatter updated: 2026-08-01 ＜ 本文最新: 2026-09-10」 actor=AI"
+  assert_contains "S-8: 表に無い kind は本人" "$items" "kind=owner_decision target=Projects/y.md"
+  assert_not_contains "S-8: 要観察は現れない" "$items" "unread_pending"
+  assert_contains "S-8: ヘッダ inventory=2(" "$(health_header "$ctx")" "inventory=2(2026-09-15, "
+  ctx="$(run_bootstrap_fixture S-15)"
+  assert_eq "S-15: 読込 1 行（target result actor ok_when ack log=該当なし）" "1" \
+    "$(health_section "$ctx" | grep -Ec '^- \[1\] source=読込 severity=ERROR target=Preferences/core-conduct\.md result=[^ ]+ actor=AI ok_when=「[^」]+」 ack=該当なし log=該当なし$')"
+  assert_contains "S-15: ヘッダ stage=ERROR … load=missing(1)" "$(health_header "$ctx")" "load=missing(1)"
+  assert_contains "S-15: 必読リスト側の想定外欠落の警告も従来どおり" "$ctx" "必読のはずのpublicノートが見つかりません"
+  ctx="$(run_bootstrap_fixture S-19)"
+  assert_eq "S-19: 想起 1 行（result actor ok_when ack log）" "1" \
+    "$(health_section "$ctx" | grep -Ec '^- \[1\] source=想起 severity=ERROR result=前セッション（sess-prev-0001）で注入なし（直接観測） actor=AI ok_when=「[^」]+」 ack=該当なし log=該当なし$')"
+  assert_contains "S-19: ヘッダ recall=observed(injected=false)" "$(health_header "$ctx")" "recall=observed(injected=false)"
+  ctx="$(run_bootstrap_fixture S-11)"
+  ack_at="$(jq -r '.ack.at' "$HEALTH_FX_ROOT/S-11/last-run.json")"; ack_note="$(jq -r '.ack.note' "$HEALTH_FX_ROOT/S-11/last-run.json")"
+  assert_contains "S-11: ack=対処済み・次回判定待ち（at: note）" "$ctx" "ack=対処済み・次回判定待ち（${ack_at}: ${ack_note}）"
+  assert_contains "S-11: stage=WARNING のまま" "$(health_header "$ctx")" "stage=WARNING"
+  ctx="$(run_bootstrap_fixture S-7)"
+  ack_at="$(jq -r '.ack.at' "$HEALTH_FX_ROOT/S-7/last-run.json")"; ack_note="$(jq -r '.ack.note' "$HEALTH_FX_ROOT/S-7/last-run.json")"
+  assert_contains "S-7: ack=申告後に再失敗（at: note）" "$ctx" "ack=申告後に再失敗（${ack_at}: ${ack_note}）"
+  ctx="$(run_bootstrap_fixture S-16)"
+  assert_eq "S-16（AC-20）: severity=ERROR の項目行がちょうど 1 行" "1" "$(health_section "$ctx" | grep -c 'severity=ERROR')"
+  assert_eq "S-16: 項目行 2 行（週次 1・読込 1）" "2" "$(health_section "$ctx" | grep -c '^- \[')"
+}
+
+echo "=== 6. stage_unique_and_equal_to_dock（AC-12）: S-1〜S-23 全件で stage= がヘッダに 1 回・Dock の B 行と一致 ==="
+{
+  n_fx=0
+  for d in "$HEALTH_FX_ROOT"/S-*; do
+    fx="$(basename "$d")"
+    n_fx=$((n_fx + 1))
+    ctx="$(run_bootstrap_fixture "$fx")"
+    frame="$(run_dock_fixture "$fx")"
+    assert_eq "AC-12 $fx: stage= がちょうど 1 回" "1" "$(grep -c 'stage=' <<<"$ctx")"
+    assert_eq "AC-12 $fx: 注入の stage と B 行の段階が一致" \
+      "$(grep -o 'stage=[A-Z]*' <<<"$ctx" | cut -d= -f2)" \
+      "$(awk -F'\t' '$1=="B"{print $4}' <<<"$frame" | sed 's/ 候補[0-9]*件$//')"
+    assert_eq "AC-12 $fx: ヘッダの items= と項目行数が一致" \
+      "$(grep -o 'items=[0-9]*' <<<"$ctx" | head -1 | cut -d= -f2)" \
+      "$(health_section "$ctx" | grep -c '^- \[')"
+    # bootstrap が書いた観測記録の load・recall_prev が fixture の observation.json（期待値）と一致（設計 §10.1）
+    assert_eq "AC-12 $fx: 観測記録の load が期待値と一致" \
+      "$(jq -c '.load' "$d/observation.json")" "$(jq -c '.load' "$BOOT_OBS_FILE" 2>/dev/null)"
+    assert_eq "AC-12 $fx: 観測記録の recall_prev が期待値と一致" \
+      "$(jq -c '.recall_prev' "$d/observation.json")" "$(jq -c '.recall_prev' "$BOOT_OBS_FILE" 2>/dev/null)"
+  done
+  assert_eq "AC-12: S-* は 23 本" "23" "$n_fx"
+}
+
+echo "=== 7. observer_writes_injected_false_when_reads_but_no_recall（AC-22 恒・D-6）: 前セッションは reads あり・recall 0 行 → injected=false・ERROR ==="
+{
+  ctx="$(run_bootstrap_fixture S-19)"
+  assert_eq "観測記録: schema" "health-observation/1" "$(jq -r '.schema' "$BOOT_OBS_FILE")"
+  assert_eq "観測記録: session_id=今回・source=startup" "sess-cur-0002 startup" "$(jq -r '"\(.session_id) \(.source)"' "$BOOT_OBS_FILE")"
+  assert_eq "観測記録: recall_prev.session_id=前セッション" "sess-prev-0001" "$(jq -r '.recall_prev.session_id' "$BOOT_OBS_FILE")"
+  assert_eq "観測記録: reads_rows=3 recall_valid_rows=0 recall_error_rows=0 injected=false" "3 0 0 false" \
+    "$(jq -r '.recall_prev | "\(.reads_rows) \(.recall_valid_rows) \(.recall_error_rows) \(.injected)"' "$BOOT_OBS_FILE")"
+  assert_contains "注入: stage=ERROR" "$(health_header "$ctx")" "stage=ERROR"
+  assert_contains "注入: 想起の項目" "$ctx" "source=想起 severity=ERROR"
+}
+
+echo "=== 7b. observer_prev_session_is_last_writer（F-18・V-11）: 前セッション＝最後に観測記録を書いたセッション（自分自身・並行も定義どおり） ==="
+{
+  LOGDIR="$(mktemp -d)"
+  OBS="$(mktemp -d)/session-observation.json"
+  printf '%s\tsess-A\tPreferences/absolute-rules.md\n%s\tsess-B\tPreferences/absolute-rules.md\n' "$(d_ts -1)" "$(d_ts -1)" > "$LOGDIR/vault-reads.tsv"
+  printf '%s\tsess-A\tKnowledge/x.md\tk\n%s\tERROR\t\tsess-B\tboom\n' "$(d_ts -1)" "$(d_ts -1)" > "$LOGDIR/vault-recall.tsv"
+  # (1) 観測記録なし → 前セッション null・injected null
+  ctx="$(run_bootstrap "$HEALTH_SHARED_VAULT" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "" "" "" "$OBS" '{"session_id":"sess-A","source":"startup"}')"
+  assert_eq "(1) 前回なし: recall_prev.session_id=null・injected=null" "null null" "$(jq -r '"\(.recall_prev.session_id) \(.recall_prev.injected)"' "$OBS")"
+  assert_contains "(1) ヘッダ recall=observed(injected=null)" "$(health_header "$ctx")" "recall=observed(injected=null)"
+  # (2) sess-B が起動 → 前セッション＝sess-A（reads 1・recall 有効 1 → injected=true）
+  ctx="$(run_bootstrap "$HEALTH_SHARED_VAULT" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "" "" "" "$OBS" '{"session_id":"sess-B","source":"startup"}')"
+  assert_eq "(2) 前セッション=sess-A・injected=true" "sess-A true" "$(jq -r '"\(.recall_prev.session_id) \(.recall_prev.injected)"' "$OBS")"
+  # (3) sess-B が compact で再び起動 → 前セッション＝自分自身 sess-B（reads 1・有効 0・ERROR 行 1 → injected=false）
+  ctx="$(run_bootstrap "$HEALTH_SHARED_VAULT" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "" "" "" "$OBS" '{"session_id":"sess-B","source":"compact"}')"
+  assert_eq "(3) 前セッション=自分自身 sess-B・source=compact" "sess-B compact" "$(jq -r '"\(.recall_prev.session_id) \(.source)"' "$OBS")"
+  assert_eq "(3) reads 1・有効 0・ERROR 1 → injected=false" "1 0 1 false" \
+    "$(jq -r '.recall_prev | "\(.reads_rows) \(.recall_valid_rows) \(.recall_error_rows) \(.injected)"' "$OBS")"
+  assert_contains "(3) 注入は ERROR（想起）" "$(health_header "$ctx")" "stage=ERROR"
+  # (4) 前セッションに reads が無い → injected=null（F-17 の縮退）
+  ctx="$(run_bootstrap "$HEALTH_SHARED_VAULT" "/nonexistent-dir/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "" "" "" "$OBS" '{"session_id":"sess-C","source":"startup"}')"
+  assert_eq "(4) reads ログ不在 → injected=null" "null" "$(jq -r '.recall_prev.injected' "$OBS")"
+  assert_eq "(4) 観測記録の required は LOCAL_ONLY を除く 4 件・missing 0" "4 0" "$(jq -r '"\(.load.required | length) \(.load.missing | length)"' "$OBS")"
+  rm -rf "$LOGDIR" "$(dirname "$OBS")"
+}
+
+echo "=== 7c. 観測記録は毎回上書き（今回の観測で判定）・Vault ルート不在＝vault_root_readable=false・missing に必読 4 件 ==="
+{
+  ctx="$(run_bootstrap_fixture S-18)"
+  assert_eq "S-18: vault_root_readable=false・missing 4 件" "false 4" "$(jq -r '"\(.load.vault_root_readable) \(.load.missing | length)"' "$BOOT_OBS_FILE")"
+  assert_contains "S-18: ヘッダ load=root_unreadable" "$(health_header "$ctx")" "load=root_unreadable"
+  assert_eq "S-18: 項目は 1 行（ノートごとに数えない）" "1" "$(health_section "$ctx" | grep -c '^- \[')"
+}
+
+echo "=== 7d. X1b_skipped_header_marks_prev_completed／X5_running_header_marks_prev_completed（W-3・§14-6）: 「前回」明示 ==="
+{
+  ctx="$(run_bootstrap_fixture X-1b)"
+  assert_contains "X-1b: ヘッダが skipped(busy:lock・前回 <completed.run_id> の完了記録)" "$(health_header "$ctx")" \
+    "maintenance=skipped(busy:lock・前回 2026-09-08/150001-1111 の完了記録)"
+  assert_contains "X-1b: stage=OK items=0（手動の busy-skip は加算しない）" "$(health_header "$ctx")" "stage=OK items=0"
+  ctx="$(run_bootstrap_fixture X-5)"
+  assert_contains "X-5: ヘッダが running(開始 …・以下の週次メンテ項目は前回 <completed.run_id> の完了記録)" "$(health_header "$ctx")" \
+    "maintenance=running(開始 2026-09-15T06:00:01Z・以下の週次メンテ項目は前回 2026-09-08/150001-1111 の完了記録)"
+  assert_eq "X-5: 項目は前回の fail 1 行" "1" "$(health_section "$ctx" | grep -c '^- \[1\] source=週次メンテ severity=WARNING step=Phase1② fragments_log result=失敗')"
+  assert_contains "X-5: stage=WARNING items=1" "$(health_header "$ctx")" "stage=WARNING items=1"
+  ctx="$(run_bootstrap_fixture X-1)"
+  assert_contains "X-1: 定期の busy-skip は未起動 1 件" "$ctx" "result=未起動 actor=AI reason=「当該予定の起動が実行なしに終わった（busy-skip: busy:lock"
+}
+
+echo "=== 7e. health_judge_now_passed_as_now（V-8(a)・F-19）: HEALTH_JUDGE_NOW が --now に写る＝judged_at と now=injected。未設定なら now=injected 無し ==="
+{
+  ctx="$(run_bootstrap_fixture S-1)"
+  assert_contains "HEALTH_JUDGE_NOW あり: judged_at が fixture の now" "$(health_header "$ctx")" "judged_at=$(cat "$HEALTH_FX_ROOT/S-1/now")"
+  assert_contains "HEALTH_JUDGE_NOW あり: ヘッダ末尾に now=injected" "$(health_header "$ctx")" " now=injected"
+  ctx="$(HEALTH_JUDGE_NOW="" run_bootstrap "$HEALTH_SHARED_VAULT")"
+  assert_not_contains "HEALTH_JUDGE_NOW 無し: now=injected が出ない" "$ctx" "now=injected"
+  assert_contains "HEALTH_JUDGE_NOW 無し: 不在＝OK（サブ機初回・F-7）" "$(health_header "$ctx")" "stage=OK items=0"
+  assert_contains "HEALTH_JUDGE_NOW 無し: maintenance=absent" "$(health_header "$ctx")" "maintenance=absent"
+}
+
+echo "=== 8. judge_missing_prints_unavailable_line（F-10・NFR-2）: 判定機不在／python3 失敗＝固定 1 行「判定不能」・段階を出さない・本文は止めない ==="
+{
+  ctx="$(HEALTH_JUDGE_LIB=/nonexistent-dir/health_judge.py run_bootstrap "$HEALTH_SHARED_VAULT")"
+  assert_eq "判定機不在: 固定 1 行" "1" "$(printf '%s\n' "$ctx" | grep -c '^【外部脳ヘルス】判定不能（health_judge.py: ')"
+  assert_not_contains "判定機不在: stage= を出さない" "$ctx" "stage="
+  assert_contains "判定機不在: 本文は健在" "$ctx" "① タスクに着手する前に"
+  STUB_PY="$(mktemp -d)"
+  printf '#!/bin/bash\nexit 3\n' > "$STUB_PY/python3"; chmod +x "$STUB_PY/python3"
+  ctx="$(PATH="$STUB_PY:$PATH" run_bootstrap "$HEALTH_SHARED_VAULT")"
+  assert_contains "python3 が非 0: 判定不能（終了コード 3）" "$ctx" "【外部脳ヘルス】判定不能（health_judge.py: 判定機が終了コード 3 で失敗）"
+  assert_not_contains "python3 が非 0: stage= を出さない" "$ctx" "stage="
+  rm -rf "$STUB_PY"
+}
+
+echo "=== 8b. observation_write_failure_warns（F-9）: 観測記録が書けなくても判定は続き、ヘルス節末尾に ⚠️ 1 行 ==="
+{
+  RO="$(mktemp -d)"
+  : > "$RO/not-a-dir"
+  ctx="$(run_bootstrap "$HEALTH_SHARED_VAULT" "" "" "$HEALTH_FX_ROOT/S-2" "$HEALTH_FX_ROOT/S-2/last-run.json" "" "$RO/not-a-dir/session-observation.json")"
+  assert_contains "F-9: ⚠️ 観測記録の保存に失敗" "$(health_section "$ctx")" "⚠️ 観測記録の保存に失敗（Dock と食い違う可能性"
+  assert_contains "F-9: 判定は続く（stage=WARNING・S-2 の 1 件）" "$(health_header "$ctx")" "stage=WARNING items=1"
+  assert_contains "F-9: 今回の観測で判定（load=ok）" "$(health_header "$ctx")" "load=ok"
+  rm -rf "$RO"
+}
+
+echo "=== 8c. extras_reads_log_stale_outside_health_section（F-17・SO-8）: vault-reads.tsv の 7 日超は節の外の ℹ️ 行・段階に影響しない ==="
+{
+  LOGDIR="$(mktemp -d)"
+  printf '%s\tsess-old\tKnowledge/x.md\n' "$(d_ts -8)" > "$LOGDIR/vault-reads.tsv"
+  printf '%s\tsess-old\tKnowledge/x.md\tk\n' "$(d_ts -1)" > "$LOGDIR/vault-recall.tsv"
+  ctx="$(run_bootstrap "$HEALTH_SHARED_VAULT" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv")"
+  assert_eq "ℹ️ 行が 1 行" "1" "$(printf '%s\n' "$ctx" | grep -c '^ℹ️ vault-reads.tsv に直近 7 日の有効な記録なし（ヘルス源外・段階に影響しない）')"
+  assert_not_contains "ℹ️ 行はヘルス節の中に無い" "$(health_section "$ctx")" "ℹ️"
+  assert_contains "段階は OK のまま" "$(health_header "$ctx")" "stage=OK items=0"
+  assert_not_contains "旧文言「フック死の疑い」は退役" "$ctx" "フック死の疑い"
+  printf '%s\tsess-new\tKnowledge/x.md\n' "$(d_ts -1)" > "$LOGDIR/vault-reads.tsv"
+  ctx="$(run_bootstrap "$HEALTH_SHARED_VAULT" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv")"
+  assert_not_contains "直近なら ℹ️ 行なし" "$ctx" "ℹ️ vault-reads.tsv"
+  rm -rf "$LOGDIR"
+}
+
+echo "=== 8d. items_do_not_use_last_result_summary（設計 §13・静的）: 項目生成経路に last_result_summary の参照が無い ==="
+{
+  assert_eq "bootstrap-vault.sh: last_result_summary の参照 0" "0" "$(grep -c 'last_result_summary' "$SCRIPT")"
+  JUDGE_LIB="$REPO_ROOT/claude/hooks/lib/health_judge.py"
+  assert_eq "health_judge.py: last_result_summary の参照はちょうど 1 か所" "1" "$(grep -c 'last_result_summary' "$JUDGE_LIB")"
+  assert_eq "health_judge.py: その 1 か所は旧形式（legacy）フォールバックの中" "1" \
+    "$(awk '/# 旧形式（移行期）/{f=1} /# 以降は新契約/{f=0} f && /last_result_summary/{n++} END{print n+0}' "$JUDGE_LIB")"
+  assert_eq "bootstrap-vault.sh: 旧判定の線 MAINTENANCE_STALE_DAYS は退役" "0" "$(grep -c 'MAINTENANCE_STALE_DAYS' "$SCRIPT")"
+  assert_eq "bootstrap-vault.sh: machine_role による④スキップは撤去" "0" "$(grep -c 'machine_role" != "sub"' "$SCRIPT")"
+}
+
+echo "=== 8e. no_real_home_default_in_tests（設計 §10.1・静的）: 本ファイル内の \$SCRIPT 直接起動に既定が実ファイルの env 6 本がすべて付いている ==="
+{
+  missing_env_lines="$(python3 - "$TESTS_DIR/test-bootstrap-vault.sh" <<'PY'
+import re, sys
+lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
+need = ["VAULT_READS_LOG", "VAULT_RECALL_LOG", "VAULT_INVENTORY_LOG_DIR",
+        "MAINTENANCE_LAST_RUN_FILE", "MAINTENANCE_PLIST_FILE", "HEALTH_OBSERVATION_FILE"]
+bad = []
+for i, line in enumerate(lines):
+    if '"$SCRIPT"' not in line:
+        continue
+    s = line.strip()
+    # 早期終了モード（BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY）はヘルス節に到達しない＝対象外。
+    if s.startswith("#") or "sed -n" in s or "grep" in s or "bash -n" in s or s.startswith("SCRIPT=") \
+            or "not in line" in s or "BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY" in s:
+        continue
+    window = "\n".join(lines[max(0, i - 14): i + 1])
+    lacking = [n for n in need if n + "=" not in window]
+    if lacking:
+        bad.append(f"L{i + 1}: {' '.join(lacking)}")
+print("\n".join(bad))
+PY
+)"
+  assert_eq "\$SCRIPT 直接起動で env 6 本を欠く箇所が 0" "" "$missing_env_lines"
+  n_direct="$(grep -c '"\$SCRIPT"' "$TESTS_DIR/test-bootstrap-vault.sh")"
+  assert_true "\$SCRIPT の直接起動が検査対象に含まれている（陽性の実測 ${n_direct} 箇所）" "$([ "$n_direct" -ge 5 ] && echo 1 || echo 0)"
+}
+
+echo "=== 8f. 判定機の入力が壊れていても本文は止めない（NFR-2 fail-open）: latest.json 破損＝週次の整合 1 件・last-run 解析不能＝破損 ==="
+{
+  INV_DIR="$(mktemp -d)"
   printf 'not json' > "$INV_DIR/latest.json"
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
-  assert_contains "JSON 破損は⚠️1行（パス付き）" "$ctx" "⚠️ 棚卸しの状態記録が壊れています（latest.json: ${INV_DIR}/latest.json）"
-  assert_not_contains "破損時に「棚卸し最新」の行は出ない" "$ctx" "棚卸し最新"
-
-  printf '{"date":"2026-06-15","report_path":"/tmp/x.md"}\n' > "$INV_DIR/latest.json"
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
-  assert_contains "actionable 欠落も⚠️" "$ctx" "棚卸しの状態記録が壊れています"
-
-  rm -f "$INV_DIR/latest.json"
-  echo "**要確認 3 件**" > "$INV_DIR/2026-06-15.md"
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "$INV_DIR")"
-  assert_not_contains "latest.json 不在なら行なし（md があっても読まない）" "$ctx" "棚卸し"
-
-  rm -rf "$VAULT_DIR" "$INV_DIR"
-}
-
-echo "=== 6. 外部脳ヘルス行②: reads/recallログが直近${VAULT_AGENT_LOG_STALE_DAYS:-7}日以内なら警告なし ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LOGDIR="$(mktemp -d)"
-  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts -1)" > "$LOGDIR/vault-reads.tsv"
-  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts -1)" > "$LOGDIR/vault-recall.tsv"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv")"
-  assert_not_contains "フック死の疑いは出ない（直近1日前）" "$ctx" "フック死の疑い"
-
-  rm -rf "$VAULT_DIR" "$LOGDIR"
-}
-
-echo "=== 7. 外部脳ヘルス行②: reads/recallログが8日以上前で止まっていると両方とも警告に出る ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LOGDIR="$(mktemp -d)"
-  printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts -8)" > "$LOGDIR/vault-reads.tsv"
-  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts -8)" > "$LOGDIR/vault-recall.tsv"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv")"
-  assert_contains "フック死の疑いが出る" "$ctx" "⚠️ フック死の疑い:"
-  assert_contains "vault-reads.tsvが名指しされる" "$ctx" "vault-reads.tsv"
-  assert_contains "vault-recall.tsvも名指しされる" "$ctx" "vault-recall.tsv"
-
-  rm -rf "$VAULT_DIR" "$LOGDIR"
-}
-
-echo "=== 7g. 外部脳ヘルス行④: last-run.jsonのstarted_atが直近(1日前)なら死活警告は出ない ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_not_contains "直近実行なら死活警告は出ない" "$ctx" "週次メンテが"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7h. 外部脳ヘルス行④: last-run.jsonのstarted_atが8日以上前なら死活警告が出る（Critical対処・2026-07-18ハードニング） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -10)" "$(d_ts -10)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "10日動いていない旨の死活警告が出る" "$ctx" "⚠️ 週次メンテが10日動いていません"
-  # last-run.jsonのフルパスが末尾に文字化けせず出る（2026-08-10実測発見:
-  # macOS標準bash 3.2は`$VAR）`（波括弧無し・直後に全角文字）で変数展開が
-  # 化ける実害があり、本行はその回帰確認。詳細はclaude/hooks/bootstrap-
-  # vault.sh側の同トピックのコメント参照）。
-  assert_contains "last-run.jsonのフルパスが文字化けせず出る（bash 3.2の\$VAR）文字化けバグの回帰確認）" \
-    "$ctx" "last-run.json: ${LAST_RUN_FILE}）"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7h2. 外部脳ヘルス行④: 境界値（7日前は警告なし・ちょうど8日前は警告あり）（2026-07-18ハードニングCodexレビュー指摘Minor対応） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-
-  LAST_RUN_DIR7="$(mktemp -d)"
-  LAST_RUN_FILE7="$LAST_RUN_DIR7/last-run.json"
-  printf '{"started_at": "%s"}' "$(d_ts -7)" > "$LAST_RUN_FILE7"
-  ctx7="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE7")"
-  assert_not_contains "7日前(境界未満)では警告は出ない" "$ctx7" "週次メンテが"
-
-  LAST_RUN_DIR8="$(mktemp -d)"
-  LAST_RUN_FILE8="$LAST_RUN_DIR8/last-run.json"
-  printf '{"started_at": "%s"}' "$(d_ts -8)" > "$LAST_RUN_FILE8"
-  ctx8="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE8")"
-  assert_contains "ちょうど8日前(境界)では警告が出る" "$ctx8" "⚠️ 週次メンテが8日動いていません"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR7" "$LAST_RUN_DIR8"
-}
-
-echo "=== 7i. 外部脳ヘルス行④(b): last-run.json自体が無い/壊れている/時刻が両方とも壊れているのいずれでもクラッシュせず「状態記録が無い/壊れています」を警告する（2周目ハードニング・従来の完全silentから変更） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-
-  ctx1="$(run_bootstrap "$VAULT_DIR" "" "" "" "/nonexistent-dir/last-run.json")"
-  assert_not_contains "ファイルが無ければ「動いていません」ではなく" "$ctx1" "週次メンテが動いていません"
-  assert_not_contains "「起動はするが」でもない" "$ctx1" "起動はするが"
-  assert_contains "ファイルが無ければ状態記録なしの警告が出る" "$ctx1" "⚠️ 週次メンテの状態記録が無い/壊れています"
-
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf 'not valid json{{{' > "$LAST_RUN_FILE"
-  ctx2="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "壊れたJSONでも状態記録なしの警告が出る(fail-openだが沈黙しない)" "$ctx2" "⚠️ 週次メンテの状態記録が無い/壊れています"
-
-  printf '{"started_at": "not-a-timestamp"}' > "$LAST_RUN_FILE"
-  ctx3="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "started_atの時刻が壊れており他に手がかりが無ければ状態記録なしの警告が出る" "$ctx3" "⚠️ 週次メンテの状態記録が無い/壊れています"
-  assert_contains "本文自体は壊れず出力される" "$ctx3" "【セッション開始ブートストラップ｜ハーネス強制注入】"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7j. 外部脳ヘルス行④(a): started_atは直近(1日前)でもlast_success_atが8日以上前なら「起動はするが成功していない」を警告する（2周目ハードニング・毎週起動して毎週失敗の不可視対応） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -10)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "起動はするが10日成功していない旨の警告が出る" "$ctx" "⚠️ 週次メンテが起動はするが10日成功していません"
-  assert_not_contains "「動いていません」（全停止）とは混同しない" "$ctx" "週次メンテが10日動いていません"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7k. 外部脳ヘルス行④(a): 境界値（last_success_atが7日前は警告なし・ちょうど8日前は警告あり。started_atは直近固定） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-
-  LAST_RUN_DIR7="$(mktemp -d)"
-  LAST_RUN_FILE7="$LAST_RUN_DIR7/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -7)" > "$LAST_RUN_FILE7"
-  ctx7="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE7")"
-  assert_not_contains "last_success_atが7日前(境界未満)では警告なし" "$ctx7" "成功していません"
-
-  LAST_RUN_DIR8="$(mktemp -d)"
-  LAST_RUN_FILE8="$LAST_RUN_DIR8/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -8)" > "$LAST_RUN_FILE8"
-  ctx8="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE8")"
-  assert_contains "last_success_atがちょうど8日前(境界)では警告が出る" "$ctx8" "⚠️ 週次メンテが起動はするが8日成功していません"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR7" "$LAST_RUN_DIR8"
-}
-
-echo "=== 7l. 外部脳ヘルス行④: last_success_atが未設定（初回相当）でもstarted_atが直近なら警告は出ない（起動していない/日時解析不能とは異なる正常な過渡状態） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_not_contains "last_success_at未設定・started_at直近では何も警告しない" "$ctx" "週次メンテ"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7l2. 外部脳ヘルス行④(b): last_success_atだけ値が壊れている(started_atは正常・直近)場合も状態記録の警告が出る（tester4差し戻し・Major対応: A②の穴＝非対称破損パターン① last_success_atのみ破損） ==="
-{
-  # 従来はstarted_epoch/success_epochの両方が空のときしか(b)が発火せず、
-  # started_atが正常なままlast_success_atだけ壊れていると完全に沈黙していた
-  # （(a)が狙う「起動するが成功しない」検知そのものが破損データで無効化される
-  # 最も痛いケース）。
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "not-a-timestamp"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "last_success_atのみ破損でも状態記録の警告が出る(沈黙しない)" "$ctx" "⚠️ 週次メンテの状態記録が無い/壊れています"
-  assert_not_contains "「起動はするが」の誤判定にはならない(値を信用できないため)" "$ctx" "起動はするが"
-  assert_not_contains "「動いていません」の誤判定にもならない" "$ctx" "週次メンテが1日動いていません"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7l3. 外部脳ヘルス行④(b): started_atだけ値が壊れている(last_success_atは正常・直近)場合も状態記録の警告が出る（tester4差し戻し・Major対応: 非対称破損パターン② started_atのみ破損） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "not-a-timestamp", "last_success_at": "%s"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "started_atのみ破損でも状態記録の警告が出る(沈黙しない)" "$ctx" "⚠️ 週次メンテの状態記録が無い/壊れています"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7l4. 外部脳ヘルス行④(b): started_at・last_success_atが両方とも未来日時(時計ズレ/破損の疑い)の場合も状態記録の警告が出る（tester4差し戻し・Major対応: 非対称破損パターン③ 両方未来日） ==="
-{
-  # 未来日時はdate解析自体は成功する（形式は正しい）ため、解析失敗のみを
-  # 見る従来の判定では素通りしてしまう（age計算が負になりstale判定も
-  # 永久にすり抜ける）。解析成功でも未来日時なら「壊れている」扱いにする。
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts 30)" "$(d_ts 30)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "両方未来日時でも状態記録の警告が出る(沈黙しない)" "$ctx" "⚠️ 週次メンテの状態記録が無い/壊れています"
-  assert_not_contains "「動いていません」（負のage）の誤判定にはならない" "$ctx" "週次メンテが"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7l5. 外部脳ヘルス行④(b): last_success_atキーは実在するが値が空文字列/nullの場合も『キー自体が無い(初回未成功)』と誤認せず状態記録の警告が出る（2周目再レビュー指摘Major対応: \`.field // empty\`だけではキー欠落と空文字列/nullを区別できない穴） ==="
-{
-  # maintenance.sh自身は有効なISO8601文字列しか書かない契約のため、
-  # 「キーは実在するのに値が空/null」は書込側の異常（破損）を示す信号で
-  # あり、「まだ一度も成功していない」という正常な過渡状態（＝キー自体が
-  # 無い・7l系テスト）と混同してはいけない。`jq -r '.field // empty'`だけ
-  # では、値が空文字列/null/falseのいずれもキー欠落と同じ出力（空文字列）
-  # になり区別できない（Codex再レビュー指摘・Major）ため、`has()`で
-  # キーの実在を独立に確認する実装へ修正した。
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-
-  LAST_RUN_DIR_EMPTY="$(mktemp -d)"
-  LAST_RUN_FILE_EMPTY="$LAST_RUN_DIR_EMPTY/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": ""}' "$(d_ts -1)" > "$LAST_RUN_FILE_EMPTY"
-  ctx_empty="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE_EMPTY")"
-  assert_contains "last_success_atが空文字列(キーは実在)でも状態記録の警告が出る" \
-    "$ctx_empty" "⚠️ 週次メンテの状態記録が無い/壊れています"
-
-  LAST_RUN_DIR_NULL="$(mktemp -d)"
-  LAST_RUN_FILE_NULL="$LAST_RUN_DIR_NULL/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": null}' "$(d_ts -1)" > "$LAST_RUN_FILE_NULL"
-  ctx_null="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE_NULL")"
-  assert_contains "last_success_atがnull(キーは実在)でも状態記録の警告が出る" \
-    "$ctx_null" "⚠️ 週次メンテの状態記録が無い/壊れています"
-
-  LAST_RUN_DIR_STARTED_EMPTY="$(mktemp -d)"
-  LAST_RUN_FILE_STARTED_EMPTY="$LAST_RUN_DIR_STARTED_EMPTY/last-run.json"
-  printf '{"started_at": "", "last_success_at": "%s"}' "$(d_ts -1)" > "$LAST_RUN_FILE_STARTED_EMPTY"
-  ctx_started_empty="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE_STARTED_EMPTY")"
-  assert_contains "started_atが空文字列(last_success_atは正常)でも状態記録の警告が出る" \
-    "$ctx_started_empty" "⚠️ 週次メンテの状態記録が無い/壊れています"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR_EMPTY" "$LAST_RUN_DIR_NULL" "$LAST_RUN_DIR_STARTED_EMPTY"
-}
-
-echo "=== 7m. 外部脳ヘルス行④: 配役表のmachine_roleが\"sub\"かつlast-run.json不在でも④の警告は出ない（サブ機はmaintenance.sh非搭載＝2026-08-06対応、本人報告・実害中の解消。2026-09-07で判定元を旧マーカーから配役表へ移行＝FX-M2相当） ==="
-{
-  # maintenance.sh(週次メンテ)・LaunchAgentはメイン機専用機能でサブ機には
-  # 存在しないため、④の警告は毎セッション必ず出続けていた（実害）。machine_role
-  # が厳密に"sub"のときだけ④のみをスキップし、①等の他セクションには影響しない
-  # ことも合わせて確認する。
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  INV_DIR="$(mktemp -d)"
-  printf '{"date":"2026-06-01","report_path":"%s/2026-06-01.md","actionable":3}\n' "$INV_DIR" > "$INV_DIR/latest.json"
-
-  ctx="$(run_bootstrap_health4 "$VAULT_DIR" "configured value=sub" "" "$INV_DIR")"
-  assert_not_contains "machine_role=sub・last-run.json不在では状態記録の警告が出ない" "$ctx" "週次メンテの状態記録が無い/壊れています"
-  assert_not_contains "machine_role=sub・last-run.json不在では動いていない系の警告も出ない" "$ctx" "週次メンテが"
-  assert_contains "④以外(①棚卸し)は影響を受けず出る" "$ctx" "棚卸し最新"
-  assert_contains "ヘルス見出し自体は①があるので出る" "$ctx" "【外部脳ヘルス】"
-
-  rm -rf "$VAULT_DIR" "$INV_DIR"
-}
-
-echo "=== 7m2. 外部脳ヘルス行④: 配役表のmachine_roleが\"main\"の場合は従来どおり警告が出る。同じ場所に置いた旧マーカー(\"sub\")は読まれない（FX-M1相当・読んでいないことの証明） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-
-  ctx="$(run_bootstrap_health4 "$VAULT_DIR" "configured value=main" "sub")"
-  assert_contains "machine_role=mainでは従来どおりlast-run.json不在の警告が出る（旧マーカーがsubでも無視される）" "$ctx" "週次メンテの状態記録が無い/壊れています"
-
-  rm -rf "$VAULT_DIR"
-}
-
-echo "=== 7m3. 外部脳ヘルス行④: 実体プロファイルが無い（fail-closed）場合は従来どおり警告が出る ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-
-  ctx="$(run_bootstrap_with_profile "$VAULT_DIR" "/nonexistent-dir/profile.md")"
-  assert_contains "実体プロファイル不在では従来どおりlast-run.json不在の警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
-
-  rm -rf "$VAULT_DIR"
-}
-
-echo "=== 7m4. 外部脳ヘルス行④: machine_roleの値に内部空白を含む「s u b」(属性の形式検査(T6)で解決失敗)の場合は従来どおり警告が出る（fail-closed。前後空白はtrimするが内部の空白まで削っては誤って一致してしまうためtest-check-sub-update.sh 2eと同じ観点を踏襲） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-
-  ctx="$(run_bootstrap_health4 "$VAULT_DIR" "configured value=s u b")"
-  assert_contains "machine_roleの値に内部空白を含む場合は\"sub\"と誤認されず従来どおり警告が出る" "$ctx" "週次メンテの状態記録が無い/壊れています"
-
-  rm -rf "$VAULT_DIR"
-}
-
-echo "=== 7n. 外部脳ヘルス行: last_result=warnなら警告要旨つきで⚠️1行が出る（旧D4・2026-08-10・[[Decisions/2026-08-10-round6-rulings]]決定1のセット条件） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  # started_atは直近(死活警告が別途出て本テストの主眼と混同しないように)。
-  printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "warn", "last_result_summary": "Phase1check-drift.shがdriftを検知しました"}' \
-    "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "前回結果warnの⚠️行が出る" "$ctx" "⚠️ 前回の週次メンテ結果: warn"
-  assert_contains "警告要旨(last_result_summary)が併記される" "$ctx" "check-drift.shがdriftを検知しました"
-  assert_not_contains "死活経過日数の警告(④の他分岐)は誤って出ない" "$ctx" "週次メンテが"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7n2. 外部脳ヘルス行: last_result=failなら⚠️1行が出る ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s", "last_result": "fail", "last_result_summary": "backup-vault.sh failed"}' "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "前回結果failの⚠️行が出る" "$ctx" "⚠️ 前回の週次メンテ結果: fail"
-  assert_contains "警告要旨が併記される" "$ctx" "backup-vault.sh failed"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7n3. 外部脳ヘルス行: last_result=successなら⚠️行は出ない ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "success", "last_result_summary": ""}' \
-    "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_not_contains "successでは前回結果の⚠️行は出ない" "$ctx" "前回の週次メンテ結果"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7n4. 外部脳ヘルス行: last_resultキー自体が無い（旧last-run.json・移行前）でもクラッシュせず⚠️行は出ない(fail-open) ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "%s"}' "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_not_contains "last_resultキー欠落では前回結果の⚠️行は出ない(fail-open)" "$ctx" "前回の週次メンテ結果"
-  assert_contains "本文自体は壊れず末尾まで出る" "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 7n5. 外部脳ヘルス行: last_result=successかつlast_result_summaryが非空ならℹ️1行が出る（⚠️ではない・工程横断レビュー指摘Major対応・2026-08-10。用途例＝check-drift②の未知config.tomlキー検出） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LAST_RUN_DIR="$(mktemp -d)"
-  LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
-  printf '{"started_at": "%s", "last_success_at": "%s", "last_result": "success", "last_result_summary": "Phase1check-drift.sh2が未知キーを3件検出しました"}' \
-    "$(d_ts -1)" "$(d_ts -1)" > "$LAST_RUN_FILE"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "" "" "" "$LAST_RUN_FILE")"
-  assert_contains "ℹ️1行が出る" "$ctx" "ℹ️ 前回の週次メンテ結果: success"
-  assert_contains "summaryの中身が併記される" "$ctx" "未知キーを3件検出しました"
-  assert_not_contains "⚠️（warn/fail用の記号）は使われない" "$ctx" "⚠️ 前回の週次メンテ結果"
-  assert_contains "last-run.jsonのフルパスが文字化けせず出る（bash 3.2の\$VAR）文字化けバグの回帰確認）" \
-    "$ctx" "last-run.json: ${LAST_RUN_FILE}）"
-
-  rm -rf "$VAULT_DIR" "$LAST_RUN_DIR"
-}
-
-echo "=== 8. 外部脳ヘルス行: 棚卸し・ログとも無いが、last-run.json不在の死活警告(b)は出る（2周目ハードニングで完全沈黙は撤回） ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  # 棚卸しレポート出力先を作らない・ログも渡さない（既定の存在しないパス）。
-  # last-run.jsonも既定の存在しないパスのまま＝7iで検証した(b)の警告が
-  # 単独で出るようになった（2026-07-18 2周目ハードニング以前は完全沈黙で
-  # ヘルス見出し自体が出なかったが、初回未稼働の不可視を塞ぐ変更に伴い
-  # 意図的に変更した）。
-
-  ctx="$(run_bootstrap "$VAULT_DIR")"
-  assert_contains "ヘルス見出し自体はlast-run.json不在の警告(b)で出る" "$ctx" "【外部脳ヘルス】"
-  assert_contains "last-run.json不在の状態記録警告が単独で出る" "$ctx" "⚠️ 週次メンテの状態記録が無い/壊れています"
-  assert_not_contains "棚卸し・フック死など他の項目は出ない（無い情報を無理に出さない）" "$ctx" "棚卸し最新"
-  assert_not_contains "本文自体は壊れず末尾まで出る" "$ctx" "見つかりません"
-  # ctxが空文字のまま素通りする偽陽性を防ぐため、本文の固有見出しを積極的に
-  # 確認する（Codexレビュー指摘・Minor: 否定アサーションのみだとctx自体が
-  # 空でも成功してしまう）。
-  assert_contains "ブートストラップ本文の見出しは健在（ctxが空で素通りしていないことの確認）" \
-    "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
-  assert_contains "本文の必読ファイル指示も健在" "$ctx" "① タスクに着手する前に"
-
-  rm -rf "$VAULT_DIR"
-}
-
-echo "=== 8b. 外部脳ヘルス行②: ログ時刻が壊れている/未来日時でもクラッシュせず警告は出さない(fail-open) ==="
-{
-  VAULT_DIR="$(mktemp -d)"
-  make_full_vault "$VAULT_DIR"
-  LOGDIR="$(mktemp -d)"
-  # 3列目はあるが時刻が壊れている行のみ → 経過日数を計算できずfail-openで無警告
-  printf 'not-a-timestamp\tsess1\tKnowledge/x.md\n' > "$LOGDIR/vault-reads.tsv"
-  # 未来日時（システム時計のズレ・破損想定）→ age が負になり「7日超過」条件を
-  # 満たさないため、こちらもfail-open側（誤ってstale扱いにはしない）。
-  printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 3650)" > "$LOGDIR/vault-recall.tsv"
-
-  ctx="$(run_bootstrap "$VAULT_DIR" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv")"
-  assert_contains "本文は壊れず出力される" "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
-  assert_not_contains "壊れた時刻・未来日時ではフック死の疑いを誤って出さない(fail-open)" \
-    "$ctx" "フック死の疑い"
-
-  rm -rf "$VAULT_DIR" "$LOGDIR"
+  ctx="$(run_bootstrap "$HEALTH_SHARED_VAULT" "" "" "$INV_DIR" "$HEALTH_FX_ROOT/S-1/last-run.json")"
+  assert_contains "latest.json 破損: phase1-inventory の失敗 1 件（⑥）" "$ctx" "step=Phase1③ vault_inventory（記録の整合） result=失敗 actor=AI"
+  assert_contains "latest.json 破損: ヘッダ inventory=none" "$(health_header "$ctx")" "inventory=none"
+  assert_contains "本文は健在" "$ctx" "【セッション開始ブートストラップ｜ハーネス強制注入】"
+  rm -rf "$INV_DIR"
 }
 
 echo "=== 9. ワーカー(agent_type付き)には2026-09-03の軽量版撤去により何も注入されない（is_worker判定自体は健在で即exit 0。共通ルールの正本はagents/*.mdの共通ルール節へ移管済み） ==="
@@ -897,15 +812,16 @@ echo "=== 9. ワーカー(agent_type付き)には2026-09-03の軽量版撤去に
   LAST_RUN_FILE="$LAST_RUN_DIR/last-run.json"
   printf '{"started_at": "%s"}' "$(d_ts -10)" > "$LAST_RUN_FILE"
 
-  ctx="$(run_bootstrap_worker "$VAULT_DIR" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "$INV_DIR" "$LAST_RUN_FILE")"
+  WORKER_OBS_DIR="$(mktemp -d)"
+  ctx="$(run_bootstrap_worker "$VAULT_DIR" "$LOGDIR/vault-reads.tsv" "$LOGDIR/vault-recall.tsv" "$INV_DIR" "$LAST_RUN_FILE" "$WORKER_OBS_DIR/session-observation.json")"
   assert_eq "ワーカー版のadditionalContextは完全に空（軽量版DIRECTIVEを撤去しexit 0のみ）" "" "$ctx"
   assert_not_contains "ワーカー版にはヘルス見出しが出ない" "$ctx" "【外部脳ヘルス】"
-  assert_not_contains "ワーカー版には棚卸し情報も出ない" "$ctx" "棚卸し最新"
-  assert_not_contains "ワーカー版にはフック死の疑いも出ない" "$ctx" "フック死の疑い"
-  assert_not_contains "ワーカー版には死活警告も出ない（last-run.jsonが古くても）" "$ctx" "週次メンテが"
+  assert_not_contains "ワーカー版には段階も出ない" "$ctx" "stage="
   assert_not_contains "旧軽量版の見出し文言はもう出ない（撤去の回帰確認）" "$ctx" "【チームメイト用ブートストラップ｜軽量版】"
+  # 観測記録はワーカーでは書かない（設計 §5 手順 4＝現行の early exit のまま）。
+  assert_true "ワーカー版は観測記録を書かない" "$([ ! -e "$WORKER_OBS_DIR/session-observation.json" ] && echo 1 || echo 0)"
 
-  rm -rf "$VAULT_DIR" "$LOGDIR" "$INV_DIR" "$LAST_RUN_DIR"
+  rm -rf "$VAULT_DIR" "$LOGDIR" "$INV_DIR" "$LAST_RUN_DIR" "$WORKER_OBS_DIR"
 }
 
 echo "=== 10. P1機構(ローカル実体プロファイル): ゲート無効(BOOTSTRAP_ENABLE_LOCAL_PROFILE=0明示。run_bootstrap()の固定値)では固定パスが必読リストに一切現れない（2026-09-02からコードの既定値は1・§9.0 A-1／rollout-runbook.md現行トラック§7） ==="
@@ -1998,6 +1914,8 @@ echo "=== 56. BOOTSTRAP_ENABLE_LOCAL_PROFILE を指定しなければコード�
         VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
         VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
         MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
+        MAINTENANCE_PLIST_FILE="/nonexistent-dir/com.takumi009.maintenance.plist" \
+        HEALTH_OBSERVATION_FILE="/nonexistent-dir/health/session-observation.json" \
         AIENV_LOCAL_PROFILE_PATH="/nonexistent-dir/profile-for-default-gate-test.md" \
         "$SCRIPT" \
     | jq -r '.hookSpecificOutput.additionalContext')"
@@ -2460,11 +2378,14 @@ EOF
   sed -i '' "s/team_mode:        configured value=full/team_mode:        configured value=solo/" "$FXP1"
   AFTER_LOG="$(mktemp -d)/calls-after.log"; : > "$AFTER_LOG"
   AFTER_JSON="$(mktemp -d)/after.json"
+  OBS71="$(mktemp -d)"
   PATH="$SPY" SPY_CALLS_LOG="$AFTER_LOG" \
     BOOTSTRAP_VAULT="$VD" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
     VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
     VAULT_INVENTORY_LOG_DIR="/nonexistent-dir/vault-inventory" \
     MAINTENANCE_LAST_RUN_FILE="/nonexistent-dir/last-run.json" \
+    MAINTENANCE_PLIST_FILE="/nonexistent-dir/com.takumi009.maintenance.plist" \
+    HEALTH_OBSERVATION_FILE="$OBS71/session-observation.json" \
     BOOTSTRAP_ENABLE_LOCAL_PROFILE=1 AIENV_LOCAL_PROFILE_PATH="$FXP1" \
     run_bootstrap_capture_rc "$AFTER_JSON" "$SCRIPT"
   after_bootstrap_rc=$?
@@ -2579,8 +2500,12 @@ EOF
   # 2026-09-19 着手順2 η（bootstrap 縮小）で26→23へ更新（実測）。settings.json 整合比較
   # （python3 2回）と【使用率】ブロック（python3 1回）の撤去に対し、棚卸し①は
   # latest.json 不在で jq を呼ばない＝net -3 の正当な減少。
+  # 2026-09-20 health-self-explain（設計 v1.2 §5）で23→26へ更新（実測 net +3）。増＝観測記録の
+  # 書込み（jq・mkdir・mv）＋判定機（python3）＋描画（jq）。減＝旧判定の date/jq 呼び出しの撤去と
+  # stdin JSON の jq を 2 回→1 回に統合。判定式「増加しない（承認済み予算 +1 を含めて
+  # before+1 以下）」は 26 ≤ 30 で維持（NFR-1＝新しい常駐・フックは増やしていない）。
   AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07=29
-  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=23
+  AC1_2_REFERENCE_COUNT_AFTER_2026_09_07=26
   if [ "$before_count" != "$AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07" ] || [ "$after_count" != "$AC1_2_REFERENCE_COUNT_AFTER_2026_09_07" ]; then
     echo "  info - 参考値: 変更前${AC1_2_REFERENCE_COUNT_BEFORE_2026_09_07}・変更後${AC1_2_REFERENCE_COUNT_AFTER_2026_09_07}を記録していたが今回は変更前${before_count}・変更後${after_count}だった"
   fi

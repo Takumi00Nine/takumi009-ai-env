@@ -1,0 +1,36 @@
+{
+  "completed": {
+    "finished_at": "2026-09-15T09:00:03Z",
+    "fully_ok": false,
+    "info": [],
+    "run_dir": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h17/logs/maintenance/2026-09-20/041007-55551",
+    "run_id": "2026-09-20/041007-55551",
+    "started_at": "2026-09-15T09:00:01Z",
+    "steps": [
+      {
+        "actor": "AI",
+        "id": "phase1-fragments",
+        "log_ref": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h17/logs/maintenance/2026-09-20/041007-55551/fragments-stderr.log",
+        "name": "Phase1② fragments_log",
+        "reason": "Phase1②: fragments_log.pyが失敗/timeoutしました（OK 1・継続します）",
+        "result": "fail"
+      }
+    ],
+    "trigger": "scheduled"
+  },
+  "last_result": "warn",
+  "last_result_summary": "Phase1②: fragments_log.pyが失敗/timeoutしました（OK 1・継続します）; ",
+  "run": {
+    "finished_at": "2026-09-15T09:00:03Z",
+    "run_dir": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h17/logs/maintenance/2026-09-20/041007-55551",
+    "run_id": "2026-09-20/041007-55551",
+    "skip_reason": null,
+    "stale_after_seconds": 3600,
+    "started_at": "2026-09-15T09:00:01Z",
+    "status": "completed",
+    "trigger": "scheduled"
+  },
+  "schema": 2,
+  "started_at": "2026-09-15T09:00:01Z",
+  "success_streak": 0
+}

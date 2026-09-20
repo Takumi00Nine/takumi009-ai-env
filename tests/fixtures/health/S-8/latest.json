@@ -1,0 +1,38 @@
+{
+  "date": "2026-09-15",
+  "report_path": "/Users/x/.claude/logs/vault-inventory/2026-09-15.md",
+  "actionable": 2,
+  "n_notes": 531,
+  "sections": {
+    "unreadable": 0,
+    "missing_updated": 0,
+    "date_drift": 1,
+    "broken_links": 0,
+    "stale_keywords": 0,
+    "status_future_dated": 0,
+    "missing_aliases": 0,
+    "generic_aliases": 0,
+    "review_overdue": 0,
+    "review_invalid": 0,
+    "owner_decision": 1
+  },
+  "items": [
+    {
+      "kind": "date_drift",
+      "target": "Knowledge/x.md",
+      "detail": "frontmatter updated: 2026-08-01 ＜ 本文最新: 2026-09-10"
+    },
+    {
+      "kind": "owner_decision",
+      "target": "Projects/y.md",
+      "detail": "status が 90 日更新なし（本人の判断が要る種別・主体表に無い kind）"
+    }
+  ],
+  "watch": [
+    {
+      "kind": "unread_pending",
+      "target": "Fragments/2026-09-14.md",
+      "detail": "暫定・要観察（ログ蓄積中の未読ノート）＝要確認に数えない"
+    }
+  ]
+}

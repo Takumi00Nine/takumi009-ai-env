@@ -1,0 +1,46 @@
+{
+  "completed": {
+    "finished_at": "2026-09-15T06:00:04Z",
+    "fully_ok": false,
+    "info": [],
+    "run_dir": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h20/logs/maintenance/2026-09-20/041041-68976",
+    "run_id": "2026-09-20/041041-68976",
+    "started_at": "2026-09-15T06:00:01Z",
+    "steps": [
+      {
+        "actor": "本人",
+        "id": "phase1-drift",
+        "log_ref": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h20/logs/maintenance/2026-09-20/041041-68976/drift-stdout.log",
+        "name": "Phase1① check-drift",
+        "reason": "Phase1①: check-drift.shがdrift/実行異常を検知しました（OK 1・警告として記録し継続します）。JSON: {\"total_drift\": 3, \"item4_drift\": 0, \"drift_excluding_item4\": 3, \"items\": [\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"]}",
+        "result": "warn"
+      },
+      {
+        "actor": "AI",
+        "id": "phase1-inventory",
+        "log_ref": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h20/logs/maintenance/2026-09-20/041041-68976/inventory-stderr.log",
+        "name": "Phase1③ vault_inventory",
+        "reason": "Phase1③: vault_inventory.pyが失敗/timeoutしました（OK 1・継続します）",
+        "result": "fail"
+      }
+    ],
+    "trigger": "scheduled"
+  },
+  "fragments_candidates": 0,
+  "fragments_since": "2026-09-12",
+  "last_result": "warn",
+  "last_result_summary": "Phase1①: check-drift.shがdrift/実行異常を検知しました（OK 1・警告として記録し継続します）。JSON: {\"total_drift\": 3, \"item4_drift\": 0, \"drift_excluding_item4\": 3, \"items\": [\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "run": {
+    "finished_at": "2026-09-15T06:00:04Z",
+    "run_dir": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h20/logs/maintenance/2026-09-20/041041-68976",
+    "run_id": "2026-09-20/041041-68976",
+    "skip_reason": null,
+    "stale_after_seconds": 3600,
+    "started_at": "2026-09-15T06:00:01Z",
+    "status": "completed",
+    "trigger": "scheduled"
+  },
+  "schema": 2,
+  "started_at": "2026-09-15T06:00:01Z",
+  "success_streak": 0
+}

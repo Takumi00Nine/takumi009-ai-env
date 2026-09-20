@@ -1,0 +1,19 @@
+{
+  "date": "2026-09-15",
+  "report_path": "/Users/x/.claude/logs/vault-inventory/2026-09-15.md",
+  "actionable": 0,
+  "n_notes": 531,
+  "sections": {
+    "unreadable": 0,
+    "missing_updated": 0,
+    "date_drift": 0,
+    "broken_links": 0,
+    "stale_keywords": 0,
+    "status_future_dated": 0,
+    "missing_aliases": 0,
+    "generic_aliases": 0,
+    "review_overdue": 0,
+    "review_invalid": 0
+  },
+  "items": []
+}

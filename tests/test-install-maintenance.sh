@@ -119,6 +119,19 @@ echo "=== 2. 通常実行: 新ラベルのplistが生成される・実launchctl
   rm -rf "$FAKE_HOME"
 }
 
+echo "=== 2a. plist_hour_6_weekday_1（回帰・health-self-explain 先行スライス S0＝commit 0fd23a9）: 生成 plist の StartCalendarInterval が Weekday 1（月曜）・Hour 6・Minute 0 ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  run_install_skip "$FAKE_HOME" >/dev/null
+  assert_launchctl_never_called "SKIP_LAUNCHCTL=1下では偽launchctlは呼ばれない（2a）"
+  DEST="$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist"
+  assert_eq "plist_hour_6_weekday_1: Weekday=1" "1" "$(plutil -extract StartCalendarInterval.Weekday raw -o - "$DEST" 2>/dev/null)"
+  assert_eq "plist_hour_6_weekday_1: Hour=6（03→06・S0）" "6" "$(plutil -extract StartCalendarInterval.Hour raw -o - "$DEST" 2>/dev/null)"
+  assert_eq "plist_hour_6_weekday_1: Minute=0" "0" "$(plutil -extract StartCalendarInterval.Minute raw -o - "$DEST" 2>/dev/null)"
+  assert_eq "plist_hour_6_weekday_1: RunAtLoad=false（配置時に即時実行しない）" "false" "$(plutil -extract RunAtLoad raw -o - "$DEST" 2>/dev/null)"
+  rm -rf "$FAKE_HOME"
+}
+
 echo "=== 2b. USER解決失敗: id -unが非0終了ならUSERが空のplistを生成せず即座にFAILする（Codexレビュー指摘Major対応・2026-09-10） ==="
 {
   FAKE_HOME="$(mktemp -d)"

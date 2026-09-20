@@ -1,0 +1,40 @@
+{
+  "schema": 2,
+  "started_at": "2026-09-15T06:00:01Z",
+  "last_success_at": "2026-09-08T06:00:44Z",
+  "last_result": "fail",
+  "last_result_summary": "理由X: fragments_log.py が失敗しました（rc=1・Fragments ディレクトリの一時的なファイルロックで読み出しに失敗。再実行で解消する見込み）",
+  "fragments_candidates": 12,
+  "fragments_since": "2026-09-08",
+  "run": {
+    "run_id": "2026-09-15/150001-4242",
+    "run_dir": "/Users/x/.claude/logs/maintenance/2026-09-15/150001-4242",
+    "started_at": "2026-09-15T06:00:01Z",
+    "trigger": "scheduled",
+    "status": "completed",
+    "stale_after_seconds": 7200,
+    "skip_reason": null,
+    "finished_at": "2026-09-15T06:00:45Z"
+  },
+  "completed": {
+    "run_id": "2026-09-15/150001-4242",
+    "run_dir": "/Users/x/.claude/logs/maintenance/2026-09-15/150001-4242",
+    "trigger": "scheduled",
+    "started_at": "2026-09-15T06:00:01Z",
+    "finished_at": "2026-09-15T06:00:45Z",
+    "fully_ok": false,
+    "steps": [
+      {
+        "id": "phase1-fragments",
+        "name": "Phase1② fragments_log",
+        "result": "fail",
+        "reason": "理由X: fragments_log.py が失敗しました（rc=1・Fragments ディレクトリの一時的なファイルロックで読み出しに失敗。再実行で解消する見込み）",
+        "actor": "AI",
+        "log_ref": "/Users/x/.claude/logs/maintenance/2026-09-15/150001-4242/fragments-stdout.log"
+      }
+    ],
+    "info": []
+  },
+  "success_streak": 0,
+  "ack": null
+}

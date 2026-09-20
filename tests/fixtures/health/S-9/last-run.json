@@ -1,0 +1,30 @@
+{
+  "completed": {
+    "finished_at": "2026-09-15T09:00:03Z",
+    "fully_ok": true,
+    "info": [],
+    "run_dir": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h16/logs/maintenance/2026-09-20/040953-50390",
+    "run_id": "2026-09-20/040953-50390",
+    "started_at": "2026-09-15T09:00:01Z",
+    "steps": [],
+    "trigger": "manual"
+  },
+  "fragments_candidates": 0,
+  "fragments_since": "2026-09-12",
+  "last_result": "success",
+  "last_result_summary": "",
+  "last_success_at": "2026-09-15T09:00:03Z",
+  "run": {
+    "finished_at": "2026-09-15T09:00:03Z",
+    "run_dir": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h16/logs/maintenance/2026-09-20/040953-50390",
+    "run_id": "2026-09-20/040953-50390",
+    "skip_reason": null,
+    "stale_after_seconds": 3600,
+    "started_at": "2026-09-15T09:00:01Z",
+    "status": "completed",
+    "trigger": "manual"
+  },
+  "schema": 2,
+  "started_at": "2026-09-15T09:00:01Z",
+  "success_streak": 1
+}

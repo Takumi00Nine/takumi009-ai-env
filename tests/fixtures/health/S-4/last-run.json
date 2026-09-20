@@ -1,0 +1,14 @@
+{
+  "run": {
+    "finished_at": null,
+    "run_dir": "/var/folders/l3/pth9tqg92gx6bvqrc4_lmnyc0000gn/T/tmp.nDMuAqEXkp/h8/logs/maintenance/2026-09-20/040923-37743",
+    "run_id": "2026-09-20/040923-37743",
+    "skip_reason": null,
+    "stale_after_seconds": 3600,
+    "started_at": "2026-09-15T06:00:01Z",
+    "status": "running",
+    "trigger": "scheduled"
+  },
+  "schema": 2,
+  "started_at": "2026-09-15T06:00:01Z"
+}

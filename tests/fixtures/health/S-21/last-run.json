@@ -1,0 +1,31 @@
+{
+  "schema": 2,
+  "started_at": "2026-09-13T21:00:01Z",
+  "last_success_at": "2026-09-13T21:00:45Z",
+  "last_result": "success",
+  "last_result_summary": "",
+  "fragments_candidates": 12,
+  "fragments_since": "2026-09-08",
+  "run": {
+    "run_id": "2026-09-14/060001-3131",
+    "run_dir": "/Users/x/.claude/logs/maintenance/2026-09-14/060001-3131",
+    "started_at": "2026-09-13T21:00:01Z",
+    "trigger": "scheduled",
+    "status": "completed",
+    "stale_after_seconds": 7200,
+    "skip_reason": null,
+    "finished_at": "2026-09-13T21:00:45Z"
+  },
+  "completed": {
+    "run_id": "2026-09-14/060001-3131",
+    "run_dir": "/Users/x/.claude/logs/maintenance/2026-09-14/060001-3131",
+    "trigger": "scheduled",
+    "started_at": "2026-09-13T21:00:01Z",
+    "finished_at": "2026-09-13T21:00:45Z",
+    "fully_ok": true,
+    "steps": [],
+    "info": []
+  },
+  "success_streak": 4,
+  "ack": null
+}
