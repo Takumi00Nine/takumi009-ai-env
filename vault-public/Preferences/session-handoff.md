@@ -1,6 +1,6 @@
 ---
 date: 2026-09-16
-updated: 2026-09-19
+updated: 2026-09-21
 tags: [preference, session, handoff, cmux, leader]
 project: takumi009-ai-env
 related:
@@ -8,6 +8,7 @@ related:
   - "[[Preferences/cross-session-messaging]]"
   - "[[Decisions/2026-09-16-leader-spawns-next-session]]"
   - "[[Decisions/2026-09-19-handoff-close-after-children-done]]"
+  - "[[Decisions/2026-09-21-drain-deferred-tasks-before-handoff]]"
 aliases:
   - "セッション引き継ぎ"
   - "session-handoff"
@@ -22,7 +23,8 @@ aliases:
 - 引き金は2つだけ（[[Preferences/core-conduct]] §4）＝①1時間超の休憩 ②文脈が警告しきい値に達した後の次の切れ目。作業の真ん中で切らない（成果物の完成・検証巡の完了・工程の区切りで切る）。
 
 ## 手順
-1. **再開メモを書く**（リーダー直筆可＝`~/.claude` 配下）: `~/.claude/resume/YYYY-MM-DD-<slug>-resume.md`。内容＝状態（案件・工程・モード）／正本のパス／本人決定済み事項／次の工程の順番／継続用の識別子（Codex の thread_id 等）。再開メモは 8KB 以下（`wc -c`）。超える分は案件 docs（`~/Claude/<slug>/docs/`）へ置き、メモからは参照する。
+0. **残作業の棚卸し**: 会話中の「後で／締めで／〜します」を洗い出し、今のセッションで終わるもの（規範の焼き込み・記録の追記・小さな修正・約束した報告）は区切る前に終える。終えられないものだけ再開メモの「未消化の小タスク」節へ（[[Decisions/2026-09-21-drain-deferred-tasks-before-handoff]]）。
+1. **再開メモを書く**（リーダー直筆可＝`~/.claude` 配下）: `~/.claude/resume/YYYY-MM-DD-<slug>-resume.md`。内容＝状態（案件・工程・モード）／正本のパス／本人決定済み事項／次の工程の順番／継続用の識別子（Codex の thread_id 等）／**未消化の小タスク（なければ『なし』）**。再開メモは 8KB 以下（`wc -c`）。超える分は案件 docs（`~/Claude/<slug>/docs/`）へ置き、メモからは参照する。
 2. **新セッションを起動して依頼を投入**: `~/work/takumi009-ai-env/scripts/session-handoff.sh <再開メモ> "<続きの依頼>" [--cwd <dir>] [--name <題>]`。スクリプトが `cmux new-workspace`（`cct` 起動）→プロンプト `❯` 待ち→猶予→`cmux send`→`cmux send-key Enter` を順に行い、ワークスペース参照（`REF=`）と送った依頼文（`SENT=`）を表示する。
 3. **着手を確認**: `cmux read-screen --workspace <REF>` を1回見て、新セッションが再開メモを読み始めたことを確認してから本人へ1行報告する。
 4. **旧セッションを閉じる**: 本人が閉じる（旧セッションから自分自身の `close-workspace` は未実測のため行わない）。⚠️ **「閉じてください」の1行は、旧セッションが起動した子プロセス（ラッパー経由のワーカー・バックグラウンド実行・監視）がすべて完了してから書く**。走行中のものがあれば「まだ閉じない」と明示し、完了通知を受けた応答で初めて「閉じてください」を書く（新セッションの起動自体は先に行ってよい）。
@@ -38,3 +40,4 @@ aliases:
 - 依頼文に改行を含めない（複数行貼付扱いになる）。
 - 新セッションへの続行指示に SendMessage（cross-session）は使わない＝[[Preferences/cross-session-messaging]] の4点（同名改名・同一本文の無言破棄・bypass 時の保留・同意の代理不可）。
 - テストで cmux をスタブするときは PATH でなく `SESSION_HANDOFF_CMUX_BIN` を差し替える。
+- 「締めでやる」「次のセッションで」と送った小作業はセッション境界で消える（2026-09-21 実害・本人指摘）＝手順0で先に消化する。

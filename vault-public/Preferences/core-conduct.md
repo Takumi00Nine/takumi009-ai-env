@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-20
+updated: 2026-09-21
 tags: [preference, core, conduct, behavior, decision-making]
 project: takumi009-ai-env
 related:
@@ -13,6 +13,7 @@ related:
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
   - "[[Decisions/2026-09-07-out-of-scope-links-not-broken]]"
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
+  - "[[Decisions/2026-09-21-drain-deferred-tasks-before-handoff]]"
   - "[[Decisions/2026-09-17-effort-per-role-v2]]"
   - "[[Knowledge/mistakes-archive]]"
   - "[[Decisions/2026-09-19-leader-fills-the-gaps]]"
@@ -89,7 +90,7 @@ aliases:
 - schema・設定のキーやスロットを増減する時は、参照側と必ずセットで直す（片方だけだと未解決参照か孤立キーが残る）。
 - テキストで指示しても再発する事象は、ツール境界でフック化して止める（フックは最終防衛線）。
 - まとまったタスクは着手前に「ループ型（自動検証）か人間チェック挟み込み型か」を本人に確認する（基準＝ゴールを機械的に計測・数値化できるか）。
-- セッションを区切る引き金は2つ＝①1時間超の休憩 ②文脈が警告しきい値に達した後の次の切れ目（作業の真ん中で切らない）。区切りはリーダーが再開メモを残し新セッションを自分で起動して続きを渡す（[[Preferences/session-handoff]]・本人に貼らせない）。長い成果物・ログはワーカーに要約させる。
+- セッションを区切る引き金は2つ＝①1時間超の休憩 ②文脈が警告しきい値に達した後の次の切れ目（作業の真ん中で切らない）。区切りはリーダーが再開メモを残し新セッションを自分で起動して続きを渡す（[[Preferences/session-handoff]]・本人に貼らせない）。長い成果物・ログはワーカーに要約させる。**区切る前に残作業の棚卸し**＝先送りした小作業は区切る前に消化し、できないものだけ再開メモの「未消化の小タスク」に残す（[[Decisions/2026-09-21-drain-deferred-tasks-before-handoff]]）。
 - 直接編集できる範囲内でも、テスト・デバッグの反復（書く→動かす→直す）が見込まれる実装は委任する。
 - 実効モードを変えられるのは本人だけ。リーダーは「軽量で足りそうです」と提案するまで（ワーカー・検証職・Codex も変えられない）。実効モードは会話の中で持つだけで永続化しない。
 - 単独モードは第三者検証が要らない案件に使う。迷ったらリーダーが本人に一言確認する。
