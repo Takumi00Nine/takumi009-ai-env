@@ -138,6 +138,10 @@ cd ~/work/dotfiles && git pull --ff-only && ./install.sh   # refresh an existing
 
 cmux Dock's "Project"/"Task" panes — details = `Decisions/2026-09-15-cmux-dock-two-repo-split` in the Vault.
 
+#### Declaring the project for a cmux workspace (`cmux/cmux-task-declare.sh`)
+
+The "Task" pane shows the Tasks section of the project declared for the **focused cmux workspace**. Declare once per workspace with `~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>` (the leader runs it, never the hook). The declaration is keyed by the workspace UUID, which cmux keeps across restarts: after a cmux restart the declaration is still alive in the same (restored) workspace, so nothing needs to be re-declared there. A new workspace (freshly opened, or not restored) starts undeclared — the SessionStart injection (`claude/hooks/bootstrap-vault.sh` ⑥) shows the declaration state of the calling workspace (`宣言済み: <slug>` / `未宣言` / `宣言状態 不明`, plus `宣言記録破損` when the record file is unreadable), so read that line and declare once when it says `未宣言`. `list` / `unset` / `prune` are the other subcommands (the weekly maintenance runs `prune`).
+
 ### Vault Backup Operations
 
 `scripts/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). Details = the comment at the top of the script.
@@ -390,6 +394,10 @@ cd ~/work/dotfiles && git pull --ff-only && ./install.sh   # 既存の dotfiles 
 ```
 
 cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-09-15-cmux-dock-two-repo-split`。
+
+#### 案件宣言の使い方（`cmux/cmux-task-declare.sh`）
+
+「Task」枠は、**フォーカス中の cmux ワークスペース**に宣言された案件の Tasks 節を出す。宣言はワークスペースごとに 1 回＝`~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>`（実行はリーダー。フックは呼ばない）。宣言の鍵はワークスペースの UUID で、cmux は再起動を越えて UUID を保持する＝**cmux の再起動後も同じワークスペースでは宣言が生きている**ので、そこでは宣言し直さなくてよい。新しいワークスペース（新規に開いた・復元されなかった）は未宣言から始まる＝SessionStart の注入文（`claude/hooks/bootstrap-vault.sh` の ⑥）が呼び出し元ワークスペースの**宣言状態**（`宣言済み: <slug>`／`未宣言`／`宣言状態 不明`・記録が読めないときは `宣言記録破損` も）を出すので、その行を見て `未宣言` なら 1 回宣言する。他のサブコマンド＝`list`／`unset`／`prune`（週次メンテが `prune` を実行する）。
 
 ### Vault バックアップの運用
 

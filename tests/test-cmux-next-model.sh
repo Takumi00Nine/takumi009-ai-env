@@ -5,6 +5,13 @@
 # （NFR-13・AC-106）。
 #
 # 実行方法: bash tests/test-cmux-next-model.sh
+#
+# v6（requirements-v6.md・design.md §41）＝実装への契約（テストが決めた口・A-v6-7）:
+#   CMUX_VAULT_TASKS_SANITIZE_FAIL=1 ＝ Tasks 節の共有解析（cmux/lib-vault-tasks.sh）の
+#   サニタイズ段だけを失敗させるテスト専用の差し替え口（D-v6-14・DT-33＝解析不能の作り方）。
+#   未設定／空＝通常。slug の無害化・next の切り詰め・frontmatter の読み取りには効かせない
+#   （M-v6-15）。本番設定（config/・launchd/・scripts/install*・dock.json）に名前を書かない。
+#   （フック側の口 BOOTSTRAP_CMUX_LIB_DIR は tests/test-bootstrap-vault.sh 参照）
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="$SCRIPT_DIR/../cmux/cmux-next-model.sh"
@@ -644,7 +651,7 @@ v3_unmarked="$(printf '%s\n' "$v3_hits" | grep -v -F -- "$V3_MARK" | grep -c . |
 assert_eq "v5_ac138: マーカー無しの旧版リテラル行が 0 件${v3_hits:+（実測: $v3_hits）}" "0" "$v3_unmarked"
 assert_eq "v5_ac138: ai-env 側のマーカー行は 0 行（WU-Z (g) は dotfiles 側）" "0" "$v3_marked"
 
-echo "=== v5_ac146: 不変（WU-B を Next Project 基底に加えた入力）＝①cmux 0 回 ②Vault バイト不変 ③20 回の中央値 0.8 秒・最大値 1.2 秒以下（NFR-15 v5.8） ==="
+echo "=== v5_ac146（＝v6 AC-151 ③・NFR-18 の計測もこの 29 ノート入力で兼ねる）: 不変（WU-B を Next Project 基底に加えた入力）＝①cmux 0 回 ②Vault バイト不変 ③20 回の中央値 0.8 秒・最大値 1.2 秒以下（NFR-15 v5.8） ==="
 reset_vault
 mk_notes_N_all "$VAULT"
 mk_notes_WU_B "$VAULT"
@@ -723,6 +730,214 @@ PATH="$STUBBIN_DATE:$PATH" JUDGE_NOW="" run_frame_raw
 assert_eq "v5_dt17_date: --frame rc=1" "1" "$(cat "$WORKDIR/frame_rc")"
 assert_eq "v5_dt17_date: --frame stdout 0 バイト" "0" "$(wc -c < "$WORKDIR/frame_stdout" | tr -d ' ')"
 assert_eq "v5_dt17_date: --frame stderr 1 行" "1" "$(wc -l < "$WORKDIR/frame_stderr" | tr -d ' ')"
+
+# ==========================================================================
+# v6: 待ち日時の版付け（requirements-v6.md §7 WV-1〜27・WV-A／WV-B・§8.1 AC-148〜151・
+# §8.5 AC-154 (a)・design.md §41.9.4 DT-23・25・26・27・28・33）。判定時刻は v5 と同じ
+# T0／T1 を CMUX_NEXT_JUDGE_NOW で渡す。診断の固定語（§41.5.4）＝「無効」／「使わない」／
+# `解析できない`。slug の照合は前後が slug 文字（[a-z0-9-]）でない位置だけ数える
+# （v-bad が v-badday・v-badfirst に当たらないように）。
+# ==========================================================================
+slug_hits() {   # $1=slug $2=file → slug を含む行数
+  grep -cE -- "(^|[^a-z0-9-])$1([^a-z0-9-]|\$)" "$2"
+}
+diag_line() {   # $1=slug → stderr のその slug の行
+  grep -E -- "(^|[^a-z0-9-])$1([^a-z0-9-]|\$)" "$WORKDIR/list_stderr"
+}
+AC148_EXPECTED="1${tab}v-prev${tab}次版${tab}稼働中${tab}
+2${tab}v-fm${tab}fm${tab}稼働中${tab}
+3${tab}v-cur${tab}返事待ち${tab}待ち${tab}2026-09-25T10:00
+4${tab}v-nofm${tab}待つ${tab}待ち${tab}2026-09-25T10:00
+5${tab}v-paused${tab}止${tab}保留${tab}"
+AC149_EXPECTED="1${tab}v-prev${tab}次版${tab}稼働中${tab}
+2${tab}v-fm${tab}fm${tab}稼働中${tab}
+3${tab}v-past${tab}過去${tab}稼働中${tab}
+4${tab}v-bad${tab}無効${tab}稼働中${tab}
+5${tab}v-indent${tab}字下げ${tab}稼働中${tab}
+6${tab}v-sec${tab}秒${tab}稼働中${tab}
+7${tab}v-tz${tab}時差${tab}稼働中${tab}
+8${tab}v-badday${tab}暦外${tab}稼働中${tab}
+9${tab}v-badfirst${tab}先頭無効${tab}稼働中${tab}
+10${tab}v-outside${tab}範囲外${tab}稼働中${tab}
+11${tab}v-other${tab}別節${tab}稼働中${tab}
+12${tab}v-after${tab}節後${tab}稼働中${tab}
+13${tab}v-cur${tab}返事待ち${tab}待ち${tab}2026-09-25T10:00
+14${tab}v-nofm${tab}待つ${tab}待ち${tab}2026-09-25T10:00
+15${tab}v-next${tab}v3${tab}待ち${tab}2026-09-26T10:00
+16${tab}v-done${tab}完了${tab}待ち${tab}2026-09-25T10:00
+17${tab}v-two${tab}二行${tab}待ち${tab}2026-09-25T10:00
+18${tab}v-day${tab}日付${tab}待ち${tab}2026-09-25T00:00
+19${tab}v-first${tab}zzz${tab}待ち${tab}2026-09-25T10:00
+20${tab}v-bothfm${tab}両方${tab}待ち${tab}2026-09-25T10:00
+21${tab}v-empty${tab}空版${tab}待ち${tab}2026-09-28T10:00
+22${tab}v-quoted${tab}引用${tab}待ち${tab}2026-09-25T10:00
+23${tab}v-spaces${tab}空白${tab}待ち${tab}2026-09-25T10:00
+24${tab}v-squote${tab}単引${tab}待ち${tab}2026-09-25T10:00
+25${tab}v-noheads${tab}見出無${tab}待ち${tab}2026-09-28T10:00
+26${tab}v-blank${tab}空本文${tab}待ち${tab}2026-09-28T10:00
+27${tab}v-paused${tab}止${tab}保留${tab}"
+AC149_T1_EXPECTED="1${tab}v-cur${tab}返事待ち${tab}稼働中${tab}
+2${tab}v-prev${tab}次版${tab}稼働中${tab}
+3${tab}v-fm${tab}fm${tab}稼働中${tab}
+4${tab}v-nofm${tab}待つ${tab}稼働中${tab}
+5${tab}v-paused${tab}止${tab}保留${tab}"
+
+echo "=== v6_ac148_version_wait_5cols_T0: WV-A × T0 で --list が 5 行リテラル一致・rc=0・--frame の #V /4 と P 行 6 欄が一致（FR-108） ==="
+reset_vault
+mk_notes_WV_A "$VAULT"
+JUDGE_NOW="$T0" run_list_raw
+assert_eq "v6_ac148: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v6_ac148: 5 行リテラル一致（v-prev＝前の版の待ちは効かない・v-fm＝▶ の版があるので frontmatter を見ない・v-cur＝▶ の版 v2 の待ち・v-nofm＝Tasks 節なしは frontmatter・v-paused＝保留）" "$AC148_EXPECTED" "$(cat "$WORKDIR/list_stdout")"
+JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v6_ac148: --frame rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v6_ac148: --frame 1 行目が #V /4（契約不変）" "#V${tab}cmux-dock-frame/4${tab}Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "v6_ac148: P 行 5 行" "5" "$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v6_ac148: P 行は全行 6 欄" "0" "$(awk -F '\t' '$1=="P" && NF!=6' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v6_ac148: P 行の第 2〜6 欄が --list の 5 行と順序含め完全一致" "$AC148_EXPECTED" \
+  "$(awk -F '\t' '$1=="P"{printf "%s\t%s\t%s\t%s\t%s\n", $2, $3, $4, $5, $6}' "$WORKDIR/frame_stdout")"
+assert_eq "v6_ac148: --frame に R 行なし" "0" "$(awk -F '\t' '$1=="R"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+
+echo "=== v6_ac149_classes_T0: WV-B × T0 で --list が 27 行リテラル一致・rc=0・stderr の診断ちょうど 7 行（slug＋固定語＋値）・除外 9 slug は 0 行 ==="
+reset_vault
+mk_notes_WV_B "$VAULT"
+JUDGE_NOW="$T0" run_list_raw
+assert_eq "v6_ac149: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v6_ac149: 27 行リテラル一致（▶ の版が無い 5 分類＝v-nofm・v-done・v-empty・v-noheads・v-blank は frontmatter が効く）" "$AC149_EXPECTED" "$(cat "$WORKDIR/list_stdout")"
+assert_eq "v6_ac149: stderr の診断はちょうど 7 行" "7" "$(wc -l < "$WORKDIR/list_stderr" | tr -d ' ')"
+for slug in v-fm v-bad v-bothfm v-sec v-tz v-badday v-badfirst; do
+  assert_eq "v6_ac149: 診断に $slug を含む行がちょうど 1 行" "1" "$(slug_hits "$slug" "$WORKDIR/list_stderr")"
+done
+for slug in v-indent v-outside v-other v-after v-paused v-empty v-noheads v-blank v-two; do
+  assert_eq "v6_ac149: 診断に $slug を含む行が 0（読まない・順 2・順 5 は診断なし）" "0" "$(slug_hits "$slug" "$WORKDIR/list_stderr")"
+done
+# §41.5.4: 種別の固定語と値。「使わない」（frontmatter 残存）＝v-fm・v-bothfm、「無効」（版の待ち行）＝5 件。
+assert_eq "v6_ac149: 「使わない」 の行は 2 行" "2" "$(grep -c '使わない' "$WORKDIR/list_stderr")"
+assert_eq "v6_ac149: 「無効」 の行は 5 行" "5" "$(grep -c '無効' "$WORKDIR/list_stderr")"
+assert_contains "v6_ac149: v-fm の行＝使わない＋frontmatter の値" "$(diag_line v-fm)" "使わない"
+assert_contains "v6_ac149: v-fm の行に frontmatter の値 2026-09-25T10:00" "$(diag_line v-fm)" "2026-09-25T10:00"
+assert_not_contains "v6_ac149: v-fm の行に 「無効」 は無い" "$(diag_line v-fm)" "無効"
+assert_contains "v6_ac149: v-bothfm の行＝使わない" "$(diag_line v-bothfm)" "使わない"
+assert_contains "v6_ac149: v-bothfm の行に frontmatter の値 2026-09-30T10:00" "$(diag_line v-bothfm)" "2026-09-30T10:00"
+assert_not_contains "v6_ac149: v-bothfm の行に 「無効」 は無い" "$(diag_line v-bothfm)" "無効"
+for pair in "v-bad|来週" "v-sec|2026-09-25T10:00:00" "v-tz|2026-09-25T10:00+09:00" "v-badday|2026-02-30T10:00" "v-badfirst|来週"; do
+  slug="${pair%%|*}"; val="${pair#*|}"
+  assert_contains "v6_ac149: $slug の行＝無効" "$(diag_line "$slug")" "無効"
+  assert_contains "v6_ac149: $slug の行に書かれた値 $val" "$(diag_line "$slug")" "$val"
+  assert_not_contains "v6_ac149: $slug の行に 「使わない」 は無い" "$(diag_line "$slug")" "使わない"
+done
+JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v6_ac149: --frame rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v6_ac149: --frame に R 行が無い（診断で理由フレームにしない）" "0" "$(awk -F '\t' '$1=="R"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v6_ac149: --frame の P 行 27" "27" "$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+echo "=== v6_dt28_frame_same_classes: --frame の P 行第 2〜6 欄が WV-B 27 件の --list と順序含め完全一致（分類経路が 1 本） ==="
+assert_eq "v6_dt28: P 行の第 2〜6 欄＝--list 27 行" "$AC149_EXPECTED" \
+  "$(awk -F '\t' '$1=="P"{printf "%s\t%s\t%s\t%s\t%s\n", $2, $3, $4, $5, $6}' "$WORKDIR/frame_stdout")"
+assert_eq "v6_dt28: P 行は全行 6 欄" "0" "$(awk -F '\t' '$1=="P" && NF!=6' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+
+echo "=== v6_ac149_time_only_T1: WV-A × T1 で v-cur・v-nofm が稼働中・第 5 列空。T0／T1 の前後で Vault のファイル集合と内容がバイト不変 ==="
+reset_vault
+mk_notes_WV_A "$VAULT"
+before_v6="$(vault_snapshot "$VAULT")"
+JUDGE_NOW="$T0" run_list_raw
+t0_out_v6="$(cat "$WORKDIR/list_stdout")"
+JUDGE_NOW="$T1" run_list_raw
+assert_eq "v6_ac149_T1: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v6_ac149_T1: 5 行（v-cur・v-nofm が稼働中・第 5 列空）" "$AC149_T1_EXPECTED" "$(cat "$WORKDIR/list_stdout")"
+assert_eq "v6_ac149_T1: T0 は AC-148 の 5 行（同じ Vault・判定時刻だけの差）" "$AC148_EXPECTED" "$t0_out_v6"
+after_v6="$(vault_snapshot "$VAULT")"
+assert_true "v6_ac149_vault_immutable: T0／T1 の実行前後で Vault がバイト不変" "$([ "$before_v6" = "$after_v6" ] && echo 1 || echo 0)"
+
+echo "=== v6_ac151_invariants: WV-B 入力で ①cmux を一度も呼ばない ②Vault がバイト不変（③所要＝v5_ac146 の 29 ノート計測・④回帰 11 本＝test-runner） ==="
+reset_vault
+mk_notes_WV_B "$VAULT"
+STUBBIN_V6="$WORKDIR/stubbin-v6"; mkdir -p "$STUBBIN_V6"
+CMUX_CALL_LOG_V6="$WORKDIR/cmux_calls_v6.log"; : > "$CMUX_CALL_LOG_V6"
+cat > "$STUBBIN_V6/cmux" <<STUB
+#!/bin/bash
+echo "cmux \$*" >> "$CMUX_CALL_LOG_V6"
+exit 0
+STUB
+chmod +x "$STUBBIN_V6/cmux"
+before_v6="$(vault_snapshot "$VAULT")"
+PATH="$STUBBIN_V6:$PATH" JUDGE_NOW="$T0" run_list_raw
+PATH="$STUBBIN_V6:$PATH" JUDGE_NOW="$T0" run_frame_raw
+after_v6="$(vault_snapshot "$VAULT")"
+assert_eq "v6_ac151①: cmux の呼び出し 0 件" "0" "$(wc -l < "$CMUX_CALL_LOG_V6" | tr -d ' ')"
+assert_true "v6_ac151②: 実行前後で Vault がバイト不変" "$([ "$before_v6" = "$after_v6" ] && echo 1 || echo 0)"
+assert_eq "v6_ac151: --list は 27 行・rc=0" "27 0" "$(wc -l < "$WORKDIR/list_stdout" | tr -d ' ') $(cat "$WORKDIR/list_rc")"
+
+echo "=== v6_dt23_25_26_27: ▶ でない版の無効行（DT-23）・空値（DT-25 (i)）・保留の next 導出（DT-26）・版見出し前の行（DT-27）＝診断 0 行 ==="
+reset_vault
+# DT-23: ▶ の版 v2 は待ち行なし。▶ でない v1 にだけ無効な待ち行 → 稼働中・診断 0。
+_mk_note_WV "$VAULT" v-dt23 'status: active' 2026-09-19 'next: dt23' '' $'## Tasks\n### v1\n- [x] a\n- wait_until: 来週\n### v2\n- [/] b\n'
+# DT-25 (i): 空値（`- wait_until:` だけ）・frontmatter なし → 稼働中・第 5 列空・診断 0。
+_mk_note_WV "$VAULT" v-dt25i 'status: active' 2026-09-18 'next: dt25i' '' $'## Tasks\n### v1\n- [/] a\n- wait_until:\n'
+# DT-26: paused・next: 空・未完タスクあり・版の待ち行が無効 → 保留・next 欄は先頭未完タスクから導出・第 5 列空・診断 0。
+_mk_note_WV "$VAULT" v-dt26 'status: paused' 2026-09-17 'next:' '' $'## Tasks\n### v1\n- [ ] 先頭未完\n- wait_until: 来週\n'
+# DT-27 (a): 版見出しの前にチェックリストと待ち行・後に版 v1（待ち行なし） → 稼働中（前の行を v1 に帰属させない）。
+_mk_note_WV "$VAULT" v-dt27a 'status: active' 2026-09-16 'next: dt27a' '' $'## Tasks\n- [ ] stray\n- wait_until: 2026-09-25T10:00\n### v1\n- [/] a\n'
+# DT-27 (b): 同じ形で v1 に別の待ち行 → v1 の行だけが効く（09-26。09-25 ではない）。
+_mk_note_WV "$VAULT" v-dt27b 'status: active' 2026-09-15 'next: dt27b' '' $'## Tasks\n- [ ] stray\n- wait_until: 2026-09-25T10:00\n### v1\n- [/] a\n- wait_until: 2026-09-26T10:00\n'
+JUDGE_NOW="$T0" run_list_raw
+assert_eq "v6_dt23-27: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v6_dt23-27: stderr 0 行（どれも診断なし）" "0" "$(wc -c < "$WORKDIR/list_stderr" | tr -d ' ')"
+assert_eq "v6_dt23: v-dt23 は稼働中・第 5 列空" "稼働中${tab}" "$(awk -F '\t' '$2=="v-dt23"{print $4 "\t" $5}' "$WORKDIR/list_stdout")"
+assert_eq "v6_dt25(i): v-dt25i は稼働中・第 5 列空" "稼働中${tab}" "$(awk -F '\t' '$2=="v-dt25i"{print $4 "\t" $5}' "$WORKDIR/list_stdout")"
+assert_eq "v6_dt26: v-dt26 は保留・next 欄は導出値・第 5 列空" "先頭未完${tab}保留${tab}" "$(awk -F '\t' '$2=="v-dt26"{print $3 "\t" $4 "\t" $5}' "$WORKDIR/list_stdout")"
+assert_eq "v6_dt27(a): v-dt27a は稼働中・第 5 列空" "稼働中${tab}" "$(awk -F '\t' '$2=="v-dt27a"{print $4 "\t" $5}' "$WORKDIR/list_stdout")"
+assert_eq "v6_dt27(b): v-dt27b は v1 の待ち行だけで待ち（2026-09-26T10:00）" "待ち${tab}2026-09-26T10:00" "$(awk -F '\t' '$2=="v-dt27b"{print $4 "\t" $5}' "$WORKDIR/list_stdout")"
+
+echo "=== v6_dt25_ii_empty_value_with_fm: 空値の待ち行＋frontmatter に将来の値 → 稼働中・第 5 列空・診断ちょうど 1 行（使わない・無効を含まない） ==="
+reset_vault
+_mk_note_WV "$VAULT" v-dt25ii 'status: active' 2026-09-18 'next: dt25ii' 'wait_until: 2026-09-28T10:00' $'## Tasks\n### v1\n- [/] a\n- wait_until:\n'
+JUDGE_NOW="$T0" run_list_raw
+assert_eq "v6_dt25(ii): rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v6_dt25(ii): 稼働中・第 5 列空（空値で frontmatter に倒さない）" "1${tab}v-dt25ii${tab}dt25ii${tab}稼働中${tab}" "$(cat "$WORKDIR/list_stdout")"
+assert_eq "v6_dt25(ii): stderr ちょうど 1 行" "1" "$(wc -l < "$WORKDIR/list_stderr" | tr -d ' ')"
+assert_contains "v6_dt25(ii): 診断は使わない（frontmatter 残存）" "$(cat "$WORKDIR/list_stderr")" "使わない"
+assert_contains "v6_dt25(ii): 診断に slug" "$(cat "$WORKDIR/list_stderr")" "v-dt25ii"
+assert_not_contains "v6_dt25(ii): 診断に無効は無い（空値は無効ではない）" "$(cat "$WORKDIR/list_stderr")" "無効"
+
+echo "=== v6_dt33_unparseable: 差し替え口 CMUX_VAULT_TASKS_SANITIZE_FAIL=1 で解析不能＝稼働中・第 5 列空・診断 1 行（解析できない＋slug）・frontmatter 不採用・理由フレームにしない・口の名前が本番設定に 0 件 ==="
+reset_vault
+_mk_note_WV "$VAULT" v-dt33 'status: active' 2026-09-19 'next: dt33' 'wait_until: 2026-09-28T10:00' $'## Tasks\n### v1\n- [/] a\n'
+mk_note_WV4 "$VAULT"   # Tasks 見出しなし＝解析を起こさない対照（口の影響を受けず frontmatter で待ち）
+CMUX_VAULT_TASKS_SANITIZE_FAIL=1 JUDGE_NOW="$T0" run_list_raw
+assert_eq "v6_dt33: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+assert_eq "v6_dt33: 2 行＝v-dt33 稼働中・空（frontmatter の 09-28 を採用しない）・v-nofm は待ち" "1${tab}v-dt33${tab}dt33${tab}稼働中${tab}
+2${tab}v-nofm${tab}待つ${tab}待ち${tab}2026-09-25T10:00" "$(cat "$WORKDIR/list_stdout")"
+assert_eq "v6_dt33: stderr ちょうど 1 行" "1" "$(wc -l < "$WORKDIR/list_stderr" | tr -d ' ')"
+assert_contains "v6_dt33: 診断の固定語 解析できない" "$(cat "$WORKDIR/list_stderr")" "解析できない"
+assert_eq "v6_dt33: 診断に slug v-dt33" "1" "$(slug_hits v-dt33 "$WORKDIR/list_stderr")"
+assert_not_contains "v6_dt33: 診断に 使わない は無い" "$(cat "$WORKDIR/list_stderr")" "使わない"
+assert_not_contains "v6_dt33: 診断に 無効 は無い" "$(cat "$WORKDIR/list_stderr")" "無効"
+CMUX_VAULT_TASKS_SANITIZE_FAIL=1 JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v6_dt33: --frame rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v6_dt33: --frame に R 行なし" "0" "$(awk -F '\t' '$1=="R"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v6_dt33: --frame の v-dt33 は稼働中・待ち日時空" "稼働中${tab}" "$(awk -F '\t' '$1=="P" && $3=="v-dt33"{print $5 "\t" $6}' "$WORKDIR/frame_stdout")"
+# 対照＝口なしなら同じ Vault で v-dt33 は「▶ の版あり・待ち行なし・frontmatter 残存」＝稼働中＋使わない 1 行。
+JUDGE_NOW="$T0" run_list_raw
+assert_eq "v6_dt33(対照): 口なしでは診断 1 行＝使わない（解析できない は出ない）" "1 0" "$(grep -c '使わない' "$WORKDIR/list_stderr") $(grep -c '解析できない' "$WORKDIR/list_stderr")"
+# 静的: 差し替え口の名前が本番設定に 0 件（F-81 と同型。dock.json は dotfiles があるときだけ・launchd/ は存在するときだけ）。
+REPO_ROOT_V6="$(cd "$SCRIPT_DIR/.." && pwd)"
+# 対象＝config/・launchagents/（本 repo の launchd plist 置き場＝実在必須・空振り防止）・scripts/install*・dock.json（dotfiles があるときだけ）。
+# 2 つの口（CMUX_VAULT_TASKS_SANITIZE_FAIL・BOOTSTRAP_CMUX_LIB_DIR＝A-v6-7）とも 0 件。
+dt33_targets="$REPO_ROOT_V6/config $REPO_ROOT_V6/launchagents"
+assert_true "v6_dt33(静的): config/ と launchagents/ が実在する（検査の空振り防止）" "$([ -d "$REPO_ROOT_V6/config" ] && [ -d "$REPO_ROOT_V6/launchagents" ] && echo 1 || echo 0)"
+for f in "$REPO_ROOT_V6"/scripts/install*; do [ -f "$f" ] && dt33_targets="$dt33_targets $f"; done
+[ -f "$HOME/work/dotfiles/cmux/dock.json" ] && dt33_targets="$dt33_targets $HOME/work/dotfiles/cmux/dock.json"
+# shellcheck disable=SC2086
+dt33_leak="$(grep -rlE -- 'CMUX_VAULT_TASKS_SANITIZE_'"FAIL"'|BOOTSTRAP_CMUX_LIB_'"DIR" $dt33_targets 2>/dev/null | grep -c . || true)"
+assert_eq "v6_dt33(静的): テスト用の口 2 つの名前が本番設定（config/・launchagents/・scripts/install*・dock.json）に 0 件" "0" "$dt33_leak"
+
+echo "=== v6_ac154a_doc: cmux-next-model.sh の冒頭コメントと usage に「▶ の版」「frontmatter」「wait_until」の説明がある（AC-154 (a)） ==="
+head_comment="$(sed -n '1,80p' "${TARGET}" | grep '^#' || true)"
+assert_contains "v6_ac154a: 冒頭コメントに ▶ の版" "$head_comment" "▶ の版"
+assert_contains "v6_ac154a: 冒頭コメントに frontmatter" "$head_comment" "frontmatter"
+assert_contains "v6_ac154a: 冒頭コメントに wait_until" "$head_comment" "wait_until"
+bash "${TARGET}" >/dev/null 2>"$WORKDIR/usage_err" || true
+assert_contains "v6_ac154a: usage に ▶ の版" "$(cat "$WORKDIR/usage_err")" "▶ の版"
+assert_contains "v6_ac154a: usage に frontmatter" "$(cat "$WORKDIR/usage_err")" "frontmatter"
 
 echo
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="

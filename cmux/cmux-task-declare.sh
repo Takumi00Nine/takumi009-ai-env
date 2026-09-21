@@ -46,35 +46,17 @@ usage() {
 EOF
 }
 
+# 記録の読み手（slug の妥当性・破損判定）は共有 lib（lib-cmux-workspace.sh の
+# ws_slug_valid・ws_state_is_corrupt＝v6 A-v6-2）。ここは薄いラッパ（規則・
+# 検査式・終了コードは不変）。書き手は本 CLI だけのまま（FR-113）。
+
 # slug が FR-34 を満たすか判定する（A-Za-z0-9._- のみ・1文字以上・"." "..".
 # そのものは不可）。
-slug_valid() {
-  local s="$1"
-  case "$s" in
-    '') return 1 ;;
-    .|..) return 1 ;;
-  esac
-  case "$s" in
-    *[!A-Za-z0-9._-]*) return 1 ;;
-  esac
-  return 0
-}
+slug_valid() { ws_slug_valid "$1"; }
 
 # 記録ファイルが「破損」かどうかを判定する（設計 §3.1）。ファイル不在は
 # 破損ではない（正常な初期状態）。破損なら真（0）を返す。
-state_is_corrupt() {
-  [ -f "$STATE_FILE" ] || return 1
-  jq -s -e '
-    length == 1
-    and (.[0] | type == "object")
-    and (.[0].version == 1)
-    and (.[0].workspaces | type == "object")
-    and (.[0].workspaces | to_entries | all(.value | type == "string"))
-  ' "$STATE_FILE" >/dev/null 2>&1
-  local rc=$?
-  [ "$rc" -eq 0 ] && return 1   # 検査式が真＝正常＝破損ではない
-  return 0                      # 検査式が偽（非0終了）＝破損
-}
+state_is_corrupt() { ws_state_is_corrupt "$STATE_FILE"; }
 
 # 記録ファイルを stdout へ出す（無ければ空の骨格）。呼び出し側は
 # state_is_corrupt を先に確認していること。
@@ -196,10 +178,9 @@ cmd_unset() {
   if [ ! -f "$STATE_FILE" ]; then
     return 0
   fi
+  # UUID→対の引きは共有部品（A-v6-2）。対が無ければ何もせず成功。
+  [ -n "$(ws_state_lookup_slug "$STATE_FILE" "$uuid")" ] || return 0
   cur="$(read_state_json)"
-  if ! printf '%s' "$cur" | jq -e --arg u "$uuid" '.workspaces[$u] != null' >/dev/null 2>&1; then
-    return 0
-  fi
   new_json="$(printf '%s' "$cur" | jq -c --arg u "$uuid" '
     .version = 1
     | .workspaces = ((.workspaces // {}) | del(.[$u]))

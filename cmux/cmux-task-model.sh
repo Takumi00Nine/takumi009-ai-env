@@ -65,42 +65,18 @@ DONE_N=0
 CUR_I=-1
 
 # --- 記録ファイル（読むだけ・書かない） ---------------------------------
+# 読み手の本体は共有 lib（lib-cmux-workspace.sh の ws_state_*・ws_slug_valid＝
+# v6 A-v6-2）。ここは薄いラッパ（検査式・規則は不変）。
 
 # 記録ファイルの破損判定（v1/v2 と同一式）。ファイル不在は破損ではない。
-state_is_corrupt() {
-  [ -f "$STATE_FILE" ] || return 1
-  jq -s -e '
-    length == 1
-    and (.[0] | type == "object")
-    and (.[0].version == 1)
-    and (.[0].workspaces | type == "object")
-    and (.[0].workspaces | to_entries | all(.value | type == "string"))
-  ' "$STATE_FILE" >/dev/null 2>&1
-  local rc=$?
-  [ "$rc" -eq 0 ] && return 1
-  return 0
-}
+state_is_corrupt() { ws_state_is_corrupt "$STATE_FILE"; }
 
 # UUID に対応する slug を stdout へ出す（無ければ空）。呼び出し側は
 # state_is_corrupt を先に確認していること。
-lookup_slug() {
-  local uuid="$1"
-  [ -f "$STATE_FILE" ] || return 0
-  jq -r --arg u "$uuid" '(.workspaces // {})[$u] // empty' "$STATE_FILE" 2>/dev/null
-}
+lookup_slug() { ws_state_lookup_slug "$STATE_FILE" "$1"; }
 
 # slug が FR-34 を満たすか判定する。
-slug_valid() {
-  local s="$1"
-  case "$s" in
-    '') return 1 ;;
-    .|..) return 1 ;;
-  esac
-  case "$s" in
-    *[!A-Za-z0-9._-]*) return 1 ;;
-  esac
-  return 0
-}
+slug_valid() { ws_slug_valid "$1"; }
 
 # --- cmux 側（毎回評価） ---------------------------------------------------
 
@@ -178,31 +154,11 @@ probe_list_target() {
 
 # --- Vault 側（順3〜順10） -------------------------------------------------
 
-# next: の照合直前（§39.4.2・Q-v4-1・D-v4-2）に版名・NEXT の両側へかける
-# trim（ASCII空白とTABだけ・parse_tasksのawk trimと同じ式・
-# lib-vault-tasks.sh:65〜69）。全角空白（U+3000）は剥がさない＝一致に含む。
-# 外部プロセスを起こさない（AC-117の時間予算・NEXT側で1回＋②段の候補版ごとに呼ぶ）。
-trim_ascii() {
-  local s="$1" tab
-  tab=$'\t'
-  while [ -n "$s" ]; do
-    case "$s" in
-      " "*) s="${s# }" ;;
-      "$tab"*) s="${s#?}" ;;
-      *) break ;;
-    esac
-  done
-  while [ -n "$s" ]; do
-    case "$s" in
-      *" ") s="${s% }" ;;
-      *"$tab") s="${s%?}" ;;
-      *) break ;;
-    esac
-  done
-  printf '%s' "$s"
-}
-
-# UUID から表示モデルを組み立てる（v4・design.md §39.4.1〜§39.4.3）。
+# UUID から表示モデルを組み立てる（v4・design.md §39.4.1〜§39.4.3・v6 §41.3.1）。
+# ▶ の版（cur）と「▶ を決めない条件」（理由行 Tasks 節なし／タスクなし／空タスク）
+# の判定は共有部品 decide_current_version（lib-vault-tasks.sh）の呼び出し＝規則・
+# 理由行・表示は v4 と不変（D-v6-1・A-v6-1）。版の待ち行（種別 W）は読まない
+# （版行・分数に出ない＝AC-150）。
 # 以下のグローバルを設定する。
 #   MODEL_REASON : 非空なら理由行（順3〜10）。空なら通常表示（順11）
 #   DONE_N       : 完了した版の件数（`D` 行）
@@ -255,15 +211,14 @@ load_model() {
     return
   fi
 
-  local vcount=0 cur_vi=-1 next_raw=""
+  local vcount=0 cur_vi=-1
   local task_vidx=() task_state=() task_body=()
   local kind a b
+  # N（next:）・W（版の待ち行）は表示の組み立てでは読まない（N は決定部品が
+  # 読む・W は Task 枠に描かず数えない＝AC-150）。
   while IFS="$(printf '\t')" read -r kind a b; do
     [ -n "$kind" ] || continue
     case "$kind" in
-      N)
-        next_raw="$a"
-        ;;
       V)
         V_NAME+=("$a")
         V_TOTAL+=(0)
@@ -288,33 +243,26 @@ load_model() {
 $tsv
 TSV_EOF
 
-  if [ "$vcount" -eq 0 ]; then
-    MODEL_REASON="Tasks 節なし"
-    return
-  fi
-
-  local i total_all=0
-  for ((i = 0; i < vcount; i++)); do
-    total_all=$(( total_all + V_TOTAL[i] ))
-  done
-  if [ "$total_all" -eq 0 ]; then
-    MODEL_REASON="タスクなし"
-    return
-  fi
-
+  # ▶ の版の決定（順 10〜11・§39.4.2・v6 §41.5.3）＝共有部品 1 か所。出力＝
+  # "<序数>\tcur\t<待ち行>" か "-1\t<区分>\t"。区分 noversion／notask／blanktask は
+  # 既存の理由行（同じ条件・同じ順）に写す。alldone は理由行ではない（U が空＝
+  # cur なし・--frame は通常フレーム・--list は「全版完了」を別に検出＝§39.4.4）。
+  local decision kind
+  decision="$(printf '%s\n' "$tsv" | decide_current_version)"
+  kind="${decision#*$'\t'}"; kind="${kind%%$'\t'*}"
+  case "$kind" in
+    noversion) MODEL_REASON="Tasks 節なし"; return ;;
+    notask)    MODEL_REASON="タスクなし"; return ;;
+    blanktask) MODEL_REASON="空タスク"; return ;;
+    cur)       CUR_I="${decision%%$'\t'*}" ;;
+    *)         CUR_I=-1 ;;
+  esac
   local n_tasks=${#task_body[@]}
-  if [ "$n_tasks" -gt 0 ]; then
-    for ((i = 0; i < n_tasks; i++)); do
-      if [ -z "${task_body[$i]}" ]; then
-        MODEL_REASON="空タスク"
-        return
-      fi
-    done
-  fi
 
   # 完了判定（順11・§39.4.1手順3）: done_i = (total>=1 && done==total)。
-  # U = 未完の版の列（記載順）・DONE_N = 完了版の件数。
-  local u_list=()
+  # U = 未完の版の列（記載順）・DONE_N = 完了版の件数（表示用の統計。U の定義は
+  # 決定部品と同じ式）。
+  local i ui u_list=()
   for ((i = 0; i < vcount; i++)); do
     if [ "${V_TOTAL[$i]}" -ge 1 ] && [ "${V_DONE[$i]}" -eq "${V_TOTAL[$i]}" ]; then
       DONE_N=$(( DONE_N + 1 ))
@@ -322,27 +270,6 @@ TSV_EOF
       u_list+=("$i")
     fi
   done
-
-  # 今の版 cur の3段判定（§39.4.2・Q-v4-1）。
-  local trimmed_next ui
-  trimmed_next="$(trim_ascii "$next_raw")"
-  for ui in "${u_list[@]+"${u_list[@]}"}"; do
-    if [ "${V_HASSLASH[$ui]}" -eq 1 ]; then
-      CUR_I="$ui"
-      break
-    fi
-  done
-  if [ "$CUR_I" -lt 0 ] && [ -n "$trimmed_next" ]; then
-    for ui in "${u_list[@]+"${u_list[@]}"}"; do
-      if [ "$(trim_ascii "${V_NAME[$ui]}")" = "$trimmed_next" ]; then
-        CUR_I="$ui"
-        break
-      fi
-    done
-  fi
-  if [ "$CUR_I" -lt 0 ] && [ "${#u_list[@]}" -gt 0 ]; then
-    CUR_I="${u_list[0]}"
-  fi
 
   # BL_* の組み立て（U の全版＋その全子行・OPENに依らない＝§39.4.1手順6）。
   local j is_open

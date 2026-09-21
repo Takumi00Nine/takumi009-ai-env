@@ -654,6 +654,57 @@ echo "=== DT-9: 供給側の cmux 締切（run_with_timeout の3性質） ==="
 #    生存し続け、上の孤児検査（orphan_free）が子孫の非残存を見ている。
 assert_true "DT-9: 締切後も呼び出し元プロセスが正常終了した（list_rc採取済み）" "1"
 
+# ==========================================================================
+# v6 AC-150（requirements-v6.md §8.1・FR-106・E-v6-2・design.md §41.9.2 TP 層）:
+# WV-n（tests/lib-cmux-fixtures.sh・Project 側と同じ fixture）を宣言先にした
+# Task 供給側の --frame で、▶（cur）の版が Project 側と同じ規則で決まり、
+# `- wait_until:` の行は描かれず・数えられない。cmux スタブは S-1 のまま。
+# ==========================================================================
+echo "=== v6_ac150_cur_version: WV-1／WV-7／WV-13 を宣言先にした --frame の cur の版名が v2（[/]）・v3（next: 一致）・v1（1 番） ==="
+reset_stub_state "$STUB_STATE"
+cur_version() { awk -F '\t' '$1=="V" && $5=="cur"{print $3}' "$FRAME_OUT"; }
+cur_fraction() { awk -F '\t' '$1=="V" && $5=="cur"{print $4}' "$FRAME_OUT"; }
+mk_note_WV1 "$VAULT"; mk_note_WV2 "$VAULT"; mk_note_WV7 "$VAULT"; mk_note_WV13 "$VAULT"
+mk_note_WV22 "$VAULT"; mk_note_WV24 "$VAULT"; mk_note_WV25 "$VAULT"; mk_note_WV27 "$VAULT"
+mk_decl_single "v-cur" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "v6_ac150: WV-1 rc=0" "0" "$(cat "$FRAME_RC")"
+assert_eq "v6_ac150: WV-1 の cur は v2（[/] の版）" "v2" "$(cur_version)"
+assert_eq "v6_ac150: WV-1 の v2 の分数は 0/2（待ち行を数えない）" "0/2" "$(cur_fraction)"
+assert_eq "v6_ac150: WV-1 のフレームに wait_until を含む行 0" "0" "$(grep -c 'wait_until' "$FRAME_OUT")"
+mk_decl_single "v-next" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "v6_ac150: WV-7 の cur は v3（next: 完全一致）" "v3" "$(cur_version)"
+assert_eq "v6_ac150: WV-7 のフレームに wait_until を含む行 0" "0" "$(grep -c 'wait_until' "$FRAME_OUT")"
+mk_decl_single "v-first" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "v6_ac150: WV-13 の cur は v1（未完の 1 番）" "v1" "$(cur_version)"
+assert_eq "v6_ac150: WV-13 のフレームに wait_until を含む行 0" "0" "$(grep -c 'wait_until' "$FRAME_OUT")"
+
+echo "=== v6_ac150_prev_version_wait_not_counted: WV-2＝D 行 1（v1 は完了版として畳まれる＝待ち行を未完タスクと数えない）・v2 が cur・分数 0/1 ==="
+mk_decl_single "v-prev" "$STATE_FILE"
+run_frame_raw "$VAULT" "$STATE_FILE"
+assert_eq "v6_ac150: WV-2 rc=0" "0" "$(cat "$FRAME_RC")"
+assert_eq "v6_ac150: WV-2 の D 行は 1" "1" "$(awk -F '\t' '$1=="D"{print $2}' "$FRAME_OUT")"
+assert_eq "v6_ac150: WV-2 の cur は v2" "v2" "$(cur_version)"
+assert_eq "v6_ac150: WV-2 の v2 の分数は 0/1" "0/1" "$(cur_fraction)"
+assert_eq "v6_ac150: WV-2 のフレームに wait_until を含む行 0" "0" "$(grep -c 'wait_until' "$FRAME_OUT")"
+
+echo "=== v6_ac150_outside_lines_not_drawn: WV-22／WV-24／WV-25（版の範囲外・別節の待ち行）のフレームに wait_until を含む行 0・cur は v1 ==="
+for slug in v-outside v-other v-after; do
+  mk_decl_single "$slug" "$STATE_FILE"
+  run_frame_raw "$VAULT" "$STATE_FILE"
+  assert_eq "v6_ac150: $slug rc=0" "0" "$(cat "$FRAME_RC")"
+  assert_eq "v6_ac150: $slug のフレームに wait_until を含む行 0" "0" "$(grep -c 'wait_until' "$FRAME_OUT")"
+  assert_eq "v6_ac150: $slug の cur は v1" "v1" "$(cur_version)"
+done
+
+echo "=== v6_ac150_blank_task_reason: WV-27（本文が空の - [ ]）は Task 側が理由行「空タスク」（▶ なし＝Project 側 AC-149 行 26 と対で両側とも ▶ なし） ==="
+mk_decl_single "v-blank" "$STATE_FILE"
+assert_frame_reason "v6_ac150(WV-27)" "$VAULT" "$STATE_FILE" "空タスク"
+assert_eq "v6_ac150: WV-27 のフレームに cur の行 0" "0" "$(awk -F '\t' '$1=="V" && $5=="cur"' "$FRAME_OUT" | wc -l | tr -d ' ')"
+assert_list_reason "v6_ac150(WV-27・--list)" "$VAULT" "$STATE_FILE" "空タスク"
+
 echo
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="
 if [ "$FAIL" -gt 0 ]; then

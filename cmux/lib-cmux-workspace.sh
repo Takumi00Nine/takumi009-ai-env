@@ -1,8 +1,10 @@
 # cmux ワークスペース識別子の解決規則（共通部品・cmux-session-todo 設計
-# §21・C-11）。cmux-task-watch.sh（常駐描画・`--list`）と
-# cmux-task-declare.sh（宣言 CLI）の両方から source される。単体では実行
-# しない（関数定義のみ、副作用なし）。lib は環境変数を読まない。上書き値・
-# cmux 実体・タイムアウトは呼び出し側が引数で渡す（設計 §1.4）。
+# §21・C-11）と宣言記録の読み手（v6・設計 §41.3.2 案 A (b)・A-v6-2）。
+# cmux-task-model.sh（供給側 `--list`／`--frame`）・cmux-task-declare.sh
+# （宣言 CLI）・claude/hooks/bootstrap-vault.sh（SessionStart の ⑥＝宣言状態）
+# から source される。単体では実行しない（関数定義のみ、副作用なし）。
+# lib は環境変数を読まない。上書き値・cmux 実体・タイムアウト・記録ファイルの
+# パスは呼び出し側が引数で渡す（設計 §1.4）。
 #
 # `run_with_timeout` に依存するため、呼び出し側は本 lib より先に
 # lib-model-view.sh を source すること。
@@ -111,4 +113,52 @@ ws_caller_uuid() {
   [ -n "$caller_ref" ] || return 2
   json="$(ws_list_json "$bin" "$timeout")" || return 1
   ws_uuid_for_ref "$json" "$caller_ref" || return 2
+}
+
+# --- 宣言記録の読み手（v6・設計 §41.6・A-v6-2）------------------------------
+# 記録ファイル（既定 ~/.config/cmux-task-watch/workspaces.json・書き手は宣言
+# CLI だけ＝FR-113）の破損判定・slug の妥当性・UUID→slug の引きを 1 か所に置く。
+# 旧 cmux-task-declare.sh／cmux-task-model.sh の複製 2 か所をここへ移した
+# （検査式・規則は不変）。書き込みの経路は持たない（読むだけ）。
+
+# 記録ファイル $1 が「破損」なら真（0）を返す（設計 §3.1 の検査式）。ファイル
+# 不在は破損ではない（正常な初期状態＝非0）。jq 1 回。
+ws_state_is_corrupt() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  jq -s -e '
+    length == 1
+    and (.[0] | type == "object")
+    and (.[0].version == 1)
+    and (.[0].workspaces | type == "object")
+    and (.[0].workspaces | to_entries | all(.value | type == "string"))
+  ' "$file" >/dev/null 2>&1
+  local rc=$?
+  [ "$rc" -eq 0 ] && return 1   # 検査式が真＝正常＝破損ではない
+  return 0                      # 検査式が偽（非0終了）＝破損
+}
+
+# 記録ファイル $1 で UUID $2 に対応する slug を stdout へ出す（無ければ空・
+# rc は常に 0）。呼び出し側は ws_state_is_corrupt を先に確認していること。
+# 引くのは呼び出し元の UUID の対だけ（同じ slug の対が複数あっても先頭や
+# slug 一致では引かない＝DT-30）。jq 1 回。
+ws_state_lookup_slug() {
+  local file="$1" uuid="$2"
+  [ -f "$file" ] || return 0
+  jq -r --arg u "$uuid" '(.workspaces // {})[$u] // empty' "$file" 2>/dev/null
+  return 0
+}
+
+# slug $1 が FR-34 を満たすか判定する（A-Za-z0-9._- のみ・1文字以上・"." ".."
+# そのものは不可）。外部プロセスを起こさない。
+ws_slug_valid() {
+  local s="$1"
+  case "$s" in
+    '') return 1 ;;
+    .|..) return 1 ;;
+  esac
+  case "$s" in
+    *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  return 0
 }

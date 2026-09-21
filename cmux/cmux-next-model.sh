@@ -6,11 +6,25 @@
 # 表示）は一切行わない＝dotfiles 側の cmux-next-watch.sh が受け取って
 # 描くだけ（FR-61・FR-62）。
 #
-# 契約 cmux-dock-frame/4（v5・設計 §40.4）。区分は 3 値＝稼働中／待ち／保留。
-# 「待ち」は frontmatter の `wait_until:`（`YYYY-MM-DDTHH:MM` か `YYYY-MM-DD`＝
-# その日の 00:00・ローカル時刻・分精度）が有効で、判定時刻 < 待ち日時のとき
-# （status: active のまま・FR-91）。無効な値（秒・オフセット付き・文字列・暦外日）
-# は稼働中として扱い（隠さない側）、キーあり＋非空のときだけ stderr に 1 行。
+# 契約 cmux-dock-frame/4（v5・設計 §40.4・v6 でも不変＝FR-108）。区分は 3 値＝
+# 稼働中／待ち／保留。
+#
+# 待ち（v6・要件 FR-104〜107・設計 §41.5）＝待ちは「▶ の版（今の版＝Task 枠が ▶
+# を付ける版）が日時を待っている」こと。`wait_until` の置き場は 2 つで、使い分けは
+#   (1) Tasks 節の版の直下に行頭から `- wait_until: <値>` を 1 行（版の待ち日時）
+#       ＝▶ の版にある行だけが効く（前の版の行は効かない・先頭の 1 行だけ・
+#       字下げ／版の範囲外／Tasks 節の外は読まない）。
+#   (2) frontmatter の `wait_until:`（案件の待ち日時・v5 FR-88）＝▶ の版が無い
+#       案件（Tasks 節なし・版見出しなし・全版完了・全版タスク 0 件・空タスク）
+#       だけに効く。▶ の版がある案件に残っている値は使わず stderr に 1 行。
+# 値の文法はどちらも同じ（`YYYY-MM-DDTHH:MM` か `YYYY-MM-DD`＝その日の 00:00・
+# ローカル時刻・分精度・前後空白と揃った引用符は剥がす）。有効で判定時刻 <
+# 待ち日時のとき「待ち」（status: active のまま・FR-91）。無効な値（秒・
+# オフセット付き・文字列・暦外日）は稼働中として扱い（隠さない側）、非空の
+# ときだけ stderr に 1 行。判定順＝保留 → 解析不能（稼働中＋診断）→ ▶ の版
+# あり（版の待ち行だけで待ち／稼働中）→ ▶ の版なし（frontmatter で待ち／稼働中）
+# ＝FR-105。▶ の版の決定は Task 供給側と同じ共有部品（lib-vault-tasks.sh の
+# decide_current_version）＝両側で同じ版（FR-106）。
 # 判定時刻はテスト専用 env CMUX_NEXT_JUDGE_NOW（`YYYY-MM-DDTHH:MM[:SS]`・
 # ローカル・秒は切り捨て）で固定でき、未設定なら実時刻（設計 §40.5.1）。
 #
@@ -142,19 +156,82 @@ resolve_judge_now() {
 
 # frontmatter の next: が無い／空文字列のノートについて、同じノートの
 # Tasks 節から先頭未完タスク（状態が x でない最初のタスク。記載順のまま）
-# の本文を取り出す（FR-31）。Tasks 節が無い・未完タスクが無い・ノートが
-# 破損しているときは何も出さず非0で返る。
+# の本文を取り出す（FR-31）。$1＝read_note の TSV ストリーム（v6＝同じノートを
+# v6 の判定と next 導出で 2 回解析しない＝NFR-18・§41.5.5。解析は呼び出し側）。
+# 未完タスクが無いときは何も出さず非0で返る。
 derive_next_from_tasks() {
-  local f="$1" ts
-  ts="$(read_note "$f" 2>/dev/null)" || return 1
-  printf '%s\n' "$ts" | awk -F '\t' '
+  printf '%s\n' "$1" | awk -F '\t' '
     $1 == "T" && $2 != "x" { print $3; found = 1; exit }
     END { if (!found) exit 1 }
   '
 }
 
+# Tasks 見出しの安価な有無判定（v6・NFR-18・設計 §41.5.5・D-v6-4）。解析部品の
+# 見出し判定（サニタイズ後の ^##[ \t]+Tasks[ \t]*$）の上位集合＝サニタイズは
+# 制御文字を空白へ置くだけなので、生ファイルの「`##` で始まり Tasks を含む行」
+# を見れば、解析して版が出る入力を取りこぼさない（偽なら解析しても版は出ない）。
+# 偽陽性（`##Tasks` など）は無駄な解析 1 回で無害。外部プロセスを起こさない
+# （builtin の read＋case。AC-117・NFR-18 の時間予算）。
+note_has_tasks_heading() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in "##"*Tasks*) return 0 ;; esac
+  done < "$1" 2>/dev/null
+  return 1
+}
+
+# v5 の frontmatter 判定（▶ の版が無いと確定したノート専用＝順 5・FR-107）。
+# 大域 RANK／WAIT を設定する（呼び出し側は裸の文で呼ぶ＝サブシェルにしない）。
+# 無効値は稼働中へ倒す（隠さない側）。診断はキーあり＋非空＋正規化失敗だけ（A-v5-3）。
+RANK=1
+WAIT=""
+classify_by_frontmatter() {
+  local fm="$1" base="$2" wait_raw
+  wait_raw="$(fm_field "$fm" wait_until)"
+  WAIT="$(normalize_wait "$wait_raw")"
+  if [ -n "$WAIT" ] && [ "$JUDGE_NOW" \< "$WAIT" ]; then
+    RANK=2                                   # 待ち＝判定時刻 < 待ち日時（同じ分は稼働中）
+  else
+    if [ -z "$WAIT" ] && [ -n "$wait_raw" ] && fm_has_key "$fm" wait_until; then
+      echo "wait_until が無効です（稼働中として扱う）: ${base}: ${wait_raw}" >&2
+    fi
+    RANK=1
+    WAIT=""
+  fi
+}
+
+# v6 の版の待ち判定（▶ の版があるノート＝順 4／4′・FR-104・FR-105）。$1＝▶ の版の
+# 先頭の待ち行の生値（decide_current_version の第 3 欄）・$2＝frontmatter・$3＝slug。
+# 値は frontmatter と同じ剥がし（fm_unquote）→ 同じ正規化（normalize_wait）を通す。
+# 大域 RANK／WAIT を設定する。診断（設計 §41.5.4・固定語）＝非空かつ正規化失敗
+# なら `無効`（値つき）・frontmatter に `wait_until:` が非空で残っていれば `使わない`
+# （frontmatter の値つき・待ちでも稼働中でも出す）。空値・待ち行なし・過去・同時刻
+# は診断なし（D-v6-3）。frontmatter の値は区分に使わない（本人確定）。
+classify_by_version_wait() {
+  local raw fm="$2" base="$3" fm_wait
+  raw="$(fm_unquote "$1")"
+  WAIT="$(normalize_wait "$raw")"
+  if [ -n "$WAIT" ] && [ "$JUDGE_NOW" \< "$WAIT" ]; then
+    RANK=2
+  else
+    if [ -z "$WAIT" ] && [ -n "$raw" ]; then
+      echo "版の待ち日時が無効です（稼働中として扱う）: ${base}: ${raw}" >&2
+    fi
+    RANK=1
+    WAIT=""
+  fi
+  fm_wait="$(fm_field "$fm" wait_until)"   # 非空＝キーあり（fm_has_key は不要）
+  if [ -n "$fm_wait" ]; then
+    echo "frontmatter の wait_until は使わない（▶ の版があるため・版の待ち行だけを見る）: ${base}: ${fm_wait}" >&2
+  fi
+}
+
 # セクション1: Projects/*.md の frontmatter を走査し、区分を順位で判定
-# （1=稼働中／2=待ち／3=保留・FR-91 の順で先勝ち・設計 §40.5.3）。
+# （1=稼働中／2=待ち／3=保留・FR-105 の順で先勝ち・設計 §41.5.3）:
+#   順 1 非表示 → 順 2 保留（v6 の判定を省略・next 導出は行う）→ 順 3 Tasks 見出し
+#   なし（順 5 へ）→ 順 3′ 解析不能（稼働中＋診断 `解析できない`・frontmatter を
+#   採用しない）→ 順 4／4′ ▶ の版あり（版の待ち行だけ）→ 順 5 ▶ の版なし（v5 の
+#   frontmatter 判定）。
 # "順位<TAB>sortkey<TAB>名前<TAB>next値<TAB>待ち日時" を 1→2→3・各区分内は
 # 更新日降順で標準出力へ並べる（表示と --list の共通データ源。
 # number_entries() が読む唯一の入口）。判定時刻は main が JUDGE_NOW に固定済み。
@@ -164,7 +241,7 @@ derive_next_from_tasks() {
 # glob 不成立を「0 件の正常な表」と取り違えない。mktemp 失敗時も非0。
 collect_entries() {
   local projects_dir="$VAULT/Projects" f base fm status nextval
-  local tmpfile sortkey rank derived wait_raw wait
+  local tmpfile sortkey rank derived wait tsv parsed decision
 
   if [ ! -d "$projects_dir" ] || [ ! -r "$projects_dir" ] || [ ! -x "$projects_dir" ]; then
     echo "Projects ディレクトリを読めません: $projects_dir" >&2
@@ -179,27 +256,44 @@ collect_entries() {
     status="$(fm_field "$fm" status)"
     base="$(sanitize_str "$(basename "$f" .md)")"
     wait=""
+    # parsed: 0=未解析／1=解析済み（tsv 有効）／2=解析不能（順 3′）
+    parsed=0
+    tsv=""
     if status_allowed "$status" "$STATUS_ALLOW"; then
-      wait_raw="$(fm_field "$fm" wait_until)"
-      wait="$(normalize_wait "$wait_raw")"
-      if [ -n "$wait" ] && [ "$JUDGE_NOW" \< "$wait" ]; then
-        rank=2                                 # 待ち＝判定時刻 < 待ち日時（同じ分は稼働中）
-      else
-        # 無効値は稼働中へ倒す（隠さない側）。診断はキーあり＋非空＋正規化失敗だけ（A-v5-3）。
-        if [ -z "$wait" ] && [ -n "$wait_raw" ] && fm_has_key "$fm" wait_until; then
-          echo "wait_until が無効です（稼働中として扱う）: ${base}: ${wait_raw}" >&2
+      if note_has_tasks_heading "$f"; then
+        if tsv="$(read_note "$f" 2>/dev/null)"; then
+          parsed=1
+        else
+          parsed=2
         fi
-        rank=1
-        wait=""
       fi
+      if [ "$parsed" -eq 2 ]; then
+        # 順 3′: ▶ の不在が確定していないので frontmatter を採用しない（F-113）。
+        echo "Tasks 節を解析できない（稼働中として扱う・frontmatter の wait_until は採用しない）: ${base}" >&2
+        RANK=1; WAIT=""
+      elif [ "$parsed" -eq 1 ]; then
+        decision="$(printf '%s\n' "$tsv" | decide_current_version)"
+        case "$decision" in
+          -1$'\t'*) classify_by_frontmatter "$fm" "$base" ;;                        # 順 5: ▶ の版なし（5 分類）
+          *) classify_by_version_wait "${decision#*$'\t'cur$'\t'}" "$fm" "$base" ;;  # 順 4／4′: 第 3 欄＝先頭の待ち行
+        esac
+      else
+        classify_by_frontmatter "$fm" "$base"                          # 順 3→5: Tasks 見出しなし
+      fi
+      rank="$RANK"; wait="$WAIT"
     elif status_allowed "$status" "$STATUS_HOLD"; then
-      rank=3                                   # 保留＝wait_until を読まない
+      rank=3                                   # 保留＝版の待ち行も frontmatter も読まない
     else
       continue
     fi
     nextval="$(sanitize_str "$(fm_field "$fm" next)")"
-    if [ -z "$nextval" ]; then
-      derived="$(derive_next_from_tasks "$f")"
+    if [ -z "$nextval" ] && [ "$parsed" -ne 2 ]; then
+      # next 導出（v1 FR-31・status に依らず）。v6 の判定で解析済みならその結果を
+      # 使い、未解析（保留・Tasks 見出しなし）ならここで 1 回だけ解析する。
+      if [ "$parsed" -eq 0 ]; then
+        tsv="$(read_note "$f" 2>/dev/null)" || tsv=""
+      fi
+      derived="$(derive_next_from_tasks "$tsv")"
       if [ -n "$derived" ]; then
         nextval="$(sanitize_str "$(truncate_plain "$derived" 15)")"
       fi
@@ -374,6 +468,9 @@ usage() {
 使い方:
   cmux-next-model.sh --list    番号・正式プロジェクト名・next値・区分（稼働中/待ち/保留）・待ち日時 の 5 列 TSV
   cmux-next-model.sh --frame   1 ティック分のフレーム（cmux-dock-frame/4）
+待ち＝「▶ の版（今の版＝Task 枠が ▶ を付ける版）」が日時を待っていること。wait_until の置き場は 2 つ:
+  (1) Tasks 節の版の直下に行頭から `- wait_until: YYYY-MM-DDTHH:MM`（YYYY-MM-DD 可）＝▶ の版の行だけが効く
+  (2) frontmatter の `wait_until:`＝▶ の版が無い案件（Tasks 節なし・全版完了・全版タスク 0 件など）だけに効く
 環境変数（テスト専用）: CMUX_NEXT_JUDGE_NOW=YYYY-MM-DDTHH:MM[:SS]（待ち判定の判定時刻・ローカル）
 EOF
 }

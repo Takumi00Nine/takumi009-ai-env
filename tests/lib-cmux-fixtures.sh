@@ -572,6 +572,74 @@ mk_notes_WU_N() {
 }
 
 # ==========================================================================
+# WV群: Project 側「版の待ち」の Vault ノート fixture（WV-1〜WV-27・要件 v6 §7・
+# 設計 §41.9.3）。frontmatter＝`status: active`（WV-8 だけ paused）・`updated`・
+# `next:`・表にあるときだけ `wait_until:`。Tasks 節は `## Tasks` 直下に `### v1`…
+# の順で書き、`- wait_until:` の行は各版の末尾（WV-1 だけ `[/]` と `[ ]` の間・
+# WV-22／24／25 は版の範囲外・WV-26 は版見出しなし・WV-27 は本文が空の `- [ ]`）。
+# 値の引用符・前後空白・字下げ 2 は要件の表のリテラル。ファイル名＝<slug>.md
+# （--list 第 2 列＝slug・Task 側の宣言先にもそのまま使う＝AC-150）。
+# ==========================================================================
+
+# _mk_note_WV <vault> <slug> <status行> <updated> <next行> <wait_until行（空なら書かない）> <本文（frontmatter の後・末尾 LF 込み・空可）>
+_mk_note_WV() {
+  local vault="$1" slug="$2" status_line="$3" updated="$4" next_line="$5" wait_line="$6" body="$7"
+  {
+    printf -- '---\n'
+    printf 'date: 2026-08-01\n'
+    printf 'updated: %s\n' "$updated"
+    printf '%s\n' "$status_line"
+    printf '%s\n' "$next_line"
+    [ -n "$wait_line" ] && printf '%s\n' "$wait_line"
+    printf -- '---\n'
+    printf '# %s\n' "$slug"
+    printf '%s' "$body"
+  } > "$vault/Projects/$slug.md"
+}
+
+mk_note_WV1()  { _mk_note_WV "$1" v-cur      'status: active' 2026-09-19 'next: 返事待ち' '' $'## Tasks\n### v1\n- [x] a\n### v2\n- [/] b\n- wait_until: 2026-09-25T10:00\n- [ ] c\n'; }
+mk_note_WV2()  { _mk_note_WV "$1" v-prev     'status: active' 2026-09-18 'next: 次版'     '' $'## Tasks\n### v1\n- [x] a\n- wait_until: 2026-09-25T10:00\n### v2\n- [/] b\n'; }
+mk_note_WV3()  { _mk_note_WV "$1" v-fm       'status: active' 2026-09-17 'next: fm'       'wait_until: 2026-09-25T10:00' $'## Tasks\n### v1\n- [/] a\n'; }
+mk_note_WV4()  { _mk_note_WV "$1" v-nofm     'status: active' 2026-09-16 'next: 待つ'     'wait_until: 2026-09-25T10:00' ''; }
+mk_note_WV5()  { _mk_note_WV "$1" v-past     'status: active' 2026-09-15 'next: 過去'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-09-19T09:00\n'; }
+mk_note_WV6()  { _mk_note_WV "$1" v-bad      'status: active' 2026-09-14 'next: 無効'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 来週\n'; }
+mk_note_WV7()  { _mk_note_WV "$1" v-next     'status: active' 2026-09-13 'next: v3'       '' $'## Tasks\n### v2\n- [ ] a\n- wait_until: 2026-09-25T10:00\n### v3\n- [ ] b\n- wait_until: 2026-09-26T10:00\n'; }
+mk_note_WV8()  { _mk_note_WV "$1" v-paused   'status: paused' 2026-09-12 'next: 止'       '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-09-25T10:00\n'; }
+mk_note_WV9()  { _mk_note_WV "$1" v-done     'status: active' 2026-09-11 'next: 完了'     'wait_until: 2026-09-25T10:00' $'## Tasks\n### v1\n- [x] a\n'; }
+mk_note_WV10() { _mk_note_WV "$1" v-two      'status: active' 2026-09-10 'next: 二行'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-09-25T10:00\n- wait_until: 2026-09-26T10:00\n'; }
+mk_note_WV11() { _mk_note_WV "$1" v-day      'status: active' 2026-09-09 'next: 日付'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-09-25\n'; }
+mk_note_WV12() { _mk_note_WV "$1" v-indent   'status: active' 2026-09-08 'next: 字下げ'   '' $'## Tasks\n### v1\n- [/] a\n  - wait_until: 2026-09-25T10:00\n'; }
+mk_note_WV13() { _mk_note_WV "$1" v-first    'status: active' 2026-09-07 'next: zzz'      '' $'## Tasks\n### v1\n- [ ] a\n- wait_until: 2026-09-25T10:00\n### v2\n- [ ] b\n'; }
+mk_note_WV14() { _mk_note_WV "$1" v-bothfm   'status: active' 2026-09-06 'next: 両方'     'wait_until: 2026-09-30T10:00' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-09-25T10:00\n'; }
+mk_note_WV15() { _mk_note_WV "$1" v-empty    'status: active' 2026-09-05 'next: 空版'     'wait_until: 2026-09-28T10:00' $'## Tasks\n### v1\n- wait_until: 2026-09-25T10:00\n'; }
+mk_note_WV16() { _mk_note_WV "$1" v-quoted   'status: active' 2026-09-04 'next: 引用'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until: "2026-09-25T10:00"\n'; }
+mk_note_WV17() { _mk_note_WV "$1" v-spaces   'status: active' 2026-09-03 'next: 空白'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until:   2026-09-25T10:00  \n'; }
+mk_note_WV18() { _mk_note_WV "$1" v-sec      'status: active' 2026-09-02 'next: 秒'       '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-09-25T10:00:00\n'; }
+mk_note_WV19() { _mk_note_WV "$1" v-tz       'status: active' 2026-09-01 'next: 時差'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-09-25T10:00+09:00\n'; }
+mk_note_WV20() { _mk_note_WV "$1" v-badday   'status: active' 2026-08-31 'next: 暦外'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-02-30T10:00\n'; }
+mk_note_WV21() { _mk_note_WV "$1" v-badfirst 'status: active' 2026-08-30 'next: 先頭無効' '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 来週\n- wait_until: 2026-09-25T10:00\n'; }
+mk_note_WV22() { _mk_note_WV "$1" v-outside  'status: active' 2026-08-29 'next: 範囲外'   '' $'## Tasks\n- wait_until: 2026-09-25T10:00\n### v1\n- [/] a\n'; }
+mk_note_WV23() { _mk_note_WV "$1" v-squote   'status: active' 2026-08-28 'next: 単引'     '' $'## Tasks\n### v1\n- [/] a\n- wait_until: \'2026-09-25T10:00\'\n'; }
+mk_note_WV24() { _mk_note_WV "$1" v-other    'status: active' 2026-08-27 'next: 別節'     '' $'## Memo\n- wait_until: 2026-09-25T10:00\n## Tasks\n### v1\n- [/] a\n'; }
+mk_note_WV25() { _mk_note_WV "$1" v-after    'status: active' 2026-08-26 'next: 節後'     '' $'## Tasks\n### v1\n- [/] a\n## Notes\n- wait_until: 2026-09-25T10:00\n'; }
+mk_note_WV26() { _mk_note_WV "$1" v-noheads  'status: active' 2026-08-25 'next: 見出無'   'wait_until: 2026-09-28T10:00' $'## Tasks\n- [ ] a\n- wait_until: 2026-09-25T10:00\n'; }
+mk_note_WV27() { _mk_note_WV "$1" v-blank    'status: active' 2026-08-24 'next: 空本文'   'wait_until: 2026-09-28T10:00' $'## Tasks\n### v1\n- [ ]\n- wait_until: 2026-09-25T10:00\n'; }
+
+# WV-A ＝ {WV-1・WV-2・WV-3・WV-4・WV-8}（AC-148・AC-149 の T1）。
+mk_notes_WV_A() {
+  mk_note_WV1 "$1"; mk_note_WV2 "$1"; mk_note_WV3 "$1"; mk_note_WV4 "$1"; mk_note_WV8 "$1"
+}
+
+# WV-B ＝ WV-1〜WV-27 の全部（AC-149・AC-151・DT-28）。
+mk_notes_WV_B() {
+  local i=1
+  while [ "$i" -le 27 ]; do
+    "mk_note_WV$i" "$1"
+    i=$(( i + 1 ))
+  done
+}
+
+# ==========================================================================
 # S群: cmux スタブ（設計 §11.2 の契約・v1/v2 と同一挙動）
 # ==========================================================================
 
