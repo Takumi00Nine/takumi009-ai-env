@@ -1,6 +1,6 @@
 ---
 date: 2026-09-18
-updated: 2026-09-19
+updated: 2026-09-21
 tags: [preference, model, catalog, quick-reference]
 project: meta
 related:
@@ -9,6 +9,7 @@ related:
   - "[[Preferences/core-workflow]]"
   - "[[Decisions/2026-09-18-cast-candidates-revision]]"
   - "[[Decisions/2026-09-19-ai-env-optimization-rulings]]"
+  - "[[Decisions/2026-09-21-fable-max-explicit-only]]"
 aliases:
   - "定義名の早見表"
   - "どのモデル定義を選ぶか"
@@ -18,11 +19,12 @@ aliases:
 定義の正本は repo の `config/models.conf.sample`（コピー先 `~/.config/takumi009-ai-env/models.conf`）。
 特性・経路の詳しい比較は [[Preferences/model-catalog]]。
 本ノートは「候補列からどれを選ぶか」を1行で引くための早見表＝機械は読まない（機械可読の属性拡張は 2026-09-18 に不採用）。候補列に優先度は無く、軽い依頼では軽い候補を選び、崩れたら重い候補へ戻す。
+- fable-max は本人の明示指示があるときだけ（[[Decisions/2026-09-21-fable-max-explicit-only]]）。fable-high は上流工程の候補として現状どおり。
 
 | 定義名 | モデル／effort | 消費する枠 | 配役表で参照する職種（2026-09-18時点） | 向く場面 |
 |---|---|---|---|---|
 | fable-high | Fable 5.1 / high | Claude サブスク | leader・adoption-critic・researcher | リーダー既定。高度な採用判定 |
-| fable-max | Fable 5.1 / max | Claude サブスク | （未参照） | 上流工程で判断の質を最優先するとき |
+| fable-max | Fable 5.1 / max | Claude サブスク | （未参照） | 上流工程で判断の質を最優先するとき。**本人が明示したときだけ使う（リーダーは自動で選ばない・配役表に載せない）**＝[[Decisions/2026-09-21-fable-max-explicit-only]] |
 | opus-high | Opus 5 / high | Claude サブスク | requirements-analyst・system-designer・adoption-critic・verifier・implementer | 要件・設計・検証の主力候補。実装では Sonnet との実測比較用 |
 | opus-medium | Opus 5 / medium | Claude サブスク | implementer | 標準的な実装・設計の下読み |
 | opus-low | Opus 5 / low | Claude サブスク | （未参照） | 並列の軽作業・枠温存 |

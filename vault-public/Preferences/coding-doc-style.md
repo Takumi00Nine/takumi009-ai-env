@@ -1,6 +1,6 @@
 ---
 date: 2026-07-20
-updated: 2026-09-16
+updated: 2026-09-21
 tags: [preference, coding, documentation, structure]
 project: meta
 related:
@@ -12,11 +12,13 @@ related:
   - "[[Knowledge/validator-in-process-pure-function]]"
   - "[[Preferences/core-workflow]]"
   - "[[Preferences/core-worker]]"
+  - "[[Decisions/2026-09-21-design-doc-scope-boundary]]"
 aliases:
   - "共有ライブラリ分離"
   - "本文と差分の同期"
   - "資料改訂の同期ルール"
   - "本文とアーカイブ分離"
+  - "設計書の射程"
 ---
 
 # 設計・記述の運用ルール（共有ライブラリ分離／資料の新旧同期）
@@ -72,5 +74,12 @@ aliases:
 - 同じ退避・判定・整形の規則を2つ以上の実行部品（インストーラと更新スクリプト等）に書く必要が出た時点で、複製せず共有関数（`scripts/lib/` 等）に置き、両方から呼ぶ。
 - **Why**: 複製すると、レビュー指摘の反映が片方にだけ当たり、次の巡で同じ指摘が再検出される（2026-09-14 実例＝サブ機更新の backup 規則がインストーラと更新スクリプトに複製され、修正が連続2巡で片側漏れ→共通関数化で解消。[[Decisions/2026-09-10-leader-free-model-choice]] の締めレビュー記録）。
 - 「Rule of two」を待たず、2か所目を書く瞬間に共有化する。
+
+## 6. 設計書の射程（2026-09-21 追加）
+設計書に書くのは方式の結論と代替案の採否・部品と責務・部品間の境界（何を渡すかを言葉で）・リスク部分の詳細設計（状態遷移・source of truth・失敗モード一覧）・設計定数と根拠の所在・要件対応表・テスト戦略・着手ゲートの合格条件。書かない（実装工程へ送る）のはコード・スクリプト全文・ファイル名やクラス名単位の構成・ライブラリの API 呼び出し形・テストの識別子・担当分割。判定基準＝「その記述を変えても要件の満たし方が変わらないなら、それは設計でなく実装」。
+
+**Why**: 設計書にコードが混ざると設計レビューが実装レビューになって巡が伸びる。ファイル構成・命名など実装者の裁量を設計段階で先に固定してしまう。要件書の「実現手段は条文に書かない」（[[Decisions/2026-09-17-requirements-scope-purpose-requirements-constraints]]）と対になる線＝詳細＝[[Decisions/2026-09-21-design-doc-scope-boundary]]。
+
+**How to apply**: 設計委任プロンプトに本節を明記する。リーダーの形チェック時に本節と突合し、混入があれば検証に出さず作成元へ返す。既存の設計書は次の改訂時に適合させる。
 
 関連＝[[Preferences/codex-review-protocol]]（レビュー巡回でこの2点を検出した実例あり）・[[Knowledge/validator-in-process-pure-function]]（既定値・判定規則の設計則と対）。
