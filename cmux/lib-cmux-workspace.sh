@@ -1,8 +1,10 @@
 # cmux ワークスペース識別子の解決規則（共通部品・cmux-session-todo 設計
-# §21・C-11）と宣言記録の読み手（v6・設計 §41.3.2 案 A (b)・A-v6-2）。
-# cmux-task-model.sh（供給側 `--list`／`--frame`）・cmux-task-declare.sh
-# （宣言 CLI）・claude/hooks/bootstrap-vault.sh（SessionStart の ⑥＝宣言状態）
-# から source される。単体では実行しない（関数定義のみ、副作用なし）。
+# §21・C-11）と宣言記録の読み手（v6・設計 §41.3.2 案 A (b)・A-v6-2）、
+# 宣言先解決部品（v7・設計 §42.4・D-v7-6＝focused 解決と記録の破損判定兼引き）。
+# cmux-task-model.sh（Task 供給側 `--list`／`--frame`）・cmux-next-model.sh
+# （Project 供給側 `--focus`）・cmux-task-declare.sh（宣言 CLI）・
+# claude/hooks/bootstrap-vault.sh（SessionStart の ⑥＝宣言状態）から source
+# される。単体では実行しない（関数定義と検査式の定数だけ、副作用なし）。
 # lib は環境変数を読まない。上書き値・cmux 実体・タイムアウト・記録ファイルの
 # パスは呼び出し側が引数で渡す（設計 §1.4）。
 #
@@ -10,9 +12,8 @@
 # lib-model-view.sh を source すること。
 #
 # lib の関数はすべて、内部で呼ぶ cmux・jq の stderr を 2>/dev/null で
-# 捨てる。理由行を出すのは公開側（cmux-task-watch.sh / cmux-task-declare.sh）
-# だけで、子コマンドの出力が「--list の stderr は固定の1行」（FR-54）等の
-# 契約を破らないようにする。
+# 捨てる。理由行を出すのは呼び出し側だけで、子コマンドの出力が
+# 「--list の stderr は固定の1行」（FR-54）等の契約を破らないようにする。
 #
 # 使い方:
 #   LIB_DIR="$(cd -P "$(dirname "$0")" && pwd)"
@@ -121,21 +122,64 @@ ws_caller_uuid() {
 # 旧 cmux-task-declare.sh／cmux-task-model.sh の複製 2 か所をここへ移した
 # （検査式・規則は不変）。書き込みの経路は持たない（読むだけ）。
 
-# 記録ファイル $1 が「破損」なら真（0）を返す（設計 §3.1 の検査式）。ファイル
-# 不在は破損ではない（正常な初期状態＝非0）。jq 1 回。
-ws_state_is_corrupt() {
-  local file="$1"
-  [ -f "$file" ] || return 1
-  jq -s -e '
+# 記録ファイルの検査式（設計 §3.1）＝`jq -s` で読んだ配列に対して真なら正常。
+# ws_state_is_corrupt（2 段の読み手）と ws_declared_slug（宣言先解決部品）が
+# 同じ式を使う（正本はここ 1 つ）。
+WS_STATE_CHECK='
     length == 1
     and (.[0] | type == "object")
     and (.[0].version == 1)
     and (.[0].workspaces | type == "object")
     and (.[0].workspaces | to_entries | all(.value | type == "string"))
-  ' "$file" >/dev/null 2>&1
+'
+
+# 記録ファイル $1 が「破損」なら真（0）を返す（設計 §3.1 の検査式）。ファイル
+# 不在は破損ではない（正常な初期状態＝非0）。jq 1 回。
+ws_state_is_corrupt() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  jq -s -e "$WS_STATE_CHECK" "$file" >/dev/null 2>&1
   local rc=$?
   [ "$rc" -eq 0 ] && return 1   # 検査式が真＝正常＝破損ではない
   return 0                      # 検査式が偽（非0終了）＝破損
+}
+
+# --- 宣言先解決部品（v7・設計 §42.5.2 段 1・2・D-v7-6・A-v7-1）--------------
+# 「フォーカス中のワークスペース（focused）」の宣言先 slug を解決する 1 つの
+# 部品。Task 供給側 `--frame` と Project 供給側 `--focus` が同じ部品を呼ぶ
+# ＝段の順（cmux → 記録）と理由の順は両側で同一の実体。環境変数は読まない。
+#   $1=cmux実体 $2=タイムアウト秒（identify・workspace list の各段に同じ値）
+#   $3=宣言記録ファイル
+# 段 1＝identify と workspace list の 2 つの JSON から UUID を抽出（jq 1 回・
+# 照合規則は ws_uuid_for_ref と同じ＝ref の完全一致・id は非空文字列）。
+# 段 2＝記録の破損判定と UUID の対の引き（jq 1 回・ws_state_is_corrupt →
+# ws_state_lookup_slug の 2 段と同じ検査式・同じ引き方＝focused の UUID の
+# 対だけ・DT-30）。外部プロセス＝cmux 2・jq 2（D-v7-12）。
+# rc=0: slug を stdout へ（文法検査はしない＝呼び出し側が ws_slug_valid）。
+# rc=1: cmux 呼び出しが非0・打ち切り・JSON 解析失敗・.workspaces が配列でない
+#       （順1「cmux 応答なし」）。
+# rc=2: focused の ref が空・一覧に無い（順2「対象不明」）。
+# rc=3: 記録が破損（順3「宣言記録破損」）。
+# rc=4: 対なし＝記録不在・UUID の対が無い・空文字（順4「未宣言」）。
+ws_declared_slug() {
+  local bin="$1" timeout="$2" file="$3" identify list uuid slug
+  identify="$(run_with_timeout "$timeout" "$bin" --json identify 2>/dev/null)" || return 1
+  list="$(run_with_timeout "$timeout" "$bin" --json workspace list 2>/dev/null)" || return 1
+  uuid="$(printf '%s\n%s' "$identify" "$list" | jq -rs '
+    if length == 2 and ((.[1].workspaces // []) | type) == "array" then . else error("cmux") end
+    | (.[0].focused.workspace_ref // "") as $r
+    | [ .[1].workspaces[]
+        | select($r != "" and .ref == $r and (.id | type) == "string" and (.id | length) > 0)
+        | .id ]
+    | .[0] // ""
+  ' 2>/dev/null)" || return 1
+  [ -n "$uuid" ] || return 2
+  [ -f "$file" ] || return 4
+  slug="$(jq -rs --arg u "$uuid" '
+    if ('"$WS_STATE_CHECK"') then (.[0].workspaces[$u] // "") else error("corrupt") end
+  ' "$file" 2>/dev/null)" || return 3
+  [ -n "$slug" ] || return 4
+  printf '%s' "$slug"
 }
 
 # 記録ファイル $1 で UUID $2 に対応する slug を stdout へ出す（無ければ空・

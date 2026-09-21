@@ -640,6 +640,122 @@ mk_notes_WV_B() {
 }
 
 # ==========================================================================
+# FV群: Project 枠 v7 の Vault ノート fixture（FV-1〜FV-11・要件 v7 §7 の表を
+# リテラルで。設計 §42.9.3）。形は WV 群と同じ（_mk_note_WV）。Tasks 節は FV-3 だけ
+# （▶ の版 v1 に `- wait_until: 2026-12-31T23:59`＝T0 で待ち・短縮形 11 セル）。
+# ==========================================================================
+mk_note_FV1()  { _mk_note_WV "$1" p-act1     'status: active'    2026-09-19 'next: 設計' '' ''; }
+mk_note_FV2()  { _mk_note_WV "$1" p-act2     'status: active'    2026-09-18 'next: 実装' '' ''; }
+mk_note_FV3()  { _mk_note_WV "$1" roles-conf 'status: active'    2026-09-17 'next: 職種を設定だけで縛る' '' $'## Tasks\n### v1\n- [/] a\n- wait_until: 2026-12-31T23:59\n'; }
+mk_note_FV4()  { _mk_note_WV "$1" p-hold     'status: paused'    2026-09-16 'next: 止'   '' ''; }
+mk_note_FV5()  { _mk_note_WV "$1" p-done     'status: completed' 2026-09-15 'next: 済'   '' ''; }
+mk_note_FV6()  { _mk_note_WV "$1" p-hold2    'status: paused'    2026-09-14 'next: h2'   '' ''; }
+mk_note_FV7()  { _mk_note_WV "$1" p-hold3    'status: paused'    2026-09-13 'next: h3'   '' ''; }
+mk_note_FV8()  { _mk_note_WV "$1" p-hold4    'status: paused'    2026-09-12 'next: h4'   '' ''; }
+mk_note_FV9()  { _mk_note_WV "$1" p-hold5    'status: paused'    2026-09-11 'next: h5'   '' ''; }
+mk_note_FV10() { _mk_note_WV "$1" p-hold6    'status: paused'    2026-09-10 'next: h6'   '' ''; }
+mk_note_FV11() { _mk_note_WV "$1" p-hold7    'status: paused'    2026-09-09 'next: h7'   '' ''; }
+
+# FV-A ＝ {FV-1〜FV-5}（エントリ 4 行＝稼働中 2・待ち 1・保留 1。AC-158・160・163）。
+mk_notes_FV_A() {
+  local i=1
+  while [ "$i" -le 5 ]; do
+    "mk_note_FV$i" "$1"
+    i=$(( i + 1 ))
+  done
+}
+
+# FV-B ＝ FV-1〜FV-11（エントリ 10 行＝稼働中 2・待ち 1・保留 7。AC-162）。
+mk_notes_FV_B() {
+  local i=1
+  while [ "$i" -le 11 ]; do
+    "mk_note_FV$i" "$1"
+    i=$(( i + 1 ))
+  done
+}
+
+# ==========================================================================
+# FD群: 宣言状態 fixture（FD-1〜FD-10 と派生・要件 v7 §7・設計 §42.9.3）＝
+# 隔離 HOME の宣言記録（Task 供給側と同じ置き場・同じ形式）＋PATH 先頭の cmux
+# スタブ（S 群と同じ JSON の形・`identify` は caller／focused の両方を持つ）。
+# UUID は S 群の形（UUID-U1〜U6・U9）・ref は workspace:1〜6・9。
+# ==========================================================================
+
+# 宣言記録を $1 へ書く。$2＝種別: base（5 対 U1→p-act2・U2→roles-conf・U3→p-hold・
+# U4→p-done・U5→p-act2）／hold7（FD-3′＝U3→p-hold7）／none6（FD-8′＝U6→p-none を追加）／
+# corrupt（FD-6＝JSON として無効）／badslug（FD-6′＝U1 の値が改行を含む＝JSON としては正しい）。
+mk_fd_record() {
+  local file="$1" kind="${2:-base}"
+  mkdir -p "$(dirname "$file")"
+  case "$kind" in
+    base)
+      printf '{"version":1,"workspaces":{"UUID-U1":"p-act2","UUID-U2":"roles-conf","UUID-U3":"p-hold","UUID-U4":"p-done","UUID-U5":"p-act2"}}\n' > "$file" ;;
+    hold7)
+      printf '{"version":1,"workspaces":{"UUID-U1":"p-act2","UUID-U2":"roles-conf","UUID-U3":"p-hold7","UUID-U4":"p-done","UUID-U5":"p-act2"}}\n' > "$file" ;;
+    none6)
+      printf '{"version":1,"workspaces":{"UUID-U1":"p-act2","UUID-U2":"roles-conf","UUID-U3":"p-hold","UUID-U4":"p-done","UUID-U5":"p-act2","UUID-U6":"p-none"}}\n' > "$file" ;;
+    corrupt)
+      printf 'not json' > "$file" ;;
+    badslug)
+      printf '{"version":1,"workspaces":{"UUID-U1":"p-act2\\nx","UUID-U2":"roles-conf","UUID-U3":"p-hold","UUID-U4":"p-done","UUID-U5":"p-act2"}}\n' > "$file" ;;
+    *) echo "mk_fd_record: unknown kind $kind" >&2; return 1 ;;
+  esac
+}
+
+# cmux スタブ（FD 用）を $1 へ書く。制御は $FD_STATE 配下のファイル＝
+#   focused_ref／caller_ref（identify の応答）・workspaces.json（workspace list の応答）・
+#   fail_identify（FD-5）・fail_workspace_list（FD-5′）・hang_identify（FD-9）・
+#   hang_workspace_list（FD-9′）＝該当段だけ 10 秒 sleep（本体と sleep 子の PID を hang_pids に記録。
+#   秒数は hang_secs ファイルで上書き可＝DT-39 の探針用）。
+# 呼び出しは全部 calls.log に 1 行ずつ残す（スパイ兼用＝AC-163 ①・DT-36 (c)）。
+write_fd_cmux_stub() {
+  local bin="$1"
+  cat > "$bin" <<'STUB'
+#!/bin/bash
+STATE="$FD_STATE"
+echo "cmux $*" >> "$STATE/calls.log"
+sub2=""
+[ "$1" = "--json" ] && sub2="$2"
+[ "$sub2" = "workspace" ] && [ "$3" = "list" ] && sub2="workspace_list"
+if [ -n "$sub2" ] && [ -e "$STATE/hang_$sub2" ]; then
+  echo "$$" >> "$STATE/hang_pids"
+  sleep "$(cat "$STATE/hang_secs" 2>/dev/null || echo 10)" & child=$!
+  echo "$child" >> "$STATE/hang_pids"
+  wait "$child"
+  exit 1
+fi
+if [ "$sub2" = "identify" ]; then
+  [ -e "$STATE/fail_identify" ] && exit 9
+  printf '{"focused":{"workspace_ref":"%s"},"caller":{"workspace_ref":"%s"}}\n' \
+    "$(cat "$STATE/focused_ref" 2>/dev/null)" "$(cat "$STATE/caller_ref" 2>/dev/null)"
+  exit 0
+fi
+if [ "$sub2" = "workspace_list" ]; then
+  [ -e "$STATE/fail_workspace_list" ] && exit 9
+  [ -f "$STATE/workspaces.json" ] || exit 9
+  cat "$STATE/workspaces.json"
+  exit 0
+fi
+echo "unhandled: $*" >&2
+exit 9
+STUB
+  chmod +x "$bin"
+}
+
+# FD スタブの状態を $1 に作り直す（マーカー・記録済み PID も消す）。
+# $2＝focused の ref・$3＝caller の ref（省略時は focused と同じ）。一覧は U1〜U6・U9 の 7 件固定。
+reset_fd_state() {
+  local state="$1" focused="$2" caller="${3:-$2}"
+  rm -rf "$state"
+  mkdir -p "$state"
+  printf '%s\n' "$focused" > "$state/focused_ref"
+  printf '%s\n' "$caller" > "$state/caller_ref"
+  cat > "$state/workspaces.json" <<'JSON'
+{"workspaces":[{"id":"UUID-U1","ref":"workspace:1"},{"id":"UUID-U2","ref":"workspace:2"},{"id":"UUID-U3","ref":"workspace:3"},{"id":"UUID-U4","ref":"workspace:4"},{"id":"UUID-U5","ref":"workspace:5"},{"id":"UUID-U6","ref":"workspace:6"},{"id":"UUID-U9","ref":"workspace:9"}]}
+JSON
+}
+
+# ==========================================================================
 # S群: cmux スタブ（設計 §11.2 の契約・v1/v2 と同一挙動）
 # ==========================================================================
 

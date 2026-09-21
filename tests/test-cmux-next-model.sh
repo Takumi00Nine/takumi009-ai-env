@@ -1,8 +1,8 @@
 #!/bin/bash
 # cmux-next-model.sh のユニットテスト（cmux-session-todo 設計 §34.1 MP層）。
-# 実 Vault・実ログには一切触れない。cmux は一度も呼ばない設計なので
-# ワークスペースの解決は不要（設計 §30.2）。dotfiles には一切依存しない
-# （NFR-13・AC-106）。
+# 実 Vault・実ログには一切触れない。--list／--frame は cmux を呼ばず（設計 §30.2）、
+# --focus だけが PATH 先頭の cmux スタブを 2 回呼ぶ（設計 §42.5）。dotfiles には
+# 一切依存しない（NFR-13・AC-106）。
 #
 # 実行方法: bash tests/test-cmux-next-model.sh
 #
@@ -305,7 +305,7 @@ reset_vault
 mk_notes_N_all "$VAULT"
 # 判定機不在＝供給側スクリプトを lib だけ複製した一時ディレクトリから起動する（$LIB_DIR/../claude/hooks/lib/ が無い）。
 NOJUDGE="$WORKDIR/nojudge/cmux"; mkdir -p "$NOJUDGE"
-cp "$SCRIPT_DIR/../cmux/cmux-next-model.sh" "$SCRIPT_DIR/../cmux/lib-model-view.sh" "$SCRIPT_DIR/../cmux/lib-vault-tasks.sh" "$NOJUDGE/"
+cp "$SCRIPT_DIR/../cmux/cmux-next-model.sh" "$SCRIPT_DIR/../cmux/lib-model-view.sh" "$SCRIPT_DIR/../cmux/lib-vault-tasks.sh" "$SCRIPT_DIR/../cmux/lib-cmux-workspace.sh" "$NOJUDGE/"
 d="$FX_ROOT/S-2"
 CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="$d/last-run.json" CMUX_NEXT_INVENTORY_LATEST="$d/latest.json" \
   CMUX_NEXT_HEALTH_OBSERVATION="$d/observation.json" CMUX_NEXT_RECALL_LOG="$d/vault-recall.tsv" \
@@ -938,6 +938,314 @@ assert_contains "v6_ac154a: 冒頭コメントに wait_until" "$head_comment" "w
 bash "${TARGET}" >/dev/null 2>"$WORKDIR/usage_err" || true
 assert_contains "v6_ac154a: usage に ▶ の版" "$(cat "$WORKDIR/usage_err")" "▶ の版"
 assert_contains "v6_ac154a: usage に frontmatter" "$(cat "$WORKDIR/usage_err")" "frontmatter"
+
+# ==========================================================================
+# v7: Project 枠の宣言先照会の口 `--focus`（requirements-v7.md v7.3 §7 FV-1〜11・FV-A／B・
+# FD-1〜10 と派生・T0／§8 AC-158・AC-160・AC-162・AC-163 ①⑤／design.md §42.5（状態遷移・
+# 出力契約）・§42.9 MP 層・DT-35・36・39・42）。
+# 照会口＝隔離 HOME の宣言記録（Task 供給側と同名の既定の置き場 ~/.config/cmux-task-watch/
+# workspaces.json）＋PATH 先頭の cmux スタブ（既定の実体名 cmux）。上限の既定値は固定しない
+# （所要は ≤4 秒＝上限 3＋1 で判定）。設計 §42.5 の契約＝stdout ちょうど 1 行（slug／空行・LF 終端）・
+# stderr は空行のときだけ理由 1 行（cmux 応答なし／対象不明／宣言記録破損／未宣言）・rc 0。
+# ==========================================================================
+unset CMUX_TASK_STATE CMUX_TASK_CMUX_BIN CMUX_TASK_CALL_TIMEOUT CMUX_NEXT_FOCUS_TIMEOUT
+FD_HOME="$WORKDIR/fd-home"; FD_STATE="$WORKDIR/fd-state"; FD_BIN="$WORKDIR/fd-bin"
+FD_RECORD="$FD_HOME/.config/cmux-task-watch/workspaces.json"
+mkdir -p "$FD_BIN"
+write_fd_cmux_stub "$FD_BIN/cmux"
+export FD_STATE
+
+# fd_apply <FD id> — 宣言記録とスタブ状態を FD-n に合わせる（id の p＝′。例: 3p＝FD-3′）。
+fd_apply() {
+  mk_fd_record "$FD_RECORD" base
+  reset_fd_state "$FD_STATE" workspace:1
+  case "$1" in
+    1)  ;;
+    2)  echo workspace:2 > "$FD_STATE/focused_ref" ;;
+    3)  echo workspace:3 > "$FD_STATE/focused_ref" ;;
+    3p) mk_fd_record "$FD_RECORD" hold7; echo workspace:3 > "$FD_STATE/focused_ref" ;;
+    4)  echo workspace:9 > "$FD_STATE/focused_ref" ;;
+    5)  touch "$FD_STATE/fail_identify" ;;
+    5p) touch "$FD_STATE/fail_workspace_list" ;;
+    6)  mk_fd_record "$FD_RECORD" corrupt ;;
+    6p) mk_fd_record "$FD_RECORD" badslug ;;
+    7)  echo workspace:77 > "$FD_STATE/focused_ref" ;;
+    8)  echo workspace:4 > "$FD_STATE/focused_ref" ;;
+    8p) mk_fd_record "$FD_RECORD" none6; echo workspace:6 > "$FD_STATE/focused_ref" ;;
+    9)  touch "$FD_STATE/hang_identify" ;;
+    9p) touch "$FD_STATE/hang_workspace_list" ;;
+    10) echo workspace:5 > "$FD_STATE/focused_ref" ;;
+    *) echo "fd_apply: unknown FD $1" >&2; return 1 ;;
+  esac
+}
+
+# run_focus_raw — 隔離 HOME・PATH 先頭の FD スタブで --focus を 1 回。FOCUS_VAULT（空＝$VAULT）・
+# FOCUS_TIMEOUT（空＝既定）・FOCUS_PATH_PREFIX（スパイ用）・JUDGE_NOW で条件を変える。
+# 既定が実ファイルの env 5 本は存在しないパス固定（照会口は読まない＝DT-36）。所要を focus_elapsed に残す。
+FOCUS_VAULT=""; FOCUS_TIMEOUT=""; FOCUS_PATH_PREFIX=""
+run_focus_raw() {
+  local t0 t1
+  t0="$(python3 -c 'import time; print(time.monotonic())')"
+  HOME="$FD_HOME" PATH="${FOCUS_PATH_PREFIX:+$FOCUS_PATH_PREFIX:}$FD_BIN:$PATH" \
+  CMUX_NEXT_FOCUS_TIMEOUT="$FOCUS_TIMEOUT" CMUX_NEXT_JUDGE_NOW="$JUDGE_NOW" \
+  CMUX_NEXT_VAULT="${FOCUS_VAULT:-$VAULT}" CMUX_NEXT_INVENTORY_DIR="/nonexistent-dir" \
+    CMUX_NEXT_MAINT_STATE="/nonexistent-dir/last-run.json" \
+    CMUX_NEXT_INVENTORY_LATEST="/nonexistent-dir/latest.json" \
+    CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
+    CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+    CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
+    bash "$TARGET" --focus > "$WORKDIR/focus_stdout" 2>"$WORKDIR/focus_stderr"
+  printf '%s' "$?" > "$WORKDIR/focus_rc"
+  t1="$(python3 -c 'import time; print(time.monotonic())')"
+  focus_elapsed="$(python3 -c "print($t1 - $t0)")"
+}
+
+# assert_focus <desc> <期待 slug（空＝空行）> <期待 stderr（空＝0 バイト）> — 設計 §42.5.3 の契約を 1 回分検査。
+assert_focus() {
+  local desc="$1" slug="$2" reason="$3"
+  assert_eq "$desc: rc=0" "0" "$(cat "$WORKDIR/focus_rc")"
+  assert_eq "$desc: stdout はちょうど 1 行（LF 終端）" "1" "$(wc -l < "$WORKDIR/focus_stdout" | tr -d ' ')"
+  assert_eq "$desc: stdout の行＝[$slug]" "$slug" "$(cat "$WORKDIR/focus_stdout")"
+  if [ -n "$slug" ]; then
+    assert_eq "$desc: stderr 0 バイト（slug が出るとき理由は無い）" "0" "$(wc -c < "$WORKDIR/focus_stderr" | tr -d ' ')"
+  else
+    assert_eq "$desc: stdout は空行 1 バイト" "1" "$(wc -c < "$WORKDIR/focus_stdout" | tr -d ' ')"
+    assert_eq "$desc: stderr は理由 1 行＝[$reason]" "$reason" "$(cat "$WORKDIR/focus_stderr")"
+    assert_eq "$desc: stderr は 1 行だけ" "1" "$(wc -l < "$WORKDIR/focus_stderr" | tr -d ' ')"
+  fi
+}
+
+FV_A_LIST="1${tab}p-act1${tab}設計${tab}稼働中${tab}
+2${tab}p-act2${tab}実装${tab}稼働中${tab}
+3${tab}roles-conf${tab}職種を設定だけで縛る${tab}待ち${tab}2026-12-31T23:59
+4${tab}p-hold${tab}止${tab}保留${tab}"
+FV_B_LIST="${FV_A_LIST}
+5${tab}p-hold2${tab}h2${tab}保留${tab}
+6${tab}p-hold3${tab}h3${tab}保留${tab}
+7${tab}p-hold4${tab}h4${tab}保留${tab}
+8${tab}p-hold5${tab}h5${tab}保留${tab}
+9${tab}p-hold6${tab}h6${tab}保留${tab}
+10${tab}p-hold7${tab}h7${tab}保留${tab}"
+
+echo "=== v7_ac158_focus_three_classes（AC-158 MP）: FD-1・2・3 で --focus が p-act2／roles-conf／p-hold の 1 行・stderr 0・rc 0。FV-A×T0 の --frame は P 行 4 行（6 欄・--list と一致）・#V /4 ==="
+reset_vault
+mk_notes_FV_A "$VAULT"
+JUDGE_NOW="$T0"
+fd_apply 1; run_focus_raw; assert_focus "v7_ac158[FD-1 稼働中]" "p-act2" ""
+fd_apply 2; run_focus_raw; assert_focus "v7_ac158[FD-2 待ち]" "roles-conf" ""
+fd_apply 3; run_focus_raw; assert_focus "v7_ac158[FD-3 保留]" "p-hold" ""
+# 設定口（Task 供給側・宣言 CLI と同名）＝CMUX_TASK_STATE で記録の置き場を差し替えられる（既定は隔離 HOME の置き場）。
+fd_apply 3
+mk_fd_record "$WORKDIR/fd-alt-record.json" hold7
+CMUX_TASK_STATE="$WORKDIR/fd-alt-record.json" run_focus_raw
+assert_focus "v7_ac158[CMUX_TASK_STATE で別の記録（U3→p-hold7）へ]" "p-hold7" ""
+fd_apply 1
+PATH="$FD_BIN:$PATH" JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v7_ac158: --frame rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v7_ac158: --frame 1 行目が #V /4（契約不変）" "#V${tab}cmux-dock-frame/4${tab}Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "v7_ac158: P 行 4 行" "4" "$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v7_ac158: P 行は全行 6 欄" "0" "$(awk -F '\t' '$1=="P" && NF!=6' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v7_ac158: P 行の第 2〜6 欄＝FV-A の 4 行（v6 と同じ欄）" "$FV_A_LIST" \
+  "$(awk -F '\t' '$1=="P"{printf "%s\t%s\t%s\t%s\t%s\n", $2, $3, $4, $5, $6}' "$WORKDIR/frame_stdout")"
+assert_eq "v7_ac158: --frame に R 行なし" "0" "$(awk -F '\t' '$1=="R"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+
+echo "=== v7_focus_usage（設計 §42.5.3）: --focus と他の引数の併用・過剰引数は使い方 1 件・非 0・stdout 0 バイト ==="
+for combo in "--focus --list" "--list --focus" "--focus --frame" "--focus extra"; do
+  out="$(HOME="$FD_HOME" PATH="$FD_BIN:$PATH" bash "$TARGET" $combo 2>"$WORKDIR/unk_err")"
+  rc=$?
+  assert_true "v7_focus_usage[$combo]: 非 0 で終了" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+  assert_true "v7_focus_usage[$combo]: stdout 0 バイト" "$([ -z "$out" ] && echo 1 || echo 0)"
+  assert_true "v7_focus_usage[$combo]: 使い方が stderr に出る" "$(grep -q '使い方' "$WORKDIR/unk_err" && echo 1 || echo 0)"
+done
+
+echo "=== v7_ac160_focus_13_states（AC-160 MP）: 空行 7 状態の理由語（順 1〜4）・FD-8／8′／10 の 1 行・FD-9／9′ の所要 ≤4 秒（上限 3＋1）・13 状態で Vault と宣言記録がバイト不変（cksum） ==="
+reset_vault
+mk_notes_FV_A "$VAULT"
+JUDGE_NOW="$T0"
+fd10_out=""; fd1_out=""
+for spec in "1|p-act2|" "2|roles-conf|" "3|p-hold|" "4||未宣言" "5||cmux 応答なし" "5p||cmux 応答なし" \
+            "6||宣言記録破損" "7||対象不明" "8|p-done|" "8p|p-none|" "9||cmux 応答なし" "9p||cmux 応答なし" "10|p-act2|"; do
+  id="${spec%%|*}"; rest="${spec#*|}"; slug="${rest%%|*}"; reason="${rest#*|}"
+  label="FD-${id%p}"; [ "${id%p}" != "$id" ] && label="${label}′"
+  fd_apply "$id"
+  before_vault="$(vault_snapshot "$VAULT")"; before_rec="$(cksum "$FD_RECORD")"
+  run_focus_raw
+  after_vault="$(vault_snapshot "$VAULT")"; after_rec="$(cksum "$FD_RECORD")"
+  assert_focus "v7_ac160[$label]" "$slug" "$reason"
+  assert_true "v7_ac160[$label]: 実行前後で Vault がバイト不変" "$([ "$before_vault" = "$after_vault" ] && echo 1 || echo 0)"
+  assert_eq "v7_ac160[$label]: 実行前後で宣言記録がバイト不変（cksum）" "$before_rec" "$after_rec"
+  case "$id" in
+    9|9p) assert_true "v7_ac160[$label]: ハングでも所要 ≤4 秒（実測 ${focus_elapsed}秒）" "$(python3 -c "print(1 if $focus_elapsed <= 4.0 else 0)")" ;;
+  esac
+  [ "$id" = "1" ] && fd1_out="$(cat "$WORKDIR/focus_stdout")"
+  [ "$id" = "10" ] && fd10_out="$(cat "$WORKDIR/focus_stdout")"
+done
+assert_eq "v7_ac160[FD-10]: 同じ slug を 2 ワークスペースが宣言しても出力は FD-1 と完全一致" "$fd1_out" "$fd10_out"
+
+echo "=== v7_ac162_focus_clamp_input（AC-162 MP）: FV-B×T0 の --frame は P 行 10 行（稼働中 2・待ち 1・保留 7・番号順）・FD-3′ で --focus＝p-hold7 ==="
+reset_vault
+mk_notes_FV_B "$VAULT"
+JUDGE_NOW="$T0"
+fd_apply 3p
+PATH="$FD_BIN:$PATH" JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v7_ac162: --frame rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "v7_ac162: P 行 10 行" "10" "$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
+assert_eq "v7_ac162: 区分の件数＝稼働中 2・待ち 1・保留 7" "2 1 7" \
+  "$(awk -F '\t' '$1=="P"{n[$5]++} END{printf "%d %d %d", n["稼働中"], n["待ち"], n["保留"]}' "$WORKDIR/frame_stdout")"
+assert_eq "v7_ac162: P 行の第 2〜6 欄＝FV-B の 10 行" "$FV_B_LIST" \
+  "$(awk -F '\t' '$1=="P"{printf "%s\t%s\t%s\t%s\t%s\n", $2, $3, $4, $5, $6}' "$WORKDIR/frame_stdout")"
+run_focus_raw
+assert_focus "v7_ac162[FD-3′ 記録 U3→p-hold7]" "p-hold7" ""
+
+echo "=== v7_ac163_1_5_list_invariant（AC-163 ①⑤）: FV-A・T0 の --list は FD-1／4／6 のどれでも同じ 4 行・rc 0・cmux スパイ 0 件・所要 NFR-18 の線。--frame 1 行目 /4・旧版リテラル 0 件 ==="
+reset_vault
+mk_notes_FV_A "$VAULT"
+for id in 1 4 6; do
+  fd_apply "$id"
+  : > "$FD_STATE/calls.log"
+  HOME="$FD_HOME" PATH="$FD_BIN:$PATH" JUDGE_NOW="$T0" run_list_raw
+  assert_eq "v7_ac163①[FD-$id]: --list rc=0" "0" "$(cat "$WORKDIR/list_rc")"
+  assert_eq "v7_ac163①[FD-$id]: --list 4 行リテラル一致（宣言状態に依存しない）" "$FV_A_LIST" "$(cat "$WORKDIR/list_stdout")"
+  assert_eq "v7_ac163①[FD-$id]: --list 中の cmux スパイ 0 件" "0" "$(wc -l < "$FD_STATE/calls.log" | tr -d ' ')"
+done
+fd_apply 1
+: > "$FD_STATE/calls.log"
+HOME="$FD_HOME" PATH="$FD_BIN:$PATH" JUDGE_NOW="$T0" run_frame_raw
+assert_eq "v7_ac163⑤: --frame 1 行目が cmux-dock-frame/4（版上げなし）" "#V${tab}cmux-dock-frame/4${tab}Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
+assert_eq "v7_ac163⑤: --frame 出力に旧版リテラル 0 件" "0" "$(grep -c -F -- "$V3_LIT" "$WORKDIR/frame_stdout")"
+assert_eq "v7_ac163⑤: ai-env の追跡ファイルにマーカー無しの旧版リテラル行が 0 件（v5_ac138 の走査と同じ）" "0" "$v3_unmarked"
+assert_eq "v7_ac163①: --frame 中も cmux スパイ 0 件（--frame は cmux を呼ばない）" "0" "$(wc -l < "$FD_STATE/calls.log" | tr -d ' ')"
+if command -v python3 >/dev/null 2>&1; then
+  AC163_STATS="$(HOME="$FD_HOME" PATH="$FD_BIN:$PATH" CMUX_NEXT_JUDGE_NOW="$T0" CMUX_NEXT_VAULT="$VAULT" \
+    CMUX_NEXT_INVENTORY_DIR="/nonexistent-dir" CMUX_NEXT_MAINT_STATE="/nonexistent-dir/last-run.json" \
+    CMUX_NEXT_INVENTORY_LATEST="/nonexistent-dir/latest.json" \
+    CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
+    CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+    CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
+    python3 - "$TARGET" <<'PY'
+import statistics, subprocess, sys, time
+vals, ok = [], 1
+for _ in range(20):
+    t0 = time.monotonic()
+    r = subprocess.run(["bash", sys.argv[1], "--list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    vals.append(time.monotonic() - t0)
+    if r.returncode != 0:
+        ok = 0
+print(ok, statistics.median(vals), max(vals))
+PY
+)"
+  set -- $AC163_STATS
+  echo "v7_ac163①_perf_20runs: 実測 中央値=${2}秒 最大値=${3}秒"
+  assert_true "v7_ac163①_perf: 20 回とも rc=0" "$1"
+  assert_true "v7_ac163①_perf: 中央値 0.8 秒以下（NFR-18・実測 ${2}秒）" "$(python3 -c "print(1 if $2 <= 0.8 else 0)")"
+  assert_true "v7_ac163①_perf: 最大値 1.2 秒以下（NFR-18・実測 ${3}秒）" "$(python3 -c "print(1 if $3 <= 1.2 else 0)")"
+else
+  echo "SKIP: python3 が無いため v7_ac163①_perf を省略します"
+fi
+
+echo "=== v7_dt35_focused_not_caller（DT-35）: caller=U1・focused=U2 で --focus は focused 側＝roles-conf ==="
+reset_vault
+mk_notes_FV_A "$VAULT"
+JUDGE_NOW="$T0"
+fd_apply 1
+reset_fd_state "$FD_STATE" workspace:2 workspace:1
+run_focus_raw
+assert_focus "v7_dt35[caller≠focused]" "roles-conf" ""
+reset_fd_state "$FD_STATE" workspace:1 workspace:2
+run_focus_raw
+assert_focus "v7_dt35[逆＝caller=U2・focused=U1]" "p-act2" ""
+
+echo "=== v7_dt36_no_vault_no_judge_now（DT-36）: (a) Vault 不在パスでも p-act2・所要 ≤1 秒 (b) 判定時刻の不正値でも同じ・rc 0 (c) 外部プロセス＝cmux ちょうど 2（identify・workspace list）・jq ≤2 ==="
+fd_apply 1
+FOCUS_VAULT="$WORKDIR/no-such-vault" run_focus_raw
+assert_focus "v7_dt36(a)[Vault 不在パス]" "p-act2" ""
+assert_true "v7_dt36(a): 所要 ≤1 秒（実測 ${focus_elapsed}秒）" "$(python3 -c "print(1 if $focus_elapsed <= 1.0 else 0)")"
+FOCUS_VAULT="$WORKDIR/no-such-vault" JUDGE_NOW="来週" run_focus_raw
+assert_focus "v7_dt36(b)[判定時刻の不正値 来週]" "p-act2" ""
+JUDGE_NOW="2026-02-30T12:00" run_focus_raw
+assert_focus "v7_dt36(b)[判定時刻の不正値 暦外]" "p-act2" ""
+JUDGE_NOW="$T0"
+SPY_JQ="$WORKDIR/spy-jq"; mkdir -p "$SPY_JQ"
+REAL_JQ="$(command -v jq)"
+cat > "$SPY_JQ/jq" <<EOF
+#!/bin/bash
+echo jq >> "$WORKDIR/jq-args.log"
+exec "$REAL_JQ" "\$@"
+EOF
+chmod +x "$SPY_JQ/jq"
+: > "$WORKDIR/jq-args.log"
+fd_apply 1
+FOCUS_PATH_PREFIX="$SPY_JQ" run_focus_raw
+assert_focus "v7_dt36(c)[スパイ下でも p-act2]" "p-act2" ""
+assert_eq "v7_dt36(c): cmux の起動ちょうど 2" "2" "$(wc -l < "$FD_STATE/calls.log" | tr -d ' ')"
+assert_eq "v7_dt36(c): identify 1 回・workspace list 1 回" "1 1" \
+  "$(printf '%s %s' "$(grep -c -- '--json identify' "$FD_STATE/calls.log")" "$(grep -c -- '--json workspace list' "$FD_STATE/calls.log")")"
+jq_n="$(wc -l < "$WORKDIR/jq-args.log" | tr -d ' ')"
+assert_true "v7_dt36(c): jq の起動 ≤2（実測 ${jq_n}）" "$([ "$jq_n" -le 2 ] && echo 1 || echo 0)"
+
+echo "=== v7_dt39_hang_bounded（DT-39）: FD-9 で所要 ≤4 秒（上限 3＋1）・空行・cmux 応答なし・rc 0・終了 6 秒後にスタブの子孫 0。上限の設定口 CMUX_NEXT_FOCUS_TIMEOUT=1 で ≤2.5 秒 ==="
+fd_apply 9
+# 探針の取りこぼし防止＝このケースだけハングを 20 秒にする（sleep の自然終了 10 秒が「終了 6 秒後」の観測点に近いため）。
+echo 20 > "$FD_STATE/hang_secs"
+run_focus_raw
+assert_focus "v7_dt39[FD-9 identify ハング]" "" "cmux 応答なし"
+assert_true "v7_dt39: 所要 ≤4 秒（実測 ${focus_elapsed}秒）" "$(python3 -c "print(1 if $focus_elapsed <= 4.0 else 0)")"
+assert_true "v7_dt39: スタブがハングした（hang_pids に記録あり＝検査の空振り防止）" "$([ -s "$FD_STATE/hang_pids" ] && echo 1 || echo 0)"
+sleep 6
+dt39_alive=0
+while IFS= read -r pid; do
+  [ -n "$pid" ] || continue
+  kill -0 "$pid" 2>/dev/null && dt39_alive=$(( dt39_alive + 1 ))
+done < "$FD_STATE/hang_pids"
+assert_eq "v7_dt39: 終了 6 秒後にスタブの子孫プロセスが 0" "0" "$dt39_alive"
+fd_apply 9
+FOCUS_TIMEOUT=1 run_focus_raw
+assert_focus "v7_dt39[設定口 CMUX_NEXT_FOCUS_TIMEOUT=1]" "" "cmux 応答なし"
+assert_true "v7_dt39: 設定口 1 秒で所要 ≤2.5 秒（実測 ${focus_elapsed}秒）" "$(python3 -c "print(1 if $focus_elapsed <= 2.5 else 0)")"
+sleep 2
+
+echo "=== v7_dt42_badslug_record（DT-42）: FD-6′（focused の slug が文法外＝改行を含む）で stdout 空行ちょうど 1 行・stderr 宣言記録破損・rc 0 ==="
+fd_apply 6p
+assert_eq "v7_dt42: fixture 自体は JSON として正しい（検査の空振り防止）" "0" "$(jq -e '.workspaces["UUID-U1"] | contains("\n")' "$FD_RECORD" >/dev/null 2>&1; echo $?)"
+run_focus_raw
+assert_focus "v7_dt42[FD-6′]" "" "宣言記録破損"
+
+# --------------------------------------------------------------------------
+# implementer 追記（内部不変条件・設計 §42.5.4・FR-122・D-v7-6。外部プロセス数は DT-36(c) が正本）。
+# --------------------------------------------------------------------------
+echo "=== v7_impl_timeout_default（§42.5.4・リーダー裁定＝既定 3 秒・整数）: FD-9 の所要が既定で 3〜4.5 秒・小数 3.5 と 0 は既定へ（sanitize_interval の規則） ==="
+for tv in "" "3.5" "0"; do
+  fd_apply 9
+  FOCUS_TIMEOUT="$tv" run_focus_raw
+  assert_focus "v7_impl_timeout[CMUX_NEXT_FOCUS_TIMEOUT=${tv:-未設定}]" "" "cmux 応答なし"
+  assert_true "v7_impl_timeout[${tv:-未設定}]: 所要 3〜4.5 秒（実測 ${focus_elapsed}秒）" "$(python3 -c "print(1 if 3.0 <= $focus_elapsed <= 4.5 else 0)")"
+done
+sleep 5
+
+echo "=== v7_impl_same_words_as_task（FR-122・D-v7-6）: 同じ状態（FD-4・5・5′・6・7）で Task 供給側 --frame の理由行と --focus の stderr が同じ語 ==="
+TASK_TARGET="$SCRIPT_DIR/../cmux/cmux-task-model.sh"
+for spec in "4|未宣言" "5|cmux 応答なし" "5p|cmux 応答なし" "6|宣言記録破損" "7|対象不明"; do
+  id="${spec%%|*}"; word="${spec#*|}"
+  fd_apply "$id"
+  run_focus_raw
+  task_word="$(HOME="$FD_HOME" PATH="$FD_BIN:$PATH" CMUX_TASK_VAULT="$VAULT" CMUX_TASK_CALL_TIMEOUT=3 \
+    bash "$TASK_TARGET" --frame 2>/dev/null | awk -F '\t' '$1=="R"{print $2}')"
+  assert_eq "v7_impl_same_words[FD-$id]: Task 枠の理由行＝[$word]" "$word" "$task_word"
+  assert_eq "v7_impl_same_words[FD-$id]: --focus の stderr＝Task 枠と同じ語" "$task_word" "$(cat "$WORKDIR/focus_stderr")"
+done
+
+echo "=== v7_ac166b_doc（AC-166 (b)・requirements-v7.md §8.4・§9 文書行・設計 §42.9.1 DOC 層・§42.13）: cmux-next-model.sh の冒頭コメントと usage の両方に照会（--focus）の意味・CMUX_NEXT_FOCUS_TIMEOUT・既定 3 秒がある ==="
+head_comment_166="$(sed -n '1,80p' "${TARGET}" | grep '^#' || true)"
+assert_contains "v7_ac166b: 冒頭コメントに --focus の意味（宣言先の照会）" "$head_comment_166" "宣言先の照会"
+assert_contains "v7_ac166b: 冒頭コメントに CMUX_NEXT_FOCUS_TIMEOUT" "$head_comment_166" "CMUX_NEXT_FOCUS_TIMEOUT"
+assert_contains "v7_ac166b: 冒頭コメントに 上限の既定値 3" "$head_comment_166" "既定 3"
+assert_contains "v7_ac166b: 冒頭コメントに 単位（秒）" "$head_comment_166" "秒"
+bash "${TARGET}" >/dev/null 2>"$WORKDIR/usage_err_166" || true
+usage_err_166="$(cat "$WORKDIR/usage_err_166")"
+assert_contains "v7_ac166b: usage に --focus の意味（宣言先の照会）" "$usage_err_166" "宣言先の照会"
+assert_contains "v7_ac166b: usage に CMUX_NEXT_FOCUS_TIMEOUT" "$usage_err_166" "CMUX_NEXT_FOCUS_TIMEOUT"
+assert_contains "v7_ac166b: usage に 上限の既定値 3" "$usage_err_166" "既定 3"
+assert_contains "v7_ac166b: usage に 単位（秒）" "$usage_err_166" "秒"
 
 echo
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="

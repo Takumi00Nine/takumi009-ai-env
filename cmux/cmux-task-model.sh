@@ -54,7 +54,7 @@ CMUX_BIN="${CMUX_TASK_CMUX_BIN:-cmux}"
 # set -u 下で未評価のまま参照される経路でも unbound variable にならないよう、
 # モデル系グローバルは起動時に空へ初期化しておく（v1/v2 と同じ流儀）。
 CMUX_REASON=""
-CMUX_UUID=""
+CMUX_SLUG=""
 LIST_REASON=""
 LIST_UUID=""
 MODEL_REASON=""
@@ -65,49 +65,30 @@ DONE_N=0
 CUR_I=-1
 
 # --- 記録ファイル（読むだけ・書かない） ---------------------------------
-# 読み手の本体は共有 lib（lib-cmux-workspace.sh の ws_state_*・ws_slug_valid＝
-# v6 A-v6-2）。ここは薄いラッパ（検査式・規則は不変）。
-
-# 記録ファイルの破損判定（v1/v2 と同一式）。ファイル不在は破損ではない。
-state_is_corrupt() { ws_state_is_corrupt "$STATE_FILE"; }
-
-# UUID に対応する slug を stdout へ出す（無ければ空）。呼び出し側は
-# state_is_corrupt を先に確認していること。
-lookup_slug() { ws_state_lookup_slug "$STATE_FILE" "$1"; }
+# 読み手の本体は共有 lib（lib-cmux-workspace.sh の ws_state_is_corrupt・
+# ws_state_lookup_slug・ws_slug_valid＝v6 A-v6-2）。検査式・規則は不変。
 
 # slug が FR-34 を満たすか判定する。
 slug_valid() { ws_slug_valid "$1"; }
 
 # --- cmux 側（毎回評価） ---------------------------------------------------
 
-# フォーカス中ワークスペースの UUID を解決する（薄いラッパ。段階評価の
-# 本体は共有 lib）。成功時は CMUX_UUID に UUID を、失敗時は CMUX_REASON に
-# §7 順1・順2 の理由行を入れる（両方成功かつ解決できたときは
-# CMUX_REASON=""）。--frame の対象は focused だけで、caller との一致検査は
-# 行わない（E-9・設計 §30.2）。
-probe_focus_uuid() {
-  local refs focus_ref json
+# フォーカス中ワークスペースの宣言先 slug を解決する（薄いラッパ。本体は
+# 共有 lib の宣言先解決部品 ws_declared_slug＝Project 供給側 `--focus` と
+# 同じ 1 つの部品・v7 A-v7-1・D-v7-6）。成功時は CMUX_SLUG に slug を、失敗時
+# は CMUX_REASON に §7 順1〜順4 の理由行を入れる（成功時は CMUX_REASON=""）。
+# --frame の対象は focused だけで、caller との一致検査は行わない（E-9・
+# 設計 §30.2）。
+probe_focus_slug() {
   CMUX_REASON=""
-  CMUX_UUID=""
-
-  refs="$(ws_identify_refs "$CMUX_BIN" "$CALL_TIMEOUT")"
-  if [ $? -ne 0 ]; then
-    CMUX_REASON="cmux 応答なし"
-    return
-  fi
-  focus_ref="${refs#*$'\t'}"
-
-  json="$(ws_list_json "$CMUX_BIN" "$CALL_TIMEOUT")"
-  if [ $? -ne 0 ]; then
-    CMUX_REASON="cmux 応答なし"
-    return
-  fi
-
-  CMUX_UUID="$(ws_uuid_for_ref "$json" "$focus_ref")"
-  if [ $? -ne 0 ]; then
-    CMUX_UUID=""
-    CMUX_REASON="対象不明"
-  fi
+  CMUX_SLUG="$(ws_declared_slug "$CMUX_BIN" "$CALL_TIMEOUT" "$STATE_FILE")"
+  case $? in
+    0) ;;
+    1) CMUX_REASON="cmux 応答なし" ;;
+    2) CMUX_REASON="対象不明" ;;
+    3) CMUX_REASON="宣言記録破損" ;;
+    *) CMUX_REASON="未宣言" ;;
+  esac
 }
 
 # --list の対象解決（設計 §20.2・§21・v1/v2 と同一契約）。caller と focused
@@ -152,15 +133,16 @@ probe_list_target() {
   LIST_UUID="$cu"
 }
 
-# --- Vault 側（順3〜順10） -------------------------------------------------
+# --- Vault 側（順5〜順10） -------------------------------------------------
 
-# UUID から表示モデルを組み立てる（v4・design.md §39.4.1〜§39.4.3・v6 §41.3.1）。
+# 宣言先 slug から表示モデルを組み立てる（v4・design.md §39.4.1〜§39.4.3・v6
+# §41.3.1）。順3・順4（宣言記録破損・未宣言）は呼び出し側で先に決まっている。
 # ▶ の版（cur）と「▶ を決めない条件」（理由行 Tasks 節なし／タスクなし／空タスク）
 # の判定は共有部品 decide_current_version（lib-vault-tasks.sh）の呼び出し＝規則・
 # 理由行・表示は v4 と不変（D-v6-1・A-v6-1）。版の待ち行（種別 W）は読まない
 # （版行・分数に出ない＝AC-150）。
 # 以下のグローバルを設定する。
-#   MODEL_REASON : 非空なら理由行（順3〜10）。空なら通常表示（順11）
+#   MODEL_REASON : 非空なら理由行（順5〜10）。空なら通常表示（順11）
 #   DONE_N       : 完了した版の件数（`D` 行）
 #   CUR_I        : 今の版の版インデックス（vcount空間・無ければ-1）
 #   BL_KIND/BL_A/BL_B/BL_C : 未完の版（U・記載順）の版行＋その全子行
@@ -168,25 +150,13 @@ probe_list_target() {
 #     CX/CS/CB: A=状態1文字 B=タスク本文 C=（未使用）
 #   NR_BLIDX/NR_NUM : number_rows() が版行（VE/VC）だけに振った番号
 load_model() {
-  local uuid="$1"
+  local slug="$1"
   MODEL_REASON=""
   V_NAME=(); V_TOTAL=(); V_DONE=(); V_HASSLASH=()
   BL_KIND=(); BL_A=(); BL_B=(); BL_C=()
   NR_BLIDX=(); NR_NUM=()
   DONE_N=0
   CUR_I=-1
-
-  if state_is_corrupt; then
-    MODEL_REASON="宣言記録破損"
-    return
-  fi
-
-  local slug
-  slug="$(lookup_slug "$uuid")"
-  if [ -z "$slug" ]; then
-    MODEL_REASON="未宣言"
-    return
-  fi
 
   if [ ! -d "$VAULT" ]; then
     MODEL_REASON="Vault 不在"
@@ -345,7 +315,19 @@ run_list() {
     return 1
   fi
 
-  load_model "$LIST_UUID"
+  # caller の UUID の対を引く（順3・順4＝共有 lib の 2 段の読み手・規則不変）。
+  if ws_state_is_corrupt "$STATE_FILE"; then
+    echo "宣言記録破損" >&2
+    return 1
+  fi
+  local slug
+  slug="$(ws_state_lookup_slug "$STATE_FILE" "$LIST_UUID")"
+  if [ -z "$slug" ]; then
+    echo "未宣言" >&2
+    return 1
+  fi
+
+  load_model "$slug"
   if [ -n "$MODEL_REASON" ]; then
     echo "$MODEL_REASON" >&2
     return 1
@@ -436,13 +418,13 @@ print_task_frame() {
 # rc は常に0（呼び出し側＝描画側は stdout の中身だけで判定する。FR-82
 # #11＝rc=0のときフレームがちょうど1つある）。
 run_frame() {
-  probe_focus_uuid
+  probe_focus_slug
   if [ -n "$CMUX_REASON" ]; then
     print_reason_frame "$CMUX_REASON"
     return 0
   fi
 
-  load_model "$CMUX_UUID"
+  load_model "$CMUX_SLUG"
   if [ -n "$MODEL_REASON" ]; then
     print_reason_frame "$MODEL_REASON"
     return 0

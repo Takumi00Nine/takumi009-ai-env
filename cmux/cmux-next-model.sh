@@ -42,9 +42,27 @@
 #   --frame ＝ 1 ティック分のフレーム（§29 の行指向 TSV・P 行は 6 欄）を
 #             stdout へ出す（rc は常に 0。例外＝判定時刻の固定口が不正な
 #             ときだけ rc=1・stdout 0 バイト＝§40.5.1）。
+#   --focus ＝ 宣言先の照会（v7・設計 §42.5）＝フォーカス中のワークスペースの
+#             宣言先 slug を stdout にちょうど 1 行で出す（slug か空行）。
+#             宣言先の解決は Task 枠と同じ宣言記録（宣言 CLI が書く
+#             ~/.config/cmux-task-watch/workspaces.json）と同じ共有部品に
+#             基づく＝Task 枠が理由行を出す状態では空行。空行のときだけ
+#             stderr に理由 1 行（順に cmux 応答なし／対象不明／宣言記録破損／
+#             未宣言＝Task 枠と同じ語。文法外の slug も宣言記録破損）。
+#             rc は常に 0（使い方エラー・jq 不在だけ非 0）。判定時刻・Vault・
+#             外部脳ヘルスには触れない（判定時刻の解決より前で分岐する）。
+#             描画側は次の対象ティックまでこの 1 行を保持するだけ。
+#
+# 環境変数（--focus）:
+#   CMUX_TASK_STATE・CMUX_TASK_CMUX_BIN＝宣言記録の置き場・cmux 実体（Task 供給側・
+#     宣言 CLI と同名）。
+#   CMUX_NEXT_FOCUS_TIMEOUT＝照会の上限（秒・整数・既定 3）。cmux の取得全体を
+#     この上限で打ち切り（打ち切り後は空行＋cmux 応答なし）、内側の段（identify・
+#     workspace list）にも同じ値。描画側の締切（5 秒）より短く置く（NFR-22）。
 #
 # bash 3.2 互換（macOS標準bash）。連想配列・mapfileは使わない。
-# cmux は一度も呼ばない（ワークスペースに依存しない＝設計 §30.2）。
+# `--list`／`--frame` は cmux を一度も呼ばない（ワークスペースに依存しない＝
+# 設計 §30.2）。cmux を呼ぶのは `--focus` だけ（FR-124 ①）。
 
 set -u
 
@@ -57,10 +75,16 @@ if [ ! -r "$LIB_DIR/lib-vault-tasks.sh" ]; then
   echo "lib-vault-tasks.sh が見つかりません: $LIB_DIR/lib-vault-tasks.sh" >&2
   exit 1
 fi
+if [ ! -r "$LIB_DIR/lib-cmux-workspace.sh" ]; then
+  echo "lib-cmux-workspace.sh が見つかりません: $LIB_DIR/lib-cmux-workspace.sh" >&2
+  exit 1
+fi
 # shellcheck source=./lib-model-view.sh
 . "$LIB_DIR/lib-model-view.sh"
 # shellcheck source=./lib-vault-tasks.sh
 . "$LIB_DIR/lib-vault-tasks.sh"
+# shellcheck source=./lib-cmux-workspace.sh
+. "$LIB_DIR/lib-cmux-workspace.sh"
 
 VAULT="${CMUX_NEXT_VAULT:-$HOME/Data/obsidian}"
 # status 語彙は4値統一（active/paused/completed/closed）。稼働=active・
@@ -82,6 +106,11 @@ HEALTH_JUDGE="$LIB_DIR/../claude/hooks/lib/health_judge.py"
 STATUS_ALLOW="$(printf '%s' "$STATUS_ALLOW" | tr -d '[:space:]')"
 [ -z "$STATUS_ALLOW" ] && STATUS_ALLOW="active"
 STATUS_HOLD="$(printf '%s' "$STATUS_HOLD" | tr -d '[:space:]')"
+# `--focus` の設定口（設計 §42.5・D-v7-11）＝宣言記録・cmux 実体は Task 供給側・
+# 宣言 CLI と同名。上限だけ本スクリプトの口（受理規則は sanitize_interval＝整数）。
+FOCUS_STATE_FILE="${CMUX_TASK_STATE:-$HOME/.config/cmux-task-watch/workspaces.json}"
+FOCUS_CMUX_BIN="${CMUX_TASK_CMUX_BIN:-cmux}"
+FOCUS_TIMEOUT="$(sanitize_interval "${CMUX_NEXT_FOCUS_TIMEOUT:-}" 3)"
 
 # status が許可リスト（カンマ区切り）に含まれるか判定する。
 status_allowed() {
@@ -463,14 +492,44 @@ run_frame() {
   return 0
 }
 
+# --- `--focus`（v7・設計 §42.5＝宣言先照会の口） -----------------------------
+
+# 段 1・2＝共有 lib の宣言先解決部品 ws_declared_slug（Task 枠と同じ 1 つの
+# 部品＝cmux → 記録の順と理由の順 1〜4 は部品の中・D-v7-6）。
+# 段 3＝引いた slug の文法検査（FR-34・外部プロセスなし）。文法外・改行含みは
+# 空行＋宣言記録破損（stdout が 2 行にならない＝F-117・F-118）。
+# stdout ちょうど 1 行（slug／空行）・空行のときだけ stderr に理由 1 行・rc 0。
+# 取得全体を FOCUS_TIMEOUT で包む（内側の段にも同じ値＝打ち切り後の cmux の
+# 子孫は内側の猶予で消える・F-120）。上限での打ち切りは cmux 応答なし。
+run_focus() {
+  local slug reason=""
+  slug="$(run_with_timeout "$FOCUS_TIMEOUT" ws_declared_slug "$FOCUS_CMUX_BIN" "$FOCUS_TIMEOUT" "$FOCUS_STATE_FILE")"
+  case $? in
+    0) ws_slug_valid "$slug" || reason="宣言記録破損" ;;
+    2) reason="対象不明" ;;
+    3) reason="宣言記録破損" ;;
+    4) reason="未宣言" ;;
+    *) reason="cmux 応答なし" ;;
+  esac
+  [ -z "$reason" ] || slug=""
+  printf '%s\n' "$slug"
+  [ -z "$reason" ] || echo "$reason" >&2
+  return 0
+}
+
 usage() {
   cat >&2 <<'EOF'
 使い方:
   cmux-next-model.sh --list    番号・正式プロジェクト名・next値・区分（稼働中/待ち/保留）・待ち日時 の 5 列 TSV
   cmux-next-model.sh --frame   1 ティック分のフレーム（cmux-dock-frame/4）
+  cmux-next-model.sh --focus   宣言先の照会＝フォーカス中のワークスペースの宣言先 slug をちょうど 1 行（slug か空行）
+                               Task 枠と同じ宣言記録（宣言 CLI の記録）に基づく。空行のときだけ stderr に理由 1 行
+                               （cmux 応答なし／対象不明／宣言記録破損／未宣言）。rc は常に 0
 待ち＝「▶ の版（今の版＝Task 枠が ▶ を付ける版）」が日時を待っていること。wait_until の置き場は 2 つ:
   (1) Tasks 節の版の直下に行頭から `- wait_until: YYYY-MM-DDTHH:MM`（YYYY-MM-DD 可）＝▶ の版の行だけが効く
   (2) frontmatter の `wait_until:`＝▶ の版が無い案件（Tasks 節なし・全版完了・全版タスク 0 件など）だけに効く
+環境変数（--focus）: CMUX_TASK_STATE（宣言記録）・CMUX_TASK_CMUX_BIN（cmux 実体）＝Task 供給側と同名
+                     CMUX_NEXT_FOCUS_TIMEOUT＝照会の上限（秒・整数・既定 3。cmux が応答しないときの打ち切り）
 環境変数（テスト専用）: CMUX_NEXT_JUDGE_NOW=YYYY-MM-DDTHH:MM[:SS]（待ち判定の判定時刻・ローカル）
 EOF
 }
@@ -482,13 +541,21 @@ main() {
   case "${1:-}" in
     --list) mode="list" ;;
     --frame) mode="frame" ;;
+    --focus) mode="focus" ;;
     *) usage; exit 1 ;;
   esac
   shift || true
   [ $# -eq 0 ] || { usage; exit 1; }
 
-  # 判定時刻の固定はモード分岐の前（設計 §40.5.1・D-v5-3）。不正な固定値・
-  # 実時刻の date 失敗は --list/--frame 共通で rc=1・stdout 0 バイト・stderr 1 行
+  # 照会口は判定時刻の解決より前で分岐（設計 §42.4・D-v7-12）＝判定時刻・Vault・
+  # 外部脳ヘルスに触れない（判定時刻の固定口が不正でも照会は影響を受けない＝DT-36）。
+  if [ "$mode" = "focus" ]; then
+    run_focus
+    exit $?
+  fi
+
+  # 判定時刻の固定は --list/--frame の分岐の前（設計 §40.5.1・D-v5-3）。不正な
+  # 固定値・実時刻の date 失敗は両モード共通で rc=1・stdout 0 バイト・stderr 1 行
   # （run_frame の「失敗を理由フレーム rc=0 に変換する」経路に入る前に止める）。
   if ! resolve_judge_now; then
     echo "判定時刻を決められません（CMUX_NEXT_JUDGE_NOW=${CMUX_NEXT_JUDGE_NOW:-}・形は YYYY-MM-DDTHH:MM[:SS]）" >&2
