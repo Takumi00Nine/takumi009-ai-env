@@ -13,6 +13,7 @@ related:
   - "[[Preferences/core-workflow]]"
   - "[[Preferences/core-worker]]"
   - "[[Decisions/2026-09-21-design-doc-scope-boundary]]"
+  - "[[Decisions/2026-09-21-simplicity-principle-layer0]]"
 aliases:
   - "共有ライブラリ分離"
   - "本文と差分の同期"

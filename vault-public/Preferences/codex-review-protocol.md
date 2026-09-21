@@ -1,10 +1,11 @@
 ---
 date: 2026-07-05
-updated: 2026-09-16
+updated: 2026-09-21
 tags: [preference, codex, review, delegation, protocol]
 project: meta
 related:
   - "[[Preferences/coding-delegation]]"
+  - "[[Decisions/2026-09-21-simplicity-principle-layer0]]"
   - "[[Preferences/absolute-rules]]"
   - "[[Knowledge/codex-mcp]]"
   - "[[Knowledge/cmux-cli]]"
@@ -45,11 +46,12 @@ aliases:
 - 実効モデル/effort の確認は `~/.codex/sessions/**/rollout-*.jsonl` の `"model"`/`"effort"`（自己申告は不正確）。`gpt-5.6-sol-ultra`・`gpt-5.6-codex` 等は ChatGPT アカウントでは 400＝使わない。
 
 ## 標準レビュー観点セット（2026-07-12 輸入・コード系成果物向け）
-プロンプトの「レビュー観点」には、成果物固有の観点に加えて以下の4観点を標準で含める（出典＝Anthropic 公式 pr-review-toolkit の専門エージェント定義から要点を抽出。[[Knowledge/claude-code-official-plugins]]。プラグイン本体は不採用・観点のみ輸入）。文書系成果物では該当分のみ使う。
+プロンプトの「レビュー観点」には、成果物固有の観点に加えて以下の5観点を標準で含める（出典＝Anthropic 公式 pr-review-toolkit の専門エージェント定義から要点を抽出。[[Knowledge/claude-code-official-plugins]]。プラグイン本体は不採用・観点のみ輸入）。5 は [[Preferences/absolute-rules]] ⑥由来。文書系成果物では該当分のみ使う。
 1. **型設計**: 不正な状態を型で表現不可能にできているか（カプセル化・不変条件の型表現・構築/変更時の強制）。
 2. **静かな失敗**: エラーの握りつぶしがないか（空 catch・無言のフォールバック・過度に広い catch・文脈不足のログ・ユーザーへの不明瞭なエラー文言）。
 3. **コメント整合**: コメントと実装の一致・前提条件/副作用の記載漏れ・変更で陳腐化するコメント（コメントロット）の検出。
 4. **テストの振る舞いカバレッジ**: 行カバレッジでなく振る舞いベースで、主要フロー・エラー処理・境界・負のケースが検証されているか。実装詳細への過剰結合がないか。
+5. **過剰な複雑さ**: 目的に対して余分な部品・条件・例外・分岐が無いか（絶対厳守⑥）。「動く」「指摘が消える」を理由に足された条件・特例は指摘する。
 
 ## レビュー対象範囲
 開発4工程（要件定義/設計/開発/テスト）＝必須。researcher の調査報告・adoption-critic の判定案＝原則乗せる。operator の巡回報告＝対象外。

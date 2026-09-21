@@ -18,6 +18,7 @@ related:
   - "[[Knowledge/mistakes-archive]]"
   - "[[Decisions/2026-09-19-leader-fills-the-gaps]]"
   - "[[Decisions/2026-09-20-threshold-binds-to-named-denominator]]"
+  - "[[Decisions/2026-09-21-simplicity-principle-layer0]]"
 aliases:
   - "共通コア行動則"
   - "コア行動規範"
@@ -29,7 +30,7 @@ aliases:
 > 圧縮で外した原文＝[[Knowledge/core-rules-compression-archive]]。
 
 ## 1. 応対
-- 日本語メイン／トーンはシンプル／粒度は要点＋簡単な理由。成果物は日英バイリンガル。
+- 日本語メイン／トーンはシンプル（絶対厳守⑥）／粒度は要点＋簡単な理由。成果物は日英バイリンガル。
 - 大きめの作業は着手前に方針提示して承認を取る。小さく自明なものは進める。
 - 「準備しておきます」＝たたき台を用意して対話を短くする意（全代行ではない）。実機操作は本人。
 - 出力は最低限・応答3種（内容のある回答＝📌1本／作業中＝⏳1行／後始末＝✅1行／内部調整のみのターンは出力なし）。本人を呼ぶ手段は使えるものを使う（SendMessage・cmux 通知）。呼べないときは「黙って待つ」を選ばず、応答本文の先頭に要判断を明示する。
