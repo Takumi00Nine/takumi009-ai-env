@@ -18,6 +18,7 @@ related:
   - "[[Preferences/core-worker]]"
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
+  - "[[Decisions/2026-09-21-long-worker-detach-launch]]"
   - "[[Decisions/2026-09-08-model-definitions-file]]"
   - "[[Decisions/2026-09-17-effort-per-role-v2]]"
   - "[[Decisions/2026-09-17-round-depth-by-severity]]"
@@ -60,6 +61,7 @@ aliases:
 > 2. 配役表の `model` は定義名の候補。リーダーが spawn 前に候補からちょうど1つ選び、ラッパーへ `--model-def <定義名>` で渡す（既定は無い）。`resolve-candidate` はラッパーが内部で呼ぶ。判断材料＝[[Preferences/model-catalog]]・[[Preferences/model-definitions-usage]] と【使用率】。具体IDから起動引数を推測しない。⚠️ 再選択点＝①新しい巡 ②上限回復後 ③セッション再開 ④起動失敗時＝使用率を再取得して選び直す。継続は `--resume <session_id>` をリーダーが明示したときだけ・既定は新規起動。
 > 3. 配役表は必読にしない。spawn のたびに候補一覧コマンド（`role_candidates.py`・呼び方は同ファイル冒頭の docstring。TSV 7列 `role def route pass ok h5 d7`・`ok=no` は枠上限か resolver 拒否のみ）で候補と枠を照会し、ちょうど1つ選んで条文2へ。候補一覧で `route=subagent` の職種はラッパー起動。
 > 4. `execution` が `subagent` 以外の職種は spawn せず、決められた呼び出し口へ `resolve-candidate` の出力をそのまま渡す（exit 非0なら1つも起動しない）。`subagent` の職種はラッパーへ。
+> 5. **10 分超が見込まれるワーカーは切り離して起動し、完了検知を分ける**＝ラッパーを `nohup … &` で Claude Code のシェルから切り離し、完了は Monitor か `until` ループで「出力ファイル非空 ∧ lock 無し」と「失敗（EXIT あり ∧ 出力空）」の両方を見る。前面実行（上限 10 分）に乗せない。再起動前に 0 byte の出力ファイルを消す（[[Decisions/2026-09-21-long-worker-detach-launch]]）。
 
 ## 2. 品質ゲート
 - 成果物は作成者とは別個体による検証を通す（§1）。**起動はリーダー職**＝適用工程の成果物が完成した時点で1回（実装は全実装者の完了後）。巡数はモードで決まる＝**単独＝行わない／軽量＝工程ごとに1巡ちょうど・再レビューなし／フル＝工程ごとに1巡以上**（指摘があれば作成者が修正して次の巡）。空席時はコア §7。
