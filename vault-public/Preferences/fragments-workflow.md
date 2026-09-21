@@ -1,6 +1,6 @@
 ---
 date: 2026-06-23
-updated: 2026-09-20
+updated: 2026-09-21
 tags: [preference, fragments, blog, workflow, capture]
 project: external-brain
 related:
@@ -10,6 +10,8 @@ related:
   - "[[Preferences/blog-writing-nudge]]"
   - "[[Knowledge/external-brain-guide]]"
   - "[[Decisions/2026-09-20-fragments-reviewed-close-command]]"
+  - "[[Preferences/external-brain-maintenance-close-loop]]"
+  - "[[Decisions/2026-09-21-maintenance-close-loop]]"
 aliases:
   - "即時capture"
   - "Fragments昇格レビュー"
@@ -51,7 +53,7 @@ tags: [fragments]
 
 ## 4. 昇格・記事化
 - **週1昇格（件数のみ表示・本人指示で実行・2026-09-19〜）**: 週次メンテは昇格候補の**件数だけ**を `last-run.json`（`fragments_candidates`）に記録し、cmux Dock の Project 枠の週次行に「候補N件」と表示する。AI へは注入しない。昇格は本人が『昇格して』と言ったときにリーダーが記録職（vault-scribe）へ渡して行う（無人ヘッドレスの自動昇格は 2026-09-19 に退役＝[[Decisions/2026-09-19-ai-env-optimization-rulings]]）。
-- **昇格の締め 3 手順（2026-09-20〜・本人裁定）**: 本人指示で昇格対応を終えたら、①記録職が元エントリ（見出しブロック末尾か箇条書き末尾）へ `status: promoted → [[昇格先]]` を足す（数える側 `fragments_log.py` が候補から除外する印。昇格しなかったエントリには付けない）②リーダーが `~/work/takumi009-ai-env/scripts/fragments-reviewed.sh` を**締めの最後に**実行する（`last-run.json` へ対応済み日時を書き、その場で候補件数を数え直す。週次メンテの数え始めもこの日時以降になる）③cmux Dock の外部脳行が「候補0件」になったのを 1 回見る（常駐が 60 秒ごとに読む）。⚠️ 数え始めは日付単位＝②の後に同じ日に足した断片は翌週にも数えられない（②を最後に実行する運用で吸収）。理由・経緯＝[[Decisions/2026-09-20-fragments-reviewed-close-command]]。
+- **昇格の締め 3 手順（2026-09-20〜・本人裁定）**: 本人指示で昇格対応を終えたら、①記録職が元エントリ（見出しブロック末尾か箇条書き末尾）へ `status: promoted → [[昇格先]]` を足す（数える側 `fragments_log.py` が候補から除外する印。昇格しなかったエントリには付けない）②リーダーが `~/work/takumi009-ai-env/scripts/fragments-reviewed.sh` を**締めの最後に**実行する（`last-run.json` へ対応済み日時を書き、その場で候補件数を数え直す。週次メンテの数え始めもこの日時以降になる）③cmux Dock の外部脳行が「候補0件」になったのを 1 回見る（常駐が 60 秒ごとに読む）。⚠️ 数え始めは日付単位＝②の後に同じ日に足した断片は翌週にも数えられない（②を最後に実行する運用で吸収）。理由・経緯＝[[Decisions/2026-09-20-fragments-reviewed-close-command]]。ヘルス対処と同時に行うときの順序と終了条件＝[[Preferences/external-brain-maintenance-close-loop]]。
 - 確定したら4フォルダへ昇格、記事の種は Blog へ（記事化は [[Preferences/note-canvas-workflow]]：Fragments を素材に Canvas → 下書き → ユーザー手直し）。
 - **append-only：元エントリは消さない**。昇格先と Fragments を相互リンクし、Fragments 側に `status: promoted`（＋昇格先リンク）を足すだけ。
 - 二重管理しない：**Fragments＝履歴/発生文脈／4フォルダ＝現在の確定版／Blog＝人間向け素材**、と役割を分ける。
