@@ -170,6 +170,12 @@
             "command": "$HOME/.claude/hooks/usage-inject.sh",
             "timeout": 5,
             "statusMessage": "使用率を注入中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/code27-call-clear.sh",
+            "timeout": 2,
+            "statusMessage": "📣 未応答の呼び出しを消去中"
           }
         ]
       }

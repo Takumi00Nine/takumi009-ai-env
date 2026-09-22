@@ -931,6 +931,8 @@ link claude/hooks/inprocess-gate.sh "$HOME/.claude/hooks/inprocess-gate.sh"
 link claude/hooks/vault-write-gate.sh "$HOME/.claude/hooks/vault-write-gate.sh"
 # 使用率の毎発言注入(UserPromptSubmit)。SessionStart側と同じ共有関数を使う。
 link claude/hooks/usage-inject.sh "$HOME/.claude/hooks/usage-inject.sh"
+# 📣 通知取次 v1（2026-09-22）: 入力時に code27-call の未応答の呼び出しを全消去する（UserPromptSubmit）。
+link claude/hooks/code27-call-clear.sh "$HOME/.claude/hooks/code27-call-clear.sh"
 
 # 前提修正 P-2（設計§2）: 職種定義の配布結果を必ず報告する。
 # ①新しく配置した定義（初回未配置）②repoから消えた定義へのdangling symlinkの
@@ -991,7 +993,7 @@ if [ "$DRY_RUN" != "1" ]; then
            "$DIR/claude/hooks/check-sub-update.sh" "$DIR/claude/hooks/context-size-warn.sh" \
            "$DIR/claude/hooks/agent-model-guard.sh" \
            "$DIR/claude/hooks/inprocess-gate.sh" "$DIR/claude/hooks/vault-write-gate.sh" \
-           "$DIR/claude/hooks/usage-inject.sh" \
+           "$DIR/claude/hooks/usage-inject.sh" "$DIR/claude/hooks/code27-call-clear.sh" \
            "$DIR/cmux/cmux-task-model.sh" "$DIR/cmux/cmux-next-model.sh" \
            "$DIR/cmux/cmux-task-declare.sh"
   # 締めレビュー2巡目 #2対応（2026-09-14）: agent-model-guard.sh専用の
