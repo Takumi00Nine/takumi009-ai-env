@@ -1,9 +1,10 @@
 ---
 date: 2026-09-16
-updated: 2026-09-21
+updated: 2026-09-22
 tags: [preference, session, handoff, cmux, leader]
 project: takumi009-ai-env
 related:
+  - "[[Decisions/2026-09-22-leader-decides-session-split]]"
   - "[[Preferences/core-conduct]]"
   - "[[Preferences/cross-session-messaging]]"
   - "[[Decisions/2026-09-16-leader-spawns-next-session]]"
@@ -21,6 +22,7 @@ aliases:
 
 ## 区切る条件
 - 引き金は2つだけ（[[Preferences/core-conduct]] §4）＝①1時間超の休憩 ②文脈が警告しきい値に達した後の次の切れ目。作業の真ん中で切らない（成果物の完成・検証巡の完了・工程の区切りで切る）。
+- **区切る判断はリーダー**＝引き金が満たされ切れ目が来たら、本人に「区切りますか」と確認せず手順へ進む。本人が知るのは手順3の1行報告と手順4の閉じる操作だけ（[[Decisions/2026-09-22-leader-decides-session-split]]）。
 
 ## 手順
 0. **残作業の棚卸し**: 会話中の「後で／締めで／〜します」を洗い出し、今のセッションで終わるもの（規範の焼き込み・記録の追記・小さな修正・約束した報告）は区切る前に終える。終えられないものだけ再開メモの「未消化の小タスク」節へ（[[Decisions/2026-09-21-drain-deferred-tasks-before-handoff]]）。
