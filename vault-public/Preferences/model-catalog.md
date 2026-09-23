@@ -1,6 +1,6 @@
 ---
 date: 2026-09-09
-updated: 2026-09-19
+updated: 2026-09-23
 tags: [preference, model, catalog, claude, codex, routing, quota, bedrock, vllm]
 project: meta
 related:
@@ -20,6 +20,7 @@ related:
   - "[[Decisions/2026-09-08-usage-fetcher-migration]]"
   - "[[Decisions/2026-09-10-leader-free-model-choice]]"
   - "[[Decisions/2026-09-10-models-conf-comprehensive]]"
+  - "[[Decisions/2026-09-23-opus-5-5-adoption]]"
 aliases:
   - "モデル特性カタログ"
   - "モデルの選び方"
@@ -39,7 +40,8 @@ aliases:
 | モデル | 特徴 | 向く仕事・向かない仕事 | 注意点 |
 |---|---|---|---|
 | **Claude Fable 5.1**（`claude-fable-5-1`） | Claude 系の最上位。1M コンテキスト・adaptive thinking 常時オン・長時間の自律作業に強い | 向く＝要件定義・設計・採否判定など判断の質が下流全体に効く上流工程。向かない＝日常の軽い実装・定型作業 | Fable 専用の週次上限があるが、これは全体7日枠の内側の追加上限で、Fable 利用は両方を進める（別財布ではない・[[Knowledge/anthropic-claude-models-2026-06]]）。ワーカーに使うかはリーダーが案件ごとに判断（既定も禁止も無い）。プロンプトキャッシュ読取は base 入力価格の 2.5%（Fable 5.1／Mythos 5.1 のみ・他モデルは 10%・公式モデル表脚注 2026-09-10 確認） |
-| **Claude Opus 5**（`claude-opus-5`） | Fable 5.1 に近い性能をより軽い枠消費で出せる日常の最上位。5段階 effort（low〜max）対応 | 向く＝要件定義・設計・採否判定の既定、複雑な統合判断、Codex 上限到達時の一次レビュー代替。向かない＝大量の並列軽作業 | thinking が既定オンで応答に余裕トークンが要る。推奨 effort の初期値は high |
+| **Claude Opus 5.5**（`claude-opus-5-5`） | 2026-09-22 リリース。ほとんどの作業で Fable 5.1 と同水準の性能を Opus 5 より軽い単価（入力$4・出力$20/MTok＝Opus 5 比 -20%・公式主張で実コスト -40%）で出す新しい日常の最上位。用途＝長時間のエージェント的コーディング・知識作業。thinking 常時オン・無効化不可。既定 effort は `medium`（Opus 5 の `high` から変更） | 向く＝Opus 5 の位置づけを継承＝要件定義・設計・採否判定の既定候補、複雑な統合判断、Codex 上限到達時の一次レビュー代替。向かない＝大量の並列軽作業 | Opus 5 からの移行時の破壊的変更＝forced tool use 不可・thinking block がモデル/会話に紐付く・旧 `computer_20251124` 不可。キャッシュ読取は base 入力の 5%（最小 512 トークン）。**Claude Code は 2.1.280 以上が必要**（2.1.258 は API 400・2.1.280 で正常応答＝2026-09-23 実測）。models.conf の opus-high／medium／low が 2026-09-23 から本モデルを指す（定義名据え置き＝[[Decisions/2026-09-23-opus-5-5-adoption]]）。出典: https://platform.claude.com/docs/en/models/opus-5-5/overview ・ https://www.anthropic.com/claude-opus-5-5 （2026-09-23 取得） |
+| **Claude Opus 5**（`claude-opus-5`） | **2026-09-22 に後継の Opus 5.5 が登場し Legacy 化（提供継続・退役は 2027-07-24 より早くはならない）。** 5段階 effort（low〜max）対応・推奨 effort の初期値は high | 向く＝現行の定義は参照しない（2026-09-23 に opus-* が Opus 5.5 へ移行＝[[Decisions/2026-09-23-opus-5-5-adoption]]）。位置づけは Opus 5.5 行を参照 | Claude Code の別名 `opus` が 5.5 を指すため、ラッパー経由で Opus 5 を pin する手段は無い（旧 ID の定義は解決失敗）。API 直叩きでは引き続き利用可 |
 | **Claude Sonnet 5**（`claude-sonnet-5`） | 作る工程の主力候補。実装・調査・テストなど「作る工程」の主力 | 向く＝開発4工程の実働・探索的調査。向かない＝後戻りコストが高い設計判断の単独決定 | 並行起動しやすく枠の主消費源になりやすい |
 | **Claude Haiku 4.5** | Claude 系で最も軽量・高速 | 向く＝分類・抽出・定型変換など判断の重くない大量処理。向かない＝設計判断・複雑なコード理解 | 使う場合は models.conf に個別定義を足す（実測メモ無し） |
 | **Codex 既定（GPT-5.6 Sol、`gpt-5.6-sol`）** | Codex の一次レビュー・実装委任・画像生成一気通貫で使う既定モデル。ターミナル系のエージェント作業に強い傾向 | 向く＝コードレビュー、bounded task（目的・範囲・出力形式・停止条件が明確な小さな実装委任）、非同期の反復作業。向かない＝広範囲・複数部品にまたがる不可逆な設計判断の単独決定 | 旧世代 GPT-5.5／5.4 も一部経路（Bedrock 経由）でまだ選べる。Terra・Luna は別行を参照 |
@@ -55,7 +57,7 @@ aliases:
 
 | サービス | 認証 | 枠・窓 | リセットの仕組み | 使用率の取れ方 | 機能差 | 費用の性質 | 向く・向かない |
 |---|---|---|---|---|---|---|---|
-| **Claude サブスク** | claude.ai ログイン（キーチェーン保存の OAuth） | `claude-subscription`。`five_hour`・`seven_day`（＋Fable 専用の週次上限＝全体7日枠の内側。Fable 利用は両方を進める） | `/limit-reset`＝**未公開**の CLI コマンド。**5時間窓だけ**リセット、週次には効かない。残数の機械取得は未確認 | **【使用率】ブロックに出る**（3枠の1つ） | 組み込み WebSearch 等フル機能 | 定額（契約プラン） | 向く＝通常運用・判断の重い上流工程。向かない＝枠が切迫した状況での大量消費 |
+| **Claude サブスク** | claude.ai ログイン（キーチェーン保存の OAuth） | `claude-subscription`。`five_hour`・`seven_day`（＋Fable 専用の週次上限＝全体7日枠の内側。Fable 利用は両方を進める） | `/limit-reset`＝**未公開**の CLI コマンド。**5時間窓だけ**リセット、週次には効かない。残数の機械取得は未確認。2026-09-22 の Opus 5.5 発表文がサブスク利用者向けの公式 rate limit reset（保存して任意時に使用）を明記＝取得方法・機械取得・`/limit-reset` との関係は未確認 | **【使用率】ブロックに出る**（3枠の1つ） | 組み込み WebSearch 等フル機能 | 定額（契約プラン） | 向く＝通常運用・判断の重い上流工程。向かない＝枠が切迫した状況での大量消費 |
 | **Claude Bedrock**（現行＝`models.conf` の Bedrock 定義（`provider=bedrock`）＋`bedrock.env` のピン留め（配役表の role 行に provider は無い）。設計中の統合経路名は要件書側） | AWS プロファイル→短期ベアラートークン（presigned URL 方式・実効期限は指定値と AWS 認証情報の残り期限の短い方）。使用側に IAM の明示 Allow（`bedrock:CallWithBearerToken`）が要る | `unlimited`（枠の概念なし） | 無し（上限の概念が無いためリセットという操作が意味を持たない） | 出ない（`unlimited` は使用率を読まない） | **WebSearch は利用可**（2026-08 時点の「不可」という公式注記は 2026-09-01 実測で訂正済み＝[[Knowledge/bedrock-claude-code-pitfalls]]） | 従量課金（AWS 側でトークン量課金） | 向く＝サブスク枠を使い切りたくない場面の保険的経路、費用を許容できる場面。向かない＝定額枠で足りている状況（従量課金が無駄になる）。注意＝短期トークンの実効期限・SSO 再ログインが要る場合がある |
 | **Codex サブスク**（ChatGPT ログイン） | ChatGPT の OAuth ログイン | `codex-subscription`。`five_hour`・`seven_day` | **公式の「rate-limit reset credit」**（本人の呼び方＝チケット）。**5時間窓と週次窓の両方**を一度にリセット、付与から30日で失効 | **【使用率】ブロックに出る**。チケットの枚数・期限も `account/rateLimits/read` から機械取得できる（確度高＝[[Knowledge/codex-rate-limit-reset-banking]]） | フル機能（WebSearch 含む） | 定額（契約プラン） | 向く＝一次レビュー・bounded task の実装委任・画像生成一気通貫。向かない＝枠切迫時の大量投入（チケットで回復できるが枚数に限りがある） |
 | **Codex Bedrock**（`amazon-bedrock` model provider） | Bedrock API キー（`AWS_BEARER_TOKEN_BEDROCK`）または AWS SDK の資格情報チェーン（前者を優先。ChatGPT ログインとは別建て） | ChatGPT サブスクの枠とは別建て（従量課金）。⚠️ **rate-limit reset credit の対象になるかは未確認**（公式ドキュメントに記載なし＝推定で「対象外」とは断定しない） | 記載なし（サブスクの窓の概念自体が無いため無いと推定。確度中） | 出ない想定（Codex サブスクの `usage` とは別系統） | **WebSearch 不可**（公式ドキュメントが機能表で明記＝「OpenAI がホストするクラウド機能に依存する機能は非対応」）。利用可能モデルは `gpt-5.6-sol`／`terra`／`luna` と旧世代 `gpt-5.5`／`gpt-5.4`（リージョン依存、公式確認済み） | 従量課金（トークン単位、シート契約なし＝AWS 公式ブログの表現） | 向く＝Codex サブスク枠が枯渇していて費用を許容できる保険。向かない＝WebSearch が要る裏取り系タスク（researcher 等） |
@@ -67,7 +69,7 @@ aliases:
 
 - **検証職（Codex 一次レビュー）**＝Codex サブスクが既定。枠が切迫してもチケット（reset credit）で回復できる余地があり、Bedrock へ落とす前に確認する価値が高い。
 - **researcher・裏取りが要る調査**＝Claude サブスクか Codex サブスク（どちらも WebSearch 可）。**Bedrock（Claude・Codex とも）は Codex 側で WebSearch 不可、Claude 側は 2026-09-01 以降は可**——Codex を Bedrock 経由で裏取り系に使わない。
-- **上流工程（要件定義・設計・採否判定）**＝Claude の Opus 5／Fable 5.1（判断の質が重要・枠消費は許容）。ローカル LLM は不向き（性能が下位）。
+- **上流工程（要件定義・設計・採否判定）**＝Claude の Opus 5.5（Opus 5 は Legacy）／Fable 5.1（判断の質が重要・枠消費は許容）。ローカル LLM は不向き（性能が下位）。
 - **量産・定型（分類・抽出・軽い実装の反復）**＝ローカル LLM か Claude Haiku 4.5。サブスク枠を温存できる。
 - **サブスク枠が枯渇している状況**＝まずローカル LLM（費用ゼロに近い）→ 次に Bedrock（従量課金だが確実に動く）→ サブスクの `/limit-reset`（Claude）やチケット（Codex）は温存策であって代替経路ではない。
 
@@ -90,6 +92,7 @@ aliases:
 - gpt-oss-20b の日本語を含む多言語評価（MMMLU）＝同モデルカード（arXiv版 https://arxiv.org/abs/2508.10925 、2026-09-09 取得。数値スコアは本カタログには転記せず定性のみ記載）。
 - Gemma 4 12B の構成・マルチモーダル・注意機構・ツール利用・言語対応＝Google AI for Developers 公式モデルカード https://ai.google.dev/gemma/docs/core/model_card_4 （2026-09-09 取得）。
 - Gemma 4 12B のライセンス（Apache 2.0）＝上記公式ページおよび Hugging Face https://huggingface.co/google/gemma-4-12B （2026-09-09 取得・2ソース一致で確認）。
+- Claude Opus 5.5（価格・effort 既定・破壊的変更・Legacy 化した Opus 5）＝ https://platform.claude.com/docs/en/models/opus-5-5/overview ・ https://www.anthropic.com/claude-opus-5-5 ・ https://platform.claude.com/docs/en/models/opus-5/overview （2026-09-23 取得）。Claude Code の必要バージョンは 2026-09-23 実測。
 
 ## 未裏取り・要確認
 - **Codex Bedrock 経路がチケット（rate-limit reset credit）の対象になるかは未確認**（公式ドキュメントに記載なし。サブスクとは別建てなので対象外の可能性が高いが、断定はしていない）。
@@ -97,6 +100,8 @@ aliases:
 - vLLM の Claude Code 側属性（`attribution_header` の要否・`auth_header` の種別）は EXP-4・EXP-5 の実測待ち（要件書 §2.2 注記）。Codex CLI から同じ vLLM サーバーへ独自 `model_providers` 定義で接続できる可能性は技術的に確認したが（Codex は任意の OpenAI 互換エンドポイントを `base_url`＋`wire_api` で受け付ける）。採用の有無は各機の記録による。
 - gpt-oss-20b のブラウジング／Python ツールが**実際のデプロイで有効化されているか**は未確認（モデル側の訓練済み能力と、サーバー側のツール実装は別物）。
 - Gemma のライセンスが Apache 2.0 である点は2つの独立ソースで一致したが、Google の従来の Gemma シリーズは「Gemma利用規約」という独自ライセンスだったため、この世代（Gemma 4）で条件が変わった可能性がある——再配布・商用利用時は都度一次情報を再確認する運用を注意点欄に明記した。
+- Opus 5.5 のサブスク側の扱い（Pro/Max での既定モデル化・5時間枠の引き上げ幅・Fable 型の専用週次枠の有無・公式 rate limit reset の取得方法）は一次情報に数値・明文が無く未取得（2026-09-23）。
+- Opus 5.5 の effort が 5 段階（low〜max）のままかは個別ページ未確認（2026-09-23）。
 
 ## 更新の掟
 
