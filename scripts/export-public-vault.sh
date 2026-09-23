@@ -143,9 +143,10 @@ done
 #      `[[personal/x]]` のような小文字表記でもObsidianはほぼ確実に実リンクとして解決してしまう
 #      （2026-07-08 修正決定。ngwordsチェック/gitleaksは対象外＝現状維持）。
 #      対象はステージング（$STAGING_DIR）。本番 $VAULT_PUBLIC は全チェック通過後にしか触らない。
-#      -P は使わない: `-f`（denylist ファイル）指定時、PCRE2 は全パターンを1本に結合するため
-#      denylist が大きいと約64KB上限（LINK_SIZE=2）を超えてコンパイル不能になる
-#      （2026-09-23 本番 export で515件・34,146バイトにより実際に発生。既定の Rust regex に変更）。
+#      リンク検査（3-a/3-b/3-e）は全て rg の既定エンジン（Rust regex）に統一し、-P（PCRE2）は使わない:
+#      `-f`（denylist ファイル）併用時、PCRE2 は全パターンを1本に結合するため denylist が大きいと
+#      約64KB上限（LINK_SIZE=2）を超えてコンパイル不能になる（2026-09-23 本番 export で515件・
+#      34,146バイトにより実際に発生）。
 log "check: Personal folder wiki link (folder-qualified, fail-fast)"
 folder_alt=$(printf '%s|' "${FAIL_LINK_FOLDERS[@]}")
 folder_alt="${folder_alt%|}"
