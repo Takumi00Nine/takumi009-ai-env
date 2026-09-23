@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-08-05
+updated: 2026-09-23
 tags: [preference, cmux, notifications]
 project: meta
 related:
@@ -8,6 +8,7 @@ related:
   - "[[Decisions/2026-07-05-cmux-notifications-actionable-only]]"
   - "[[Knowledge/cmux-cli]]"
   - "[[Knowledge/cmux-cli-reference]]"
+  - "[[Decisions/2026-09-23-away-declaration-call-mode]]"
 aliases:
   - "agentIdleReminder"
   - "📣で呼ぶ"
@@ -21,6 +22,7 @@ aliases:
 ## リーダーの呼び出し運用（必須）
 - 本人の判断・レビュー・応答が必要になったら、リーダーは **`cmux notify --title "📣 <用件>" --body "<補足>"` を明示発行**する（タイトル先頭の📣がフィルタの通行証）。
 - AI 側の自動通知は鳴らない前提なので、**📣を出さない限り本人には届かない**。呼び忘れはリーダーの失点。
+- **在席・離席の切替（2026-09-23 本人裁定）**＝在席中は 📣 を出さない。本人が「離席します」と宣言したら、以後リーダーは要判断・本人操作の依頼（🔸要確認・`!` 実行依頼）を出す応答で**必ず 📣 を発行**する。帰還の宣言は不要＝本人の次の入力で在席扱いに戻す（取次の繰り返し発話も止まる）。判定は宣言だけ（在席の自動検知は無い）。理由＝[[Decisions/2026-09-23-away-declaration-call-mode]]。
 
 ## 現在の設定（実行時に `~/.config/cmux/cmux.json` として展開・ファイル管理）
 - `notifications.hooks[0]` id=`sound-only-leader-call` — jq で「タイトルが📣始まり以外」の通知の `sound/desktop/markUnread/paneFlash` を false 化（record は残す）。hook 失敗時は既定挙動にフォールバック。
