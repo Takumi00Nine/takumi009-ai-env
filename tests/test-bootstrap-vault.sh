@@ -203,16 +203,16 @@ make_model_defs() {
     cat > "$path" <<'EOF'
 [t-opus-high]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=high
 
 [opus-noeffort]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 
 [opus-max]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=max
 
 [opus46-xhigh]
@@ -1201,7 +1201,7 @@ echo "=== 26. validate_model_def(): provider毎のmodel形式・execution既定�
 
   NONSUBEXEC="$(mktemp -d)/nonsubexec.md"
   NONSUBEXEC_CONF="$(mktemp -d)/nonsubexec.conf"
-  make_model_defs "$NONSUBEXEC_CONF" "[bad-nonsub]" "provider=anthropic-api" "model=claude-opus-5" "execution=external-cli"
+  make_model_defs "$NONSUBEXEC_CONF" "[bad-nonsub]" "provider=anthropic-api" "model=claude-opus-5-5" "execution=external-cli"
   make_v2_profile "$NONSUBEXEC" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$NONSUBEXEC_CONF" resolve_v2 "$NONSUBEXEC")"  || true
   assert_contains "anthropic-apiでexecution!=subagentはT12" "$out" "MINIMAL	T12"
@@ -1526,7 +1526,7 @@ class Fake:
 def make_def(name):
     d = pr.ModelDef(name, 0)
     d.provider = "anthropic-api"
-    d.model = "claude-opus-5"
+    d.model = "claude-opus-5-5"
     d.execution = "subagent"
     return d
 
@@ -1732,9 +1732,9 @@ echo "=== 46. list-roles: state/定義名/execution既定値/not_adopted・unkno
     "role.verifier: unavailable model=bedrock-opus"
   out="$(python3 "$PROFILE_LIB" list-roles "$LR")"  || true
 
-  assert_contains "role.leaderの行がstate=configured・定義名=t-opus-highで出る" "$out" "leader	configured	t-opus-high	anthropic-api	claude-opus-5	subagent	"
+  assert_contains "role.leaderの行がstate=configured・定義名=t-opus-highで出る" "$out" "leader	configured	t-opus-high	anthropic-api	claude-opus-5-5	subagent	"
   assert_contains "executionが省略されていてもsubagentが補われて出る" "$out" "	subagent	"
-  assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "system-designer	configured	t-opus-high	anthropic-api	claude-opus-5	subagent	high"
+  assert_contains "effortが指定されていればそのまま出る(system-designer=high)" "$out" "system-designer	configured	t-opus-high	anthropic-api	claude-opus-5-5	subagent	high"
   assert_contains "unknown状態は定義名以降が全て空文字になる（5フィールド）" "$out" "navi	unknown					"
   assert_contains "not_adopted状態も定義名以降が全て空文字になる（5フィールド）" "$out" "researcher	not_adopted					"
   assert_contains "unavailable状態は定義名・provider/modelを保持したまま出る（意図の記録）" "$out" "verifier	unavailable	bedrock-opus	bedrock	opus	subagent	"
@@ -1847,7 +1847,7 @@ echo "=== 52. V8-a 状態4値×属性有無の網羅補充: unavailableでmodel�
 
   # 2026-09-08 モデル定義ファイルと候補指定対応: 旧「providerが無いこともV8-a
   # でMINIMALになる」ケースは撤去した——role行はもうprovider属性を持たない
-  # ため、そのケース自体が成立しない（`model=claude-opus-5`は定義名として
+  # ため、そのケース自体が成立しない（`model=claude-opus-5-5`は定義名として
   # 文法上妥当に読め、未定義参照ならV17で落ちる。V8-aの対象外）。
 }
 
@@ -2399,7 +2399,7 @@ EOF
   FAKE_HOME_71="$(mktemp -d)"
   mkdir -p "$FAKE_HOME_71/.claude"
   cat > "$FAKE_HOME_71/.claude/settings.json" <<'EOF'
-{"model": "claude-opus-5"}
+{"model": "claude-opus-5-5"}
 EOF
 
   # bootstrapとjqの終了コードを分離検査するためのヘルパー（Codex一次レビュー
@@ -2474,7 +2474,7 @@ git_role:         configured value=aienv-repo:commit  # AC5-ALLOW:FXP0
 web_verification: configured value=websearch  # AC5-ALLOW:FXP0
 no_read_paths:    configured value=work-old  # AC5-ALLOW:FXP0
 ${legacy_excluded_key}: configured value=none
-role.leader: configured ${legacy_role_attr}anthropic-api model=claude-opus-5
+role.leader: configured ${legacy_role_attr}anthropic-api model=claude-opus-5-5
 ---
 EOF
   # 段階2直前コミット（3583015b…）のbootstrap-vault.shは廃止済みの旧

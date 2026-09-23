@@ -56,7 +56,7 @@ from typing import Optional
 # 2026-09-08 モデル定義ファイルと候補指定対応（モデル定義ファイルと候補指定-
 # 設計-2026-09-08.md §3.1・D-8）: 役割の行の文法を`model=<定義名>[,…]`（候補の
 # カンマ列挙）へ変えたのに合わせて5→6へ引き上げた。⚠️ 旧記法
-# `model=claude-opus-5`は新文法でも「定義名`claude-opus-5`」として文法的に
+# `model=claude-opus-5-5`は新文法でも「定義名`claude-opus-5-5`」として文法的に
 # 妥当に読めてしまうため、schema 6のコードは6未満の実体（`schema_version`の
 # 行が無い実体を含む）を「追随待ち」として仮想補完せず、一律
 # `T4-LEGACY`で解決失敗にする（FR-15）。この非対称（他のキー追加は仮想補完・
@@ -171,7 +171,7 @@ ROLE_EXEMPT_FROM_DEFINITION_CHECK = frozenset({"leader"})
 # 完全一致変換。旧世代IDの丸め・推測は行わない。
 AGENT_MODEL_ALIASES = {
     "claude-fable-5-1": "fable",
-    "claude-opus-5": "opus",
+    "claude-opus-5-5": "opus",
     "claude-sonnet-5": "sonnet",
     "claude-haiku-4-5-20251001": "haiku",
 }
@@ -486,7 +486,7 @@ def reconcile_schema_version(parsed: ParsedProfile, declared: int) -> list[str]:
     2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.1・§3.7・D-8）:
     `declared < EXPECTED`の仮想補完分岐（欠落キーをunknownで補って通す・
     T4 advisory）を撤去した。役割の行の文法が`model=<定義名>[,…]`へ変わり、
-    旧記法（`model=claude-opus-5`等）が新文法でも「定義名」として文法的に
+    旧記法（`model=claude-opus-5-5`等）が新文法でも「定義名」として文法的に
     妥当に読めてしまうため、6未満はすべて`T4-LEGACY`で解決失敗にする
     （FR-15。追随待ちとして通さない）。この分岐がT4 advisoryの唯一の
     発生源だったので、T4は本案件でコードから完全に消える。

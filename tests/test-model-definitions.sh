@@ -71,7 +71,7 @@ cat > "$BASE/models.conf" <<'EOF'
 # モデル定義（実体＝機ごとのローカル。config/models.conf.sampleのコピー）
 [t-opus-high]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=high
 
 [sonnet-noeffort]
@@ -104,7 +104,7 @@ EOF
 cat > "$BASE/agents/verifier.md" <<'EOF'
 ---
 name: verifier
-model: claude-opus-5
+model: claude-opus-5-5
 ---
 EOF
 cat > "$BASE/agents/ja-doc.md" <<'EOF'
@@ -186,7 +186,7 @@ role.ja-doc:      not_adopted model=sonnet-noeffort'
 echo "=== AC-2: FX-B1のlist-rolesが4行に行単位完全一致 ==="
 {
   actual="$(L "$BASE/profile.md")"
-  expected="$(printf 'implementer\tconfigured\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5\tsubagent\t\nimplementer\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh\nleader\tconfigured\tt-opus-high\tanthropic-api\tclaude-opus-5\tsubagent\thigh\nverifier\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh')"
+  expected="$(printf 'implementer\tconfigured\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5\tsubagent\t\nimplementer\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh\nleader\tconfigured\tt-opus-high\tanthropic-api\tclaude-opus-5-5\tsubagent\thigh\nverifier\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh')"
   assert_eq "AC-2: list-roles 4行完全一致" "$expected" "$actual"
 }
 
@@ -243,7 +243,7 @@ profile_slug: fixture
 team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
-role.leader:      configured ${legacy_attr_frag}anthropic-api model=claude-opus-5 effort=high
+role.leader:      configured ${legacy_attr_frag}anthropic-api model=claude-opus-5-5 effort=high
 role.implementer: configured ${legacy_attr_frag}anthropic-api model=claude-sonnet-5
 role.verifier:    configured ${legacy_attr_frag}external execution=external-cli model=default effort=high
 ---
@@ -326,7 +326,7 @@ echo "=== AC-9: FX-B9（リーダーは先頭候補のみ解決） ==="
   keys="$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
   assert_eq "FX-B9: キー集合" "effort,model" "$keys"
   model_val="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])')"
-  assert_eq "FX-B9: model==claude-opus-5（先頭候補）" "claude-opus-5" "$model_val"
+  assert_eq "FX-B9: model==claude-opus-5-5（先頭候補）" "claude-opus-5-5" "$model_val"
 }
 
 echo "=== AC-10: 職種frontmatterのmodel値はresolver出力へ影響しない ==="
@@ -521,7 +521,7 @@ echo "=== RG-1: 指定した非anthropic-api/subagentはBedrock経路の判定�
   cat > "$WORK/agents-rg1/implementer.md" <<'EOF'
 ---
 name: implementer
-model: claude-opus-5
+model: claude-opus-5-5
 ---
 EOF
   cp "$BASE/agents/verifier.md" "$BASE/agents/ja-doc.md" "$WORK/agents-rg1/"
@@ -606,7 +606,7 @@ root = work / "model-removal-fx"
 root.mkdir()
 profile = (r / "tests/fixtures/profile.md").read_text()
 defs = (r / "tests/fixtures/models.conf").read_text()
-models = ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5",
+models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5",
           "claude-haiku-4-5-20251001", "claude-fable-5", "claude-opus-4-8",
           "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
           "claude-opus-5-unknown", "opus"]
@@ -615,7 +615,7 @@ for n in range(1, 29):
     (d / "agents").mkdir(parents=True)
     for source in (r / "claude/agents").glob("*.md"):
         shutil.copy2(source, d / "agents" / source.name)
-    attrs = dict(provider="anthropic-api", model=models[n-1] if n <= 11 else "claude-opus-5",
+    attrs = dict(provider="anthropic-api", model=models[n-1] if n <= 11 else "claude-opus-5-5",
                  execution="subagent", effort="high")
     state, candidates = "configured", "pick"
     if n in (12, 13):
@@ -628,7 +628,7 @@ for n in range(1, 29):
     # ことを固定する（V1-b等より前段のガード。下の run(28) のアサーションが対象）。
     if n in (16, 28): state = "unavailable"
     if n in (23, 28): attrs.update(provider="bedrock", model="opus")
-    if n == 24: attrs.update(provider="bedrock-mantle", model="anthropic.claude-opus-5")
+    if n == 24: attrs.update(provider="bedrock-mantle", model="anthropic.claude-opus-5-5")
     if n == 27: candidates = "pick,probe"
     if n == 19: candidates = "pick,def-legacy"
     if n == 20: attrs["effort"] = "low"
@@ -644,7 +644,7 @@ for n in range(1, 29):
     (d / "models.conf").write_text(defs + "\n[pick]\n" + "".join(f"{k}={v}\n" for k, v in attrs.items()))
     if n in (25, 26, 27):
         provider = "bedrock-mantle" if n == 26 else "bedrock"
-        model = "anthropic.claude-opus-5" if n == 26 else "opus"
+        model = "anthropic.claude-opus-5-5" if n == 26 else "opus"
         with (d / "models.conf").open("a") as f:
             f.write(f"\n[probe]\nprovider={provider}\nmodel={model}\nexecution=subagent\n")
     if n in (21, 22):
@@ -665,7 +665,7 @@ def run(n, *, model_def="pick", profile_path=None, command="resolve-candidate"):
         args += ["--agents-dir", str(d / "agents")]
     return subprocess.run(args, env={**os.environ, "AIENV_MODEL_DEFS_FILE": str(d / "models.conf")}, capture_output=True)
 
-aliases = {"claude-fable-5-1":"fable", "claude-opus-5":"opus",
+aliases = {"claude-fable-5-1":"fable", "claude-opus-5-5":"opus",
            "claude-sonnet-5":"sonnet", "claude-haiku-4-5-20251001":"haiku"}
 for n, model in enumerate(list(aliases), 1):
     p = run(n); effort = "" if n == 4 else "high"
@@ -793,6 +793,35 @@ echo "=== AC-20: resolve-candidateのeffortの口（ラッパー起動-設計-v1
     bad_files="$(grep -lE 'models\.conf|parse_model_defs|load_model_defs' "${wrapper_files[@]}" 2>/dev/null || true)"
   fi
   assert_eq "wrapper_does_not_parse_models_conf: models.confを解析するラッパーファイルが0件" "" "$bad_files"
+}
+
+echo "=== Opus 5.5 案件 OPUS55-AC-2・OPUS55-AC-3: 別名表更新後の解決結果 ==="
+{
+  # OPUS55-AC-2: model=claude-opus-5-5（BASEのt-opus-high。上のFX-B1等で
+  # 既に既定値として使っている）がAGENT_MODEL=opusへ解決する。
+  out_opus55="$(C "$BASE/profile.md" leader t-opus-high "$BASE/agents")"; rc_opus55=$?
+  assert_eq "OPUS55-AC-2: exit0" "0" "$rc_opus55"
+  agent_model_opus55="$(printf '%s\n' "$out_opus55" | awk -F'\t' '$1=="AGENT_MODEL"{print $2}')"
+  assert_eq "OPUS55-AC-2: AGENT_MODEL==opus（model=claude-opus-5-5の解決）" "opus" "$agent_model_opus55"
+
+  # OPUS55-AC-3: 旧世代ID model=claude-opus-5 は別名表（AGENT_MODEL_ALIASES）
+  # に無いため解決失敗する。⚠️ 意図的に旧IDを使う陰性fixture（AC-4の一括
+  # 置換の対象外）。
+  cp "$BASE/models.conf" "$WORK/opus55-legacy.conf"
+  cat >> "$WORK/opus55-legacy.conf" <<'EOF'
+
+[legacy-opus]
+provider=anthropic-api
+model=claude-opus-5
+execution=subagent
+effort=high
+EOF
+  variant_profile "$WORK/opus55-legacy.md" \
+    's/role.leader:      configured model=t-opus-high/role.leader:      configured model=legacy-opus/'
+  out_legacy="$(AIENV_MODEL_DEFS_FILE="$WORK/opus55-legacy.conf" python3 "$LIB" resolve-candidate "$WORK/opus55-legacy.md" --role leader --model-def legacy-opus --agents-dir "$BASE/agents" 2>&1)"; rc_legacy=$?
+  assert_eq "OPUS55-AC-3: exit2（旧IDclaude-opus-5は別名表に無い）" "2" "$rc_legacy"
+  assert_contains "OPUS55-AC-3: AGENT_MODEL_UNSUPPORTED" "$out_legacy" "AGENT_MODEL_UNSUPPORTED"
+  assert_contains "OPUS55-AC-3: 理由にmodel=claude-opus-5を含む" "$out_legacy" "model=claude-opus-5"
 }
 
 echo ""

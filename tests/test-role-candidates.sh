@@ -81,7 +81,7 @@ EOF
 cat > "$BASE/models.conf" <<'EOF'
 [t-opus-high]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=high
 
 [sonnet-noeffort]
@@ -288,6 +288,16 @@ PYSTUB
   assert_contains "MINOR-8: 正常行(leader)はstdoutにそのまま残る" "$stub_out" "leader"
   assert_not_contains "MINOR-8: 壊れた行(broken)はstdoutに出ない" "$stub_out" "broken"
   assert_eq "MINOR-8: stderrにUNRESOLVED TAB INTERNAL_ERRORを1行" "$(printf 'UNRESOLVED\tINTERNAL_ERROR')" "$stub_err"
+}
+
+echo "=== OPUS55-AC-2: model=claude-opus-5-5（t-opus-high）のpass列がopus ==="
+{
+  # Opus 5.5 採用（opus-*定義をclaude-opus-5-5へ）AC-2: resolver別名表の
+  # 更新後、role.leader（model=t-opus-high→claude-opus-5-5）のpass列
+  # （4列目）がopusのまま出る。
+  out="$(RCALL "$MISSING_CACHE")"
+  leader_row="$(printf '%s\n' "$out" | awk -F'\t' '$1=="leader"{print}')"
+  assert_eq "OPUS55-AC-2: leaderのpass列==opus" "opus" "$(printf '%s' "$leader_row" | awk -F'\t' '{print $4}')"
 }
 
 echo ""
