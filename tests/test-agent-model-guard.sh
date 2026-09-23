@@ -93,7 +93,7 @@ assert_deny_case "GD-02 欠落をexit 0の完全なdeny JSONで拒否" "$WORK/gd
 run_guard "$base,"'"model":""}}' "$WORK/gd03.out" "$WORK/gd03.err"
 assert_deny_case "GD-03 空文字をexit 0の完全なdeny JSONで拒否" "$WORK/gd03.out" "$WORK/gd03.err" 'MODEL_ARGUMENT_INVALID: Agent.model は resolve-candidate が返した4別名のいずれかを明示してください。'
 
-run_guard "$base,"'"model":"claude-opus-5"}}' "$WORK/gd04.out" "$WORK/gd04.err"
+run_guard "$base,"'"model":"claude-opus-5-5"}}' "$WORK/gd04.out" "$WORK/gd04.err"
 assert_deny_case "GD-04 具体IDをexit 0の完全なdeny JSONで拒否" "$WORK/gd04.out" "$WORK/gd04.err" 'MODEL_ARGUMENT_INVALID: Agent.model は resolve-candidate が返した4別名のいずれかを明示してください。'
 
 run_guard '{"tool_name":"Agent","tool_input":{"subagent_type":"Explore"}}' "$WORK/gd05.out" "$WORK/gd05.err"

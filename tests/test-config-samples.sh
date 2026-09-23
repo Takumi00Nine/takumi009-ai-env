@@ -102,6 +102,26 @@ echo "=== AC-1c: 配役表の職種名が職種定義ファイルの集合に収
   fi
 }
 
+echo "=== OPUS55-AC-1: config/models.conf.sample の opus-*定義がclaude-opus-5-5・他3定義は不変 ==="
+{
+  # Opus 5.5 採用（opus-*定義をclaude-opus-5-5へ）AC-1: [opus-high]/[opus-medium]/
+  # [opus-low]のmodel=がclaude-opus-5-5（provider/effortは変えない）。
+  # fable-high/sonnet-high/haikuは不変（値でなく対象3定義だけを見る）。
+  model_of() { # model_of <定義名> — [定義名]セクション内のmodel=値を1つ返す
+    awk -v name="[$1]" '
+      $0==name{insec=1; next}
+      /^\[/{insec=0}
+      insec && /^model=/{sub(/^model=/,""); print; exit}
+    ' "$MODELS_SAMPLE"
+  }
+  for name in opus-high opus-medium opus-low; do
+    assert_eq "OPUS55-AC-1: [$name] model==claude-opus-5-5" "claude-opus-5-5" "$(model_of "$name")"
+  done
+  assert_eq "OPUS55-AC-1: [fable-high] model は不変" "claude-fable-5-1" "$(model_of fable-high)"
+  assert_eq "OPUS55-AC-1: [sonnet-high] model は不変" "claude-sonnet-5" "$(model_of sonnet-high)"
+  assert_eq "OPUS55-AC-1: [haiku] model は不変" "claude-haiku-4-5-20251001" "$(model_of haiku)"
+}
+
 echo "=== AC-2: 経路（provider×execution）ごとの代表1件が起動でき、未対応の経路は保留になる（要件書 FR-7・AC-2） ==="
 {
   check_candidate() {

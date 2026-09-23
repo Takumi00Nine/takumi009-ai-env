@@ -81,7 +81,7 @@ model=claude-sonnet-5
 
 [t-opus-high]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=high
 
 [t-bedrock-opus]

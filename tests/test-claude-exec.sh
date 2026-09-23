@@ -109,7 +109,7 @@ model=claude-sonnet-5
 
 [t-opus-high]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=high
 
 [sonnet-legacy]
@@ -305,6 +305,7 @@ echo "=== AC-5: model_passed_verbatim / model_switches_with_candidate ==="
   run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o1.json" --task-id t-ac5a --model-def t-sonnet-high
   assert_eq "t-sonnet-high: --model sonnet" "sonnet" "$(stub_arg_after --model)"
   run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-ac5b --model-def t-opus-high
+  # OPUS55-AC-2: model=claude-opus-5-5（t-opus-high）が --model opus へ解決される。
   assert_eq "t-opus-high: --model opus" "opus" "$(stub_arg_after --model)"
 }
 
