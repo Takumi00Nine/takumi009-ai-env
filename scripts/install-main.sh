@@ -349,7 +349,7 @@ PROFILE_SAMPLE_SRC="$DIR/config/profile.md.sample"
 # ============================================================
 
 # resolve_leader_runtime — 実効リーダー候補のmodel/effortを1行JSON
-# （例 {"model": "claude-opus-5", "effort": "high"}）で標準出力へ書く。
+# （例 {"model": "claude-opus-5-5", "effort": "high"}）で標準出力へ書く。
 # `resolve-leader`は自己完結（存在確認・symlink拒否・preflight・全validatorを
 # lib内部で行う契約）なので、ここでは事前チェックを重複させない。失敗時は
 # 標準出力へ1文字も出さず、libの標準エラー（`<機械可読コード>\t<理由>`・値を

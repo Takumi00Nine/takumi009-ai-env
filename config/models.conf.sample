@@ -33,7 +33,7 @@
 #  model は具体ID（別名不可）
 # =====================================================================
 
-# --- 現行世代・参照用3定義（配役表・テストが参照。名前と値を変えない）---
+# --- 現行世代・参照用3定義（配役表・テストが参照。定義名は変えない。model 値は採用世代に追随＝2026-09-23 Opus 5→5.5）---
 [fable-high]
 provider=anthropic-api
 model=claude-fable-5-1
@@ -41,7 +41,7 @@ effort=high
 
 [opus-high]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=high
 
 [sonnet-high]
@@ -62,23 +62,23 @@ provider=anthropic-api
 model=claude-fable-5-1
 effort=max
 
-# Opus 5を軽く回す枠。並列軽作業・枠温存向け
+# Opus 5.5を軽く回す枠。並列軽作業・枠温存向け
 [opus-low]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=low
 
-# Opus 5の中間枠。high と low の間（標準的な検証・設計の下読み向け）
+# Opus 5.5の中間枠。high と low の間（標準的な検証・設計の下読み向け）
 [opus-medium]
 provider=anthropic-api
-model=claude-opus-5
+model=claude-opus-5-5
 effort=medium
 
 # xhighは運用上使わない（Decisions/2026-08-07-avoid-xhigh-effort）。網羅
 # 目的で経路の存在だけ記録し無効化
 # [opus-xhigh]
 # provider=anthropic-api
-# model=claude-opus-5
+# model=claude-opus-5-5
 # effort=xhigh
 
 # Sonnet 5を軽く回す枠。探索的調査・大量並列向け
