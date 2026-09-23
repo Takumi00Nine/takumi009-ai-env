@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-09-22
+updated: 2026-09-23
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -29,10 +29,10 @@ aliases:
 - **記録職の選び方**: 既定＝`vault-scribe-light`（既存ノートへの数行追記・状態記号・frontmatter の数行・文字列置換 1〜2 箇所）。標準 `vault-scribe` は新規ノート・Preferences の編集・本文の書き換え・複数ノートの整合のときだけ。正本＝各定義ファイルの「担当範囲」。
 - 長くなったら分割（目安8,000字・Decisions は対象外）＝詳細を別ノートへ分離し相互リンク。
 - フロントマター必須（date/tags/project）・本文編集で `updated` 更新。wiki link はフォルダ付き `[[Folder/note]]`・関連ノートは**相互に**リンク。
-- aliases 必須（README 除く）＝想起フックの検索キー。実際に打ちそうな語1〜5個・汎用語禁止・迷ったら付けない。外部情報系は `review_by:`（任意）。
+- aliases 必須（README 除く）＝想起フックの検索キー。実際に打ちそうな語（目安5個・他ノートと重ならない固有語・汎用語禁止・迷ったら付けない）で、**うち1個以上は「その知識を使う場面で口にする語」**（技法名・カタログ名だけにしない＝[[Decisions/2026-09-23-situational-aliases-and-milestone-recall]]）。外部情報系は `review_by:`（任意）。
 - Read/Write/Edit/Grep で直接操作（obsidian-mcp 不使用）。Vault 読み書きは本人へ明示報告（定常メンテ＝Fragments 昇格・棚卸し対処は個別報告不要）。
 ## AI主導の想起（キーワード1本化）
-- 検索仕様は**フック1つだけ**（aliases・ファイル名照合。別ツール/別閾値/別モード禁止）。候補不足なら同じフックをクエリ言い換えで再実行（コマンド＝[[Knowledge/external-brain-guide]]）。工夫は「聞き方」のみ。
+- 検索仕様は**フック1つだけ**（aliases・ファイル名照合。別ツール/別閾値/別モード禁止）。候補不足なら同じフックをクエリ言い換えで再実行（コマンド＝[[Knowledge/external-brain-guide]]）。工夫は「聞き方」のみ。**工程の節目（要件定義・設計・企画書・レビューの着手前）にリーダーが場面語で同じフックを1回回し、出た棚を読んでから始める**（同 Decision）。
 ## 起動時ヘルス警告・綻びの扱い
 - SessionStart 注入の【外部脳ヘルス】は `stage=ERROR` のときだけ最初の応答で「直しましょう」と述べ、主体 `AI` の項目を対処して本番経路（読込・想起）を 1 回だけ再実行し、失敗したら診断結果と対処案の提示に切り替える。`WARNING` は本人が対処を求めるまで言及しない。対処の締め手順と終了条件（`OK 候補0件` まで回す）＝[[Preferences/external-brain-maintenance-close-loop]]。
 - **綻びは読み時に直す**: 鮮度（`review_by` 超過・古い外部可変情報＝一次情報で再確認→`updated` 引き直し。内部の決定ノートは対象外）／リンク切れ（張り直す or 除去）／alias（欠落・汎用/短すぎ＝想起に効く語へ）。⚠️ サブ機で Preferences 内のリンク先が無いのは常態＝リンク切れに数えない（[[Preferences/core-workflow]] §4）。
