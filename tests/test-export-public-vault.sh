@@ -71,6 +71,19 @@ assert_stdout_has() {
   fi
 }
 
+# AC-1/AC-2（巨大denylist回帰テスト用）: stdout/stderrのどちらに出ても検知できるよう
+# 両方をまとめて「含まれていないこと」を確認する（2026-09-23 本番障害の回帰）。
+assert_output_not_has() {
+  local desc="$1" work="$2" needle="$3"
+  local combined
+  combined="$(cat "$work/stdout.log" "$work/stderr.log" 2>/dev/null)"
+  if [[ "$combined" == *"$needle"* ]]; then
+    fail_case "$desc (出力に \"$needle\" が含まれてはいけない)"
+  else
+    pass "$desc"
+  fi
+}
+
 # ダミー Vault fixture を1つ作る（各テストケースで使い回す最小構成）。
 # 呼び出し元が VAULT_DIR を用意してから呼ぶ。
 make_base_vault() {
@@ -111,6 +124,25 @@ EOF
   cat > "$vault/Blogs/published-sample.md" <<'EOF'
 # 公開済み記事サンプル
 EOF
+}
+
+# AC-1/AC-2（巨大denylist回帰テスト用）: 指定フォルダに、指定文字数ちょうどの
+# 一意なbasenameを持つ.mdノートを大量生成する（2026-09-23本番のexport障害＝
+# `rg: PCRE2: error compiling pattern at offset 0: regular expression is too large`
+# の再現用。原因は basename検査（3-b/3-e）が`rg -P -f <denylist生成パターン>`で
+# denylist全件を1本のPCRE2パターンとしてコンパイルし、約64KB(PCRE2の
+# LINK_SIZE=2上限)を超えると失敗すること。本番では515件・34,146バイトで
+# 再現したため、ここでは余裕を持って60文字×1,200件＝生成される
+# rg -f 用パターンファイルが約118,800バイトになる規模にする）。
+make_large_denylist_notes() {
+  local dir="$1" count="$2" name_len="$3" prefix="note-"
+  mkdir -p "$dir"
+  local padlen=$((name_len - ${#prefix}))
+  local i name
+  for ((i = 0; i < count; i++)); do
+    name="${prefix}$(printf '%0*d' "$padlen" "$i")"
+    printf '# dummy\n' > "$dir/$name.md"
+  done
 }
 
 # ダミーのNGワードファイルを作る（NGWORD_ALPHA/NGWORD_BETA の2語。ngwords.txtの
@@ -970,6 +1002,74 @@ echo "=== 9. PA-2: vault-public 以外を stage した状態で実行しても c
   staged_status="$(git -C "$REPO_DIR" status --porcelain -- other-file.txt)"
   assert_eq "stage したままの other-file.txt は index に残っている（A  other-file.txt）" \
     "A  other-file.txt" "$staged_status"
+
+  rm -rf "$WORK"
+}
+
+# --- 巨大denylist回帰テスト（2026-09-23本番障害・AC-1/AC-2）:
+#     3-b（fail-fast・Personal）・3-e（report-only・Knowledge等）のbasename検査は
+#     denylist全件を1本のrgパターンへ結合する。件数が増えるとPCRE2の
+#     コンパイル上限(約64KB)を超え、`rg: PCRE2: error compiling pattern at
+#     offset 0: regular expression is too large`でexit 2になり、fail-fast側は
+#     誤ってFAILし、report-only側はWARNを出す（設計方針＝-Pを外すことだが、
+#     このテストは方針でなく振る舞い＝下記の受入条件だけを固定する） ---
+
+echo "=== 10. AC-1 large-denylist-report: report対象(Knowledge)のbasename denylistが巨大でもrg実行エラーにならない ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  REPO_DIR="$WORK/repo"
+  make_base_vault "$VAULT_DIR"
+  make_large_denylist_notes "$VAULT_DIR/Knowledge" 1200 60
+  new_repo "$REPO_DIR"
+
+  # 生成される基準パターンファイルの実バイト数を直接確認する（scripts/lib/
+  # personal-link-check.shを読み取り専用でsourceして計測。編集はしない）。
+  pattern_size=$(
+    source "$REPO_ROOT/scripts/lib/personal-link-check.sh"
+    DENY="$(mktemp)"; PAT="$(mktemp)"
+    personal_link_build_basename_denylist "$VAULT_DIR" Knowledge "$DENY"
+    personal_link_build_basename_pattern_file "$DENY" "$PAT"
+    wc -c < "$PAT" | tr -d ' '
+    rm -f "$DENY" "$PAT"
+  )
+  assert_true "basenameパターンファイルが70,000バイトを超える(実測 ${pattern_size} バイト)" \
+    "$([[ "$pattern_size" -gt 70000 ]] && echo 1 || echo 0)"
+
+  rc=0
+  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
+  assert_eq "AC-1: 巨大denylistでもexit 0" "0" "$rc"
+  assert_output_not_has "AC-1: report-only rg実行エラーのWARNが出ない" "$WORK" "WARN: report-only rg 実行エラー"
+  assert_output_not_has "AC-1: PCRE2の\"too large\"エラーが出ない" "$WORK" "regular expression is too large"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 11. AC-2 large-denylist-failfast: fail-fast対象(Personal)のbasename denylistが巨大でもfailしない(リンク無しなら) ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  REPO_DIR="$WORK/repo"
+  make_base_vault "$VAULT_DIR"
+  # Preferences から Personal への wiki link は一切追加しない（AC-2の前提）。
+  make_large_denylist_notes "$VAULT_DIR/Personal" 1200 60
+  new_repo "$REPO_DIR"
+
+  pattern_size=$(
+    source "$REPO_ROOT/scripts/lib/personal-link-check.sh"
+    DENY="$(mktemp)"; PAT="$(mktemp)"
+    personal_link_build_basename_denylist "$VAULT_DIR" Personal "$DENY"
+    personal_link_build_basename_pattern_file "$DENY" "$PAT"
+    wc -c < "$PAT" | tr -d ' '
+    rm -f "$DENY" "$PAT"
+  )
+  assert_true "basenameパターンファイルが70,000バイトを超える(実測 ${pattern_size} バイト)" \
+    "$([[ "$pattern_size" -gt 70000 ]] && echo 1 || echo 0)"
+
+  rc=0
+  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
+  assert_eq "AC-2: Personalへのリンクが無ければ巨大denylistでもexit 0" "0" "$rc"
+  assert_output_not_has "AC-2: basename checkのrg実行エラーでfailしない" "$WORK" "rg 実行エラー (basename check"
 
   rm -rf "$WORK"
 }

@@ -51,7 +51,9 @@ echo "=== 1. personal_link_folder_regex: 基本形 [[Personal/xxx]] にマッチ
   printf '[[Personal/career-private]] への参照\n' > "$DIR/note.md"
   pattern="$(personal_link_folder_regex "Personal")"
   rc=0
-  rg -n -i -P "$pattern" "$DIR" >/dev/null || rc=$?
+  # AC-4: 本番(export-public-vault.sh)と同じ既定エンジン(Rust regex)で検証する
+  # （-Pは付けない＝PCRE2固有の書き方に依存していないことをテストが保証する）。
+  rg -n -i "$pattern" "$DIR" >/dev/null || rc=$?
   assert_eq "フォルダ付きlinkにマッチする(rc=0)" "0" "$rc"
   rm -rf "$DIR"
 }
@@ -64,7 +66,8 @@ echo "=== 2. personal_link_folder_regex: [[ 直後の空白・フォルダ名/�
     DIR="$(mktemp -d)"
     printf '%s\n' "$variant" > "$DIR/note.md"
     rc=0
-    rg -n -i -P "$pattern" "$DIR" >/dev/null || rc=$?
+    # AC-4: -Pなし（本番と同じ既定エンジン）で検証する。
+    rg -n -i "$pattern" "$DIR" >/dev/null || rc=$?
     assert_eq "「${variant}」にマッチする" "0" "$rc"
     rm -rf "$DIR"
   done
@@ -77,7 +80,8 @@ echo "=== 3. personal_link_folder_regex: 無関係なフォルダへのlinkに�
   printf '[[Knowledge/some-note]] への参照\n' > "$DIR/note.md"
   pattern="$(personal_link_folder_regex "Personal")"
   rc=0
-  rg -n -i -P "$pattern" "$DIR" >/dev/null || rc=$?
+  # AC-4: -Pなし（本番と同じ既定エンジン）で検証する。
+  rg -n -i "$pattern" "$DIR" >/dev/null || rc=$?
   assert_eq "マッチしない(rc=1)" "1" "$rc"
   rm -rf "$DIR"
 }
@@ -125,7 +129,8 @@ echo "=== 6. personal_link_build_basename_pattern_file: basename形式(pipe/head
     DIR="$(mktemp -d)"
     printf '%s\n' "$variant" > "$DIR/note.md"
     rc=0
-    rg -n -i -P -f "$PATTERN_FILE" "$DIR" >/dev/null || rc=$?
+    # AC-4: -Pなし（本番と同じ既定エンジン）で検証する。
+    rg -n -i -f "$PATTERN_FILE" "$DIR" >/dev/null || rc=$?
     assert_eq "「${variant}」にマッチする" "0" "$rc"
     rm -rf "$DIR"
   done
@@ -142,7 +147,8 @@ echo "=== 7. personal_link_build_basename_pattern_file: 正規表現特殊文字
   DIR="$(mktemp -d)"
   printf '[[note.with(special)chars]]\n' > "$DIR/note.md"
   rc=0
-  rg -n -i -P -f "$PATTERN_FILE" "$DIR" >/dev/null || rc=$?
+  # AC-4: -Pなし（本番と同じ既定エンジン）で検証する。
+  rg -n -i -f "$PATTERN_FILE" "$DIR" >/dev/null || rc=$?
   assert_eq "特殊文字を含むbasenameでもマッチする(rc=0)" "0" "$rc"
   rm -rf "$DENYLIST" "$PATTERN_FILE" "$DIR"
 }
