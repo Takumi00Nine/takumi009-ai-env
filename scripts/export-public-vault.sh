@@ -143,11 +143,14 @@ done
 #      `[[personal/x]]` のような小文字表記でもObsidianはほぼ確実に実リンクとして解決してしまう
 #      （2026-07-08 修正決定。ngwordsチェック/gitleaksは対象外＝現状維持）。
 #      対象はステージング（$STAGING_DIR）。本番 $VAULT_PUBLIC は全チェック通過後にしか触らない。
+#      -P は使わない: `-f`（denylist ファイル）指定時、PCRE2 は全パターンを1本に結合するため
+#      denylist が大きいと約64KB上限（LINK_SIZE=2）を超えてコンパイル不能になる
+#      （2026-09-23 本番 export で515件・34,146バイトにより実際に発生。既定の Rust regex に変更）。
 log "check: Personal folder wiki link (folder-qualified, fail-fast)"
 folder_alt=$(printf '%s|' "${FAIL_LINK_FOLDERS[@]}")
 folder_alt="${folder_alt%|}"
 rc=0
-rg -n -i -P "$(personal_link_folder_regex "$folder_alt")" "$STAGING_DIR" || rc=$?
+rg -n -i "$(personal_link_folder_regex "$folder_alt")" "$STAGING_DIR" || rc=$?
 if [[ $rc -eq 0 ]]; then
   fail "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
 elif [[ $rc -gt 1 ]]; then
@@ -166,7 +169,7 @@ personal_link_build_basename_pattern_file "$BASENAME_DENYLIST" "$BASENAME_PATTER
 
 if [[ -s "$BASENAME_PATTERN_FILE" ]]; then
   rc=0
-  rg -n -i -P -f "$BASENAME_PATTERN_FILE" "$STAGING_DIR" || rc=$?
+  rg -n -i -f "$BASENAME_PATTERN_FILE" "$STAGING_DIR" || rc=$?
   if [[ $rc -eq 0 ]]; then
     fail "Personal ノートへの wiki link（basename形式）を検出しました"
   elif [[ $rc -gt 1 ]]; then
@@ -221,7 +224,7 @@ register_tmp; REPORT_LINES_FILE="$REGISTER_TMP_RESULT"
 report_folder_alt=$(printf '%s|' "${REPORT_LINK_FOLDERS[@]}")
 report_folder_alt="${report_folder_alt%|}"
 rc=0
-rg -n -i -P "$(personal_link_folder_regex "$report_folder_alt")" "$STAGING_DIR" >> "$REPORT_LINES_FILE" || rc=$?
+rg -n -i "$(personal_link_folder_regex "$report_folder_alt")" "$STAGING_DIR" >> "$REPORT_LINES_FILE" || rc=$?
 [[ $rc -gt 1 ]] && log "WARN: report-only rg 実行エラー (folder-qualified, exit $rc)。レポートが不完全な可能性があります"
 
 register_tmp; REPORT_BASENAME_DENYLIST="$REGISTER_TMP_RESULT"
@@ -230,7 +233,7 @@ personal_link_build_basename_denylist "$VAULT" "${REPORT_LINK_FOLDERS[@]}" "$REP
 personal_link_build_basename_pattern_file "$REPORT_BASENAME_DENYLIST" "$REPORT_BASENAME_PATTERN_FILE"
 if [[ -s "$REPORT_BASENAME_PATTERN_FILE" ]]; then
   rc=0
-  rg -n -i -P -f "$REPORT_BASENAME_PATTERN_FILE" "$STAGING_DIR" >> "$REPORT_LINES_FILE" || rc=$?
+  rg -n -i -f "$REPORT_BASENAME_PATTERN_FILE" "$STAGING_DIR" >> "$REPORT_LINES_FILE" || rc=$?
   [[ $rc -gt 1 ]] && log "WARN: report-only rg 実行エラー (basename, exit $rc)。レポートが不完全な可能性があります"
 fi
 
