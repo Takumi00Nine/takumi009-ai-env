@@ -23,14 +23,16 @@
 #
 # 空白許容ポリシー（2026-07-08、tester 独立検証で発見された2件のMajorへの対応。
 # 複製元=export-public-vault.shのコメントをそのまま踏襲）:
-#  1件目: name と区切り文字（| # ^ ]）の**間**の空白 → `[[:space:]]*` を区切り文字の前に追加
+#  1件目: name と区切り文字（| # ^ ]）の**間**の空白 → `\s*` を区切り文字の前に追加
 #         （例: `[[career-private | alias]]` のようにpipeエイリアスの可読性目的で空白を
 #          入れる書き方はObsidian実務でよくあるが、空白なし前提の正規表現だとすり抜けていた）
-#  2件目: `[[` **直後**の空白 → `[[:space:]]*` を name の前にも追加
+#  2件目: `[[` **直後**の空白 → `\s*` を name の前にも追加
 #         （例: `[[ career-private]]` のようなタイプミス/IME確定時の余分な空白）
+# `\s` を使うのはRust regex（rg）ではUnicode対応で全角スペース（U+3000）も含むため
+# （`[[:space:]]`はASCII限定でPCRE2時代に拾えていた全角空白入りリンクがすり抜けていた）。
 personal_link_folder_regex() {
   local alt="$1"
-  printf '\\[\\[[[:space:]]*(%s)[[:space:]]*/' "$alt"
+  printf '\\[\\[\\s*(%s)\\s*/' "$alt"
 }
 
 # $1 = Vaultルート、$2以降 = basename denylistを生成する対象フォルダ名（可変長）、
@@ -73,6 +75,6 @@ personal_link_build_basename_pattern_file() {
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     escaped=$(printf '%s' "$name" | sed -e 's/[.[\*^$()+?{}|\\]/\\&/g')
-    printf '\\[\\[[[:space:]]*%s[[:space:]]*([|#\\^]|\\])\n' "$escaped" >> "$out"
+    printf '\\[\\[\\s*%s\\s*([|#\\^]|\\])\n' "$escaped" >> "$out"
   done < "$denylist"
 }
