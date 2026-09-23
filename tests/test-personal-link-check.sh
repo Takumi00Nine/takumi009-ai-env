@@ -413,6 +413,46 @@ FINDEOF
   rm -rf "$WORK_TMP" "$BINDIR"
 }
 
+echo "=== 13. AC-5(a) personal_link_folder_regex: Unicode全角空白(U+3000)入りのフォルダ付きlinkを検出する（検証職BLOCKING指摘: Rust regexの[[:space:]]はASCIIのみでPCRE2から後退していた） ==="
+{
+  source "$LIB"
+  SP="$(printf '\xe3\x80\x80')"
+  pattern="$(personal_link_folder_regex "Personal")"
+  variant1="[[${SP}Personal/career-private]]"
+  variant2="[[Personal/career-private${SP}|alias]]"
+  for variant in "$variant1" "$variant2"; do
+    DIR="$(mktemp -d)"
+    printf '%s\n' "$variant" > "$DIR/note.md"
+    rc=0
+    # AC-4継続: -Pなし（本番と同じ既定Rust regexエンジン）で検証する。
+    rg -n -i "$pattern" "$DIR" >/dev/null || rc=$?
+    assert_eq "全角空白入りfolder形式にマッチする(rc=0): ${variant}" "0" "$rc"
+    rm -rf "$DIR"
+  done
+}
+
+echo "=== 14. AC-5(b) personal_link_build_basename_pattern_file: Unicode全角空白(U+3000)入りのbasename形式linkを検出する（検証職BLOCKING指摘） ==="
+{
+  source "$LIB"
+  SP="$(printf '\xe3\x80\x80')"
+  DENYLIST="$(mktemp)"
+  printf 'career-private\n' > "$DENYLIST"
+  PATTERN_FILE="$(mktemp)"
+  personal_link_build_basename_pattern_file "$DENYLIST" "$PATTERN_FILE"
+  variant1="[[${SP}career-private]]"
+  variant2="[[career-private${SP}|alias]]"
+  for variant in "$variant1" "$variant2"; do
+    DIR="$(mktemp -d)"
+    printf '%s\n' "$variant" > "$DIR/note.md"
+    rc=0
+    # AC-4継続: -Pなし（本番と同じ既定Rust regexエンジン）で検証する。
+    rg -n -i -f "$PATTERN_FILE" "$DIR" >/dev/null || rc=$?
+    assert_eq "全角空白入りbasename形式にマッチする(rc=0): ${variant}" "0" "$rc"
+    rm -rf "$DIR"
+  done
+  rm -f "$DENYLIST" "$PATTERN_FILE"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

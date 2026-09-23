@@ -340,6 +340,32 @@ EOF
   rm -rf "$WORK"
 }
 
+# --- 検証職BLOCKING指摘の回帰テスト（AC-5・2026-09-23）:
+#     export-public-vault.shはrg -Pを外し既定のRust regex(ASCII限定[[:space:]])で
+#     動くようになった結果、PCRE2/UCPでは一致していたUnicode空白（全角空白U+3000等）
+#     をfail-fastが検出できなくなる後退（PCRE2 [[:space:]]=2件一致 / Rust
+#     [[:space:]]=1件のみ、という実測差）。ソース上の見た目に頼らず、バイト列
+#     (\xe3\x80\x80)からU+3000を組み立てて注入する ---
+
+echo "=== 2a6. private link（フォルダ付き形式・[[直後に全角空白U+3000）で exit 1（AC-5(c)） ==="
+{
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"
+  REPO_DIR="$WORK/repo"
+  make_base_vault "$VAULT_DIR"
+  SP="$(printf '\xe3\x80\x80')"
+  printf '\n全角空白直後のうっかりリンク: [[%sPersonal/career-private]]\n' "$SP" \
+    >> "$VAULT_DIR/Preferences/sample-pref.md"
+  new_repo "$REPO_DIR"
+
+  rc=0
+  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
+  assert_eq "全角空白直後のフォルダ付きprivate linkで exit 1" "1" "$rc"
+  assert_stderr_has "理由=全角空白直後フォルダ付きlink検出" "$WORK" "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
+
+  rm -rf "$WORK"
+}
+
 echo "=== 2b. private link（basename形式・フォルダ省略）で exit 1 ==="
 {
   WORK="$(mktemp -d)"
