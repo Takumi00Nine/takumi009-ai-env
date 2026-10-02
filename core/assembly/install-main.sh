@@ -1,39 +1,40 @@
 #!/usr/bin/env bash
-# メイン環境用インストーラ: このリポジトリの claude/・codex/ 配下を
-# ライブ位置（~/.claude/・~/.codex/）へ symlink する（dotfiles/install.sh と同方式）。
+# メイン環境用インストーラ: このリポジトリの各機能フォルダ配下の Claude Code／Codex
+# 接続部品を、ライブ位置（~/.claude/・~/.codex/）へ symlink する（dotfiles/install.sh
+# と同方式。配置先の集合＝台帳 core/data/ledger.tsv・FR-14 ②）。
 #
 # 冪等（再実行安全）: 既存の「実ファイル」（symlinkでないもの）は初回だけ
 # "<dest>.pre-aienv.bak" へ退避してから symlink に置き換える。バックアップは
 # 既に存在すれば上書きしない（2回目以降の実行や、symlinkでなく実ファイルを
 # 生成し続ける config.toml でも、初回のオリジナルだけを守り続ける）。
 #
-# 例外: codex/config.toml は symlink しない。plain TOML は（hooks.json の
-# "command" 文字列と違い）シェル変数展開が行われないため、__AIENV_HOME__
-# プレースホルダを実ホームパスへ置換した実ファイルとして生成する
-# （詳細は codex/config.toml 冒頭のコメント参照）。
+# 例外: team/connect/codex/config.toml は symlink しない。plain TOML は
+# （hooks.json の "command" 文字列と違い）シェル変数展開が行われないため、
+# __AIENV_HOME__ プレースホルダを実ホームパスへ置換した実ファイルとして生成する
+# （詳細は team/connect/codex/config.toml 冒頭のコメント参照）。
 #
-# 例外その2: claude/settings.json も symlink しない。理由は2つ: ① JSONもTOML
+# 例外その2: core/assembly/settings.json も symlink しない。理由は2つ: ① JSONもTOML
 # 同様シェル変数展開されないため、"model"/"effortLevel" をローカル実体
 # プロファイルの role.leader から解決した値へ置き換える必要がある。
 # ② symlinkのままだと、セッション内で `/model` を実行した際にClaude Code自身が
 # ユーザー設定ファイルの "model" フィールドを書き換える仕様があり、symlink先＝
-# このリポジトリの claude/settings.json が直接書き換わる副作用があった。
+# このリポジトリの core/assembly/settings.json が直接書き換わる副作用があった。
 # generate_settings_json() が python3 の json module でトップレベルの
 # "model"/"effortLevel" キーへ代入した実ファイルを生成する（テンプレの
 # __AIENV_MODEL__／__AIENV_EFFORT__ は置換対象の目印として残す）。値は機役割
 # にも呼び出し経路（--sub-delegate）にも依存せず、role.leader からだけ決まる。
 #
 # 使い方:
-#   scripts/install-main.sh                          # 実行（symlink化 / config.toml・settings.json生成）
-#   scripts/install-main.sh --dry-run                # 置換計画だけ表示（何もしない）
-#   scripts/install-main.sh --with-dotfiles          # 上記に加え、dotfiles（部品・下請け）も導入する
-#   scripts/install-main.sh --check-profile          # ローカル実体プロファイルの resolve 結果を1行返す（副作用ゼロ）
-#   scripts/install-main.sh --render-settings-json <path>
+#   core/assembly/install-main.sh                          # 実行（symlink化 / config.toml・settings.json生成）
+#   core/assembly/install-main.sh --dry-run                # 置換計画だけ表示（何もしない）
+#   core/assembly/install-main.sh --with-dotfiles          # 上記に加え、dotfiles（部品・下請け）も導入する
+#   core/assembly/install-main.sh --check-profile          # ローカル実体プロファイルの resolve 結果を1行返す（副作用ゼロ）
+#   core/assembly/install-main.sh --render-settings-json <path>
 #                                                     # settings.json の生成物だけを <path> へ書いて終了（配置は行わない）
 #
-# --check-profile: resolver（claude/hooks/lib/profile_resolve.py resolve）の
+# --check-profile: resolver（team/executor/profile_resolve.py resolve）の
 # 結果行（OK/MINIMAL/PROFILE_NOT_FOUND 等・タブ区切り）を stdout の1行目に
-# そのまま出し、resolver の終了コードで exit する。scripts/check-drift.sh ⑧が
+# そのまま出し、resolver の終了コードで exit する。core/assembly/check-drift.sh ⑧が
 # stdout 1行目を機械可読行として読む契約のため、案内ログは stdout へ出さない。
 #
 # --render-settings-json <path>（2026-09-19 着手順3・設計 §3.5）: check-drift ①-2
@@ -53,19 +54,19 @@
 #
 # 機役割（配役表の `machine_role`）: 本スクリプトは既存の実体プロファイルの
 # 内容を一切書き換えない（実体を編集するのは本人だけ）。実体が無いときだけ、
-# 雛形配置ブロック（後述）が config/profile.md.sample から新規に作成する。
+# 雛形配置ブロック（後述）が team/data/profile.md.sample から新規に作成する。
 # リーダー配役（role.leader）が未確定・解決不能なら settings.json は生成せず
 # 非0で終了する（対話で確定させる経路と既定モデルへの縮退は 2026-09-19 に
 # 退役した＝profile.md を直接編集して再実行する）。
 #
-# python3 requirement (moved from README "Setup" 2026-09-19): `install-main.sh` requires `python3` (used to generate `claude/settings.json`; also required separately by `check-drift.sh`'s `config.toml`/`settings.json` comparisons). macOS normally ships one via Xcode Command Line Tools, so this usually isn't an issue — if it's missing, `install-main.sh` fails fast at startup with a clear message (run `xcode-select --install`).
+# python3 requirement (moved from README "Setup" 2026-09-19; paths updated for the v1.1 component split 2026-10-03): `install-main.sh` requires `python3` (used to generate `core/assembly/settings.json`; also required separately by `check-drift.sh`'s `config.toml`/`settings.json` comparisons). macOS normally ships one via Xcode Command Line Tools, so this usually isn't an issue — if it's missing, `install-main.sh` fails fast at startup with a clear message (run `xcode-select --install`).
 # Language runtimes including Python itself aren't managed via brew in this environment (see `anyenv-runtime-management` in the Vault), so it's intentionally not listed in the Brewfile.
 #
-# Role definitions (moved from README "About vault-public/" 2026-09-19, verbatim): Role definitions (`~/.claude/agents/<role>.md`, one per role under `claude/agents/*.md` in the repo) are symlinks straight into the repo, like the other symlinked destinations above — there is no per-role frontmatter generation.
+# Role definitions (moved from README "About vault-public/" 2026-09-19, verbatim; paths updated for the v1.1 component split 2026-10-03): Role definitions (`~/.claude/agents/<role>.md`, one per role under `team/rules/agents/*.md` in the repo) are symlinks straight into the repo, like the other symlinked destinations above — there is no per-role frontmatter generation.
 #
-# config/*.sample (moved from README "Main environment" 2026-09-19): `config/*.sample` is the source for these three local config files' real values. `config/profile.md.sample` and `config/models.conf.sample` ship with the real values used on the maintainer's main machine, so a fresh main machine can copy them as-is; a sub machine should copy them too and then edit at least `machine_role` (and, if it plays a different leader role, `role.leader`).
-# `config/bedrock.env.sample` (→ `~/.config/takumi009-ai-env/bedrock.env`, permission 0600) is only for machines that actually use Bedrock — don't place it on a subscription-only machine; there is no auto-copy for it, you always copy it yourself. `config/models.conf.sample` likewise has no auto-copy — copy it yourself.
-# `config/profile.md.sample` is different: if `~/.config/takumi009-ai-env/profile.md` doesn't exist yet, `install-main.sh` automatically copies `config/profile.md.sample` there for you the first time it runs (an existing skeleton-placement step from before `config/*.sample` existed; it never overwrites a profile that's already there). Copying it yourself beforehand has the same effect — either way you end up with this machine's real values, not a placeholder.
+# *.sample (moved from README "Main environment" 2026-09-19; paths updated for the v1.1 component split 2026-10-03): `team/data/*.sample` and `team/connect/claude-code/bedrock.env.sample` are the source for these three local config files' real values. `team/data/profile.md.sample` and `team/data/models.conf.sample` ship with the real values used on the maintainer's main machine, so a fresh main machine can copy them as-is; a sub machine should copy them too and then edit at least `machine_role` (and, if it plays a different leader role, `role.leader`).
+# `team/connect/claude-code/bedrock.env.sample` (→ `~/.config/takumi009-ai-env/bedrock.env`, permission 0600) is only for machines that actually use Bedrock — don't place it on a subscription-only machine; there is no auto-copy for it, you always copy it yourself. `team/data/models.conf.sample` likewise has no auto-copy — copy it yourself.
+# `team/data/profile.md.sample` is different: if `~/.config/takumi009-ai-env/profile.md` doesn't exist yet, `install-main.sh` automatically copies `team/data/profile.md.sample` there for you the first time it runs (an existing skeleton-placement step from before these `*.sample` files existed; it never overwrites a profile that's already there). Copying it yourself beforehand has the same effect — either way you end up with this machine's real values, not a placeholder.
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 #       本スクリプトは既存の実ファイルをsymlinkへ置き換えるため、ユーザー本人が
@@ -81,9 +82,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # できないため、テストで誤って実システムのlaunchdへ登録する事故を防ぐ。本番は
 # 常に既定値=0のまま）。
 : "${SKIP_LAUNCHCTL:=0}"
-# ローカル実体プロファイルの配置先（claude/hooks/bootstrap-vault.sh と同じ
-# 環境変数名・既定値。実体は機ごとのローカル・repo管理外。推奨経路は repo の
-# config/profile.md.sample を手でコピーして作ること。実体が無いときだけ後述の
+# ローカル実体プロファイルの配置先（core/connect/claude-code/session-start-compose.sh
+# （旧ライブ名 bootstrap-vault.sh）の Team 寄与と同じ環境変数名・既定値。実体は
+# 機ごとのローカル・repo管理外。推奨経路は repo の team/data/profile.md.sample を
+# 手でコピーして作ること。実体が無いときだけ後述の
 # 「雛形配置」ブロックが同サンプルをコピーする＝既存は上書きしない）。
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
 # Bedrock最小セット: ピン留めの実値（推論プロファイルID・リージョン・
@@ -91,11 +93,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # 認証情報そのもの（AWS_ACCESS_KEY_ID等）はここに置かない（専用の資格情報
 # 機構のまま）。存在しない（Bedrock未導入機）場合は何もしない。
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
-# 共有lib（claude/hooks/lib/profile_resolve.py）とコア職種マニフェスト
-# （claude/agents/）の場所。bootstrap-vault.shと同じ「自身の実体パスから
-# 同梱libを解決する」方式。
-: "${AIENV_PROFILE_RESOLVE_LIB:=$DIR/claude/hooks/lib/profile_resolve.py}"
-: "${AIENV_AGENTS_DIR:=$DIR/claude/agents}"
+# 共有lib（team/executor/profile_resolve.py）とコア職種マニフェスト
+# （team/rules/agents/）の場所。session-start-compose.sh（旧ライブ名
+# bootstrap-vault.sh）と同じ「自身の実体パスから同梱libを解決する」方式。
+: "${AIENV_PROFILE_RESOLVE_LIB:=$DIR/team/executor/profile_resolve.py}"
+: "${AIENV_AGENTS_DIR:=$DIR/team/rules/agents}"
 # Bedrock env ファイルから settings.json の "env" ブロックへ取り込んでよい
 # キーの許可リスト（2026-08-25 Codex一次レビュー指摘・Major対応: 当初は
 # テンプレと衝突しないキーを無条件で取り込んでいたため、誤ってAWS認証情報
@@ -303,17 +305,17 @@ fail() { echo "[install-main] FAIL: $*" >&2; exit 1; }
 # 飲み込まれ得た（MAJOR-1と合流して「配置しました」報告のまま静かに壊れる）。
 # install-main.sh の link() が使う（update-sub は install-sub 経由）ため、
 # 3段のガード（-r・bash -n・declare -F）はここにだけ置く。
-if [ ! -r "$DIR/scripts/lib/managed-symlink.sh" ]; then
-  fail "共有ライブラリが読み取れません（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
+if [ ! -r "$DIR/core/assembly/managed-symlink.sh" ]; then
+  fail "共有ライブラリが読み取れません（checkout破損の可能性）: $DIR/core/assembly/managed-symlink.sh"
 fi
-if ! /bin/bash -n "$DIR/scripts/lib/managed-symlink.sh" 2>/dev/null; then
-  fail "共有ライブラリの構文が不正です（checkout破損の可能性）: $DIR/scripts/lib/managed-symlink.sh"
+if ! /bin/bash -n "$DIR/core/assembly/managed-symlink.sh" 2>/dev/null; then
+  fail "共有ライブラリの構文が不正です（checkout破損の可能性）: $DIR/core/assembly/managed-symlink.sh"
 fi
-# shellcheck source=scripts/lib/managed-symlink.sh
-source "$DIR/scripts/lib/managed-symlink.sh"
+# shellcheck source=core/assembly/managed-symlink.sh
+source "$DIR/core/assembly/managed-symlink.sh"
 for _managed_symlink_fn in sync_managed_symlink; do
   if ! declare -F "$_managed_symlink_fn" >/dev/null 2>&1; then
-    fail "共有ライブラリの読み込みに失敗しました（${_managed_symlink_fn}()が定義されていません）: $DIR/scripts/lib/managed-symlink.sh"
+    fail "共有ライブラリの読み込みに失敗しました（${_managed_symlink_fn}()が定義されていません）: $DIR/core/assembly/managed-symlink.sh"
   fi
 done
 unset _managed_symlink_fn
@@ -342,7 +344,7 @@ fail_settings_generation() {
 # ＝生ファイルなのでYAMLフェンス抽出は不要（extract_profile_schema_block()は
 # 撤去した。旧・§3.9 Q2の候補抽出は2026-09-08 モデル定義ファイルと候補指定
 # 対応でsample_model_candidates()ごと既に廃止済みのためこの変数を使わない）。
-PROFILE_SAMPLE_SRC="$DIR/config/profile.md.sample"
+PROFILE_SAMPLE_SRC="$DIR/team/data/profile.md.sample"
 
 # ============================================================
 # リーダー実行値の解決と検査口
@@ -371,7 +373,7 @@ resolve_leader_runtime() {
 
 # check_profile_cmd — --check-profile。resolver の `resolve` 結果行を stdout の
 # 1行目にそのまま出し、その終了コードで exit する（副作用ゼロ）。
-# ⚠️ stdout 1行目＝機械可読行の契約（scripts/check-drift.sh ⑧ が head -1 を
+# ⚠️ stdout 1行目＝機械可読行の契約（core/assembly/check-drift.sh ⑧ が head -1 を
 # タブ分割で判定する）。案内ログを stdout に足さない。
 check_profile_cmd() {
   local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB" rc=0
@@ -531,7 +533,7 @@ generate_config_toml() {
 # 生成しうる欠陥があった。json moduleでの直接代入ならエスケープ処理自体が不要で
 # 構造的に安全）。テンプレの"model"値（__AIENV_MODEL__）は置換対象の目印・
 # ドキュメントとして残すのみで、実際の置換はテキストマッチではなくキー代入で行う
-# （scripts/check-drift.sh の①-2はテンプレの__AIENV_MODEL__を期待値へ文字列置換して
+# （core/assembly/check-drift.sh の①-2はテンプレの__AIENV_MODEL__を期待値へ文字列置換して
 # 比較するため、テンプレ側のプレースホルダ表記自体は維持すること）。
 # Bedrock env取り込みの許可リスト（AIENV_ALLOWED_BEDROCK_ENV_KEYS）は
 # スクリプト冒頭（引数解析より前）で既に宣言済み——ここでは再宣言しない
@@ -799,7 +801,7 @@ if [ -n "$RENDER_SETTINGS_JSON" ]; then
   if [ "$AIENV_SKIP_SETTINGS_GENERATION" = "1" ]; then
     fail "動的Bedrock許可キーを算出できないため settings.json を生成できません: $RENDER_SETTINGS_JSON"
   fi
-  generate_settings_json claude/settings.json "$RENDER_SETTINGS_JSON" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
+  generate_settings_json core/assembly/settings.json "$RENDER_SETTINGS_JSON" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
   if [ "$AIENV_DEFERRED_EXIT_CODE" != "0" ] || [ ! -f "$RENDER_SETTINGS_JSON" ]; then
     fail "settings.json を生成できませんでした（Bedrock envファイルが実在するのに読めない等。詳細は上記のWARN）: $RENDER_SETTINGS_JSON"
   fi
@@ -807,9 +809,9 @@ if [ -n "$RENDER_SETTINGS_JSON" ]; then
 fi
 
 # --- ローカル実体プロファイルの雛形配置（2026-08-30 共通コア分離 §9.0 A-1 P1機構） ---
-# サンプル（config/profile.md.sample・repo管理下）から $AIENV_LOCAL_PROFILE_PATH
-# の雛形を作る。メイン/サブ共通（--sub-delegate経由でも実行する＝claude/・
-# codex/のsymlink化と同じ扱い）。
+# サンプル（team/data/profile.md.sample・repo管理下）から $AIENV_LOCAL_PROFILE_PATH
+# の雛形を作る。メイン/サブ共通（--sub-delegate経由でも実行する＝Claude Code／
+# Codex のsymlink化と同じ扱い）。
 # ⚠️ 2026-09-01 配役表解凍 §4.2-c: この雛形配置ブロックは settings.json 生成
 # （旧・本ブロックの後段にあった）より**前**へ入れ替えた（旧実装は生成が
 # 雛形配置より前にあり、入力〈プロファイル〉が出力〈settings.json〉より後に
@@ -825,7 +827,8 @@ fi
 #
 # ⚠️ 2026-09-08 本人裁定A案（設定ファイルsample配布）: 読み元をVaultノート
 # （vault-public/Preferences/profile-sample.md）から repo の
-# config/profile.md.sample へ付け替えた。config/profile.md.sampleは
+# config/profile.md.sample（v1.1 機能の部品化で team/data/profile.md.sample へ
+# 移動）へ付け替えた。team/data/profile.md.sampleは
 # 実体そのままの生ファイル（```yamlフェンスやObsidianノートのfrontmatter
 # メタデータで包まれていない・schema本体が先頭`---`から直接始まる）ため、
 # 旧来のYAMLフェンス抽出（`extract_profile_schema_block()`。2026-08-30
@@ -850,7 +853,7 @@ else
   profile_tmp="$(mktemp "$(dirname "$AIENV_LOCAL_PROFILE_PATH")/.$(basename "$AIENV_LOCAL_PROFILE_PATH").aienv-tmp.XXXXXX")"
   if PROFILE_COPY_ERR="$(cp "$PROFILE_SAMPLE_SRC" "$profile_tmp" 2>&1 1>/dev/null)"; then
     mv "$profile_tmp" "$AIENV_LOCAL_PROFILE_PATH"
-    log "ローカル実体プロファイルの雛形を作成しました: $AIENV_LOCAL_PROFILE_PATH <- ${PROFILE_SAMPLE_SRC}（config/profile.md.sampleをそのままコピー）"
+    log "ローカル実体プロファイルの雛形を作成しました: $AIENV_LOCAL_PROFILE_PATH <- ${PROFILE_SAMPLE_SRC}（team/data/profile.md.sampleをそのままコピー）"
   else
     rm -f "$profile_tmp"
     warn "config/profile.md.sampleを読み取れませんでした（無い・checkout破損・権限不足等の可能性）。雛形コピーをskipします: ${PROFILE_SAMPLE_SRC}（詳細: ${PROFILE_COPY_ERR}）"
@@ -886,53 +889,58 @@ fi
 # 対応。判定・WARN・AIENV_DEFERRED_EXIT_CODEの計上は上のブロックで既に
 # 済ませている）。
 if [ "$AIENV_SKIP_SETTINGS_GENERATION" != "1" ]; then
-  generate_settings_json claude/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
+  generate_settings_json core/assembly/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
 fi
-link claude/hooks/bootstrap-vault.sh    "$HOME/.claude/hooks/bootstrap-vault.sh"
-link claude/hooks/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.sh"
+# bootstrap-vault.sh（旧ライブ名）は Core の SessionStart 合成器へ張る（v1.1
+# 機能の部品化・設計 §5.5 D-9＝主後継。settings.json の SessionStart 登録名は不変）。
+link core/connect/claude-code/session-start-compose.sh "$HOME/.claude/hooks/bootstrap-vault.sh"
+link team/connect/claude-code/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.sh"
 # 危険コマンド deny ゲート(PreToolUse Bash)。2026-08-06 追加: 2026-07-19 の
 # フック導入時にリポジトリ収録が漏れており、サブ機で settings.json が
 # 存在しないパスを参照して起動時警告が出ていた。
-link claude/hooks/bash-danger-gate.sh "$HOME/.claude/hooks/bash-danger-gate.sh"
+link core/connect/claude-code/bash-danger-gate.sh "$HOME/.claude/hooks/bash-danger-gate.sh"
 # 方針ガード(PreToolUse Bash・公開ガード/pip仮想環境/brewランタイムの3規則)。
 # 2026-09-19 追加: settings.json の inline 3 本をファイル化（段3-5 τ）。
-link claude/hooks/bash-policy-gate.sh "$HOME/.claude/hooks/bash-policy-gate.sh"
+link core/connect/claude-code/bash-policy-gate.sh "$HOME/.claude/hooks/bash-policy-gate.sh"
+# Codex 直叩き柵(PreToolUse Bash)。v1.1 機能の部品化＝旧 bash-danger-gate.sh の
+# ③ を分割した新ライブ名（設計 §4.3）。settings.json 側にも新規登録する。
+link team/connect/claude-code/codex-direct-call-gate.sh "$HOME/.claude/hooks/codex-direct-call-gate.sh"
 # 外部脳 想起支援(UserPromptSubmit)・利用ログ(PostToolUse Read) の2フック
 # （2026-07-10 追加。settings.json への hooks 登録はリーダーが別途行う＝
 # このスクリプトはsymlink配置のみを担当）。
-link claude/hooks/vault-recall.sh    "$HOME/.claude/hooks/vault-recall.sh"
-link claude/hooks/vault-read-log.sh  "$HOME/.claude/hooks/vault-read-log.sh"
+link ai-brain/executor/vault-recall.sh    "$HOME/.claude/hooks/vault-recall.sh"
+link ai-brain/executor/vault-read-log.sh  "$HOME/.claude/hooks/vault-read-log.sh"
 # Dock（Project／Task）ペイン番号参照の自動解決(UserPromptSubmit)。cmux の
 # --list 対応表を注入する（2026-08-06 追加・2026-09-19 Project/Task の2本を
-# 1本に統合・表示ツール本体は cmux/ 側）。
-link claude/hooks/dock-pane-resolve.sh "$HOME/.claude/hooks/dock-pane-resolve.sh"
+# 1本に統合・表示ツール本体は dock/executor/ 側）。
+link dock/executor/dock-pane-resolve.sh "$HOME/.claude/hooks/dock-pane-resolve.sh"
 # サブ機更新チェック(SessionStart)。settings.json は main/sub 共通でこのフックを
 # 登録するため、リンクも main/sub 共通で配置する（スクリプト側が配役表の
 # `machine_role`で判定し、メイン機では無出力で即 exit 0＝fail-closed）。
 # 2026-07-28 追加: 2026-07-23 実装時にリンク配置が漏れており、両機で
 # SessionStart に「No such file or directory」の非ブロッキングエラーが出ていた。
-link claude/hooks/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
+link core/assembly/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
 # セッション肥大化警告(UserPromptSubmit)。settings.json には2026-08-10導入時から
 # 登録されていたが、本スクリプトへのlink配置が漏れていた（2026-08-30発覚・
 # context-size-warn.sh/bash-danger-gate.sh/Project対応表フック/check-sub-update.sh
 # に続く同型4回目。settings.json登録とinstaller配置の2点セット突合を
-# scripts/check-drift.sh側にも追加している＝§9.0 A-0-2）。
-link claude/hooks/context-size-warn.sh "$HOME/.claude/hooks/context-size-warn.sh"
-# `claude/agents/` 直下の定義集合（管理職種）のAgent呼出しへmodel明示を強制するPreToolUseガード。
-link claude/hooks/agent-model-guard.sh "$HOME/.claude/hooks/agent-model-guard.sh"
+# core/assembly/check-drift.sh側にも追加している＝§9.0 A-0-2）。
+link core/connect/claude-code/context-size-warn.sh "$HOME/.claude/hooks/context-size-warn.sh"
+# `team/rules/agents/` 直下の定義集合（管理職種）のAgent呼出しへmodel明示を強制するPreToolUseガード。
+link team/connect/claude-code/agent-model-guard.sh "$HOME/.claude/hooks/agent-model-guard.sh"
 # 配役表に職種行がある職種のin-process起動（Agentツール）境界(PreToolUse
 # ^Agent$。ラッパー起動-設計-v1.1.1.md §4・D-3)。agent-model-guard.shと
 # 同じeventに並ぶ。
-link claude/hooks/inprocess-gate.sh "$HOME/.claude/hooks/inprocess-gate.sh"
-# 子（scripts/claude-exec.sh経由の名前無しworker）専用のVault保護柵。親の
+link team/connect/claude-code/inprocess-gate.sh "$HOME/.claude/hooks/inprocess-gate.sh"
+# 子（team/connect/claude-code/claude-exec.sh経由の名前無しworker）専用のVault保護柵。親の
 # settings.jsonのPreToolUseには登録しない（子の--settingsインライン
 # JSONが$HOME/.claude/hooks/vault-write-gate.shを直接参照する＝設計§2.5・
 # 裁定A）。配置だけはここで行う。
-link claude/hooks/vault-write-gate.sh "$HOME/.claude/hooks/vault-write-gate.sh"
+link ai-brain/connect/claude-code/vault-write-gate.sh "$HOME/.claude/hooks/vault-write-gate.sh"
 # 使用率の毎発言注入(UserPromptSubmit)。SessionStart側と同じ共有関数を使う。
-link claude/hooks/usage-inject.sh "$HOME/.claude/hooks/usage-inject.sh"
+link usage/executor/usage-inject.sh "$HOME/.claude/hooks/usage-inject.sh"
 # 📣 通知取次 v1（2026-09-22）: 入力時に code27-call の未応答の呼び出しを全消去する（UserPromptSubmit）。
-link claude/hooks/code27-call-clear.sh "$HOME/.claude/hooks/code27-call-clear.sh"
+link notify/connect/code27/code27-call-clear.sh "$HOME/.claude/hooks/code27-call-clear.sh"
 
 # 前提修正 P-2（設計§2）: 職種定義の配布結果を必ず報告する。
 # ①新しく配置した定義（初回未配置）②repoから消えた定義へのdangling symlinkの
@@ -944,12 +952,12 @@ link claude/hooks/code27-call-clear.sh "$HOME/.claude/hooks/code27-call-clear.sh
 # 職種定義は再び symlink 化する（link()＝sync_managed_symlink() 経由。他の
 # 管理symlinkと同じ退避規則）。B-1のラッパーがeffortの実行値を--effortで
 # 子へ渡すため、職種定義ファイル側にeffort:行を持たせる必要が無くなった。
-AGENTS_SRC_DIR="$DIR/claude/agents"
+AGENTS_SRC_DIR="$DIR/team/rules/agents"
 AGENTS_DEST_DIR="$HOME/.claude/agents"
 [ -d "$AGENTS_SRC_DIR" ] || fail "リポジトリのディレクトリが見つかりません（checkout破損の可能性）: $AGENTS_SRC_DIR"
 AGENTS_NEWLY_PLACED=()
 for f in "$AGENTS_SRC_DIR"/*.md; do
-  [ -e "$f" ] || fail "claude/agents/ 配下に .md が1つもありません（checkout破損の可能性）"
+  [ -e "$f" ] || fail "team/rules/agents/ 配下に .md が1つもありません（checkout破損の可能性）"
   name="$(basename "$f")"
   dest="$AGENTS_DEST_DIR/$name"
   # symlink・実ファイルいずれの形でも一切存在しなかったものだけを「初回未配置」
@@ -958,7 +966,7 @@ for f in "$AGENTS_SRC_DIR"/*.md; do
   if [ "$DRY_RUN" != "1" ] && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
     AGENTS_NEWLY_PLACED+=("${name%.md}")
   fi
-  link "claude/agents/$name" "$dest"
+  link "team/rules/agents/$name" "$dest"
 done
 
 if [ "$DRY_RUN" != "1" ]; then
@@ -986,16 +994,17 @@ if [ "$DRY_RUN" != "1" ]; then
 fi
 
 if [ "$DRY_RUN" != "1" ]; then
-  chmod +x "$DIR/claude/hooks/bootstrap-vault.sh" "$DIR/claude/hooks/delegation-gate-v2.sh" \
-           "$DIR/claude/hooks/bash-danger-gate.sh" "$DIR/claude/hooks/bash-policy-gate.sh" \
-           "$DIR/claude/hooks/dock-pane-resolve.sh" \
-           "$DIR/claude/hooks/vault-recall.sh" "$DIR/claude/hooks/vault-read-log.sh" \
-           "$DIR/claude/hooks/check-sub-update.sh" "$DIR/claude/hooks/context-size-warn.sh" \
-           "$DIR/claude/hooks/agent-model-guard.sh" \
-           "$DIR/claude/hooks/inprocess-gate.sh" "$DIR/claude/hooks/vault-write-gate.sh" \
-           "$DIR/claude/hooks/usage-inject.sh" "$DIR/claude/hooks/code27-call-clear.sh" \
-           "$DIR/cmux/cmux-task-model.sh" "$DIR/cmux/cmux-next-model.sh" \
-           "$DIR/cmux/cmux-task-declare.sh"
+  chmod +x "$DIR/core/connect/claude-code/session-start-compose.sh" "$DIR/team/connect/claude-code/delegation-gate-v2.sh" \
+           "$DIR/core/connect/claude-code/bash-danger-gate.sh" "$DIR/core/connect/claude-code/bash-policy-gate.sh" \
+           "$DIR/team/connect/claude-code/codex-direct-call-gate.sh" \
+           "$DIR/dock/executor/dock-pane-resolve.sh" \
+           "$DIR/ai-brain/executor/vault-recall.sh" "$DIR/ai-brain/executor/vault-read-log.sh" \
+           "$DIR/core/assembly/check-sub-update.sh" "$DIR/core/connect/claude-code/context-size-warn.sh" \
+           "$DIR/team/connect/claude-code/agent-model-guard.sh" \
+           "$DIR/team/connect/claude-code/inprocess-gate.sh" "$DIR/ai-brain/connect/claude-code/vault-write-gate.sh" \
+           "$DIR/usage/executor/usage-inject.sh" "$DIR/notify/connect/code27/code27-call-clear.sh" \
+           "$DIR/dock/executor/cmux-task-model.sh" "$DIR/dock/executor/cmux-next-model.sh" \
+           "$DIR/dock/executor/cmux-task-declare.sh"
   # 締めレビュー2巡目 #2対応（2026-09-14）: agent-model-guard.sh専用の
   # 固有理由コード付き実行可能性チェックはここで削除した。
   # 上のlink()がsync_managed_symlink()経由で既にsrc欠落を汎用の「リポジトリ
@@ -1003,38 +1012,38 @@ if [ "$DRY_RUN" != "1" ]; then
   # このchmod自体もsrc欠落なら`set -euo pipefail`により非0で停止するため、
   # この専用ガードは実際には発火しえない残骸だった（他のどのフックにも
   # 同種の専用チェックは無く、汎用経路だけで担保されている）。実行可能性の
-  # 継続的な監視はscripts/check-drift.shの汎用`[NOT-EXECUTABLE]`検査
+  # 継続的な監視はcore/assembly/check-drift.shの汎用`[NOT-EXECUTABLE]`検査
   # （$HOME/.claude/hooks/*.sh全体対象）が担う。
 fi
 
 # --- codex/ ---
-link codex/AGENTS.md   "$HOME/.codex/AGENTS.md"
-link codex/hooks.json  "$HOME/.codex/hooks.json"
-generate_config_toml codex/config.toml "$HOME/.codex/config.toml"
+link team/connect/codex/AGENTS.md   "$HOME/.codex/AGENTS.md"
+link team/connect/codex/hooks.json  "$HOME/.codex/hooks.json"
+generate_config_toml team/connect/codex/config.toml "$HOME/.codex/config.toml"
 
 # Codex呼び出し経路のMCPサーバー登録ステップは2026-09-06 codex exec一本化に
 # 伴い廃止した（Claude Code側からのMCP経由呼び出しをやめ、Bash経由の
-# scripts/codex-exec.sh に一本化。詳細は
+# team/connect/codex/codex-exec.sh に一本化。詳細は
 # docs/core-split/codex-exec-only-検討経緯-2026-09-06.md）。Codex呼び出しは
-# 各ワーカーが scripts/codex-exec.sh を直接叩く方式になったため、インストーラ側の
+# 各ワーカーが team/connect/codex/codex-exec.sh を直接叩く方式になったため、インストーラ側の
 # 自動登録ステップは不要になった。
 
-# 週次drift通知LaunchAgent（com.takumi009.drift-check.plist・scripts/drift-notify.sh）は
+# 週次drift通知LaunchAgent（com.takumi009.drift-check.plist・drift-notify.sh）は
 # 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で撤去した。
 # 週次無人実行の経路は新設 maintenance.sh（PR2・install-maintenance.shが設置）へ移す。
 # 既存マシンで稼働中の旧LAは install-maintenance.sh の移行処理（旧ラベルのbootout）で
 # 片付ける（本スクリプトでは何もしない）。
 
-# 使用率取得器 LaunchAgent（com.takumi009.usage-fetch・scripts/usage-fetch.sh）は
+# 使用率取得器 LaunchAgent（com.takumi009.usage-fetch・usage/executor/usage-fetch.sh）は
 # 2026-09 B1-b（使用率取得器移設）で `claude-codex-usage/refresh.sh` から移設した
 # （docs/core-split/使用率取得器移設B1b-設計-2026-09-08.md）。install-backup.sh・
 # install-maintenance.sh と同じ理由で、本スクリプトからは呼び出さない（毎分実行
 # ジョブの導入は「新旧の入れ替え順序」「本人確認を挟む切替手順」を持つ独立の
-# installer にする＝scripts/install-usage-fetch.sh。メイン機の標準セットアップは
+# installer にする＝usage/assembly/install-usage-fetch.sh。メイン機の標準セットアップは
 # install-main.sh の実行後にこれを個別に実行する。詳細＝README「セットアップ」
 # 節・使用率取得器移設B1b-実装-2026-09-08.md）。サブ機は install-sub.sh の
 # 「LaunchAgent を一切設置しない」方針を崩さず、導入する場合は本人が
-# scripts/install-usage-fetch.sh を直接実行する（設計書§8 Q-7・(C)案）。
+# usage/assembly/install-usage-fetch.sh を直接実行する（設計書§8 Q-7・(C)案）。
 # ⚠️ ローカル実体プロファイルの雛形配置は、settings.json生成より前（本ファイル
 # 上部・generate_settings_json呼び出しの直前）へ移動した（2026-09-01 配役表
 # 解凍 §4.2-c）。ここには残さない。

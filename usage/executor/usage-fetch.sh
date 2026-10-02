@@ -45,6 +45,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=notify/connect/macos/usage-notify.sh
 . "$SCRIPT_DIR/../../notify/connect/macos/usage-notify.sh"
 
+# 接続の列挙（D-8 方式②）＝台帳の鍵 usage.fetch を台帳ツールで照会し、
+# 返った接続（claude-code・codex の fetch.sh。台帳の行順）ごとに、同じ
+# 階層の宣言（usage.env の service=）を読んで短名を集め、取得器を
+# source する。宣言の無い・短名の無い接続は飛ばす。0 件＝取得口なし
+# （main() の既存の失敗記録へ・D-8 方式②）。短名の集合は USAGE_FETCH_SERVICES
+# （空白区切り・台帳の行順）に置く。
+USAGE_FETCH_SERVICES=""
+while IFS= read -r _usage_conn_path; do
+  [ -n "$_usage_conn_path" ] || continue
+  _usage_conn_dir="$(dirname "$_usage_conn_path")"
+  _usage_conn_service="$(grep -m1 '^service=' "$_usage_conn_dir/usage.env" 2>/dev/null | cut -d= -f2-)"
+  [ -n "$_usage_conn_service" ] || continue
+  USAGE_FETCH_SERVICES="${USAGE_FETCH_SERVICES:+$USAGE_FETCH_SERVICES }$_usage_conn_service"
+  # shellcheck disable=SC1090
+  . "$_usage_conn_path"
+done <<EOF
+$(bash "$SCRIPT_DIR/../../core/assembly/ledger-tool.sh" lookup usage.fetch 2>/dev/null)
+EOF
+unset _usage_conn_path _usage_conn_dir _usage_conn_service
+
 load_config() {
   CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-codex-usage"
   CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-codex-usage"
@@ -65,8 +85,6 @@ load_config() {
   validate_config_numbers
   LOCK_DIR="$CACHE_DIR/locks"
   TMP_DIR="$CACHE_DIR/tmp"
-  CLAUDE_CACHE="$CACHE_DIR/claude-cache.json"
-  CODEX_CACHE="$CACHE_DIR/codex-cache.json"
   NOTIFY_STATE="$CACHE_DIR/notify-state.json"
 }
 
@@ -272,29 +290,12 @@ write_failure_cache() {
 refresh_service() {
   local service cache out err fetch_status attempts payload error_type message status_json
   service="$1"
-  if [ "$service" = "claude" ]; then
-    cache="$CLAUDE_CACHE"
-  else
-    cache="$CODEX_CACHE"
-  fi
+  # キャッシュ名は宣言の短名から組み立てる（<短名>-cache.json・設計 §5.3）。
+  # 提供元のリテラルはここに書かない。
+  cache="$CACHE_DIR/$service-cache.json"
   out="$TMP_DIR/$service.out.$$"
   err="$TMP_DIR/$service.err.$$"
   mkdir -p "$CACHE_DIR" "$TMP_DIR" 2>/dev/null || return 1
-
-  # F-3: codex コマンド不在は Codex サービスだけの失敗として扱う（Claude の
-  # 取得を止めない。前提コマンドの検査をサービスごとに分ける＝D-18）。
-  # ⚠️ 他の「取得に失敗したが正しく記録できた」経路と同じく、記録が書けた
-  # 場合は0を返す（非0を返すのはwrite_failure_cache自体が失敗した場合だけ＝
-  # 上の戻り値契約の注記を参照）。
-  if [ "$service" = "codex" ] && ! command -v codex >/dev/null 2>&1; then
-    log "codex: command not found; skipping fetch and recording failure"
-    attempts=0
-    if ! write_failure_cache "$service" "$cache" "command" "missing required command: codex" "null" "$attempts"; then
-      log "$service: failed to write failure cache (missing_command)"
-      return 1
-    fi
-    return 0
-  fi
 
   retry_fetch "$service" "$out" "$err"
   fetch_status=$?
@@ -335,6 +336,21 @@ refresh_service() {
     return 0
   fi
 
+  # F-3: 前提コマンド（接続の取得器が使う実行体）が無いときは、この接続
+  # だけの失敗として扱う（他の接続の取得を止めない。前提コマンドの検査を
+  # サービスごとに分ける＝D-18）。⚠️ 他の「取得に失敗したが正しく記録でき
+  # た」経路と同じく、記録が書けた場合は0を返す（非0を返すのは
+  # write_failure_cache自体が失敗した場合だけ＝上の戻り値契約の注記を参照）。
+  if [ "$fetch_status" -eq 15 ]; then
+    log "$service: required command missing; skipping fetch and recording failure"
+    rm -f "$out" "$err" 2>/dev/null
+    if ! write_failure_cache "$service" "$cache" "command" "missing required command: $service" "null" 0; then
+      log "$service: failed to write failure cache (missing_command)"
+      return 1
+    fi
+    return 0
+  fi
+
   # ⚠️ D-3: 一過性の no-op は 429 だけ。タイムアウト・curl の通信系エラー
   # （124・5・6・7・28・52・55・56）を含め、それ以外はすべて「失敗」として
   # last_error を書く（現物は 42・124・5・6・7・28・52・55・56 を無言 no-op に
@@ -363,31 +379,41 @@ refresh_service() {
 
 main() {
   load_config
-  local mode overall_status
+  local mode overall_status svc valid
   trap 'cleanup_locks; cleanup_claude_curl_configs; cleanup_codex_server; exit 130' INT
   trap 'cleanup_locks; cleanup_claude_curl_configs; cleanup_codex_server; exit 143' TERM
   trap 'cleanup_locks; cleanup_claude_curl_configs; cleanup_codex_server'           EXIT
   mode="${1:-all}"
-  case "$mode" in
-    claude|codex|all) ;;
-    *) printf '%s\n' "usage: $0 [claude|codex|all]" >&2; return 2 ;;
-  esac
+  if [ "$mode" != "all" ]; then
+    valid=0
+    for svc in $USAGE_FETCH_SERVICES; do
+      [ "$mode" = "$svc" ] && valid=1
+    done
+    if [ "$valid" != "1" ]; then
+      printf 'usage: %s [%s]\n' "$0" "$(printf '%s' "${USAGE_FETCH_SERVICES:+$USAGE_FETCH_SERVICES|}all" | tr ' ' '|')" >&2
+      return 2
+    fi
+  fi
   log "usage-fetch.sh $mode: started"
   command -v jq >/dev/null 2>&1 || { printf '%s\n' 'missing required command: jq' >&2; return 3; }
   command -v curl >/dev/null 2>&1 || { printf '%s\n' 'missing required command: curl' >&2; return 3; }
   mkdir -p "$CACHE_DIR" "$LOCK_DIR" "$TMP_DIR" 2>/dev/null || return 1
 
-  # ⚠️ F-9c: `all` の短絡をやめる。片方が非0でも、もう片方の取得を必ず
+  if [ -z "$USAGE_FETCH_SERVICES" ]; then
+    log "usage-fetch.sh: no connections declared (usage.fetch); nothing to do"
+    return 1
+  fi
+
+  # ⚠️ F-9c: `all` の短絡をやめる。1 接続が非0でも、他の接続の取得は必ず
   # 行い、終了コードは最後に集約する（現物は claude が非0だと
   # `with_lock claude refresh_service claude || return 1` でそこで打ち切り、
   # codex の取得が丸ごと省略されていた）。
   overall_status=0
-  if [ "$mode" = "claude" ] || [ "$mode" = "all" ]; then
-    with_lock claude refresh_service claude || overall_status=1
-  fi
-  if [ "$mode" = "codex" ] || [ "$mode" = "all" ]; then
-    with_lock codex refresh_service codex || overall_status=1
-  fi
+  for svc in $USAGE_FETCH_SERVICES; do
+    if [ "$mode" = "all" ] || [ "$mode" = "$svc" ]; then
+      with_lock "$svc" refresh_service "$svc" || overall_status=1
+    fi
+  done
   return "$overall_status"
 }
 

@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-r"""core/connect/claude-code/bash-danger-gate.sh ルール③の判定ロジック。
+r"""Codex 直叩き柵（同じフォルダの codex-direct-call-gate.sh）の判定ロジック。
 
 標準入力からBashコマンド文字列を1つ受け取り、それが
-「team/connect/codex/codex-exec.sh を経由しない codex exec / codex resume（execの別名
+「Codex の口（ラッパー）を経由しない codex exec / codex resume（execの別名
 eを含む）の直接実行」に該当するかどうかを判定して、標準出力へ
 DENY / ALLOW / PARSE_ERROR のいずれか1行だけを出す。
+許可するラッパーは第1引数（パスまたはファイル名・省略可）で受ける。柵が台帳の
+鍵で照会して渡す（v1.1）。省略時はラッパー無し＝除外するコマンド語なし。
 
-2026-09-06 codex exec 一本化（Codex呼び出しをscripts/codex-exec.sh経由に
-限定）に伴い新設。呼び出し元のbash-danger-gate.shは、以前は正規表現だけで
+2026-09-06 codex exec 一本化（Codex呼び出しをラッパー経由に
+限定）に伴い新設。呼び出し元の柵（当時は危険コマンド柵のルール③）は、以前は正規表現だけで
 単純コマンド分割・引用符の中身除去・シェルコメント除去・`--`終端の認識を
 自前実装していたが、dogfoodレビュー（5巡）で以下の実装不備が繰り返し
 見つかった:
   - コマンド文字列全体に対する除外判定（複合コマンドの無関係な断片へ
-    "codex-exec.sh"や"--help"を混ぜるだけでバイパス可能）
+    ラッパー名や"--help"を混ぜるだけでバイパス可能）
   - 「最初の引用符より前で打ち切る」方式（引用符の**後**に来る正当な
     Codex CLI構文＝`codex -c '...' exec`のようなグローバルオプション先出し
     を見逃す）
@@ -90,8 +92,8 @@ import sys
 
 # execのCLI別名 'e' を含む。1文字のため、フラグの値がたまたま 'e' である
 # 場合（例: `codex review -m e`）を誤検知しうるが、別名検出を維持する
-# トレードオフとして受け入れている（bash-danger-gate.sh側のコメント・
-# tests/test-bash-danger-gate.sh参照）。
+# トレードオフとして受け入れている（Codex 直叩き柵のコメント・
+# tests/test-codex-direct-call-gate.sh参照）。
 SUBCOMMANDS = {"exec", "e", "resume"}
 # -V（大文字）が正式表記だが、比較は小文字化してから行うため -v も含める。
 HELP_FLAGS = {"--help", "-h", "--version", "-v"}
@@ -190,8 +192,7 @@ def _normalize_separators(cmd):
 
 def is_codex(token):
     """先頭コマンド語がcodex本体かどうか（パス接頭辞は許容）。
-    ラッパーのファイル名は"codex"ではなく"codex-exec.sh"なので、これには
-    一致しない（特別扱いの除外ロジックが不要になる）。"""
+    ラッパーのファイル名は"codex"ではないので、これには一致しない。"""
     base = token.rsplit("/", 1)[-1]
     return base.lower() == "codex"
 
@@ -206,7 +207,7 @@ def split_clauses(tokens):
     return clauses
 
 
-def clause_is_direct_call(clause):
+def clause_is_direct_call(clause, wrapper=""):
     # 先頭の "(" はサブシェルのグループ化構文（`( codex exec ... )`）。
     # 空白で区切られていれば独立トークンとして現れるため、対応する末尾の
     # ")" とあわせて取り除いてから判定する（1階層ずつ対応。`{ ...; }`の
@@ -215,7 +216,12 @@ def clause_is_direct_call(clause):
         clause = clause[1:]
         if clause and clause[-1] == ")":
             clause = clause[:-1]
-    if not clause or not is_codex(clause[0]):
+    if not clause:
+        return False
+    # 許可するラッパー（第1引数）を先頭コマンド語に持つ断片は直接実行でない。
+    if wrapper and clause[0].rsplit("/", 1)[-1] == wrapper.rsplit("/", 1)[-1]:
+        return False
+    if not is_codex(clause[0]):
         return False
     rest = clause[1:]
     # `--` はCLIの「オプション解析の終端」記法。以降はサブコマンドとしても
@@ -236,7 +242,7 @@ def clause_is_direct_call(clause):
     return any(t in SUBCOMMANDS for t in lowered)
 
 
-def analyze(cmd):
+def analyze(cmd, wrapper=""):
     normalized, unterminated_quote = _normalize_separators(cmd)
     if unterminated_quote:
         return "PARSE_ERROR"
@@ -254,15 +260,16 @@ def analyze(cmd):
         return "PARSE_ERROR"
     clauses = split_clauses(tokens)
     for clause in clauses:
-        if clause_is_direct_call(clause):
+        if clause_is_direct_call(clause, wrapper):
             return "DENY"
     return "ALLOW"
 
 
 def main():
     cmd = sys.stdin.read()
+    wrapper = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
-        result = analyze(cmd)
+        result = analyze(cmd, wrapper)
     except Exception:
         # 想定外の例外でも呼び出し元の判定を止めないよう、フォールバック
         # 判定（呼び出し元での簡易正規表現チェック）に委ねる。

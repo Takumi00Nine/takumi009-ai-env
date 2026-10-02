@@ -24,13 +24,26 @@ set -uo pipefail  # -e は使わない（Phase1の1項目失敗で残りが止�
 # 中間ファイルはディレクトリ0700・ファイル0600（ファイル側はumaskで絞る）。
 umask 077
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# lib は実体の位置から引く＝旧パスの転送 symlink（配置済み LaunchAgent の起動対象）から起動されてもリンクを辿る。
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _dir="$(cd "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_dir/$_self" ;; esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 # shellcheck source=core/executor/pid-lock.sh
 source "$SCRIPT_DIR/../../core/executor/pid-lock.sh"
 # shellcheck source=core/executor/status-file.sh
 source "$SCRIPT_DIR/../../core/executor/status-file.sh"
-# shellcheck source=notify/connect/macos/macos-notify.sh
-source "$SCRIPT_DIR/../../notify/connect/macos/macos-notify.sh"
+# macOS 通知 lib は無ければ飛ばす（通知を送らずログだけ＝AI Brain と Core だけでもメンテは動く・v1.1 設計 §5.4）。
+NOTIFY_LIB="$SCRIPT_DIR/../../notify/connect/macos/macos-notify.sh"
+if [[ -r "$NOTIFY_LIB" ]]; then
+  # shellcheck source=notify/connect/macos/macos-notify.sh
+  source "$NOTIFY_LIB"
+else
+  notify_macos() { echo "[maintenance] 通知 lib が無いため通知を送りません: $1 — $2"; }
+fi
 
 : "${VAULT:=$HOME/Data/obsidian}"
 : "${AIENV_REPO:=$HOME/work/takumi009-ai-env}"
@@ -97,6 +110,7 @@ step_name() {
     phase1-drift)     echo "Phase1① check-drift" ;;
     phase1-fragments) echo "Phase1② fragments_log" ;;
     phase1-inventory) echo "Phase1③ vault_inventory" ;;
+    phase3-task-prune) echo "Phase3 宣言掃除の入口の照会" ;;
     phase3-summary)   echo "Phase3 Fragmentsサマリ追記" ;;
     phase3-backup)    echo "Phase3 最終commit" ;;
     phase3-record)    echo "Phase3 last_success_at更新" ;;
@@ -873,14 +887,34 @@ log "=== Phase 3: サマリ・通知 ==="
 # backup-vault.shとも干渉しない。
 # 新しいエラー隔離の仕組みは作らず、既存のrun_wrapped_step（timeout付き
 # 起動＋status-file）にそのまま載せる（設計書§16.2）。
-TASK_PRUNE_CMD="${MAINTENANCE_TASK_PRUNE_CMD:-$HOME/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh}"
+# 掃除の入口＝上書き口 MAINTENANCE_TASK_PRUNE_CMD、無ければ宣言 CLI を台帳の鍵で引く
+# （他機能の部品名を書かない＝v1.1 設計 §5.2・§5.6）。鍵なし＝入口なし（予定された省略）。
+# 台帳・実体の異常＝入口なしと同じ縮退に、照会の固定文（LEDGER: …）を異常として添える。
+TASK_PRUNE_KEY="dock.task-declare"
+TASK_PRUNE_LEDGER_ERROR=""
+if [[ -n "${MAINTENANCE_TASK_PRUNE_CMD:-}" ]]; then
+  TASK_PRUNE_CMD="$MAINTENANCE_TASK_PRUNE_CMD"
+else
+  TASK_PRUNE_CMD="$(bash "$SCRIPT_DIR/../../core/assembly/ledger-tool.sh" lookup "$TASK_PRUNE_KEY" 2>&1)"
+  case "$?" in
+    0) TASK_PRUNE_CMD="${TASK_PRUNE_CMD%%$'\n'*}" ;;
+    1) TASK_PRUNE_CMD="" ;;
+    *)
+      [[ "$TASK_PRUNE_CMD" == "LEDGER: "* ]] || TASK_PRUNE_CMD="LEDGER: ledger 照会に失敗"
+      TASK_PRUNE_LEDGER_ERROR="${TASK_PRUNE_CMD%%$'\n'*}"
+      TASK_PRUNE_CMD="" ;;
+  esac
+fi
 TASK_PRUNE_SEGMENT=""            # 実施サマリへ足す1セグメント
-if [[ ! -x "$TASK_PRUNE_CMD" ]]; then
-  # 掃除の入口そのものが存在しない（段②でai-env側だけ先に入った期間・
-  # dotfiles未導入の別マシン＝F-23）。記録も他工程も無傷のまま
-  # 「未導入」とだけ記録して次へ進む（FR-47④）。
+if [[ -z "$TASK_PRUNE_CMD" || ! -x "$TASK_PRUNE_CMD" ]]; then
+  # 掃除の入口そのものが存在しない（宣言 CLI を置かない構成・別マシン＝F-23）。
+  # 記録も他工程も無傷のまま「未導入」とだけ記録して次へ進む（FR-47④）。
   TASK_PRUNE_SEGMENT="・宣言掃除 未導入"
-  add_info_note "Phase3: 宣言記録の掃除は未実施です（掃除の入口が見つかりません: ${TASK_PRUNE_CMD}）"
+  if [[ -n "$TASK_PRUNE_LEDGER_ERROR" ]]; then
+    add_anomaly phase3-task-prune warn "Phase3: 宣言記録の掃除の入口を台帳で引けません（${TASK_PRUNE_LEDGER_ERROR}）"
+  else
+    add_info_note "Phase3: 宣言記録の掃除は未実施です（掃除の入口が見つかりません: ${TASK_PRUNE_CMD:-台帳に鍵 ${TASK_PRUNE_KEY} なし}）"
+  fi
 else
   TASK_PRUNE_STATUS_FILE="$RUN_DIR/step-status-task-prune.json"
   TASK_PRUNE_OUT="$RUN_DIR/task-prune.out"

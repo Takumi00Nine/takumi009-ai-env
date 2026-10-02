@@ -7,7 +7,7 @@
 設計の正本: ~/work/takumi009-ai-env-private/docs/core-split/
             配役表解凍-設計-2026-09-01.md
 
-外部ライブラリに依存しない（標準ライブラリのみ）。bootstrap-vault.sh・
+外部ライブラリに依存しない（標準ライブラリのみ）。セッション開始の注入・
 install-main.sh から `python3 <このファイル> <subcommand> ...` として呼ばれる
 サブプロセス実行を前提とし、モジュールとしてimportされることは想定しない
 （ただしテストの都合上 import しても壊れないようにトップレベル副作用は
@@ -21,7 +21,7 @@ install-main.sh から `python3 <このファイル> <subcommand> ...` として
 AI向けDIRECTIVEには流用しない）。
 2026-09-17 effort-per-role v2（設計-v1.2.md §4.8・要件v1.2.1 OV-10）:
 秘匿方針の明示的な例外として`list-candidates`（候補一覧コマンド
-role_candidates.py 経由でのみ使われる）を追加する。セッション開始の注入には
+経由でのみ使われる）を追加する。セッション開始の注入には
 出さず、AI が明示的にこのコマンドを呼んだときだけ、定義名・起動値（`pass`）・
 effort の値を返す。
 ⚠️ installer・update-sub・check-drift 向けの「素材＋配役表由来のeffort行」を
@@ -1260,7 +1260,7 @@ def determine_machine_role(parsed: ParsedProfile) -> str:
     validate_capability_keys()のV7/V8-bを通過済みなので、configuredの
     valueは既にmain|subのいずれかであることが保証されている。
     ⚠️ Codex一次レビュー指摘（MAJOR-1・2026-09-07）対応: 従来は
-    unavailableもunknownへ潰していたため、bootstrap-vault.sh側で
+    unavailableもunknownへ潰していたため、セッション開始の注入側で
     「machine_roleが未確定」の保留行がunavailableでも誤って出ていた
     （FR-9・設計§4.3は「保留はunknownのときだけ」）。unavailableを
     区別できる値として返すことで、呼び出し側が保留行の要否を
@@ -1569,15 +1569,15 @@ def do_resolve_candidate(
         return None, err
 
     role_line = parsed.roles.get(role)
-    role_candidates = resolved.get(role, [])
+    candidates_of_role = resolved.get(role, [])
     if (
         role_line is None
         or role_line.state not in ("configured", "unavailable")
-        or model_def_name not in [d.name for d in role_candidates]
+        or model_def_name not in [d.name for d in candidates_of_role]
     ):
         return None, ("CANDIDATE_NOT_IN_LIST", f"{model_def_name}はrole.{role}の候補にありません")
 
-    selected = next(d for d in role_candidates if d.name == model_def_name)
+    selected = next(d for d in candidates_of_role if d.name == model_def_name)
     return _evaluate_selected_candidate(role, role_line, selected, agents_dir, bedrock_env)
 
 
@@ -1643,7 +1643,7 @@ def do_list_candidates(
     path: str, bedrock_env: Optional[str], agents_dir: Optional[str]
 ) -> tuple[Optional[list[tuple]], Optional[tuple[str, str]]]:
     """`list-candidates`本体（新設・設計-v1.2.md §4.2・要件v1.2.1 FR-14〜24の
-    列挙元）。候補一覧コマンド`role_candidates.py`が subprocess で1回だけ
+    列挙元）。候補一覧コマンドが subprocess で1回だけ
     呼ぶ口（AI向けDIRECTIVEには絶対に流用しない秘匿方針の明示的な例外＝
     OV-10）。列挙順は`list-roles`と同一（職種名の昇順・候補は配役表の
     記載順）。候補の可否判定・起動値の組み立ては`resolve-candidate`と
@@ -1652,7 +1652,7 @@ def do_list_candidates(
     戻り値: (成功時の6列タプル一覧 or None, (機械可読コード, 短い理由) or
     None)。1行の列＝(role, state, def, route, pass, verdict)。候補を
     持たない職種（not_adopted/unknown）はdef以降が空文字の6フィールド行
-    （2フィールドへ畳むのは表示側＝role_candidates.pyの仕事＝FR-21）。
+    （2フィールドへ畳むのは表示側＝候補一覧コマンドの仕事＝FR-21）。
     """
     parsed, _model_defs, resolved, _declared, err = _load_and_validate_v2_self_contained(path)
     if err is not None:

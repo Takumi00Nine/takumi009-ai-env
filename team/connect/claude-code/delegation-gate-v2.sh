@@ -24,7 +24,7 @@
 # 判定不能時は素通し（このゲートの目的は「委任の自問」であり防御ではない）。
 
 # D-2（設計-v1.1.1.md §3・裁定A）: rule 2.5 の「対象がVaultのAI向け6フォルダ
-# 配下か」の判定だけを guard_common.sh の guard_is_vault_ai_path へ委ねる
+# 配下か」の判定だけを Core の core/executor/vault-paths.sh の guard_is_vault_ai_path へ委ねる
 # （6フォルダの literal はそこにしか書かない＝NFR-7・AC-10②）。⚠️
 # 振る舞い（マーカーの逃げ道・deny文面・rule 4mを含む他の判定順序）は
 # 一切変えない（設計の絶対条件＝本ファイルは判定式の移設のみ）。
@@ -32,9 +32,8 @@
 # 検証1巡目 I1-B1 対応: installer はこの3フックを1本ずつ
 # `$HOME/.claude/hooks/<名前>.sh`（repoへのsymlink）として配置する
 # （`$HOME/.claude/hooks/lib/`は作らない）ため、`BASH_SOURCE[0]%/*`だけでは
-# 実運用経路でguard_common.shを解決できない。team/connect/claude-code/inprocess-gate.sh
-# の resolve_inprocess_gate_self_dir() と同じ方式（自身のsymlinkを解決した
-# 実体ディレクトリ直下のlib/を見る）に揃える。source失敗時は fail-close＝
+# 実運用経路で共有部品を解決できない。自身のsymlinkを解決した実体ディレクトリ
+# から repo 内の相対位置（core/executor/）を見る。source失敗時は fail-close＝
 # rule 2.5 の対象かどうかを判定できないまま素通しにはせず、即denyしてexit 0
 # （このゲート唯一のVault保護柵が無言で無効化される再発を防ぐ）。
 resolve_delegation_gate_self_dir() {
@@ -51,7 +50,7 @@ resolve_delegation_gate_self_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 guard_common_load_error() {
-  reason="delegation-gate: 共有部品（guard_common.sh・cause=$1）を読み込めず、Vault保護（rule 2.5）を判定できません。フックの配置を確認してください。"
+  reason="delegation-gate: 共有部品（vault-paths.sh・cause=$1）を読み込めず、Vault保護（rule 2.5）を判定できません。フックの配置を確認してください。"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}' 2>/dev/null \
     || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
   exit 0
@@ -61,8 +60,8 @@ SELF_DIR="$(resolve_delegation_gate_self_dir 2>/dev/null)" || guard_common_load_
 # 検証2巡目 I2-M2 対応: env上書き口（GUARD_COMMON_LIB）は置かない（子が
 # 持てない逃げ道になる＝裁定A「子に逃げ道を持たせない」に反するため撤去。
 # テスト用の差し替えは、実体ディレクトリごとsymlinkする既存の方式で足りる）。
-# shellcheck source=lib/guard_common.sh
-source "$SELF_DIR/guard_common.sh" 2>/dev/null || guard_common_load_error GUARD_COMMON_UNREADABLE
+# shellcheck source=../../../core/executor/vault-paths.sh
+source "$SELF_DIR/../../../core/executor/vault-paths.sh" 2>/dev/null || guard_common_load_error GUARD_COMMON_UNREADABLE
 
 TEAMS_DIR="${GATE_TEAMS_DIR:-$HOME/.claude/teams}"
 MARKER_DIR="${GATE_MARKER_DIR:-/tmp}"

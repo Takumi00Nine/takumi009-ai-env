@@ -7,8 +7,10 @@ AI 専用コマンド（設計-v1.2.md §4「D-3 候補一覧コマンド」・
 持たない・色や整形やsummaryは無い＝FR-14・SO-9）。判定式（provider の
 enum・`AGENT_MODEL` の別名表・拒否条件・`execution` の既定）はすべて
 `profile_resolve.py`（`list-candidates`サブコマンド）に委ね、ここでは
-複製しない（FR-18）。使用率は`usage_snapshot.py --json`を1回呼ぶだけ
-（FR-19・NFR-2）。
+複製しない（FR-18）。使用率は Usage の提示器（台帳の鍵 usage.snapshot を
+Core の台帳ツールで照会する＝v1.1）を `--json` で1回呼ぶだけ（FR-19・NFR-2）。
+鍵なし＝使用率列は全行`-`。台帳異常・実体異常＝全行`-`＋照会の固定文を
+stderr へ1行（設計 v1.1 §5.6）。
 
 依存はどちらも subprocess 経由（python の import はしない・設計§4.1「依存の
 呼び方」）。exit code は常に0（提示専用・FR-23）。配役表が解決できない、
@@ -20,8 +22,7 @@ enum・`AGENT_MODEL` の別名表・拒否条件・`execution` の既定）は�
 このコマンドを呼んだときだけ、定義名・起動値（`pass`）を返す。セッション
 開始の注入には一切出さない。
 
-置き場: `claude/hooks/lib/` は元から symlink されない場所（repo 実体パスを
-直接叩く）。したがって check-drift.sh の管理symlink集合にも載らない
+置き場: symlink されない場所（repo 実体パスを直接叩く）。したがって check-drift.sh の管理symlink集合にも載らない
 （設計§4.1）。
 
 呼び方（README 2026-09-19）: Any role whose `tools:` frontmatter includes `Bash` can look up its own launch candidates (definition name, resolved route, pass/fail, and remaining usage) with `python3 ~/work/takumi009-ai-env/team/connect/claude-code/role_candidates.py [--role <role>]` — an AI-facing command, not meant for interactive use.
@@ -47,7 +48,8 @@ DEFAULT_AGENTS_DIR = "~/.claude/agents"
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 PROFILE_RESOLVE_PY = os.path.normpath(os.path.join(_LIB_DIR, "..", "..", "executor", "profile_resolve.py"))
-USAGE_SNAPSHOT_PY = os.path.normpath(os.path.join(_LIB_DIR, "..", "..", "..", "usage", "executor", "usage_snapshot.py"))
+LEDGER_TOOL = os.path.normpath(os.path.join(_LIB_DIR, "..", "..", "..", "core", "assembly", "ledger-tool.sh"))
+USAGE_SNAPSHOT_KEY = "usage.snapshot"
 
 # 枠の対応（設計§4.5・FR-19）。route がこの2つ以外（該当なし・候補なし職種の
 # 空文字を含む）は両方 "-"。
@@ -101,14 +103,39 @@ def _run_list_candidates(profile_path: str, agents_dir: str) -> tuple[Optional[l
     return rows, None
 
 
+def _lookup_usage_snapshot() -> Optional[str]:
+    """提示器のパスを台帳の鍵で照会する。鍵なし（台帳ツールが無い＝Core の外に
+    置かれた場合も含む）は None を黙って返す。台帳異常・実体異常は照会の
+    固定文を stderr へ写して None（fail-soft）。"""
+    if not os.path.isfile(LEDGER_TOOL):
+        return None
+    try:
+        proc = subprocess.run(
+            ["bash", LEDGER_TOOL, "lookup", USAGE_SNAPSHOT_KEY],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    lines = proc.stdout.splitlines()
+    if proc.returncode == 0 and lines:
+        return lines[0]
+    if proc.returncode != 1 and proc.stderr:
+        sys.stderr.write(proc.stderr.splitlines()[0] + "\n")
+    return None
+
+
 def _run_usage_snapshot() -> Optional[dict]:
-    """`usage_snapshot.py --json`をsubprocessで1回呼ぶ。呼び出し自体が失敗
+    """提示器を`--json`でsubprocessで1回呼ぶ。呼び出し自体が失敗
     しても fail-soft（設計§4.5＝全行`-`にするだけ・`ok`はresolverの判定
     だけで決める）。
     """
+    snapshot_py = _lookup_usage_snapshot()
+    if snapshot_py is None:
+        return None
     try:
         proc = subprocess.run(
-            [sys.executable, USAGE_SNAPSHOT_PY, "--json"],
+            [sys.executable, snapshot_py, "--json"],
             capture_output=True,
             text=True,
         )

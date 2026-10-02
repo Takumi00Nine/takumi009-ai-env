@@ -107,12 +107,6 @@ CLAUDE_RESET_CREDITS_FIELDS = frozenset(
 CREDIT_ENTRY_FIELDS = frozenset(
     {"id", "status", "granted_at_epoch", "expires_at_epoch", "title"}
 )
-CLAUDE_RESET_CREDITS_FIXED = {
-    "available_count": None,
-    "reset_scope": ["five_hour"],
-    "credits": [],
-    "note": "not_machine_readable",
-}
 # ⚠️ label は five_hour/seven_day では null・model_weekly だけ非null。
 # フィールド集合そのものは窓の種類によらず常にこの5つで揃える
 # （AC-95①の「集合の完全一致」を型の分岐なしで機械的に検査できるようにする
@@ -121,18 +115,134 @@ WINDOW_FIELDS = frozenset(
     {"window", "used_percent", "remaining_percent", "resets_at_epoch", "label"}
 )
 
-POOL_CACHE_FILE = {
-    "claude-subscription": "claude-cache.json",
-    "codex-subscription": "codex-cache.json",
-}
-POOL_HUMAN_LABEL = {
-    "claude-subscription": "Claude枠",
-    "codex-subscription": "Codex枠",
-}
 WINDOW_HUMAN_LABEL = {
     "five_hour": "5h",
     "seven_day": "7d",
 }
+
+# ============================================================
+# 接続の列挙（設計 §5.3）＝台帳の Usage 接続行（鍵 usage.fetch）を列挙して
+# 宣言（usage.env の KEY=VALUE）を読む。枠の並び＝台帳の行順
+# （AC-12 の stdout 一致）。提供元名で分岐しない＝枠 id（pool_ref）・
+# キャッシュ名（<短名>-cache.json）・表示名・チケット句の固定値は宣言の
+# 値から組み立てる。列挙できない・宣言が読めない接続は飛ばし、1件も
+# 揃わなければ現行の固定値へ縮退する（提示専用・exit 0 の契約を保つ）。
+# ============================================================
+_DEFAULT_SUBSCRIPTION_POOL_REFS = ["claude-subscription", "codex-subscription"]
+_DEFAULT_POOL_CACHE_FILE = {
+    "claude-subscription": "claude-cache.json",
+    "codex-subscription": "codex-cache.json",
+}
+_DEFAULT_POOL_HUMAN_LABEL = {
+    "claude-subscription": "Claude枠",
+    "codex-subscription": "Codex枠",
+}
+_DEFAULT_FIXED_RESET_CREDITS = {
+    "claude-subscription": {
+        "available_count": None,
+        "reset_scope": ["five_hour"],
+        "credits": [],
+        "note": "not_machine_readable",
+    }
+}
+_LEDGER_REL = os.path.join("core", "data", "ledger.tsv")
+_USAGE_ENV_NAME = "usage.env"
+_USAGE_FETCH_KEY = "usage.fetch"
+
+
+def _repo_root() -> str:
+    """このファイル自身の位置（usage/executor/）から repo ルートを引く。"""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _parse_declaration(path: str):
+    """KEY=VALUE 1行ずつの宣言ファイルを読む。`#` 始まり・空行は除く。
+    読めなければ None（呼び出し側がその接続を飛ばす）。
+    """
+    data = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return None
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        data[key.strip()] = value.strip()
+    return data
+
+
+def _usage_fetch_connection_paths(ledger_path: str):
+    """台帳（鍵=usage.fetch の part 行）を台帳の行順に列挙する。台帳が
+    読めない・該当行が無ければ空リスト（呼び出し側が現行の固定値へ縮退）。
+    """
+    rows = []
+    try:
+        with open(ledger_path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return rows
+    for raw_line in lines:
+        if raw_line.startswith("#") or not raw_line.strip():
+            continue
+        cols = raw_line.rstrip("\n").split("\t")
+        try:
+            kind, path, _func, _layer, _prov, key = cols[0], cols[1], cols[2], cols[3], cols[4], cols[5]
+        except IndexError:
+            continue
+        if kind == "part" and key == _USAGE_FETCH_KEY:
+            rows.append(path)
+    return rows
+
+
+def _load_usage_connections():
+    """戻り値: (pool_refs, pool_cache_file, pool_human_label,
+    fixed_reset_credits) の4つ組。pool_refs は台帳の行順。
+    """
+    root = _repo_root()
+    ledger_path = os.environ.get("AIENV_LEDGER") or os.path.join(root, _LEDGER_REL)
+    pool_refs = []
+    pool_cache_file = {}
+    pool_human_label = {}
+    fixed_reset_credits = {}
+    for rel in _usage_fetch_connection_paths(ledger_path):
+        env_path = os.path.join(root, os.path.dirname(rel), _USAGE_ENV_NAME)
+        decl = _parse_declaration(env_path)
+        if not decl:
+            continue
+        service = decl.get("service")
+        pool_ref = decl.get("pool_ref")
+        if not service or not pool_ref:
+            continue
+        pool_refs.append(pool_ref)
+        pool_cache_file[pool_ref] = service + "-cache.json"
+        pool_human_label[pool_ref] = decl.get("label", pool_ref)
+        if "reset_credits_fixed_note" in decl:
+            scope = [s for s in decl.get("reset_credits_fixed_reset_scope", "").split(",") if s]
+            fixed_reset_credits[pool_ref] = {
+                "available_count": None,
+                "reset_scope": scope,
+                "credits": [],
+                "note": decl.get("reset_credits_fixed_note"),
+            }
+    if not pool_refs:
+        return (
+            list(_DEFAULT_SUBSCRIPTION_POOL_REFS),
+            dict(_DEFAULT_POOL_CACHE_FILE),
+            dict(_DEFAULT_POOL_HUMAN_LABEL),
+            {k: dict(v) for k, v in _DEFAULT_FIXED_RESET_CREDITS.items()},
+        )
+    return pool_refs, pool_cache_file, pool_human_label, fixed_reset_credits
+
+
+(
+    SUBSCRIPTION_POOL_REFS,
+    POOL_CACHE_FILE,
+    POOL_HUMAN_LABEL,
+    FIXED_RESET_CREDITS,
+) = _load_usage_connections()
 
 # last_errorの非秘密化（絶対厳守③）。
 # ⚠️ 2026-09-08 worker-driven一次レビュー（Codex）BLOCKING-2/3対応で全面
@@ -172,9 +282,9 @@ ERROR_UNCLASSIFIED = "取得エラーがありますが詳細は伏せていま�
 
 def usage_cache_dir(cli_override: Optional[str] = None) -> str:
     """キャッシュディレクトリの位置を決める唯一の関数。⚠️ os.environ を読むのは
-    ここだけ（profile_resolve.pyのmodel_defs_path()と同じ設計則。2026-09-08
-    worker-driven一次レビューMINOR対応でDEFAULT_CACHE_DIRのXDG_CACHE_HOME
-    直接読みをここへ集約した）。
+    ここだけ（他の設定パス解決関数と同じ設計則＝環境変数を読む場所を1つに
+    集約する。2026-09-08 worker-driven一次レビューMINOR対応でDEFAULT_CACHE_DIRの
+    XDG_CACHE_HOME直接読みをここへ集約した）。
     優先順位（先勝ち・2026-09-08 MAJOR-2対応で`--cache-dir`引数を追加）:
     ①`cli_override`（`--cache-dir`） ②環境変数`AIENV_USAGE_CACHE_DIR`
     ③既定（`${XDG_CACHE_HOME:-~/.cache}/claude-codex-usage`）。指示書
@@ -438,10 +548,14 @@ def _build_codex_reset_credits(data: Optional[dict]) -> dict:
 
 
 def _reset_credits_for_pool(pool_ref: str, data: Optional[dict]) -> dict:
-    if pool_ref == "claude-subscription":
-        # dictはmutableなので、呼び出し元が誤って書き換えても定数側へ
-        # 波及しないよう毎回コピーを返す。
-        return dict(CLAUDE_RESET_CREDITS_FIXED)
+    """宣言（usage.env）にチケット句の固定値があればそれを返し（dictは
+    mutableなので、呼び出し元が誤って書き換えても定数側へ波及しないよう
+    毎回コピーを返す）、無ければキャッシュの reset_credits から組み立てる
+    （提供元名で分岐しない＝設計 §5.3）。
+    """
+    fixed = FIXED_RESET_CREDITS.get(pool_ref)
+    if fixed is not None:
+        return dict(fixed)
     return _build_codex_reset_credits(data)
 
 
@@ -547,15 +661,15 @@ def build_unlimited_pool() -> dict:
 
 
 def build_snapshot(cache_dir: str, now: int, stale_seconds: int) -> dict:
-    """枠は常にこの順で3件（claude-subscription→codex-subscription→
-    unlimited）。⚠️ 枠間の差・順位・偏りラベルは計算しない（FR-116。
-    このモジュールに引き算・比較演算を1つも持たない）。
+    """枠は常に台帳の Usage 接続行の順（既定＝claude-subscription→
+    codex-subscription）＋unlimited の3件。⚠️ 枠間の差・順位・偏りラベルは
+    計算しない（FR-116。このモジュールに引き算・比較演算を1つも持たない）。
     """
     pools = [
-        build_subscription_pool("claude-subscription", cache_dir, now, stale_seconds),
-        build_subscription_pool("codex-subscription", cache_dir, now, stale_seconds),
-        build_unlimited_pool(),
+        build_subscription_pool(pool_ref, cache_dir, now, stale_seconds)
+        for pool_ref in SUBSCRIPTION_POOL_REFS
     ]
+    pools.append(build_unlimited_pool())
     return {"generated_at": now, "pools": pools}
 
 

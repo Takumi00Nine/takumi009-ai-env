@@ -6,7 +6,7 @@
     <string>com.takumi009.usage-fetch</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__AIENV_HOME__/work/takumi009-ai-env/scripts/usage-fetch.sh</string>
+        <string>__AIENV_HOME__/work/takumi009-ai-env/usage/executor/usage-fetch.sh</string>
         <string>all</string>
     </array>
     <key>EnvironmentVariables</key>

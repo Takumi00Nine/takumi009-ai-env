@@ -1,32 +1,25 @@
 #!/usr/bin/env bash
-# 使用率取得器の「取得・変換・検証」部分（B1-b・使用率取得器移設）。
+# 使用率取得器の「提供元に依らない変換・検証・原子的書込・時刻」部分
+# （B1-b・使用率取得器移設。v1.1 分割＝提供元ごとの取得・変換は
+# usage/connect/<提供元>/fetch.sh へ移した。D-15 の窓検査・B1-c の
+# reset_credits 検査（codex 形）は本ファイルに残る＝書き手側の契約）。
 #
 # `claude-codex-usage/refresh.sh` から移設した純粋寄りの部品を集めた共有
 # ライブラリ（実行エントリポイントとは同居させない＝coding-doc-style §1）。
 # `usage/executor/usage-fetch.sh` からのみ source される。単体テストからも直接
 # source してよい（AIENV_USAGE_TEST_LIB=1 の判定・`main` の呼び出しは持たない
 # エントリ側＝usage/executor/usage-fetch.sh の役割。本ファイルは常に安全に source
-# できる純粋関数の集合である）。
+# できる純粋関数の集合である）。取得器（fetch_<短名>_once）は接続側が持ち、
+# 本ファイルの retry_fetch() は短名から関数名を組み立てて呼ぶ（提供元の
+# リテラルをここに書かない）。
 #
 # 呼び出し元（usage/executor/usage-fetch.sh）が load_config() で設定するグローバル
-# （CACHE_DIR・TMP_DIR・REQUEST_TIMEOUT・RETRY_COUNT・
-# CLAUDE_TOKEN_EXPIRY_SKEW_SECONDS 等）と、trap ハンドラが読む後始末用
-# グローバル（_codex_server_pid 等）に依存する。
+# （CACHE_DIR・TMP_DIR・REQUEST_TIMEOUT・RETRY_COUNT 等）に依存する。
 #
 # ⚠️ 秘密の扱いは現物から1行も緩めない（absolute-rules ③）＝トークンは
-# `curl --config <600の一時ファイル>` 経由でのみ渡し、コマンドライン・環境
-# 変数・ログに出さない。エラーの詳細は safe_error_token() の許可リストに
-# 一致した語だけをログへ出す。
-
-# Codex サーバ後始末用（fetch_codex_once が設定し、trap ハンドラが読む）
-_codex_server_pid=""
-_codex_writer_pid=""
-_codex_tmp_dir=""
-
-# Claude curl 認証設定ファイル後始末用（fetch_claude_once が設定し、
-# trap ハンドラが読む）
-_claude_curl_config_files=""
-_claude_curl_config_file_result=""
+# 接続側（usage/connect/<提供元>/fetch.sh）が `curl --config <600の一時
+# ファイル>` 経由でのみ渡し、コマンドライン・環境変数・ログに出さない。
+# エラーの詳細は safe_error_token() の許可リストに一致した語だけをログへ出す。
 
 iso_to_epoch() {
   local value normalized
@@ -97,136 +90,6 @@ run_with_timeout() {
   fi
   rm -rf "$timeout_dir" 2>/dev/null
   return "$status"
-}
-
-curl_config_quote() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
-token_has_crlf() {
-  case "$1" in
-    *$'\r'*|*$'\n'*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-register_claude_curl_config() {
-  local file
-  file="$1"
-  if [ -n "$_claude_curl_config_files" ]; then
-    _claude_curl_config_files="$_claude_curl_config_files
-$file"
-  else
-    _claude_curl_config_files="$file"
-  fi
-}
-
-# トークンをコマンドラインにも環境変数にも載せず、0600の一時ファイル
-# （curl --config 経由）だけで渡す。ファイルはシンボリックリンク攻撃を
-# 避けるため `set -C`（noclobber）で新規作成し、権限を作成直後に締める。
-create_claude_curl_config() {
-  local token file quoted i
-  token="$1"
-  _claude_curl_config_file_result=""
-  mkdir -p "$TMP_DIR" 2>/dev/null || return 1
-  i=0
-  while [ "$i" -lt 10 ]; do
-    file="$TMP_DIR/.claude-curl-auth.$$.$RANDOM.conf"
-    if ( set -C; umask 077; : >"$file" ) 2>/dev/null; then
-      chmod 600 "$file" 2>/dev/null || { rm -f "$file" 2>/dev/null; return 1; }
-      register_claude_curl_config "$file"
-      quoted="$(curl_config_quote "$token")"
-      printf 'header = "Authorization: Bearer %s"\n' "$quoted" >"$file" 2>/dev/null || {
-        rm -f "$file" 2>/dev/null
-        return 1
-      }
-      _claude_curl_config_file_result="$file"
-      return 0
-    fi
-    i=$(( i + 1 ))
-  done
-  return 1
-}
-
-remove_claude_curl_config() {
-  local file kept entry
-  file="$1"
-  rm -f "$file" 2>/dev/null
-  kept=""
-  while IFS= read entry; do
-    [ -n "$entry" ] || continue
-    [ "$entry" = "$file" ] && continue
-    if [ -n "$kept" ]; then
-      kept="$kept
-$entry"
-    else
-      kept="$entry"
-    fi
-  done <<EOF
-$_claude_curl_config_files
-EOF
-  _claude_curl_config_files="$kept"
-}
-
-# jq ヘルパ（Claude の per-model weekly 窓を「配列位置」ではなく「意味」
-# （kind=="weekly_scoped" かつ scope.model が非null）で選ぶ。上流が並びを
-# 入れ替えた実績がある＝2026-07-13。transform_codex_usage の
-# windowDurationMins 帯判定と同じ考え方）。
-_MODEL_WEEKLY_ENTRY_JQ='
-  def model_weekly_entry:
-    ([.limits[]? | select(.kind == "weekly_scoped" and .scope.model != null)]) as $candidates
-    | (($candidates | map(select(.is_active == true)) | .[0]) // $candidates[0]);
-'
-
-transform_claude_usage() {
-  local raw now fh_reset sd_reset mw_reset fh_epoch sd_epoch mw_epoch value
-  raw="$1"
-  now="$2"
-  fh_reset="$(printf '%s' "$raw" | jq -r '.five_hour.resets_at // .five_hour.resetsAt // empty' 2>/dev/null)"
-  sd_reset="$(printf '%s' "$raw" | jq -r '.seven_day.resets_at // .seven_day.resetsAt // empty' 2>/dev/null)"
-  mw_reset="$(printf '%s' "$raw" | jq -r "${_MODEL_WEEKLY_ENTRY_JQ} model_weekly_entry | .resets_at // empty" 2>/dev/null)"
-  fh_epoch="null"
-  sd_epoch="null"
-  mw_epoch="null"
-  if [ -n "$fh_reset" ]; then
-    value="$(iso_to_epoch "$fh_reset")" && fh_epoch="$value"
-  fi
-  if [ -n "$sd_reset" ]; then
-    value="$(iso_to_epoch "$sd_reset")" && sd_epoch="$value"
-  fi
-  if [ -n "$mw_reset" ]; then
-    value="$(iso_to_epoch "$mw_reset")" && mw_epoch="$value"
-  fi
-  printf '%s' "$raw" | jq -c \
-    --argjson now "$now" \
-    --argjson fh_epoch "$fh_epoch" \
-    --argjson sd_epoch "$sd_epoch" \
-    --argjson mw_epoch "$mw_epoch" \
-    "${_MODEL_WEEKLY_ENTRY_JQ}"'
-    (model_weekly_entry) as $mw
-    | {
-      schema_version: 1,
-      service: "claude",
-      fetched_at: $now,
-      updated_at: $now,
-      five_hour: {
-        used_percent: (.five_hour.used_percent // .five_hour.utilization),
-        resets_at: (.five_hour.resets_at // .five_hour.resetsAt // null),
-        resets_at_epoch: $fh_epoch
-      },
-      seven_day: {
-        used_percent: (.seven_day.used_percent // .seven_day.utilization),
-        resets_at: (.seven_day.resets_at // .seven_day.resetsAt // null),
-        resets_at_epoch: $sd_epoch
-      },
-      model_weekly: {
-        used_percent: ($mw.percent // null),
-        resets_at: ($mw.resets_at // null),
-        resets_at_epoch: $mw_epoch,
-        label: ($mw.scope.model.display_name // null)
-      },
-      last_error: null
-    }' 2>/dev/null
 }
 
 transform_codex_usage() {
@@ -400,7 +263,7 @@ validate_usage_payload() {
     and .service == $service
     and (.fetched_at | valid_epoch)
     and (
-      if $service == "codex" then
+      if has("reset_credits") then
         (.five_hour | window_ok)
         and (.seven_day | window_ok)
         and ((.five_hour.used_percent != null) or (.seven_day.used_percent != null))
@@ -427,158 +290,6 @@ write_validated_usage_payload() {
   printf '%s\n' "$payload" >"$out_file"
 }
 
-fetch_claude_once() {
-  local out_file err_file creds_source token expires_at now_ms skew_ms response curl_status status body now transformed curl_config
-  out_file="$1"
-  err_file="$2"
-  creds_source="keychain"
-  token="$(security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null \
-    | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)"
-  if [ -z "$token" ]; then
-    creds_source="file"
-    token="$(jq -r '.claudeAiOauth.accessToken // empty' \
-      "$HOME/.claude/.credentials.json" 2>/dev/null)"
-  fi
-  if [ -z "$token" ]; then
-    printf '%s\n' 'missing_token' >"$err_file"
-    return 10
-  fi
-  if token_has_crlf "$token"; then
-    printf '%s\n' 'invalid_token' >"$err_file"
-    return 10
-  fi
-  # claudeAiOauth.expiresAt はミリ秒epoch。事前に見て、既に期限切れ（or
-  # 期限間際）なら通信せず auth_expired を返す（確実に401になる通信を
-  # 省く）。読む先はトークンと同じ資格情報源（keychain/file）に揃える
-  # （別ソースの古い expiresAt で誤って skip しないため）。
-  if [ "$creds_source" = "keychain" ]; then
-    expires_at="$(security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null \
-      | jq -r '.claudeAiOauth.expiresAt // empty' 2>/dev/null)"
-  else
-    expires_at="$(jq -r '.claudeAiOauth.expiresAt // empty' \
-      "$HOME/.claude/.credentials.json" 2>/dev/null)"
-  fi
-  if [ -n "$expires_at" ] && is_unsigned_int "$expires_at"; then
-    if [ "${#expires_at}" -ge 13 ] && [ "${#expires_at}" -le 15 ]; then
-      now_ms=$(( $(now_epoch) * 1000 ))
-      skew_ms=$(( CLAUDE_TOKEN_EXPIRY_SKEW_SECONDS * 1000 ))
-      if [ "$expires_at" -le $(( now_ms + skew_ms )) ]; then
-        printf '%s\n' 'token_expired' >"$err_file"
-        return 14
-      fi
-    else
-      log "claude: expiresAt has unexpected digit count (${#expires_at}); ignoring it and fetching normally"
-    fi
-  else
-    log "claude: expiresAt missing or non-numeric; expiry pre-check skipped"
-  fi
-  create_claude_curl_config "$token" || {
-    printf '%s\n' 'curl_config_error' >"$err_file"
-    return 13
-  }
-  curl_config="$_claude_curl_config_file_result"
-  response="$(curl -sS --max-time "$REQUEST_TIMEOUT" \
-    -w '\n%{http_code}' \
-    --config "$curl_config" \
-    -H "anthropic-beta: oauth-2025-04-20" \
-    "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)"
-  curl_status=$?
-  remove_claude_curl_config "$curl_config"
-  if [ "$curl_status" -ne 0 ]; then
-    printf 'curl_exit=%s\n' "$curl_status" >"$err_file"
-    return "$curl_status"
-  fi
-  status="$(printf '%s\n' "$response" | tail -n 1)"
-  body="$(printf '%s\n' "$response" | sed '$d')"
-  case "$status" in
-    2??)
-      now="$(now_epoch)"
-      transformed="$(transform_claude_usage "$body" "$now")" || {
-        printf '%s\n' 'parse_error' >"$err_file"
-        return 11
-      }
-      write_validated_usage_payload claude "$transformed" "$out_file" "$err_file" || return 11
-      return 0
-      ;;
-    429) printf '%s\n' 'rate_limited' >"$err_file"; return 42 ;;
-    *) printf 'http_status=%s\n' "$status" >"$err_file"; return 12 ;;
-  esac
-}
-
-fetch_codex_once() {
-  local out_file err_file in_fifo server_out server_err codex_deadline start_seconds result now transformed
-  out_file="$1"
-  err_file="$2"
-  _codex_tmp_dir="$TMP_DIR/codex.$$.$RANDOM"
-  mkdir -p "$_codex_tmp_dir" 2>/dev/null || return 1
-  in_fifo="$_codex_tmp_dir/in"
-  server_out="$_codex_tmp_dir/out"
-  server_err="$_codex_tmp_dir/err"
-  mkfifo "$in_fifo" 2>/dev/null || {
-    rm -rf "$_codex_tmp_dir" 2>/dev/null
-    _codex_tmp_dir=""
-    return 1
-  }
-  : >"$server_out"
-  codex app-server <"$in_fifo" >"$server_out" 2>"$server_err" &
-  _codex_server_pid=$!
-
-  # codex app-server は initialize が終わるまで account/* を捌かない。FIFO を
-  # writer サブシェルで開き続けて全体の間中つなぐ。
-  {
-    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"takumi009-ai-env-usage-fetch","version":"1.0"}}}'
-    sleep 3
-    printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read","params":{}}'
-    sleep "$REQUEST_TIMEOUT"
-  } >"$in_fifo" &
-  _codex_writer_pid=$!
-
-  codex_deadline=$(( REQUEST_TIMEOUT + 5 ))
-  start_seconds=$SECONDS
-  result=""
-  while [ $(( SECONDS - start_seconds )) -le "$codex_deadline" ]; do
-    # B1-c（2026-09-09・検証職1巡目MAJOR-3対応）: チケット
-    # （`.result.rateLimitResetCredits`）は rateLimits の兄弟キーなので
-    # 変換器へは `.result` 全体を渡すが、**完了条件（このループを抜ける
-    # 条件）は従来どおり `.result.rateLimits` の存在**に保つ（`.result` の
-    # 有無だけを条件にすると、rateLimits を欠いた応答＝壊れた/不完全な
-    # 応答を「結果が来た」と誤認して待機を打ち切ってしまい、本来
-    # `codex_timeout`（124）になるべき状況が `parse_error`（11）に化ける
-    # という分類の後退を検証職が実測で発見した）。
-    result="$(jq -c 'select(.id == 2 and (.result.rateLimits != null)) | .result // empty' "$server_out" 2>/dev/null | tail -n 1)"
-    [ -n "$result" ] && break
-    kill -0 "$_codex_server_pid" 2>/dev/null || break
-    sleep 0.1
-  done
-  kill "$_codex_writer_pid" 2>/dev/null
-  kill "$_codex_server_pid" 2>/dev/null
-  sleep 1
-  kill -0 "$_codex_server_pid" 2>/dev/null && kill -9 "$_codex_server_pid" 2>/dev/null
-  wait "$_codex_writer_pid" 2>/dev/null
-  wait "$_codex_server_pid" 2>/dev/null
-  if [ -z "$result" ]; then
-    printf '%s\n' 'codex_timeout' >"$err_file"
-    rm -rf "$_codex_tmp_dir" 2>/dev/null
-    _codex_tmp_dir="" _codex_server_pid="" _codex_writer_pid=""
-    return 124
-  fi
-  now="$(now_epoch)"
-  transformed="$(transform_codex_usage "$result" "$now")" || {
-    printf '%s\n' 'parse_error' >"$err_file"
-    rm -rf "$_codex_tmp_dir" 2>/dev/null
-    _codex_tmp_dir="" _codex_server_pid="" _codex_writer_pid=""
-    return 11
-  }
-  write_validated_usage_payload codex "$transformed" "$out_file" "$err_file" || {
-    rm -rf "$_codex_tmp_dir" 2>/dev/null
-    _codex_tmp_dir="" _codex_server_pid="" _codex_writer_pid=""
-    return 11
-  }
-  rm -rf "$_codex_tmp_dir" 2>/dev/null
-  _codex_tmp_dir="" _codex_server_pid="" _codex_writer_pid=""
-  return 0
-}
-
 retry_fetch() {
   local service out_file err_file attempt max_attempts last_status err_detail sleep_seconds shift_amount
   service="$1"
@@ -589,11 +300,10 @@ retry_fetch() {
   last_status=1
   while [ "$attempt" -lt "$max_attempts" ]; do
     attempt=$(( attempt + 1 ))
-    if [ "$service" = "claude" ]; then
-      fetch_claude_once "$out_file" "$err_file"
-    else
-      fetch_codex_once "$out_file" "$err_file"
-    fi
+    # 取得器（usage/connect/<短名>/fetch.sh）は短名から関数名を組み立てて
+    # 呼ぶ＝提供元のリテラルをここに書かない（接続側が fetch_<短名>_once を
+    # 定義する契約。D-8 方式②）。
+    "fetch_${service}_once" "$out_file" "$err_file"
     last_status=$?
     if [ "$last_status" -eq 0 ]; then
       log "$service: fetch OK (attempt $attempt/$max_attempts)"
@@ -607,6 +317,10 @@ retry_fetch() {
     fi
     if [ "$last_status" -eq 14 ]; then
       log "$service: token expired; retry suppressed until the token is refreshed"
+      break
+    fi
+    if [ "$last_status" -eq 15 ]; then
+      log "$service: required command missing; retry suppressed until it is installed"
       break
     fi
     [ "$attempt" -lt "$max_attempts" ] || break

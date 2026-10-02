@@ -29,7 +29,7 @@
 # ローカル・秒は切り捨て）で固定でき、未設定なら実時刻（設計 §40.5.1）。
 #
 # 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）:
-# B 行は判定機（ai-brain/executor/health_judge.py＝唯一の判定ロジック）の写し＝
+# B 行はヘルス判定機（AI Brain＝唯一の判定ロジック・台帳の鍵で引く）の写し＝
 #   B<TAB>外部脳<TAB><ok|warn|error><TAB><OK|WARNING|ERROR>[ 候補N件]
 # を 0〜1 行。判定機が動かないときは 0 行（3 値の外の機構障害＝FR-15 の例外）。
 # 旧判定（8 日線・棚卸し n/a・週次 ✅/⚠）は退役。
@@ -66,7 +66,14 @@
 
 set -u
 
-LIB_DIR="$(cd -P "$(dirname "$0")" && pwd)"
+# 共有 lib は実体と同じフォルダ＝旧パスの転送 symlink（dotfiles の既定供給パス）から起動されてもリンクを辿った先を見る。
+_self="$0"
+while [ -L "$_self" ]; do
+  _dir="$(cd -P "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_dir/$_self" ;; esac
+done
+LIB_DIR="$(cd -P "$(dirname "$_self")" && pwd)"
 if [ ! -r "$LIB_DIR/lib-model-view.sh" ]; then
   echo "lib-model-view.sh が見つかりません: $LIB_DIR/lib-model-view.sh" >&2
   exit 1
@@ -100,9 +107,10 @@ MAINT_STATE_FILE="${CMUX_NEXT_MAINT_STATE:-$HOME/.claude/logs/maintenance/last-r
 HEALTH_OBSERVATION="${CMUX_NEXT_HEALTH_OBSERVATION:-$HOME/.claude/logs/health/session-observation.json}"
 RECALL_LOG="${CMUX_NEXT_RECALL_LOG:-$HOME/.claude/logs/vault-recall.tsv}"
 MAINT_PLIST="${CMUX_NEXT_MAINT_PLIST:-$HOME/Library/LaunchAgents/com.takumi009.maintenance.plist}"
-: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"  # 判定機の既定と同値（bootstrap-vault.sh と同じ渡し方＝設計 §4.1・想起の疑い判定の線）
-# 判定機の所在（repo パス運用＝$LIB_DIR/../../ai-brain/executor/）。無ければ B 行 0 行・stderr に 1 行。
-HEALTH_JUDGE="$LIB_DIR/../../ai-brain/executor/health_judge.py"
+: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"  # 判定機の既定と同値（読込の注入と同じ渡し方＝設計 §4.1・想起の疑い判定の線）
+# ヘルス判定機は台帳の鍵で引く（他機能の部品名を書かない＝v1.1 設計 §5.2・§5.6）。台帳ツール＝Core の組立。
+LEDGER_TOOL="$LIB_DIR/../../core/assembly/ledger-tool.sh"
+HEALTH_JUDGE_KEY="ai-brain.health-judge"
 STATUS_ALLOW="$(printf '%s' "$STATUS_ALLOW" | tr -d '[:space:]')"
 [ -z "$STATUS_ALLOW" ] && STATUS_ALLOW="active"
 STATUS_HOLD="$(printf '%s' "$STATUS_HOLD" | tr -d '[:space:]')"
@@ -393,23 +401,31 @@ print_reason_frame() {
   printf 'E\t1\n'
 }
 
-# ヘルス（外部脳）の B 行を stdout へ出す（0〜1 行・設計 §6）。判定機
-# health_judge.py を呼び、stage（OK／WARNING／ERROR）を warn 欄（ok／warn／
-# error）と表示テキスト（3 値）に写す。判定機が無い・python3 が無い・非 0・
-# JSON でない・stage が 3 値でない、のいずれでも 0 行（stderr に 1 行）＝
+# ヘルス（外部脳）の B 行を stdout へ出す（0〜1 行・設計 §6）。判定機を
+# 鍵で引いて呼び、stage（OK／WARNING／ERROR）を warn 欄（ok／warn／
+# error）と表示テキスト（3 値）に写す。鍵なし＝0 行（予定された省略・記録なし）。
+# 台帳・実体の異常＝0 行＋固定文 `LEDGER: …` を stderr に 1 行。python3 が無い・
+# 非 0・JSON でない・stage が 3 値でない、のいずれでも 0 行（stderr に 1 行）＝
 # 誤った段階を見せない（FR-15 の例外・NFR-2 fail-open）。
 # 末尾付記＝extras.fragments_candidates が非負整数のときだけ「 候補N件」
 # （0 件も表示＝本人裁定 R-2。段階に影響しない）。
-# テスト専用 env HEALTH_JUDGE_NOW が非空なら --now に写す（bootstrap と同名・設計 §4.1）。
+# テスト専用 env HEALTH_JUDGE_NOW が非空なら --now に写す（読込の注入と同名・設計 §4.1）。
 emit_health_rows() {
-  local py verdict rc fields stage cand warn
-  if [ ! -f "$HEALTH_JUDGE" ]; then
-    echo "health_judge.py が見つかりません（B 行を省略）: $HEALTH_JUDGE" >&2
-    return 0
-  fi
+  local judge py verdict rc fields stage cand warn
+  judge="$(bash "$LEDGER_TOOL" lookup "$HEALTH_JUDGE_KEY" 2>&1)"; rc=$?
+  case "$rc" in
+    0) judge="${judge%%$'\n'*}" ;;
+    1) return 0 ;;
+    *)
+      case "$judge" in
+        "LEDGER: "*) printf '%s\n' "${judge%%$'\n'*}" >&2 ;;
+        *) printf 'LEDGER: ledger 照会に失敗（rc=%s）\n' "$rc" >&2 ;;
+      esac
+      return 0 ;;
+  esac
   py="$(command -v python3 2>/dev/null)"
   [ -n "$py" ] || py="/usr/bin/python3"
-  verdict="$("$py" "$HEALTH_JUDGE" judge \
+  verdict="$("$py" "$judge" judge \
     --last-run "$MAINT_STATE_FILE" \
     --inventory-latest "$INVENTORY_LATEST" \
     --observation "$HEALTH_OBSERVATION" \
@@ -419,7 +435,7 @@ emit_health_rows() {
     ${HEALTH_JUDGE_NOW:+--now "$HEALTH_JUDGE_NOW"} 2>/dev/null)"
   rc=$?
   if [ "$rc" != "0" ] || [ -z "$verdict" ]; then
-    echo "health_judge.py が失敗しました（rc=${rc}・B 行を省略）" >&2
+    echo "ヘルス判定機が失敗しました（rc=${rc}・B 行を省略）" >&2
     return 0
   fi
   fields="$(printf '%s' "$verdict" | jq -r 'select(type == "object" and .schema == "health-verdict/1")
@@ -433,7 +449,7 @@ emit_health_rows() {
     WARNING) warn="warn" ;;
     ERROR) warn="error" ;;
     *)
-      echo "health_judge.py の stage が 3 値でありません（B 行を省略）" >&2
+      echo "ヘルス判定機の stage が 3 値でありません（B 行を省略）" >&2
       return 0 ;;
   esac
   if [ -n "$cand" ]; then

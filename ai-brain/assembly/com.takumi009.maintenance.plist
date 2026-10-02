@@ -6,13 +6,13 @@
     <string>com.takumi009.maintenance</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__AIENV_HOME__/work/takumi009-ai-env/scripts/maintenance.sh</string>
+        <string>__AIENV_HOME__/work/takumi009-ai-env/ai-brain/executor/maintenance.sh</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
         <string>__AIENV_HOME__</string>
-        <!-- ヘッドレスClaude CLI（`claude`コマンド）のログイン判定に必要（launchd経由では環境変数が継承されないため明示設定・2026-09-10）。scripts/install-maintenance.shが実ユーザー名へ置換する。 -->
+        <!-- ヘッドレスClaude CLI（`claude`コマンド）のログイン判定に必要（launchd経由では環境変数が継承されないため明示設定・2026-09-10）。ai-brain/assembly/install-maintenance.shが実ユーザー名へ置換する。 -->
         <key>USER</key>
         <string>__AIENV_USER__</string>
         <key>PATH</key>

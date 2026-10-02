@@ -66,7 +66,7 @@ mkdir -p "$(dirname "$DEST")"
 # plistは symlink ではなく実ファイルとして配置する（dotfiles/install.shの
 # install_launchagent()と同じ理由＝launchdのログイン時自動読込がsymlinked plist
 # では不安定なため）。__AIENV_HOME__ を実ホームパスへ置換しつつ、mktemp書き込み
-# →mvで原子的に生成する（scripts/install-main.shのgenerate_config_toml()と同方式）。
+# →mvで原子的に生成する（core/assembly/install-main.shのgenerate_config_toml()と同方式）。
 escaped_home=$(printf '%s' "$HOME" | sed -e 's/[&\]/\\&/g' -e 's/#/\\#/g')
 tmp="$(mktemp "$(dirname "$DEST")/.$(basename "$DEST").aienv-tmp.XXXXXX")"
 trap 'rm -f "$tmp"' RETURN

@@ -11,24 +11,23 @@
 # 専用フックへ切り出し、ラッパーが職種ごとの `--settings` に足す
 # （Vault 書込を宣言した職種＝frontmatter `aienv-vault-write: allowed` の子には載せない＝記録職の正規の書き込み経路）。
 #
-# 判定式は `guard_common.sh` の `guard_is_vault_ai_path` を使う（6フォルダの
-# literal はそこにしか書かない＝NFR-7・AC-10②。親側の `delegation-gate-v2.sh`
-# rule 2.5 も同じ関数を使う）。
+# 判定式は Core の `core/executor/vault-paths.sh` の `guard_is_vault_ai_path` を使う
+# （6フォルダの literal はそこにしか書かない＝NFR-7・AC-10②。親側の委任の柵も
+# 同じ関数を使う）。
 #
 # ⚠️ 逃げ道のマーカー（親専用の `claude-vault-direct-ok-<sid>`）はここでは
 # 見ない（子に逃げ道を持たせない＝設計 notes §2.1）。
 # ⚠️ 判定材料が取れないとき（jq 不在・入力が空・パスが取れない等）は素通し
 # （親の rule 2.5 と同じ向き＝このゲートは防御ではなく再発防止＝
-# delegation-gate-v2.sh:24 の方針）。ただし共有部品 guard_common.sh 自体が
+# 親側の委任の柵の方針）。ただし共有部品 vault-paths.sh 自体が
 # 読めないときは別扱い（下記）＝この柵が持つ唯一の判定式なので、読めない
 # まま素通しにはしない。
 #
 # 検証1巡目 I1-B1 対応: installer は本フックを `$HOME/.claude/hooks/
 # vault-write-gate.sh`（repoへのsymlink）として配置する
 # （`$HOME/.claude/hooks/lib/`は作らない）ため、`BASH_SOURCE[0]%/*`だけでは
-# 実運用経路でguard_common.shを解決できない。team/connect/claude-code/inprocess-gate.sh
-# の resolve_inprocess_gate_self_dir() と同じ方式（自身のsymlinkを解決した
-# 実体ディレクトリ直下のlib/を見る）に揃える。source失敗時は fail-close
+# 実運用経路で共有部品を解決できない。自身のsymlinkを解決した実体ディレクトリ
+# から repo 内の相対位置（core/executor/）を見る。source失敗時は fail-close
 # （denyしてexit 0＝子に載せた唯一のVault保護柵が無言で無効化される再発を
 # 防ぐ。他の「判定材料が取れないときは素通し」箇所とは異なり、ここは
 # 柵そのものが機能しない場合なので通さない）。
@@ -46,7 +45,7 @@ resolve_vault_gate_self_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 guard_common_load_error() {
-  reason="vault-write-gate: 共有部品（guard_common.sh・cause=$1）を読み込めず、Vault保護を判定できません。フックの配置を確認してください。成果物は依頼文が指定した作業ディレクトリへ書いてください。"
+  reason="vault-write-gate: 共有部品（vault-paths.sh・cause=$1）を読み込めず、Vault保護を判定できません。フックの配置を確認してください。成果物は依頼文が指定した作業ディレクトリへ書いてください。"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}' 2>/dev/null \
     || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
   exit 0
@@ -57,8 +56,8 @@ SELF_DIR="$(resolve_vault_gate_self_dir 2>/dev/null)" || guard_common_load_error
 # 持てない逃げ道になる＝裁定A「子に逃げ道を持たせない」に反するため撤去。
 # 本フックは子に載る唯一のVault保護柵そのもの＝逃げ道を持たせてはならない。
 # テスト用の差し替えは、実体ディレクトリごとsymlinkする既存の方式で足りる）。
-# shellcheck source=lib/guard_common.sh
-source "$SELF_DIR/../../../team/connect/claude-code/guard_common.sh" 2>/dev/null || guard_common_load_error GUARD_COMMON_UNREADABLE
+# shellcheck source=../../../core/executor/vault-paths.sh
+source "$SELF_DIR/../../../core/executor/vault-paths.sh" 2>/dev/null || guard_common_load_error GUARD_COMMON_UNREADABLE
 
 command -v jq >/dev/null 2>&1 || exit 0
 

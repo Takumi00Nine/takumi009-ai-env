@@ -159,7 +159,7 @@ log "（メイン専用機能＝backup-vault・maintenance等のLaunchAgentは�
 # 一度も適用したことが無く、既設のLaunchAgentが存在しないため、旧ラベルの
 # bootout/plist削除といった移行処理は不要（本人指示・2026-07-23）。単に設置しない
 # だけでよい。
-log "（サブ専用の定期更新LaunchAgentも廃止済みのためインストールしていません＝claude/hooks/check-sub-update.shのSessionStartフックに置き換え済み）"
+log "（サブ専用の定期更新LaunchAgentも廃止済みのためインストールしていません＝core/assembly/check-sub-update.shのSessionStartフックに置き換え済み）"
 
 # --- 5. 機役割（machine_role）の案内（サブ機として使うための本人操作を示す） ---
 # 配役表-能力軸整理-設計-2026-09-07.md §5.1: 実体プロファイルへ`machine_role`を

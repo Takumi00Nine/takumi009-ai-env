@@ -58,7 +58,7 @@
 #      検知に専念する設計判断＝リーダー裁定2026-07-16）。
 #      $VAULT が無い
 #      （サブ機・私的Vault未clone）場合は対象外。maintenance.shは
-#      README.mdにも明記の「メイン専用」機能（scripts/install-maintenance.sh
+#      README.mdにも明記の「メイン専用」機能（ai-brain/assembly/install-maintenance.sh
 #      を実行していなければ対応LaunchAgent plistが無い）なので、reads/recallログ
 #      （install-main.shで標準導入・任意ではない）とは別に、LaunchAgent plistの
 #      実在＋launchd上のロード状態（読み取り専用の`launchctl print`照会。
@@ -113,7 +113,7 @@
 #      穴になるため、ミューテックスディレクトリの新鮮度を直接読む（削除はしない＝
 #      読み取りのみ。解除はbackup-vault.sh自身の起動時ロジックに委ねる）。
 #
-# (README "Drift Detection" 2026-09-19・①②の補足) Whether the 23 symlink files (including one per role definition under `~/.claude/agents/`) point to the actual files in the repo, plus a check of the generated `~/.claude/settings.json`: the installer's own generation function re-renders it into a temporary file (`scripts/install-main.sh --render-settings-json`) and the result is diffed against the live file after JSON normalization, reporting differing top-level key names only (values are never printed; `model` is compared like any other key, so a mismatch after `/model` is drift too; if re-rendering fails, that is one `[SETTINGS-RENDER-FAILED]` drift item).
+# (README "Drift Detection" 2026-09-19・①②の補足・paths updated for the v1.1 component split 2026-10-03) Whether the 23 symlink files (including one per role definition under `~/.claude/agents/`) point to the actual files in the repo, plus a check of the generated `~/.claude/settings.json`: the installer's own generation function re-renders it into a temporary file (`core/assembly/install-main.sh --render-settings-json`) and the result is diffed against the live file after JSON normalization, reporting differing top-level key names only (values are never printed; `model` is compared like any other key, so a mismatch after `/model` is drift too; if re-rendering fails, that is one `[SETTINGS-RENDER-FAILED]` drift item).
 # Whether `~/.codex/config.toml` (a generated file) matches the repo's template with the placeholder expansion applied. The tables Codex Desktop rewrites on startup (`plugins`, `mcp_servers`, `desktop`) are treated as app-managed and excluded; what is monitored is the 7 keys the maintainer chose in the template (`service_tier`, `approval_policy`, `model`, `model_reasoning_effort`, `sandbox_workspace_write.network_access`, `features.hooks`, `features.js_repl`).
 # ④ is informational only: differences are shown as `ℹ️ INFO` and not counted as drift (the export is run in the weekly maintenance Phase 0 and at the close of each task; the count is still reported as `item4_drift` in `--json`).
 #
@@ -129,7 +129,7 @@
 #
 # 読み取りのみ（実 ~/.claude・~/.codex・実Vaultには一切書き込まない）。
 #
-# 使い方: scripts/check-drift.sh
+# 使い方: core/assembly/check-drift.sh
 #   --json: 末尾の人間向けサマリ行の直後に、機械可読なJSON1行を追加でstdoutへ
 #     出力する（設計書§1.2「①check-drift.sh実行（per-item機械可読出力を追加＝
 #     改訂v2）」＝maintenance.sh Phase1①向け・2026-07-16簡素化）。それ以外の
@@ -174,7 +174,7 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 : "${AIENV_PRIVATE_REPO:=$HOME/work/takumi009-ai-env-private}"
 # ローカル実体プロファイルの既定パス（⑧の案内文と①-2の失敗文言で使う）。
 # ⚠️ model/effort の既定値・resolverの直叩きはここでは持たない。①-2 は
-# scripts/install-main.sh --render-settings-json（生成関数そのもの）に再生成
+# core/assembly/install-main.sh --render-settings-json（生成関数そのもの）に再生成
 # させ、その生成物と実ファイルを比べるだけ（2026-09-19 着手順3・設計 §4.2）。
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
 
@@ -227,35 +227,35 @@ echo "======================================================================"
 # レビュー指摘・Major対応として合わせて追加。settings.json/①-2の対応とは独立の
 # 修正のため、READMEの「N件」表記もこの3件を含めた実数に更新している）。
 SYMLINKS=(
-  "$HOME/.claude/hooks/bootstrap-vault.sh|$DIR/claude/hooks/bootstrap-vault.sh"
-  "$HOME/.claude/hooks/delegation-gate-v2.sh|$DIR/claude/hooks/delegation-gate-v2.sh"
-  "$HOME/.claude/hooks/bash-danger-gate.sh|$DIR/claude/hooks/bash-danger-gate.sh"
-  "$HOME/.claude/hooks/bash-policy-gate.sh|$DIR/claude/hooks/bash-policy-gate.sh"
-  "$HOME/.claude/hooks/vault-recall.sh|$DIR/claude/hooks/vault-recall.sh"
-  "$HOME/.claude/hooks/vault-read-log.sh|$DIR/claude/hooks/vault-read-log.sh"
-  "$HOME/.claude/hooks/dock-pane-resolve.sh|$DIR/claude/hooks/dock-pane-resolve.sh"
-  "$HOME/.claude/hooks/check-sub-update.sh|$DIR/claude/hooks/check-sub-update.sh"
+  "$HOME/.claude/hooks/bootstrap-vault.sh|$DIR/core/connect/claude-code/session-start-compose.sh"
+  "$HOME/.claude/hooks/delegation-gate-v2.sh|$DIR/team/connect/claude-code/delegation-gate-v2.sh"
+  "$HOME/.claude/hooks/bash-danger-gate.sh|$DIR/core/connect/claude-code/bash-danger-gate.sh"
+  "$HOME/.claude/hooks/bash-policy-gate.sh|$DIR/core/connect/claude-code/bash-policy-gate.sh"
+  "$HOME/.claude/hooks/vault-recall.sh|$DIR/ai-brain/executor/vault-recall.sh"
+  "$HOME/.claude/hooks/vault-read-log.sh|$DIR/ai-brain/executor/vault-read-log.sh"
+  "$HOME/.claude/hooks/dock-pane-resolve.sh|$DIR/dock/executor/dock-pane-resolve.sh"
+  "$HOME/.claude/hooks/check-sub-update.sh|$DIR/core/assembly/check-sub-update.sh"
   # 2026-08-30追加: settings.jsonには2026-08-10導入時から登録済みだったが、
   # install-main.shへのlink配置が漏れていた（同型4回目・§9.0 A-0-2で修理）。
   # このSYMLINKS一覧にも同時に漏れていたため、あわせて追加する。
-  "$HOME/.claude/hooks/context-size-warn.sh|$DIR/claude/hooks/context-size-warn.sh"
-  "$HOME/.claude/hooks/agent-model-guard.sh|$DIR/claude/hooks/agent-model-guard.sh"
+  "$HOME/.claude/hooks/context-size-warn.sh|$DIR/core/connect/claude-code/context-size-warn.sh"
+  "$HOME/.claude/hooks/agent-model-guard.sh|$DIR/team/connect/claude-code/agent-model-guard.sh"
   # ラッパー起動-設計-v1.1.1.md §4・§2.5・D-3・裁定A（2026-09-17追加）:
   # in-process起動の境界フックと、子専用のVault保護柵フック。
-  "$HOME/.claude/hooks/inprocess-gate.sh|$DIR/claude/hooks/inprocess-gate.sh"
-  "$HOME/.claude/hooks/vault-write-gate.sh|$DIR/claude/hooks/vault-write-gate.sh"
-  "$HOME/.claude/hooks/usage-inject.sh|$DIR/claude/hooks/usage-inject.sh"
-  "$HOME/.codex/AGENTS.md|$DIR/codex/AGENTS.md"
-  "$HOME/.codex/hooks.json|$DIR/codex/hooks.json"
+  "$HOME/.claude/hooks/inprocess-gate.sh|$DIR/team/connect/claude-code/inprocess-gate.sh"
+  "$HOME/.claude/hooks/vault-write-gate.sh|$DIR/ai-brain/connect/claude-code/vault-write-gate.sh"
+  "$HOME/.claude/hooks/usage-inject.sh|$DIR/usage/executor/usage-inject.sh"
+  "$HOME/.codex/AGENTS.md|$DIR/team/connect/codex/AGENTS.md"
+  "$HOME/.codex/hooks.json|$DIR/team/connect/codex/hooks.json"
 )
-# 案件③ B-1 D-4（設計-v1.1.3.md §5 手順3）: 配置先職種定義（claude/agents/*.md）
+# 案件③ B-1 D-4（設計-v1.1.3.md §5 手順3）: 配置先職種定義（team/rules/agents/*.md）
 # はeffort-per-role v2の生成実ファイル方式を退役し、他の管理symlinkと同じ
 # この一覧へ戻す（symlink総数Nはロール数ぶん増える）。
-if [ -d "$DIR/claude/agents" ]; then
-  for f in "$DIR"/claude/agents/*.md; do
+if [ -d "$DIR/team/rules/agents" ]; then
+  for f in "$DIR"/team/rules/agents/*.md; do
     [ -e "$f" ] || continue
     name="$(basename "$f")"
-    SYMLINKS+=("$HOME/.claude/agents/$name|$DIR/claude/agents/$name")
+    SYMLINKS+=("$HOME/.claude/agents/$name|$DIR/team/rules/agents/$name")
   done
 fi
 
@@ -293,13 +293,13 @@ echo "======================================================================"
 echo "①-2 ~/.claude/settings.json（生成物）と repo テンプレのプレースホルダ展開差分"
 echo "======================================================================"
 
-# claude/settings.json は2026-08-21からsymlinkではなく生成物（scripts/install-main.sh
+# core/assembly/settings.json は2026-08-21からsymlinkではなく生成物（core/assembly/install-main.sh
 # generate_settings_json()。理由は同ファイル冒頭コメント参照＝JSONもシェル変数
 # 展開されない・symlinkのままだと`/model`実行時にClaude Code自身がrepo管理下の
 # ファイルを直接書き換えてしまう副作用があった）。①のsymlink一覧からは除外し、
 # ここでは「installerの生成関数で一時ファイルへ再生成→実ファイルとJSON正規化diff」
 # を行う（2026-09-19 着手順3・設計 §4.2）。
-#   入力口＝scripts/install-main.sh --render-settings-json <path> の1つだけ
+#   入力口＝core/assembly/install-main.sh --render-settings-json <path> の1つだけ
 #   （旧 --print-* 系の値出力口と項目別比較は退役）。
 #   生成側と本番installは同じ生成関数・同じ環境変数の既定値
 #   （AIENV_LOCAL_PROFILE_PATH・AIENV_MODEL_DEFS_FILE・AIENV_BEDROCK_ENV_FILE・
@@ -329,7 +329,7 @@ KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS=(
 : "${AIENV_LOCAL_PROFILE_PATH_HINT:=$AIENV_LOCAL_PROFILE_PATH}"
 
 SETTINGS_JSON_LIVE="$HOME/.claude/settings.json"
-SETTINGS_JSON_TEMPLATE="$DIR/claude/settings.json"
+SETTINGS_JSON_TEMPLATE="$DIR/core/assembly/settings.json"
 # ①-3 が modelSettings.<model> の照合に使う期待model（生成物から読む。値は
 # ログへ出さない。再生成できなければ空＝①-3 はその項目を飛ばす）。
 EXPECTED_MODEL=""
@@ -339,23 +339,23 @@ if [ -L "$SETTINGS_JSON_LIVE" ]; then
   # symlinkのままである時点で「/model実行時にrepo管理下のファイルが直接
   # 書き換わる」旧来の問題が解消されていないため、内容比較を行わず即座に
   # drift計上する。
-  item_drift "[UNEXPECTED-SYMLINK] $SETTINGS_JSON_LIVE がsymlinkのままです（2026-08-21以降は生成物であるべき。旧versionのinstall-main.shを適用した環境の可能性が高いため、scripts/install-main.shを再実行してください）"
+  item_drift "[UNEXPECTED-SYMLINK] $SETTINGS_JSON_LIVE がsymlinkのままです（2026-08-21以降は生成物であるべき。旧versionのinstall-main.shを適用した環境の可能性が高いため、core/assembly/install-main.shを再実行してください）"
 elif [ ! -f "$SETTINGS_JSON_LIVE" ]; then
   item_drift "[MISSING] $SETTINGS_JSON_LIVE が存在しません（未インストール？）"
 elif [ ! -f "$SETTINGS_JSON_TEMPLATE" ]; then
   item_drift "[MISSING] リポジトリ側テンプレが見つかりません: $SETTINGS_JSON_TEMPLATE"
-elif [ ! -x "$DIR/scripts/install-main.sh" ]; then
-  item_drift "[SETTINGS-RENDER-FAILED] scripts/install-main.sh が見つからないか実行権限がありません＝settings.jsonを再生成できず監視不能"
+elif [ ! -x "$DIR/core/assembly/install-main.sh" ]; then
+  item_drift "[SETTINGS-RENDER-FAILED] core/assembly/install-main.sh が見つからないか実行権限がありません＝settings.jsonを再生成できず監視不能"
 else
   _render_tmpd="$(mktemp -d 2>/dev/null)" || _render_tmpd=""
   if [ -z "$_render_tmpd" ]; then
     item_drift "[SETTINGS-RENDER-FAILED] 再生成用の一時ディレクトリを作成できません＝監視不能"
   else
     _render_rc=0
-    "$DIR/scripts/install-main.sh" --render-settings-json "$_render_tmpd/settings.json" >/dev/null 2>"$_render_tmpd/err" || _render_rc=$?
+    "$DIR/core/assembly/install-main.sh" --render-settings-json "$_render_tmpd/settings.json" >/dev/null 2>"$_render_tmpd/err" || _render_rc=$?
     if [ "$_render_rc" -ne 0 ] || [ ! -f "$_render_tmpd/settings.json" ]; then
       _render_err="$(head -1 "$_render_tmpd/err" 2>/dev/null)"
-      item_drift "[SETTINGS-RENDER-FAILED] scripts/install-main.sh --render-settings-json が失敗しました（exit ${_render_rc}: ${_render_err:-理由不明}）＝settings.jsonを再生成できず監視不能。プロファイルのリーダー行（role.leader）を確認してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
+      item_drift "[SETTINGS-RENDER-FAILED] core/assembly/install-main.sh --render-settings-json が失敗しました（exit ${_render_rc}: ${_render_err:-理由不明}）＝settings.jsonを再生成できず監視不能。プロファイルのリーダー行（role.leader）を確認してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
     else
       app_managed_keys_joined="$(printf '%s\x1f' "${KNOWN_APP_MANAGED_SETTINGS_JSON_KEYS[@]}")"
       SETTINGS_JSON_DIFF_OUT="$(python3 -c "
@@ -415,7 +415,7 @@ if isinstance(m, str) and m:
               item_drift "[JSON-PARSE-FAILED] ${parse_failed_path} をJSONとして解析できませんでした（${b}）＝監視不能"
               ;;
             DIFF)
-              item_drift "[SETTINGS-DIFF] キー '${a}' が生成物と異なります（値は出しません。scripts/install-main.sh の再実行で生成物へ揃うか、意図した変更ならテンプレ claude/settings.json へ反映してください）"
+              item_drift "[SETTINGS-DIFF] キー '${a}' が生成物と異なります（値は出しません。core/assembly/install-main.sh の再実行で生成物へ揃うか、意図した変更ならテンプレ core/assembly/settings.json へ反映してください）"
               ;;
           esac
         done <<EOF
@@ -600,7 +600,7 @@ KNOWN_APP_MANAGED_TOML_LEAF_KEYS=(
 )
 
 CONFIG_TOML_LIVE="$HOME/.codex/config.toml"
-CONFIG_TOML_TEMPLATE="$DIR/codex/config.toml"
+CONFIG_TOML_TEMPLATE="$DIR/team/connect/codex/config.toml"
 if [ ! -f "$CONFIG_TOML_LIVE" ]; then
   item_drift "[MISSING] $CONFIG_TOML_LIVE が存在しません（未インストール？）"
 elif [ ! -f "$CONFIG_TOML_TEMPLATE" ]; then
@@ -1095,7 +1095,7 @@ else
 
     if command -v launchctl >/dev/null 2>&1; then
       if ! launchctl print "gui/$(id -u)/com.takumi009.maintenance" >/dev/null 2>&1; then
-        item_drift "[MAINTENANCE-NOT-LOADED] com.takumi009.maintenance.plistは存在しますが、launchd上にロードされていません＝bootstrap未実行か手動でbootoutされた可能性。確認: launchctl print gui/$(id -u)/com.takumi009.maintenance ／ 再導入: scripts/install-maintenance.sh"
+        item_drift "[MAINTENANCE-NOT-LOADED] com.takumi009.maintenance.plistは存在しますが、launchd上にロードされていません＝bootstrap未実行か手動でbootoutされた可能性。確認: launchctl print gui/$(id -u)/com.takumi009.maintenance ／ 再導入: ai-brain/assembly/install-maintenance.sh"
       fi
     else
       log "  -> maintenance.sh週次ランナー: launchctlコマンドが見つからないためlaunchd上のロード状態を確認できません（macOS以外の実行環境の可能性）"
@@ -1309,7 +1309,7 @@ EOF
   if vault_agent_installed "maintenance"; then
     check_maintenance_freshness
   else
-    log "  -> maintenance.sh週次ランナー: 未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.maintenance.plist が無い。scripts/install-maintenance.sh 未実行）のためチェック対象外"
+    log "  -> maintenance.sh週次ランナー: 未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.maintenance.plist が無い。ai-brain/assembly/install-maintenance.sh 未実行）のためチェック対象外"
   fi
   if vault_agent_installed "weekly-review"; then
     check_weekly_review_freshness "$WEEKLY_REVIEW_DIR" "$WEEKLY_REVIEW_STALE_DAYS"
@@ -1504,8 +1504,8 @@ echo "======================================================================"
 # （profile-resolve-contract-2026-09-01.md §3）どおり、成功時はOK行の直後に
 # 配役一覧を続けて表示するが、**stdoutの1行目だけが機械可読の契約**
 # （OK/MINIMALのタブ区切り）。ここではその1行目だけを見る。
-if [ ! -x "$DIR/scripts/install-main.sh" ]; then
-  log "  -> scripts/install-main.sh が見つからないため --check-profile を実行できません。チェック対象外"
+if [ ! -x "$DIR/core/assembly/install-main.sh" ]; then
+  log "  -> core/assembly/install-main.sh が見つからないため --check-profile を実行できません。チェック対象外"
 else
   # ⚠️ stdoutとstderrを別々に捕捉する（2026-09-01 Codex二次レビュー指摘・
   # Major対応: 従来は`2>&1`で合流させており、両方に出力があった場合に
@@ -1520,14 +1520,14 @@ else
   CHECK_PROFILE_RC=0
   _check_profile_err_tmp="$(mktemp 2>/dev/null)" || _check_profile_err_tmp=""
   if [ -n "$_check_profile_err_tmp" ]; then
-    CHECK_PROFILE_STDOUT="$("$DIR/scripts/install-main.sh" --check-profile 2>"$_check_profile_err_tmp")" || CHECK_PROFILE_RC=$?
+    CHECK_PROFILE_STDOUT="$("$DIR/core/assembly/install-main.sh" --check-profile 2>"$_check_profile_err_tmp")" || CHECK_PROFILE_RC=$?
     CHECK_PROFILE_STDERR="$(cat "$_check_profile_err_tmp" 2>/dev/null)"
     rm -f "$_check_profile_err_tmp"
   else
     # 一時ファイルを作れない異常時のみ、やむを得ず合流させる
     # （fail-openで「一致」扱いにはしない＝後段のPROFILE-VALIDATION-FAILEDへ
     # 素直に流れる）。
-    CHECK_PROFILE_STDOUT="$("$DIR/scripts/install-main.sh" --check-profile 2>&1)" || CHECK_PROFILE_RC=$?
+    CHECK_PROFILE_STDOUT="$("$DIR/core/assembly/install-main.sh" --check-profile 2>&1)" || CHECK_PROFILE_RC=$?
   fi
   CHECK_PROFILE_FIRST_LINE="$(printf '%s\n' "$CHECK_PROFILE_STDOUT" | head -1)"
   if [ -z "$CHECK_PROFILE_FIRST_LINE" ] && [ -n "$CHECK_PROFILE_STDERR" ]; then
@@ -1645,7 +1645,7 @@ print('UNKNOWN_EXTRA' + chr(9) + unknown_extra)
       # ⚠️ UNKNOWN_EXTRAはadvisoryとは別扱い（§4a・T9'）: AI側は必読除外＝
       # 最小能力として振る舞うため、独立した[PROFILE-AI-UNREADABLE]項目で
       # 出す（キー名のみ・値は出さない＝絶対厳守③・V15と同じ秘匿方針）。
-      item_drift "[PROFILE-AI-UNREADABLE] ローカル実体プロファイルに未知キーがあり、AI側は必読から除外されています（キー名: ${CP_UNKNOWN_EXTRA}）。機械側の解決値は有効なままですが、AIはこのプロファイルを読めていません。対処: scripts/update-sub.sh でコードを追随させるか、未知キーを削除してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
+      item_drift "[PROFILE-AI-UNREADABLE] ローカル実体プロファイルに未知キーがあり、AI側は必読から除外されています（キー名: ${CP_UNKNOWN_EXTRA}）。機械側の解決値は有効なままですが、AIはこのプロファイルを読めていません。対処: core/assembly/update-sub.sh でコードを追随させるか、未知キーを削除してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
     fi
     if [ "$TOTAL_DRIFT" -eq "$check_profile_drift_before" ]; then
       if [ "$check_profile_had_info" = "1" ]; then
@@ -1709,7 +1709,7 @@ if [ -f "$USAGE_NEW_PLIST" ]; then
     usage_ls="$(usage_label_loaded "$USAGE_NEW_LABEL")"
     case "$usage_ls" in
       false)
-        item_drift "[USAGE-FETCH-NOT-LOADED] ${USAGE_NEW_PLIST} は存在しますが、launchd上にロードされていません＝bootstrap未実行か手動でbootoutされた可能性。確認: launchctl print ${USAGE_DOMAIN}/${USAGE_NEW_LABEL} ／ 再導入: scripts/install-usage-fetch.sh"
+        item_drift "[USAGE-FETCH-NOT-LOADED] ${USAGE_NEW_PLIST} は存在しますが、launchd上にロードされていません＝bootstrap未実行か手動でbootoutされた可能性。確認: launchctl print ${USAGE_DOMAIN}/${USAGE_NEW_LABEL} ／ 再導入: usage/assembly/install-usage-fetch.sh"
         ;;
       true)
         usage_na2="$(usage_label_active "$USAGE_NEW_LABEL")"

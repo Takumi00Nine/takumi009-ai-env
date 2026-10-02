@@ -8,8 +8,8 @@
       "WebFetch(domain:*)",
       "Edit(~/Data/**)",
       "Read(~/.config/takumi009-ai-env/profile.md)",
-      "Bash(~/work/takumi009-ai-env/scripts/codex-exec.sh:*)",
-      "Bash(python3 ~/work/takumi009-ai-env/claude/hooks/lib/role_candidates.py:*)",
+      "Bash(~/work/takumi009-ai-env/team/connect/codex/codex-exec.sh:*)",
+      "Bash(python3 ~/work/takumi009-ai-env/team/connect/claude-code/role_candidates.py:*)",
       "Skill(schedule)",
       "Skill(update-config)",
       "Skill(claude-api)"
@@ -167,15 +167,15 @@
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/usage-inject.sh",
-            "timeout": 5,
-            "statusMessage": "使用率を注入中"
-          },
-          {
-            "type": "command",
             "command": "$HOME/.claude/hooks/code27-call-clear.sh",
             "timeout": 2,
             "statusMessage": "📣 未応答の呼び出しを消去中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/usage-inject.sh",
+            "timeout": 5,
+            "statusMessage": "使用率を注入中"
           }
         ]
       }
@@ -208,6 +208,12 @@
             "command": "$HOME/.claude/hooks/bash-danger-gate.sh",
             "timeout": 5,
             "statusMessage": "危険コマンドガード確認中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/codex-direct-call-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Codex直叩きガード確認中"
           }
         ]
       },

@@ -22,6 +22,10 @@ Bash側（team/connect/claude-code/claude-exec.sh）へ複製しない。
       標準出力する。抽出元が読めない／解析できない／(1)が0command／宣言が
       不正（重複・不正値・未知の aienv- キー）／定義が読めないなら非0で
       終わる（呼び出し側はexit 8にする＝F3）。
+      (2)の柵は台帳の鍵 ai-brain.write-gate を Core の台帳ツールで照会して
+      決める（v1.1）。鍵なし＝その機能が置かれていない＝載せない。台帳異常・
+      実体異常＝照会の固定文を stderr に写して非0（柵が載らない子を無言で
+      起動しない＝fail-close）。
 
   classify --raw <path> [--timed-out]
       子の標準出力（--output-format json）ファイルを読み、FR-19の分類器
@@ -43,6 +47,7 @@ import fcntl
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 
@@ -72,15 +77,40 @@ def cmd_env_keys(_args: argparse.Namespace) -> int:
 # 除外する（agent-model-guard.sh・delegation-gate-v2.sh）。
 _LEADER_ONLY_MARKERS = ("delegation-gate-v2.sh", "agent-model-guard.sh")
 
-_VAULT_GATE_ENTRY = {
-    "matcher": "Edit|Write|NotebookEdit",
-    "hooks": [
-        {
-            "type": "command",
-            "command": "$HOME/.claude/hooks/vault-write-gate.sh",
-        }
-    ],
-}
+# (2) の柵＝台帳の鍵で引く（他機能の部品名を書かない）。子の settings には
+# ライブ位置（フックの配置先）の同じファイル名を載せる＝分割前と同じ command。
+_VAULT_GATE_KEY = "ai-brain.write-gate"
+_LIVE_HOOKS_DIR = "$HOME/.claude/hooks"
+_LEDGER_TOOL = os.path.normpath(
+    os.path.join(
+        os.path.dirname(os.path.realpath(__file__)),
+        "..", "..", "..", "core", "assembly", "ledger-tool.sh",
+    )
+)
+
+
+def _vault_gate_entry() -> tuple[dict | None, str | None]:
+    """鍵を照会して (2) のエントリを返す。戻り値＝(エントリ or None, 異常の1行 or None)。
+    鍵なしは (None, None)＝載せない。"""
+    try:
+        proc = subprocess.run(
+            ["bash", _LEDGER_TOOL, "lookup", _VAULT_GATE_KEY],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        return None, f"CHILD_SETTINGS_LEDGER_TOOL_UNAVAILABLE: {exc}"
+    if proc.returncode == 1:
+        return None, None
+    lines = proc.stdout.splitlines()
+    if proc.returncode != 0 or not lines:
+        err = (proc.stderr or "").strip().splitlines()
+        return None, err[0] if err else f"CHILD_SETTINGS_LEDGER_TOOL_FAILED: rc={proc.returncode}"
+    command = f"{_LIVE_HOOKS_DIR}/{os.path.basename(lines[0])}"
+    return {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [{"type": "command", "command": command}],
+    }, None
 
 
 def _filter_pretooluse(entries: list) -> list:
@@ -137,7 +167,12 @@ def cmd_child_settings(args: argparse.Namespace) -> int:
 
     combined = list(layer1)
     if not declared:
-        combined.append(_VAULT_GATE_ENTRY)
+        entry, ledger_err = _vault_gate_entry()
+        if ledger_err is not None:
+            sys.stderr.write(f"{ledger_err}\n")
+            return 1
+        if entry is not None:
+            combined.append(entry)
 
     canary_path = os.path.join(args.child_cwd, ".claude-exec-hooks-alive")
     # シェル側で展開させない（パスをそのままcommandに埋め込む＝設計§2.5(3)）。
