@@ -347,7 +347,7 @@ def check_static(ledger, moves):
     for old, rs in olds.items():
         if len(rs) > 1 and any(r["kind"] != SPLIT for r in rs):
             rep("moves", rs[0]["new"], "旧 %s の後継が複数なのに種別が分割でない" % old)
-    for r in parts_rows:
+    for r in parts_rows + suite_rows:
         if r.path not in origins:
             rep("moves", r.path, "移動表に由来が無い")
 
