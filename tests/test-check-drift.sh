@@ -1195,7 +1195,7 @@ echo "=== 13. --json: ④以外(例: ③UNCOMMITTED)のdriftはdrift_excluding_i
   # 起こす（ai-brain/data/vault-public/Preferences自体を変更すると④も同時にdriftしてしまい、
   # このテストの主眼〈④以外のみのdrift〉を検証できなくなるため・実装中に自分で
   # 気付いて修正）。
-  echo "dirty change" >> "$REPO/scripts/check-drift.sh.orig-marker"
+  echo "dirty change" >> "$REPO/core/assembly/check-drift.sh.orig-marker"
 
   rc=0
   out="$(run_check_json "$REPO" "$HOME_DIR")" || rc=$?

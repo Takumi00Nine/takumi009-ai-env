@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/connect/claude-code/session-start-compose.sh のユニットテスト（メイン/サブ両方の回帰テスト）。
+# ai-brain/executor/bootstrap-vault.sh（AI Brain の読込の寄与）のユニットテスト（メイン/サブ両方の回帰テスト）。
 #
 # 実 Vault($HOME/Data/obsidian) には依存しない。BOOTSTRAP_VAULT 環境変数で
 # 毎回ダミーのfixtureディレクトリへ差し替えてスクリプトを実行し、
@@ -20,7 +20,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/core/connect/claude-code/session-start-compose.sh"
+SCRIPT="$REPO_ROOT/ai-brain/executor/bootstrap-vault.sh"  # AI Brain の寄与（引数なし＝hook 形）。AI Brain のスイートは AI Brain の部品だけを起動する（設計 §4.4）
 # PATHをspyディレクトリだけに絞る外部プロセス計数テスト（§10.5）で使う。
 # 絞ったPATHでも`bash`自身が見つかるよう、絶対パスを先に確定しておく。
 REAL_BASH="$(command -v bash)"

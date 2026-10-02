@@ -46,7 +46,7 @@ fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 # FIXEDからschema_version/profile_slugを除いたもの）だけを
 # 唯一の正本として実行時ソースで取得する（ハードコード再列挙しない）。
 # ⚠️ 旧v1/v2の突合テスト（旧section 8）は突合相手が消えたため削除した。
-BOOTSTRAP_VAULT_SH="$REPO_ROOT/core/connect/claude-code/session-start-compose.sh"
+BOOTSTRAP_VAULT_SH="$REPO_ROOT/ai-brain/executor/bootstrap-vault.sh"
 PROFILE_RESOLVE_PY_FOR_KEYS="$REPO_ROOT/team/executor/profile_resolve.py"
 KNOWN_KEYS=()
 if [ -f "$PROFILE_RESOLVE_PY_FOR_KEYS" ]; then

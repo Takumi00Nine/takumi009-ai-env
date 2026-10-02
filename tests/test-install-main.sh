@@ -214,7 +214,7 @@ echo "=== 2. ローカル実体プロファイルの雛形配置: サンプル�
     "$([[ -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
   assert_true "symlinkではなく実ファイルとしてコピーされる（雛形は独立した実体）" \
     "$([[ ! -L "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
-  assert_true "実体はconfig/profile.md.sampleとバイト完全一致する（生ファイルの単純コピー）" \
+  assert_true "実体はteam/data/profile.md.sampleとバイト完全一致する（生ファイルの単純コピー）" \
     "$(diff -q "$TMP_REPO/team/data/profile.md.sample" "$FAKE_HOME/.config/takumi009-ai-env/profile.md" >/dev/null 2>&1 && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
@@ -276,7 +276,7 @@ echo "=== 4. ローカル実体プロファイルの雛形配置: サンプル�
   rc=0
   out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" 2>&1)" || rc=$?
   assert_true "サンプル未整備のWARNが出る（詳細に「No such file」相当を含む）" \
-    "$(echo "$out" | grep -q 'config/profile.md.sampleを読み取れませんでした' && echo "$out" | grep -q '詳細:.*[Nn]o such file' && echo 1 || echo 0)"
+    "$(echo "$out" | grep -q 'team/data/profile.md.sampleを読み取れませんでした' && echo "$out" | grep -q '詳細:.*[Nn]o such file' && echo 1 || echo 0)"
   assert_true "profile.mdは作成されない" \
     "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
   assert_true "実体が無いため settings.json は生成されず非0で終了する（既定モデルへ静かに倒れない）" \

@@ -8,10 +8,10 @@
 #
 # 契約（テストが決めた口。設計 §5.5・§11、実装計画 §7・§9）:
 #   寄与     team/connect/claude-code/profile-status.sh。stdin＝hook JSON。
-#     --slots   {"slots":{"opening":…,"directive5":…,"machine-role-hold":…,"profile-warning":…}}（この 4 枠ちょうど・
+#     --slots   {"slots":{"opening":…,"directive5":…,"role-hold":…,"profile-warning":…}}（この 4 枠ちょうど・
 #               空の枠は ""・文の末尾に改行を付けない）。枠の中身＝tests/test-session-start-compose.sh 冒頭の契約。
 #     引数なし  {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":…}}＝空でない枠だけを
-#               枠順（opening・directive5・machine-role-hold・profile-warning）に空行 1 つで連結したもの。
+#               枠順（opening・directive5・role-hold・profile-warning）に空行 1 つで連結したもの。
 #   上書き口（現行名のまま）＝BOOTSTRAP_ENABLE_LOCAL_PROFILE・AIENV_LOCAL_PROFILE_PATH・AIENV_MODEL_DEFS_FILE・
 #     PROFILE_RESOLVE_LIB・AIENV_AGENTS_DIR・BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY。
 #   配役表の照会コマンドの文＝`python3 ~/work/takumi009-ai-env/team/connect/claude-code/role_candidates.py`（新パス）。
@@ -220,10 +220,14 @@ echo "=== S1. --slots 全枠モード（実装計画 §9）: 枠名 4 つちょ�
   slots_rc=$?
   set -e
   assert_eq "S1: --slots の終了コード 0" "0" "$slots_rc"
-  assert_eq "S1: 枠名＝directive5・machine-role-hold・opening・profile-warning" \
-    "directive5,machine-role-hold,opening,profile-warning" \
+  assert_eq "S1: 枠名＝directive5・opening・profile-warning・role-hold（jq keys は辞書順）" \
+    "directive5,opening,profile-warning,role-hold" \
     "$(printf '%s' "$slots_json" | jq -r '.slots | keys | join(",")' 2>/dev/null)"
-  assert_eq "S1: machine_role の解決なし＝保留の枠は \"\"" '""' "$(printf '%s' "$slots_json" | jq -c '.slots["machine-role-hold"]' 2>/dev/null)"
+  # 基準（2da911f の bootstrap）は配役表が OK でないとき（ENABLE=0＝解決しないときを含む）machine_role を unknown に倒し、
+  # 保留行を出す（NFR-1＝働き不変。2026-10-03 基準で実測）。
+  assert_eq "S1: 配役表の解決なし＝保留の枠は基準の保留行" \
+    "⚠️ 配役表の machine_role が未確定です（この機がメイン機かサブ機かを本人が宣言していません）。機役割に依存する判断（Preferences の編集・公開スナップショットの生成・git の立場）は本人へ確認してから行う。既定値を発明しない。" \
+    "$(printf '%s' "$slots_json" | jq -r '.slots["role-hold"]' 2>/dev/null)"
   assert_eq "S1: 警告なし＝プロファイル節の枠は \"\"" '""' "$(printf '%s' "$slots_json" | jq -c '.slots["profile-warning"]' 2>/dev/null)"
   assert_eq "S1: opening＝転記指示・🧭 行・⚠️ 行の 3 行" \
     "【開幕1行】最初の応答の冒頭に、次の1行をそのまま転記する（1行だけ・要約しない）:
@@ -233,8 +237,8 @@ echo "=== S1. --slots 全枠モード（実装計画 §9）: 枠名 4 つちょ�
   assert_eq "S1: directive5 は ⑤ で始まる 1 行" "1" \
     "$(printf '%s' "$slots_json" | jq -r '.slots.directive5' 2>/dev/null | grep -c '^⑤ ' || true)"
   hook_ctx="$(run_status 2>/dev/null || true)"
-  assert_eq "S1: 引数なし＝空でない枠（opening・directive5）を空行で連結" \
-    "$(printf '%s' "$slots_json" | jq -r '[.slots.opening, .slots.directive5] | join("\n\n")' 2>/dev/null)" "$hook_ctx"
+  assert_eq "S1: 引数なし＝空でない枠（opening・directive5・role-hold）を空行で連結" \
+    "$(printf '%s' "$slots_json" | jq -r '[.slots.opening, .slots.directive5, .slots["role-hold"]] | join("\n\n")' 2>/dev/null)" "$hook_ctx"
   assert_eq "S1: 引数なしの hookEventName＝SessionStart" "SessionStart" \
     "$(echo "$STATUS_SESSION_JSON" | BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 "$SCRIPT" 2>/dev/null | jq -r '.hookSpecificOutput.hookEventName' 2>/dev/null || true)"
 }
@@ -1875,12 +1879,12 @@ echo "=== 76. AC-11(FR-9): machine_roleがunknownのときだけ保留の1行が
   sed -i '' "s/machine_role:     configured value=main/machine_role:     unknown/" "$FXP_76"
   slots_p8="$(slots_with_profile "$FXP_76" 2>/dev/null || true)"
 
-  norm() { printf '%s' "$1" | jq -S 'del(.slots["machine-role-hold"])' 2>/dev/null \
+  norm() { printf '%s' "$1" | jq -S 'del(.slots["role-hold"])' 2>/dev/null \
     | sed -E 's/MACHINE_ROLE:[a-z]+/MACHINE_ROLE:X/g; s/machine_role=[a-z]+/machine_role=X/g'; }
   assert_true "保留の枠以外は正規化すると一致（前提: 枠が取れている）" \
     "$([ -n "$(norm "$slots_p1")" ] && [ "$(norm "$slots_p1")" = "$(norm "$slots_p8")" ] && echo 1 || echo 0)"
-  hold_p1="$(printf '%s' "$slots_p1" | jq -r '.slots["machine-role-hold"]' 2>/dev/null)"
-  hold_p8="$(printf '%s' "$slots_p8" | jq -r '.slots["machine-role-hold"]' 2>/dev/null)"
+  hold_p1="$(printf '%s' "$slots_p1" | jq -r '.slots["role-hold"]' 2>/dev/null)"
+  hold_p8="$(printf '%s' "$slots_p8" | jq -r '.slots["role-hold"]' 2>/dev/null)"
   assert_eq "FX-P1(main): 保留の枠は空" "" "$hold_p1"
   assert_eq "FX-P8(unknown): 保留の枠はちょうど1行" "1" "$(printf '%s\n' "$hold_p8" | grep -c . || true)"
   assert_eq "FX-P8(unknown): その1行が保留の文" "1" "$(printf '%s\n' "$hold_p8" | grep -c '配役表の machine_role が未確定です' || true)"

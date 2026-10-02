@@ -317,12 +317,12 @@ echo "=== 7. 機役割の案内: 実行すると machine_role を本人が書く
     "$(echo "$out" | grep -q '本スクリプトは実体を書き換えません' && echo 1 || echo 0)"
   # 2026-09-08 Codexレビュー指摘・MINOR対応（差し戻しA案6巡目）: 「実体を
   # 書き換えない」という部分文字列だけでは、「既存の実体は対象・不在時は
-  # config/profile.md.sampleから新規作成する」という限定の有無を区別できず、
+  # team/data/profile.md.sampleから新規作成する」という限定の有無を区別できず、
   # この限定を誤って削除する回帰を検出できない。両方の限定句も検査する。
   assert_true "「既存の実体が対象」という限定が明示される" \
     "$(echo "$out" | grep -q '既存の実体が対象' && echo 1 || echo 0)"
-  assert_true "「不在時はconfig/profile.md.sampleから新規作成」という限定が明示される" \
-    "$(echo "$out" | grep -q 'config/profile.md.sampleからの新規作成' && echo 1 || echo 0)"
+  assert_true "「不在時はteam/data/profile.md.sampleから新規作成」という限定が明示される" \
+    "$(echo "$out" | grep -q 'team/data/profile.md.sampleからの新規作成' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }

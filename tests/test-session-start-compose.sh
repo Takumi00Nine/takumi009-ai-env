@@ -17,7 +17,7 @@
 #     ai-brain.bootstrap   must-read＝「重要: 必読ノートの全文は…」から「④ 記録職＝…」の行まで／
 #                          health＝【外部脳ヘルス】の節（ℹ️ 行があれば空行 1 つを挟んで続ける）
 #     team.session-status  opening＝「【開幕1行】…:」・🧭 行・「⚠️ この依頼に…」の 3 行／directive5＝⑤ の行／
-#                          machine-role-hold＝保留の 1 行／profile-warning＝「【ローカル実体プロファイル】」＋改行＋警告
+#                          role-hold＝保留の 1 行／profile-warning＝「【ローカル実体プロファイル】」＋改行＋警告
 #     dock.declare-state   declare6＝⑥ の行
 #   配置（基準＝分岐元 2da911f の bootstrap-vault.sh 578〜604 行の heredoc）＝本ファイルの render_expected。
 #   警告行＝本文の末尾に空行 1 つを置き、異常 1 件 1 行で LEDGER: …（固定文＝ledger-tool の lookup と同じ形）。
@@ -126,7 +126,7 @@ render_expected() {
   local o m d5 d6 hold hs pw
   o="$(slot team.session-status opening)"; m="$(slot ai-brain.bootstrap must-read)"
   d5="$(slot team.session-status directive5)"; d6="$(slot dock.declare-state declare6)"
-  hold="$(slot team.session-status machine-role-hold)"; hs="$(slot ai-brain.bootstrap health)"
+  hold="$(slot team.session-status role-hold)"; hs="$(slot ai-brain.bootstrap health)"
   pw="$(slot team.session-status profile-warning)"
   printf '%s' "【セッション開始ブートストラップ｜ハーネス強制注入】
 
@@ -199,7 +199,7 @@ PROFILE_ENABLE=1; PROFILE_PATH="$WORK/p-unknown.md"
 make_v2_profile "$PROFILE_PATH" "role.leader: configured model=t-opus-high"
 sed -i '' "s/machine_role:     configured value=main/machine_role:     unknown/" "$PROFILE_PATH"
 compose
-assert_true "保留の枠が空でない（前提）" "$([ -n "$(slot team.session-status machine-role-hold)" ] && echo 1 || echo 0)"
+assert_true "保留の枠が空でない（前提）" "$([ -n "$(slot team.session-status role-hold)" ] && echo 1 || echo 0)"
 assert_true "プロファイル節の枠が空でない（前提）" "$([ -n "$(slot team.session-status profile-warning)" ] && echo 1 || echo 0)"
 assert_eq "保留行・プロファイル節つきでも基準の骨格と文字列等値" "$(render_expected)" "$CTX"
 assert_eq "保留行はちょうど 1 回" "1" "$(printf '%s\n' "$CTX" | grep -c '配役表の machine_role が未確定です' || true)"

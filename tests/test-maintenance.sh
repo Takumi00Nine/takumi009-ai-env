@@ -1267,18 +1267,25 @@ echo "=== 39. Phase3宣言掃除: 入口のパスはMAINTENANCE_TASK_PRUNE_CMD�
   assert_contains "上書きしたパスの応答が反映される（・宣言掃除 実施・1件・UUIDは含まない）" "$FRAG_TEXT" "・宣言掃除 実施・1件"
 }
 
-echo "=== 39b. FR-78/AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしないとき、既定は ai-env の dock/executor/cmux-task-declare.sh を指す（cmux-session-todo v3・供給側の移設） ==="
+# setup_prune_ledger <偽 repo> — 偽 repo に台帳ツール（実物の写し）と台帳 1 行（鍵 dock.task-declare）を置き、
+# 宣言 CLI の置き場（台帳が指すパス）のディレクトリを返す（v1.1 設計 §6-2＝他機能の入口は鍵の照会で引く）。
+setup_prune_ledger() {
+  local repo="$1"
+  mkdir -p "$repo/core/assembly" "$repo/core/data" "$repo/dock/executor"
+  cp "$REPO_ROOT/core/assembly/ledger-tool.sh" "$repo/core/assembly/ledger-tool.sh"
+  printf 'part\tdock/executor/cmux-task-declare.sh\tdock\texecutor\t-\tdock.task-declare\t宣言 CLI\n' > "$repo/core/data/ledger.tsv"
+  printf '%s' "$repo/dock/executor"
+}
+
+echo "=== 39b. FR-78/AC-104・v1.1 設計 §6-2: MAINTENANCE_TASK_PRUNE_CMDを上書きしないとき、台帳の鍵 dock.task-declare の照会で引けた宣言 CLI が起動される ==="
 {
   T="$WORK_ROOT/t39b"; mkdir -p "$T"
   setup_test_env "$T"
   LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
-  # 既定パスの解決先（新）は $HOME/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh。
-  # 本ファイルの $HOME は隔離済み（冒頭 mktemp -d）なので、そこへ直接スタブを
-  # 置き、MAINTENANCE_TASK_PRUNE_CMD を一切渡さずに maintenance.sh を実行する
-  # （run_maintenance() は `:=$PRUNE_STUB` で常に上書きしてしまうため、ここだけ
-  # 直接 bash 呼び出しにする）。
-  DEFAULT_PRUNE_DIR="$HOME/work/takumi009-ai-env/dock/executor"
-  mkdir -p "$DEFAULT_PRUNE_DIR"
+  # 既定の入口＝偽 repo の台帳ツールで鍵 dock.task-declare を照会して引けたパス。そこへスタブを置き、
+  # MAINTENANCE_TASK_PRUNE_CMD を一切渡さずに maintenance.sh を実行する
+  # （run_maintenance() は `:=$PRUNE_STUB` で常に上書きしてしまうため、ここだけ直接 bash 呼び出しにする）。
+  DEFAULT_PRUNE_DIR="$(setup_prune_ledger "$REPO")"
   DEFAULT_PRUNE_STUB="$DEFAULT_PRUNE_DIR/cmux-task-declare.sh"
   PRUNE_CALL_LOG="$T/prune-call-39b.log"
   setup_fake_prune_cmd "$DEFAULT_PRUNE_STUB"
@@ -1292,12 +1299,12 @@ echo "=== 39b. FR-78/AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしないと�
     GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
     bash "$REPO/ai-brain/executor/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR" || rc=$?
   assert_eq "exit 0" "0" "$rc"
-  assert_eq "既定パスのスタブ（ai-env/dock/executor/cmux-task-declare.sh）が呼ばれた" \
+  assert_eq "照会で引けた宣言 CLI（台帳の dock.task-declare＝偽 repo の dock/executor/cmux-task-declare.sh）が呼ばれた" \
     "1" "$([ -s "$PRUNE_CALL_LOG" ] && echo 1 || echo 0)"
   rm -rf "$DEFAULT_PRUNE_DIR"
 }
 
-echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経路で、実物cmux-task-declare.shを通した実削除（workspace listに無いUUIDだけが消えて残り1件は残る）と実施サマリへの反映まで検査する（検証1巡目 MAJOR #14対応: 39bは既定パスへのルーティングだけ、40/41は実物だが明示上書き経路だけを見ており、『既定パス×実物×実削除』の組合せが未検査だった） ==="
+echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経路（v1.1＝台帳の鍵の照会）で、実物cmux-task-declare.shを通した実削除（workspace listに無いUUIDだけが消えて残り1件は残る）と実施サマリへの反映まで検査する（検証1巡目 MAJOR #14対応: 39bは既定パスへのルーティングだけ、40/41は実物だが明示上書き経路だけを見ており、『既定パス×実物×実削除』の組合せが未検査だった） ==="
 {
   T="$WORK_ROOT/t39c"; mkdir -p "$T"
   setup_test_env "$T"
@@ -1308,13 +1315,10 @@ echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経�
   if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
     fail_case "AC-104(39c・既定経路): 実物cmux-task-declare.shが見つかりません（${REAL_CMUX_TASK_DECLARE}）"
   else
-    # 既定パス（$HOME/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh）へ
-    # 実物をコピーして置く。cp なのでLIB_DIR解決（dirname "$0"）はコピー先
-    # 基準になるが、cmux-task-declare.shはcmux/lib-vault-tasks.sh・
-    # lib-cmux-workspace.shと同じ相対位置にある前提のため、依存libも
-    # 一緑にコピーする。
-    DEFAULT_PRUNE_DIR="$HOME/work/takumi009-ai-env/dock/executor"
-    mkdir -p "$DEFAULT_PRUNE_DIR"
+    # 既定の入口（偽 repo の台帳で鍵 dock.task-declare が指すパス）へ実物をコピーして置く。
+    # cp なのでLIB_DIR解決（dirname "$0"）はコピー先基準になるが、cmux-task-declare.shは
+    # lib-vault-tasks.sh・lib-cmux-workspace.shと同じ相対位置にある前提のため、依存libも一緒にコピーする。
+    DEFAULT_PRUNE_DIR="$(setup_prune_ledger "$REPO")"
     cp "$REAL_CMUX_TASK_DECLARE" "$DEFAULT_PRUNE_DIR/cmux-task-declare.sh"
     REAL_CMUX_TASK_DECLARE_DIR="$(cd "$(dirname "$REAL_CMUX_TASK_DECLARE")" && pwd)"
     for lib in lib-model-view.sh lib-cmux-workspace.sh lib-vault-tasks.sh; do

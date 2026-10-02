@@ -249,24 +249,19 @@ echo "=== AC-10②: alias_literal_only_in_guard_common（許容別名の集合�
   assert_eq_local "$guard_set" "$py_set" "guard_allowed_model_aliasesの値集合＝profile_resolve.pyのAGENT_MODEL_ALIASESの値集合"
 }
 
-echo "=== AC-10②(裁定A): vault_folders_literal_only_in_guard_common（Vault6フォルダの判定literalはguard_common.shにしか無い） ==="
+echo "=== AC-10②(裁定A): vault_folders_literal_not_in_guard_common（Vault6フォルダの判定literalは分割後の guard_common.sh に無い＝二重定義の防止） ==="
 {
   GUARD_COMMON="$REPO_ROOT/team/connect/claude-code/guard_common.sh"
   DELEGATION_GATE="$REPO_ROOT/team/connect/claude-code/delegation-gate-v2.sh"
   VAULT_GATE="$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh"
 
-  # guard_common.sh のguard_vault_ai_prefixesが6フォルダすべての正本を持つ
-  # （printfの複数引数に分かれているため複数行にまたがる＝1関数の本文
-  # 全体をawkで抜き出してから6語すべての出現を見る）
-  fn_body="$(awk '/^guard_vault_ai_prefixes\(\)/{f=1} f{print} f&&/^}/{exit}' "$GUARD_COMMON")"
-  folders_ok=1
-  for name in Fragments Knowledge Decisions Projects Preferences Personal; do
-    printf '%s' "$fn_body" | grep -qF "$name" || folders_ok=0
-  done
-  if [ "$folders_ok" -eq 1 ]; then
-    pass "guard_common.sh がVault6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）の正本を持つ"
+  # v1.1（設計 §4.3）で Vault パス述語は core/executor/vault-paths.sh へ分けた。正本がそこにあることは
+  # tests/test-shell-lib.sh 27〜29 が見る。ここでは Team 側に 6 フォルダの literal が残っていないことだけを見る。
+  folder_hits="$(grep -cE 'Fragments|Knowledge|Decisions|Projects|Preferences|Personal' "$GUARD_COMMON" 2>/dev/null || true)"
+  if [ -f "$GUARD_COMMON" ] && [ "${folder_hits:-0}" -eq 0 ]; then
+    pass "guard_common.sh にVault6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）のliteralが無い"
   else
-    fail_case "guard_common.sh がVault6フォルダの正本を持つ"
+    fail_case "guard_common.sh にVault6フォルダのliteralが無い (hits=${folder_hits:-?})"
   fi
 
   # delegation-gate-v2.sh・vault-write-gate.shは、6フォルダを判定する

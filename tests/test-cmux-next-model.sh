@@ -236,7 +236,8 @@ assert_eq "frame_v3_header: 理由フレームも /4" "#V	cmux-dock-frame/4	Proj
 echo "=== judge_missing_no_b_row_e_count_consistent（F-10・§14-7）: 判定機不在／python3 失敗＝B 行 0 行・E は P 行数・rc=0 ==="
 reset_vault
 mk_notes_N_all "$VAULT"
-# 判定機不在＝供給側スクリプトを lib だけ複製した一時ディレクトリから起動する（$LIB_DIR/../claude/hooks/lib/ が無い）。
+# 台帳異常＝供給側スクリプトを lib だけ複製した一時ディレクトリから起動する（台帳ツールが無い＝照会の失敗＝
+# 設計 §5.6 の台帳異常の経路）。Dock は AI Brain の部品名を書かない（設計 §5.2）＝記録は照会の固定文 LEDGER: …。
 NOJUDGE="$WORKDIR/nojudge/cmux"; mkdir -p "$NOJUDGE"
 cp "$SCRIPT_DIR/../dock/executor/cmux-next-model.sh" "$SCRIPT_DIR/../dock/executor/lib-model-view.sh" "$SCRIPT_DIR/../dock/executor/lib-vault-tasks.sh" "$SCRIPT_DIR/../dock/executor/lib-cmux-workspace.sh" "$NOJUDGE/"
 d="$FX_ROOT/S-2"
@@ -250,7 +251,14 @@ assert_eq "判定機不在: #V は /4 のまま" "#V	cmux-dock-frame/4	Project" 
 p_n="$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
 assert_eq "判定機不在: E＝P 行数（8）" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
 assert_eq "判定機不在: P 行は 8 行そろう" "8" "$p_n"
-assert_eq "判定機不在: stderr に 1 行" "1" "$(grep -c 'health_judge.py' "$WORKDIR/frame_stderr")"
+assert_true "台帳異常: stderr に LEDGER: で始まる行が 1 行以上" "$([ "$(grep -c '^LEDGER: ' "$WORKDIR/frame_stderr")" -ge 1 ] && echo 1 || echo 0)"
+# 鍵なし（台帳は読めるが判定機の鍵の行が無い＝AI Brain が置かれていない）＝B 行を省くだけ・記録なし（設計 §5.6）。
+awk -F '\t' '$6!="ai-brain.health-judge"' "$SCRIPT_DIR/../core/data/ledger.tsv" > "$WORKDIR/ledger-nojudge.tsv"
+AIENV_LEDGER="$WORKDIR/ledger-nojudge.tsv" run_frame_fixture S-2
+assert_eq "鍵なし: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "鍵なし: B 行 0 行" "0" "$(b_rows | wc -l | tr -d ' ')"
+assert_eq "鍵なし: E＝P 行数" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
+assert_eq "鍵なし: stderr に LEDGER: 行なし（予定された省略）" "0" "$(grep -c '^LEDGER: ' "$WORKDIR/frame_stderr")"
 STUBBIN_PY="$WORKDIR/stubbin-py"; mkdir -p "$STUBBIN_PY"
 printf '#!/bin/bash\nexit 3\n' > "$STUBBIN_PY/python3"; chmod +x "$STUBBIN_PY/python3"
 PATH="$STUBBIN_PY:$PATH" run_frame_fixture S-2
