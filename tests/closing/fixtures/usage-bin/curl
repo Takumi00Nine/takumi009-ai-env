@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+if [ -n "${STUB_CURL_EXIT:-}" ] && [ "${STUB_CURL_EXIT}" != "0" ]; then
+  exit "$STUB_CURL_EXIT"
+fi
+if [ -n "${STUB_CURL_BODY_FILE:-}" ] && [ -f "$STUB_CURL_BODY_FILE" ]; then
+  cat "$STUB_CURL_BODY_FILE"
+else
+  printf '%s' "${STUB_CURL_BODY:-}"
+fi
+printf '\n%s' "${STUB_CURL_STATUS:-200}"
+exit 0
