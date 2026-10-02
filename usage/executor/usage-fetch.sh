@@ -52,26 +52,6 @@ SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 # shellcheck source=notify/connect/macos/usage-notify.sh
 . "$SCRIPT_DIR/../../notify/connect/macos/usage-notify.sh"
 
-# 接続の列挙（D-8 方式②）＝台帳の鍵 usage.fetch を台帳ツールで照会し、
-# 返った接続（claude-code・codex の fetch.sh。台帳の行順）ごとに、同じ
-# 階層の宣言（usage.env の service=）を読んで短名を集め、取得器を
-# source する。宣言の無い・短名の無い接続は飛ばす。0 件＝取得口なし
-# （main() の既存の失敗記録へ・D-8 方式②）。短名の集合は USAGE_FETCH_SERVICES
-# （空白区切り・台帳の行順）に置く。
-USAGE_FETCH_SERVICES=""
-while IFS= read -r _usage_conn_path; do
-  [ -n "$_usage_conn_path" ] || continue
-  _usage_conn_dir="$(dirname "$_usage_conn_path")"
-  _usage_conn_service="$(grep -m1 '^service=' "$_usage_conn_dir/usage.env" 2>/dev/null | cut -d= -f2-)"
-  [ -n "$_usage_conn_service" ] || continue
-  USAGE_FETCH_SERVICES="${USAGE_FETCH_SERVICES:+$USAGE_FETCH_SERVICES }$_usage_conn_service"
-  # shellcheck disable=SC1090
-  . "$_usage_conn_path"
-done <<EOF
-$(bash "$SCRIPT_DIR/../../core/assembly/ledger-tool.sh" lookup usage.fetch 2>/dev/null)
-EOF
-unset _usage_conn_path _usage_conn_dir _usage_conn_service
-
 load_config() {
   CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-codex-usage"
   CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-codex-usage"
@@ -98,6 +78,41 @@ load_config() {
 log() {
   printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$$" "$*"
 }
+
+# 接続の列挙（D-8 方式②・検証 V-01 対応）＝台帳の鍵 usage.fetch を台帳
+# ツールで照会し、返った接続（claude-code・codex の fetch.sh。台帳の行順）
+# ごとに、同じ階層の宣言（usage.env の service=）を読んで短名を集め、
+# 取得器を source する。短名の集合は USAGE_FETCH_SERVICES（空白区切り・
+# 台帳の行順）に置く。既定表（固定の pool 一覧）は持たない＝提供元の値は
+# 宣言だけが持つ（FR-6）。
+# 照会の結果 3 種（設計 §5.6）＝
+#   鍵なし（台帳ツールの stderr が空）＝接続 0 件＝記録なし（main() の
+#     「取得口なし」が既存の失敗記録を兼ねる）。
+#   台帳異常・実体異常（台帳ツールの stderr に固定文 1 行）＝そのまま
+#     ログへ写す（$2>/dev/null で捨てない）。働きは鍵なしと同じ縮退。
+#   行はあるが宣言が読めない・service が無い接続＝実体異常と同じ扱いで
+#     固定文 1 行をログへ（その接続は飛ばす）。
+USAGE_FETCH_SERVICES=""
+_usage_fetch_ledger_err="$(mktemp 2>/dev/null)" || _usage_fetch_ledger_err="${TMPDIR:-/tmp}/.usage-fetch-ledger-err.$$"
+while IFS= read -r _usage_conn_path; do
+  [ -n "$_usage_conn_path" ] || continue
+  _usage_conn_dir="$(dirname "$_usage_conn_path")"
+  _usage_conn_service="$(grep -m1 '^service=' "$_usage_conn_dir/usage.env" 2>/dev/null | cut -d= -f2-)"
+  if [ -z "$_usage_conn_service" ]; then
+    log "LEDGER: part usage.fetch $_usage_conn_path 宣言が読めない"
+    continue
+  fi
+  USAGE_FETCH_SERVICES="${USAGE_FETCH_SERVICES:+$USAGE_FETCH_SERVICES }$_usage_conn_service"
+  # shellcheck disable=SC1090
+  . "$_usage_conn_path"
+done <<EOF
+$(bash "$SCRIPT_DIR/../../core/assembly/ledger-tool.sh" lookup usage.fetch 2>"$_usage_fetch_ledger_err")
+EOF
+if [ -s "$_usage_fetch_ledger_err" ]; then
+  log "$(cat "$_usage_fetch_ledger_err")"
+fi
+rm -f "$_usage_fetch_ledger_err"
+unset _usage_conn_path _usage_conn_dir _usage_conn_service _usage_fetch_ledger_err
 
 is_unsigned_int() {
   case "$1" in
@@ -407,7 +422,7 @@ main() {
   mkdir -p "$CACHE_DIR" "$LOCK_DIR" "$TMP_DIR" 2>/dev/null || return 1
 
   if [ -z "$USAGE_FETCH_SERVICES" ]; then
-    log "usage-fetch.sh: no connections declared (usage.fetch); nothing to do"
+    log "usage-fetch.sh: 取得口なし（usage.fetch の接続が無い）"
     return 1
   fi
 

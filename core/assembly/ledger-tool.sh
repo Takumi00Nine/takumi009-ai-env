@@ -250,7 +250,7 @@ def check_static(ledger, moves):
             why.append("接続でない行に提供元 %s" % r.prov)
         box = "%s/%s/" % (r.func, r.layer) + ("%s/" % r.prov if r.layer == "connect" else "")
         rest = p[len(box):].rstrip("/") if p.startswith(box) else ""
-        if not rest or "/" in rest:
+        if (not rest or "/" in rest) and not (p.endswith("/") and p == box):
             why.append("置き場が %s の直下でない" % box)
         if r.key != "-":
             m = KEY_RE.match(r.key)

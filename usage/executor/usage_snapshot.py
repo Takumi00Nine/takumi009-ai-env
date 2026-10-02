@@ -55,6 +55,7 @@ import argparse
 import json
 import math
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -121,38 +122,25 @@ WINDOW_HUMAN_LABEL = {
 }
 
 # ============================================================
-# 接続の列挙（設計 §5.3）＝台帳の Usage 接続行（鍵 usage.fetch）を列挙して
-# 宣言（usage.env の KEY=VALUE）を読む。枠の並び＝台帳の行順
-# （AC-12 の stdout 一致）。提供元名で分岐しない＝枠 id（pool_ref）・
-# キャッシュ名（<短名>-cache.json）・表示名・チケット句の固定値は宣言の
-# 値から組み立てる。列挙できない・宣言が読めない接続は飛ばし、1件も
-# 揃わなければ現行の固定値へ縮退する（提示専用・exit 0 の契約を保つ）。
+# 接続の列挙（設計 §5.3・検証 V-01 対応）＝台帳の Usage 接続行（鍵
+# usage.fetch）を Core の台帳ツールで照会して宣言（usage.env の
+# KEY=VALUE）を読む。枠の並び＝台帳の行順（AC-12 の stdout 一致）。
+# 提供元名で分岐しない＝枠 id（pool_ref）・キャッシュ名（<短名>-cache.json）・
+# 表示名・チケット句の固定値は宣言の値から組み立てる。既定表は持たない。
+# 照会の結果 3 種（設計 §5.6。他機能の同種の照会ヘルパと同じ型）＝
+#   鍵なし（接続 0 件・stderr なし）＝枠 0 件（キャッシュ無しと同じ見え方
+#     になる・exit 0。記録なし＝予定された省略）。
+#   台帳異常・実体異常（stderr に固定文 1 行）＝その1行を stderr へ写し、
+#     働きは鍵なしと同じ縮退（2>/dev/null で捨てない）。
+#   行はあるが宣言が読めない・service／pool_ref が無い接続＝実体異常と
+#     同じ扱いで固定文 1 行を stderr へ（その接続は飛ばす）。
 # ============================================================
-_DEFAULT_SUBSCRIPTION_POOL_REFS = ["claude-subscription", "codex-subscription"]
-_DEFAULT_POOL_CACHE_FILE = {
-    "claude-subscription": "claude-cache.json",
-    "codex-subscription": "codex-cache.json",
-}
-_DEFAULT_POOL_HUMAN_LABEL = {
-    "claude-subscription": "Claude枠",
-    "codex-subscription": "Codex枠",
-}
-_DEFAULT_FIXED_RESET_CREDITS = {
-    "claude-subscription": {
-        "available_count": None,
-        "reset_scope": ["five_hour"],
-        "credits": [],
-        "note": "not_machine_readable",
-    }
-}
-_LEDGER_REL = os.path.join("core", "data", "ledger.tsv")
 _USAGE_ENV_NAME = "usage.env"
 _USAGE_FETCH_KEY = "usage.fetch"
+_LEDGER_MSG_HEAD = "LEDGER:"
 
-
-def _repo_root() -> str:
-    """このファイル自身の位置（usage/executor/）から repo ルートを引く。"""
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+LEDGER_TOOL = os.path.normpath(os.path.join(_LIB_DIR, "..", "..", "core", "assembly", "ledger-tool.sh"))
 
 
 def _parse_declaration(path: str):
@@ -174,47 +162,54 @@ def _parse_declaration(path: str):
     return data
 
 
-def _usage_fetch_connection_paths(ledger_path: str):
-    """台帳（鍵=usage.fetch の part 行）を台帳の行順に列挙する。台帳が
-    読めない・該当行が無ければ空リスト（呼び出し側が現行の固定値へ縮退）。
+def _usage_fetch_lookup():
+    """台帳ツールの照会（鍵=usage.fetch）を1回呼ぶ（他機能の同種の照会
+    ヘルパと同じ型・依存は subprocess 経由）。
+    戻り値: (絶対パスの行のリスト or None, 台帳ツールのstderr1行 or None)。
+    鍵なし（rc1）＝行も stderr も無い＝(None, None)（fail-soft・記録なし）。
+    台帳異常・実体異常（rc2/rc3）＝行は無いが stderr に固定文1行＝
+    (None, その1行)。台帳ツールが無ければ (None, None)。
     """
-    rows = []
+    if not os.path.isfile(LEDGER_TOOL):
+        return None, None
     try:
-        with open(ledger_path, encoding="utf-8") as f:
-            lines = f.readlines()
+        proc = subprocess.run(
+            ["bash", LEDGER_TOOL, "lookup", _USAGE_FETCH_KEY],
+            capture_output=True,
+            text=True,
+        )
     except OSError:
-        return rows
-    for raw_line in lines:
-        if raw_line.startswith("#") or not raw_line.strip():
-            continue
-        cols = raw_line.rstrip("\n").split("\t")
-        try:
-            kind, path, _func, _layer, _prov, key = cols[0], cols[1], cols[2], cols[3], cols[4], cols[5]
-        except IndexError:
-            continue
-        if kind == "part" and key == _USAGE_FETCH_KEY:
-            rows.append(path)
-    return rows
+        return None, None
+    lines = [line for line in proc.stdout.splitlines() if line]
+    if lines:
+        return lines, None
+    stderr_lines = proc.stderr.splitlines()
+    if stderr_lines:
+        return None, stderr_lines[0]
+    return None, None
 
 
 def _load_usage_connections():
     """戻り値: (pool_refs, pool_cache_file, pool_human_label,
-    fixed_reset_credits) の4つ組。pool_refs は台帳の行順。
+    fixed_reset_credits) の4つ組。pool_refs は台帳の行順（0件もありうる＝
+    鍵なし・台帳異常・実体異常・宣言不備のいずれも枠を増やさず飛ばす）。
     """
-    root = _repo_root()
-    ledger_path = os.environ.get("AIENV_LEDGER") or os.path.join(root, _LEDGER_REL)
     pool_refs = []
     pool_cache_file = {}
     pool_human_label = {}
     fixed_reset_credits = {}
-    for rel in _usage_fetch_connection_paths(ledger_path):
-        env_path = os.path.join(root, os.path.dirname(rel), _USAGE_ENV_NAME)
+    rows, err_line = _usage_fetch_lookup()
+    if err_line is not None:
+        sys.stderr.write(err_line + "\n")
+    for abs_path in rows or []:
+        env_path = os.path.join(os.path.dirname(abs_path), _USAGE_ENV_NAME)
         decl = _parse_declaration(env_path)
-        if not decl:
-            continue
-        service = decl.get("service")
-        pool_ref = decl.get("pool_ref")
+        service = decl.get("service") if decl else None
+        pool_ref = decl.get("pool_ref") if decl else None
         if not service or not pool_ref:
+            sys.stderr.write(
+                "%s part %s %s 宣言が読めない\n" % (_LEDGER_MSG_HEAD, _USAGE_FETCH_KEY, abs_path)
+            )
             continue
         pool_refs.append(pool_ref)
         pool_cache_file[pool_ref] = service + "-cache.json"
@@ -227,13 +222,6 @@ def _load_usage_connections():
                 "credits": [],
                 "note": decl.get("reset_credits_fixed_note"),
             }
-    if not pool_refs:
-        return (
-            list(_DEFAULT_SUBSCRIPTION_POOL_REFS),
-            dict(_DEFAULT_POOL_CACHE_FILE),
-            dict(_DEFAULT_POOL_HUMAN_LABEL),
-            {k: dict(v) for k, v in _DEFAULT_FIXED_RESET_CREDITS.items()},
-        )
     return pool_refs, pool_cache_file, pool_human_label, fixed_reset_credits
 
 
