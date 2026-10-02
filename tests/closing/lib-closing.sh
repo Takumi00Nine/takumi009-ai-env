@@ -221,6 +221,7 @@ cl_norm() {  # cl_norm <side> <run_dir> < in > out
   if [ "$side" = "base" ]; then
     a+=(--sub "$WT0=<WT>" --sub "$(cl_realpath "$WT0")=<WT>")
     [ -f "$WT1/$CLOSING_MOVES_REL" ] && a+=(--moves "$WT1/$CLOSING_MOVES_REL")
+    for sub in $CLOSING_BASE_MOVES_EXTRA; do a+=(--extra-move "$sub"); done
   else
     a+=(--sub "$WT1=<WT>" --sub "$(cl_realpath "$WT1")=<WT>")
   fi

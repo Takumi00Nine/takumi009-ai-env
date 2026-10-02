@@ -6,7 +6,8 @@
   moves-main <moves.tsv> <old>            旧パスの主後継（同じ旧パスの行のうち先頭行）。無ければ exit 1・表が読めなければ exit 2
   moves-succ <moves.tsv> <old>            旧パスの後継を全て（1 行 1 件）
   moves-split-new <moves.tsv> <new>       新パスが種別「分割」の新側なら exit 0・違えば exit 1
-  norm <rules.tsv> [--moves M] [--sub FROM=TO ...]   stdin を正規化して stdout へ（下の順）
+  norm <rules.tsv> [--moves M] [--extra-move OLD=NEW ...] [--sub FROM=TO ...]   stdin を正規化して stdout へ（下の順。
+                                          --extra-move＝移動表に無いフォルダ単位の対応の補足・--moves があるときだけ当てる）
   snap <root> <out.json> [--exclude REL ...]          root 配下のファイル・リンクの状態を記録
   snapdiff <before.json> <after.json> <root>          作成・変更・削除の一覧と、作成・変更の中身
   hooks <settings.json> <event> [<tool>]  イベント（とツール名）に当たる登録フックのコマンド（登録順）
@@ -308,17 +309,21 @@ def main(argv):
         return 0 if is_split_new(load_moves(args[0]), args[1]) else 1
     elif cmd == "norm":
         rules_p, rest = args[0], args[1:]
-        moves_rows, subs, repo_dirname = None, [], "takumi009-ai-env"
+        moves_rows, subs, repo_dirname, extra = None, [], "takumi009-ai-env", []
         i = 0
         while i < len(rest):
             if rest[i] == "--moves":
                 moves_rows = load_moves(rest[i + 1]); i += 2
             elif rest[i] == "--sub":
                 frm, _, to = rest[i + 1].partition("="); subs.append((frm, to)); i += 2
+            elif rest[i] == "--extra-move":
+                o, _, n = rest[i + 1].partition("="); extra.append({"old": o, "new": n, "kind": "補足", "mark": ""}); i += 2
             elif rest[i] == "--repo-dirname":
                 repo_dirname = rest[i + 1]; i += 2
             else:
                 die("norm: 不明な引数 %s" % rest[i])
+        if moves_rows is not None:
+            moves_rows = moves_rows + extra   # 補足は移動表の後ろ＝同じ旧パスなら移動表が勝つ・長い旧パス（ファイル行）から当てる
         text = sys.stdin.buffer.read().decode("utf-8", "replace")
         sys.stdout.write(normalize(text, load_rules(rules_p), subs, moves_rows, repo_dirname))
     elif cmd == "snap":
