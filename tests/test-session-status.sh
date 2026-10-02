@@ -448,7 +448,7 @@ echo "=== 17. P1機構: 実体がsymlinkの場合は受理せず最小能力+⚠
 
 # ============================================================================
 # 23番以降: v2配役表解凍（配役表解凍-設計-2026-09-01.md 担当A）のユニット・結合
-# テスト。claude/hooks/lib/profile_resolve.py を直接CLI呼び出しする（parser・
+# テスト。team/executor/profile_resolve.py を直接CLI呼び出しする（parser・
 # validator・候補評価は本libが唯一の正本＝§3.4）。DIRECTIVE統合部分だけ
 # run_bootstrap_with_profile()を使う。2026-09-08 モデル定義ファイルと候補
 # 指定対応（同設計§3.8・D-13）: 旧・分類ラッパー関数（旧・版分類サブコマンドの
@@ -1337,7 +1337,7 @@ echo "=== 56. BOOTSTRAP_ENABLE_LOCAL_PROFILE を指定しなければコード�
   rm -rf "$VAULT_DIR"
 }
 
-echo "=== 57. V1-aマニフェスト: claude/agents/vault-scribe.mdは職種名'vault-scribe'としてファイル名そのままマニフェストへ数えられ、旧職種名'scribe'は入らない（2026-09-03本人裁定・方針変更: 対応表〈旧AGENT_FILE_TO_ROLE〉でファイル名と職種名の不一致を吸収する方式は、サブ機で『role.scribeを見てsubagent_type=scribeでspawn→定義ファイルが無く失敗』という実害が起きたため撤回し、配役表側のキーをrole.vault-scribeへ改名して職種名＝ファイル名の不変条件に揃える方式へ変更した） ==="
+echo "=== 57. V1-aマニフェスト: team/rules/agents/vault-scribe.mdは職種名'vault-scribe'としてファイル名そのままマニフェストへ数えられ、旧職種名'scribe'は入らない（2026-09-03本人裁定・方針変更: 対応表〈旧AGENT_FILE_TO_ROLE〉でファイル名と職種名の不一致を吸収する方式は、サブ機で『role.scribeを見てsubagent_type=scribeでspawn→定義ファイルが無く失敗』という実害が起きたため撤回し、配役表側のキーをrole.vault-scribeへ改名して職種名＝ファイル名の不変条件に揃える方式へ変更した） ==="
 {
   # role_and_core_manifest_diff()本体を直接呼ぶ（マニフェスト計算ロジックの
   # 再実装ではなく、実装コードそのものを検証する）。role表は空にし、
@@ -1363,8 +1363,8 @@ PYEOF
 
 echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行の全ロール構成でresolve()を通してもADVISORY:V1-aが出ない（57.の単体確認をCLI経由でも裏付け。2026-09-03本人裁定・方針変更対応） ==="
 {
-  # 実AGENTS_DIR（claude/agents/）を使い、現行のコア職種マニフェスト全件
-  # （CORE_ROLES_WITHOUT_REPO_AGENT_FILE + claude/agents/*.md＝ファイル名
+  # 実AGENTS_DIR（team/rules/agents/）を使い、現行のコア職種マニフェスト全件
+  # （CORE_ROLES_WITHOUT_REPO_AGENT_FILE + team/rules/agents/*.md＝ファイル名
   # そのまま）ちょうどをrole.表へ宣言する。leader以外は状態を"unknown"に
   # して属性検証（V9-b等）を回避し、V1-aの対称差判定だけに焦点を絞る
   # （他ロールのstateはV1-aの結果に影響しない＝role_and_core_manifest_diff()
@@ -1382,11 +1382,11 @@ echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行�
     stem="${f##*/}"; stem="${stem%.md}"
     AGENT_FILE_STEMS="${AGENT_FILE_STEMS}${stem}"$'\n'
   done
-  # 生成の前提（空虚な真の禁止）: claude/agents/*.md が0件ならロースターが
+  # 生成の前提（空虚な真の禁止）: team/rules/agents/*.md が0件ならロースターが
   # 成立しないので、後続の判定に進む前にここで fail にする。
   stems_present=0
   [ -n "$AGENT_FILE_STEMS" ] && stems_present=1
-  assert_true "生成の前提: claude/agents/*.md が1件以上ある（0件ならロースター生成不能）" "$stems_present"
+  assert_true "生成の前提: team/rules/agents/*.md が1件以上ある（0件ならロースター生成不能）" "$stems_present"
 
   ROSTER_LINES=()
   while IFS= read -r role_name; do

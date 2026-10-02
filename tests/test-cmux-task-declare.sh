@@ -6,8 +6,8 @@
 # 実行方法: bash tests/test-cmux-task-declare.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET="$SCRIPT_DIR/../cmux/cmux-task-declare.sh"
-WATCH_TARGET="$SCRIPT_DIR/../cmux/cmux-task-model.sh"
+TARGET="$SCRIPT_DIR/../dock/executor/cmux-task-declare.sh"
+WATCH_TARGET="$SCRIPT_DIR/../dock/executor/cmux-task-model.sh"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cmux-task-declare-test.XXXXXX")" || {
   echo "FATAL: mktemp -d に失敗しました" >&2

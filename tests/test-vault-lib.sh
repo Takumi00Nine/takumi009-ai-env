@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/vault-agents/vault_lib.py のユニットテスト（複数スクリプト共有ライブラリ・
+# ai-brain/executor/vault_lib.py のユニットテスト（複数スクリプト共有ライブラリ・
 # 2026-07-16簡素化・cleanup決定#10・PR1.5②）。
 #
 # vault_inventory.py（frontmatter解析・wikilink正規表現・aliases正規化・
@@ -14,7 +14,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB_DIR="$REPO_ROOT/scripts/vault-agents"
+LIB_DIR="$REPO_ROOT/ai-brain/executor"
 
 PASS=0
 FAIL=0

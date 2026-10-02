@@ -17,7 +17,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB_DIR="$REPO_ROOT/scripts/lib"
+LIB_DIR="$REPO_ROOT/core/executor"
 
 PASS=0
 FAIL=0
@@ -113,7 +113,7 @@ echo "=== 5c. status-file.sh: read_status_fileはファイル内容が4状態語
 
 echo "=== 6. macos-notify.sh: osascriptが無い環境ではexit code 2でWARNを出す(fail-open) ==="
 {
-  source "$LIB_DIR/macos-notify.sh"
+  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
   BINDIR="$(mktemp -d)"
   for t in echo; do
     p="$(command -v "$t")"
@@ -128,7 +128,7 @@ echo "=== 6. macos-notify.sh: osascriptが無い環境ではexit code 2でWARN�
 
 echo "=== 7. macos-notify.sh: osascriptがあれば実際に呼び出しtitle/messageが渡る ==="
 {
-  source "$LIB_DIR/macos-notify.sh"
+  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
   BINDIR="$(mktemp -d)"
   CALLS="$(mktemp)"
   cat > "$BINDIR/osascript" <<CALLEOF
@@ -148,7 +148,7 @@ CALLEOF
 
 echo "=== 8. macos-notify.sh: title/message中のダブルクォート・バックスラッシュがエスケープされAppleScript文字列を壊さない ==="
 {
-  source "$LIB_DIR/macos-notify.sh"
+  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
   BINDIR="$(mktemp -d)"
   CALLS="$(mktemp)"
   cat > "$BINDIR/osascript" <<CALLEOF
@@ -167,7 +167,7 @@ CALLEOF
 
 echo "=== 9. macos-notify.sh: osascript自体が失敗(非0終了)したらexit code 1でWARNを出す ==="
 {
-  source "$LIB_DIR/macos-notify.sh"
+  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
   BINDIR="$(mktemp -d)"
   cat > "$BINDIR/osascript" <<'CALLEOF'
 #!/bin/bash
@@ -791,7 +791,7 @@ os.utime('$LOCK', (t, t))
   rm -rf "$D" "$STUBDIR"
 }
 
-# 27〜: Vault パス述語（v1.1 で claude/hooks/lib/guard_common.sh から Core の実行器 core/executor/vault-paths.sh へ
+# 27〜: Vault パス述語（v1.1 で team/connect/claude-code/guard_common.sh から Core の実行器 core/executor/vault-paths.sh へ
 # 分けた＝設計 v1.2 §4.2・§4.3。由来＝tests/test-agent-model-guard.sh「AC-10②(裁定A)」の正本検査）。
 # 契約: 関数名は分割前のまま（guard_vault_ai_prefixes・guard_is_vault_ai_path）＝呼ぶ側（AI Brain の子向け柵・
 # Team の委任柵）の行を変えない。source して使う。$HOME/Data/obsidian 配下の AI 向け 6 フォルダを判定する。

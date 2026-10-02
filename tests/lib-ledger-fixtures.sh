@@ -9,8 +9,8 @@
 #                                    git repo として作る（FX-1 の使い捨て複製）
 #   lf_commit_all <dir>            … 複製の変更を 1 コミットに（実 git 設定・フックに依らない）
 #   lf_ledger_paths <ledger> <awk 条件> … 台帳の行のうち条件に当たる行のパス列（2 列目）を 1 行ずつ
-#   lf_mk_fx4 <vault-public> <dest> … FX-4（vault-public の複製＋Knowledge/zz-probe.md）
-#   lf_mk_fx5 <vault-public> <dest> … FX-5（FX-4 を git 管理・初期コミット 1・remote なし・未コミット変更 1）
+#   lf_mk_fx4 <ai-brain/data/vault-public> <dest> … FX-4（ai-brain/data/vault-public の複製＋Knowledge/zz-probe.md）
+#   lf_mk_fx5 <ai-brain/data/vault-public> <dest> … FX-5（FX-4 を git 管理・初期コミット 1・remote なし・未コミット変更 1）
 #   lf_mk_fx6 <dir>                … FX-6（偽 launchctl・osascript・cmux＝引数を <dir>/calls.log へ 1 行ずつ記録し exit 0）
 #   lf_path_without <cmd>...       … PATH から指定コマンドを除いた PATH（含むディレクトリを影のディレクトリへ置き換える）
 #

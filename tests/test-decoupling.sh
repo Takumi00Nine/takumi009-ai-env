@@ -40,12 +40,12 @@ lf_mk_fx6 "$WORK/stub"
 NOCLI_PATH="$WORK/stub:$(lf_path_without claude codex)"
 BASE="$WORK/base"
 lf_copy_repo "$REPO_ROOT" "$BASE"
-VAULT_PUBLIC_REL="$(lf_ledger_paths "$BASE/$LF_LEDGER_REL" '$1=="part" && $2 ~ /vault-public\/$/' 2>/dev/null | head -1)"
+VAULT_PUBLIC_REL="$(lf_ledger_paths "$BASE/$LF_LEDGER_REL" '$1=="part" && $2 ~ /ai-brain/data/vault-public\/$/' 2>/dev/null | head -1)"
 
 echo "=== 0. 前提: FX-6 の PATH に claude・codex が無い ==="
 assert_true "command -v claude が非 0" "$(PATH="$NOCLI_PATH" command -v claude >/dev/null 2>&1 && echo 0 || echo 1)"
 assert_true "command -v codex が非 0" "$(PATH="$NOCLI_PATH" command -v codex >/dev/null 2>&1 && echo 0 || echo 1)"
-assert_true "台帳に公開スナップショット（vault-public/）の行がある（FX-4 の元）" "$([ -n "$VAULT_PUBLIC_REL" ] && echo 1 || echo 0)"
+assert_true "台帳に公開スナップショット（ai-brain/data/vault-public/）の行がある（FX-4 の元）" "$([ -n "$VAULT_PUBLIC_REL" ] && echo 1 || echo 0)"
 
 # entry <repo> <鍵> — その複製の台帳ツールで入口のパスを引く（1 行目）。
 entry() { bash "$1/$LF_LEDGER_TOOL_REL" lookup "$2" 2>/dev/null | head -1; }
@@ -55,7 +55,7 @@ brain_judge() {
   local repo="$1" label="$2" e out rc fx4 fx5 n0 n1 th
   run_env() { HOME="$th" PATH="$NOCLI_PATH" LOCK_FILE="$th/backup.lock" \
       VAULT_WRITER_LOCK_FILE="$th/vault-writer.lock" "$@"; }
-  [ -n "$VAULT_PUBLIC_REL" ] || { fail_case "$label: FX-4 の元（vault-public/）が台帳で引けない"; return; }
+  [ -n "$VAULT_PUBLIC_REL" ] || { fail_case "$label: FX-4 の元（ai-brain/data/vault-public/）が台帳で引けない"; return; }
 
   th="$WORK/$label-home1"; mkdir -p "$th"; fx4="$WORK/$label-fx4"
   lf_mk_fx4 "$repo/$VAULT_PUBLIC_REL" "$fx4"

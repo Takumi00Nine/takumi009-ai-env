@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude/hooks/dock-pane-resolve.sh のユニットテスト（旧 test-next-pane-resolve.sh
+# dock/executor/dock-pane-resolve.sh のユニットテスト（旧 test-next-pane-resolve.sh
 # ＋ test-task-pane-resolve.sh を統合・2026-09-19 着手順5 σ・設計 §3.4）。
 #
 # 実 ~/.claude・実Vault・実cmuxには一切依存しない。フックへ渡すJSON入力
@@ -22,7 +22,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-HOOK="$REPO_ROOT/claude/hooks/dock-pane-resolve.sh"
+HOOK="$REPO_ROOT/dock/executor/dock-pane-resolve.sh"
 
 # mktemp -d の失敗・異常な返り値を即検査する（空・`/`・既存の非空ディレクトリ
 # を拒否してからtrapの `rm -rf "$WORK_DIR"` へ進む）。

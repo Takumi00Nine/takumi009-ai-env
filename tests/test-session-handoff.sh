@@ -1,12 +1,12 @@
 #!/bin/bash
-# scripts/session-handoff.sh のユニットテスト。
+# core/connect/claude-code/session-handoff.sh のユニットテスト。
 # 実 cmux・実 Vault・実 ~/.claude には一切触れない。cmux 呼び出しは
 # $WORKDIR/stubbin/cmux（スタブ）へ SESSION_HANDOFF_CMUX_BIN 経由で差し替える。
 #
 # 実行方法: bash tests/test-session-handoff.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET="$SCRIPT_DIR/../scripts/session-handoff.sh"
+TARGET="$SCRIPT_DIR/../core/connect/claude-code/session-handoff.sh"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/session-handoff-test.XXXXXX")" || {
   echo "FATAL: mktemp -d に失敗しました" >&2

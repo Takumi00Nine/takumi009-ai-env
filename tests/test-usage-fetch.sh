@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# scripts/usage-fetch.sh・scripts/lib/usage-source.sh・scripts/lib/usage-notify.sh
+# usage/executor/usage-fetch.sh・usage/executor/usage-source.sh・notify/connect/macos/usage-notify.sh
 # のユニットテスト（B1-b・使用率取得器移設 + B1-c・Codexチケット追加）。
 #
 # ⚠️ 検証職2巡目MINOR-2対応（記述訂正）: 以下の「AC-97」対応表はB1-bが
-# 単独ブランチで作業していた当時（`claude/hooks/lib/usage_snapshot.py`が
+# 単独ブランチで作業していた当時（`usage/executor/usage_snapshot.py`が
 # まだ本ブランチに無かった時点）の記述で、当時は⑦のusage-snapshot 1件を
 # 「B1-a未マージのため未実施」としていた。**B1-aは既にmainへ統合済みで、
 # 本ファイルの⑦節は実際には実行される**（下記「⑦読み手の非通信」節の
@@ -21,7 +21,7 @@
 #   AC の枠外4件＝F-9b・F-9c・D-15窓の定義・F-3（設計書§6.1）。
 #   B1-c（2026-09-09）で⑧節（Codexチケットの取得・変換）を追加。
 #
-# ⚠️ refresh_service() の戻り値契約（scripts/usage-fetch.sh 冒頭コメント参照）＝
+# ⚠️ refresh_service() の戻り値契約（usage/executor/usage-fetch.sh 冒頭コメント参照）＝
 # 0＝キャッシュへ結果を記録できた（成功・失敗記録のどちらも含む）／
 # 1＝記録そのものが書けなかった（書き込み障害）。AC-97②の受入条件は
 # 「fetched_atが不変・last_errorが非null」であって戻り値ではないため、本テストは
@@ -29,7 +29,7 @@
 #
 # 実 launchd・実ネットワーク・実キーチェーンには一切触れない。curl・security・
 # codex を PATH スタブへ差し替え、HOME・XDG_CACHE_HOME・XDG_CONFIG_HOME を
-# 都度fixtureディレクトリへ差し替える。scripts/usage-fetch.sh を
+# 都度fixtureディレクトリへ差し替える。usage/executor/usage-fetch.sh を
 # AIENV_USAGE_FETCH_TEST_LIB=1 で source し、refresh_service()等を直接呼ぶ。
 #
 # 実行方法: bash tests/test-usage-fetch.sh
@@ -39,7 +39,7 @@ set -a
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-ENTRY="$REPO_ROOT/scripts/usage-fetch.sh"
+ENTRY="$REPO_ROOT/usage/executor/usage-fetch.sh"
 # ⚠️ B1-c⑤（表示ツール互換の現物実行）用に、$HOMEを書き換える前の実際の
 # HOMEを保存しておく。`load_entry_for()`は`.`（source）の直前の変数代入
 # なのでbashの仕様上シェル全体へ`$HOME`の変更が残る（テスト内の他fixtureが
@@ -379,9 +379,9 @@ echo "=== ②必須欠落・型不正・401・500（claude・codex 各4＝計8�
   # （available_countが文字列）が受理されてしまうことを確認する（このv4が
   # 実際にこの検査（他の検査ではなく）で拒否されている証拠）。
   MUT_USAGE_SOURCE="$(mktemp)"
-  sed '/and (\.reset_credits | reset_credits_ok)/d' "$REPO_ROOT/scripts/lib/usage-source.sh" > "$MUT_USAGE_SOURCE"
+  sed '/and (\.reset_credits | reset_credits_ok)/d' "$REPO_ROOT/usage/executor/usage-source.sh" > "$MUT_USAGE_SOURCE"
   assert_true "変異コピー生成: 対象行が実際に1行削除されている" \
-    "$([ "$(wc -l < "$REPO_ROOT/scripts/lib/usage-source.sh")" -eq "$(( $(wc -l < "$MUT_USAGE_SOURCE") + 1 ))" ] && echo 1 || echo 0)"
+    "$([ "$(wc -l < "$REPO_ROOT/usage/executor/usage-source.sh")" -eq "$(( $(wc -l < "$MUT_USAGE_SOURCE") + 1 ))" ] && echo 1 || echo 0)"
   ( . "$MUT_USAGE_SOURCE"; validate_usage_payload codex "$v4" )
   mut_v4_rc=$?
   assert_true "陽性fixture(v4向け): reset_credits_ok検査を外した変異コピーは文字列のavailable_countでも受理してしまう（fixtureが実際にこの検査を通っている証拠）" \
@@ -617,7 +617,7 @@ EOF
 }
 
 echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（B1-c・2026-09-09） ==="
-# scripts/lib/usage-source.sh: transform_codex_usage() が .result.rateLimits
+# usage/executor/usage-source.sh: transform_codex_usage() が .result.rateLimits
 # だけでなく兄弟キー .result.rateLimitResetCredits も codex-cache.json の
 # reset_credits へ書き出すことを検査する（指示書§2.3＝あり／なし／credits
 # 空／statusがavailable以外の4fixture＋秘密値なし＋既存キー不変）。
@@ -769,9 +769,9 @@ echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（
   # （このfixtureが実際にコンテナ型検査を通っている証拠）。
   MUT_USAGE_SOURCE_NOCONTAINERGUARD="$(mktemp)"
   sed 's/(if (\$rc_raw|type) == "object" then \$rc_raw else null end) as \$rc/$rc_raw as $rc/' \
-    "$REPO_ROOT/scripts/lib/usage-source.sh" > "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"
+    "$REPO_ROOT/usage/executor/usage-source.sh" > "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"
   assert_true "変異コピー生成: コンテナ型検査の行が実際に書き換わっている" \
-    "$(diff -q "$REPO_ROOT/scripts/lib/usage-source.sh" "$MUT_USAGE_SOURCE_NOCONTAINERGUARD" >/dev/null 2>&1 && echo 0 || echo 1)"
+    "$(diff -q "$REPO_ROOT/usage/executor/usage-source.sh" "$MUT_USAGE_SOURCE_NOCONTAINERGUARD" >/dev/null 2>&1 && echo 0 || echo 1)"
   raw_4c2_mut='{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":77,"resetsAt":3000},"secondary":{"windowDurationMins":10080,"usedPercent":88,"resetsAt":4000}},"rateLimitResetCredits":"bad"}'
   out_4c2_mut="$( ( . "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"; transform_codex_usage "$raw_4c2_mut" 5000 ) 2>/dev/null )"
   assert_true "陽性fixture(B1-c④c2向け): コンテナ型検査を外した変異コピーはscalarなrateLimitResetCreditsで丸ごと失敗する（fixtureが実際にこの検査を通っている証拠）" \
@@ -791,9 +791,9 @@ echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（
   # 同じ応答をtransform_codex_usageへ通すと、id欠落creditがそのまま残って
   # しまうことを確認する（このfixtureが実際にid型検査を通っている証拠）。
   MUT_USAGE_SOURCE_NOID="$(mktemp)"
-  sed 's/and ((\.id|type) == "string") and (\.id != "")//' "$REPO_ROOT/scripts/lib/usage-source.sh" > "$MUT_USAGE_SOURCE_NOID"
+  sed 's/and ((\.id|type) == "string") and (\.id != "")//' "$REPO_ROOT/usage/executor/usage-source.sh" > "$MUT_USAGE_SOURCE_NOID"
   assert_true "変異コピー生成: id型検査の行が実際に書き換わっている" \
-    "$(diff -q "$REPO_ROOT/scripts/lib/usage-source.sh" "$MUT_USAGE_SOURCE_NOID" >/dev/null 2>&1 && echo 0 || echo 1)"
+    "$(diff -q "$REPO_ROOT/usage/executor/usage-source.sh" "$MUT_USAGE_SOURCE_NOID" >/dev/null 2>&1 && echo 0 || echo 1)"
   raw_4d='{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":55,"resetsAt":1234567890},"secondary":{"windowDurationMins":10080,"usedPercent":22,"resetsAt":1234599999}},"rateLimitResetCredits":{"availableCount":1,"credits":[{"status":"available","grantedAt":1788539594,"expiresAt":1791131594,"title":"t"}]}}'
   out_4d_mut="$( ( . "$MUT_USAGE_SOURCE_NOID"; transform_codex_usage "$raw_4d" 5000 ) )"
   assert_true "陽性fixture(B1-c④d向け): id型検査を外した変異コピーはid欠落creditを残してしまう（fixtureが実際にこの検査を通っている証拠）" \
@@ -841,8 +841,8 @@ echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（
 }
 
 echo "=== ⑦読み手の非通信（usage-snapshot・B1-aがmainへ入ったため実施。check-usage-gate・監視の2件はB2） ==="
-if [ ! -f "$REPO_ROOT/claude/hooks/lib/usage_snapshot.py" ]; then
-  echo "  未実施 - ⑦usage-snapshot: claude/hooks/lib/usage_snapshot.py が本ブランチに無い（B1-a=feature/usage-snapshot 未マージ）。設計書§4の指示どおりスキップ。"
+if [ ! -f "$REPO_ROOT/usage/executor/usage_snapshot.py" ]; then
+  echo "  未実施 - ⑦usage-snapshot: usage/executor/usage_snapshot.py が本ブランチに無い（B1-a=feature/usage-snapshot 未マージ）。設計書§4の指示どおりスキップ。"
 else
   E="$(new_env)"
   mkdir -p "$E/cache"
@@ -869,14 +869,14 @@ EOF
     chmod +x "$LOGGING_BIN/$bin"
   done
 
-  out="$(PATH="$LOGGING_BIN:$PATH" python3 "$REPO_ROOT/claude/hooks/lib/usage_snapshot.py" --cache-dir "$E/cache" --now "$now_epoch")"
+  out="$(PATH="$LOGGING_BIN:$PATH" python3 "$REPO_ROOT/usage/executor/usage_snapshot.py" --cache-dir "$E/cache" --now "$now_epoch")"
   rc=$?
   assert_eq "usage-snapshot: exit 0" "0" "$rc"
   assert_true "usage-snapshot: 出力が3行ある（枠3件）" "$([ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = "3" ] && echo 1 || echo 0)"
   assert_true "usage-snapshot: curl/security/codexのいずれも一度も呼ばれていない（外向き通信ゼロ）" \
     "$([ ! -s "$CALL_LOG" ] && echo 1 || echo 0)"
 
-  out_json="$(PATH="$LOGGING_BIN:$PATH" python3 "$REPO_ROOT/claude/hooks/lib/usage_snapshot.py" --json --cache-dir "$E/cache" --now "$now_epoch")"
+  out_json="$(PATH="$LOGGING_BIN:$PATH" python3 "$REPO_ROOT/usage/executor/usage_snapshot.py" --json --cache-dir "$E/cache" --now "$now_epoch")"
   assert_true "usage-snapshot --json: curl/security/codexのいずれも一度も呼ばれていない" \
     "$([ ! -s "$CALL_LOG" ] && echo 1 || echo 0)"
   assert_true "usage-snapshot --json: 非秘密JSON1行が出る（poolsを含む）" \
@@ -885,7 +885,7 @@ EOF
   # 静的検査（AC-97⑦の判定方法の一つ＝rg -n）: subprocess・urllib・socket等の
   # 外向き通信APIの呼び出しが0件であることも合わせて確認する。
   assert_true "usage-snapshot: 静的検査でも通信系APIの呼び出しが0件" \
-    "$(grep -qE 'subprocess|urllib|socket\.|requests\.|http\.client' "$REPO_ROOT/claude/hooks/lib/usage_snapshot.py" && echo 0 || echo 1)"
+    "$(grep -qE 'subprocess|urllib|socket\.|requests\.|http\.client' "$REPO_ROOT/usage/executor/usage_snapshot.py" && echo 0 || echo 1)"
 
   rm -rf "$E" "$LOGGING_BIN"
 fi
@@ -893,9 +893,9 @@ fi
 echo "=== 検証職1巡目 MINOR-7: 通知タイトルは移設元のまま（Q-3「現行挙動のまま」） ==="
 {
   assert_true "MINOR-7回帰: usage-notify.shの通知タイトルはclaude-codex-usageのまま" \
-    "$(grep -q 'with title "claude-codex-usage"' "$REPO_ROOT/scripts/lib/usage-notify.sh" && echo 1 || echo 0)"
+    "$(grep -q 'with title "claude-codex-usage"' "$REPO_ROOT/notify/connect/macos/usage-notify.sh" && echo 1 || echo 0)"
   assert_true "MINOR-7回帰: 新しいタイトル文言(takumi009-ai-env usage-fetch)は使わない" \
-    "$(grep -q 'takumi009-ai-env usage-fetch' "$REPO_ROOT/scripts/lib/usage-notify.sh" && echo 0 || echo 1)"
+    "$(grep -q 'takumi009-ai-env usage-fetch' "$REPO_ROOT/notify/connect/macos/usage-notify.sh" && echo 0 || echo 1)"
 }
 
 echo "=== 検証職1巡目 MINOR-8: 通知失敗（osascript失敗）は取得成功を損なわず観測可能になる ==="

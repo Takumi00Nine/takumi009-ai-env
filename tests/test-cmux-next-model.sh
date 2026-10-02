@@ -7,14 +7,14 @@
 # 実行方法: bash tests/test-cmux-next-model.sh
 #
 # v6（requirements-v6.md・design.md §41）＝実装への契約（テストが決めた口・A-v6-7）:
-#   CMUX_VAULT_TASKS_SANITIZE_FAIL=1 ＝ Tasks 節の共有解析（cmux/lib-vault-tasks.sh）の
+#   CMUX_VAULT_TASKS_SANITIZE_FAIL=1 ＝ Tasks 節の共有解析（dock/executor/lib-vault-tasks.sh）の
 #   サニタイズ段だけを失敗させるテスト専用の差し替え口（D-v6-14・DT-33＝解析不能の作り方）。
 #   未設定／空＝通常。slug の無害化・next の切り詰め・frontmatter の読み取りには効かせない
 #   （M-v6-15）。本番設定（config/・launchd/・scripts/install*・dock.json）に名前を書かない。
 #   （フック側の口 BOOTSTRAP_CMUX_LIB_DIR は tests/test-bootstrap-vault.sh 参照）
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET="$SCRIPT_DIR/../cmux/cmux-next-model.sh"
+TARGET="$SCRIPT_DIR/../dock/executor/cmux-next-model.sh"
 
 # 外側シェルの env から独立させる（R2-1）。--recall-stale-days の期待値 7 は固定。
 unset VAULT_AGENT_LOG_STALE_DAYS
@@ -199,7 +199,7 @@ assert_eq "next:もTasks節も無ければnext欄が空文字" "" "$FIELD3_N4"
 
 # ==========================================================================
 # 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）＝契約 cmux-dock-frame/4（v5）。
-# B 行は判定機（claude/hooks/lib/health_judge.py）の写し＝1 行 3 値＋末尾付記。
+# B 行は判定機（ai-brain/executor/health_judge.py）の写し＝1 行 3 値＋末尾付記。
 # 判定は tests/test-health-judge.sh が 23 本を閉じる。ここでは供給側＝B 行の文法・
 # 付記・判定機不在の 0 行・E の整合・HEALTH_JUDGE_NOW を検査する。
 # 既定が実ファイルの env 5 本（CMUX_NEXT_MAINT_STATE・CMUX_NEXT_INVENTORY_LATEST・
@@ -238,7 +238,7 @@ reset_vault
 mk_notes_N_all "$VAULT"
 # 判定機不在＝供給側スクリプトを lib だけ複製した一時ディレクトリから起動する（$LIB_DIR/../claude/hooks/lib/ が無い）。
 NOJUDGE="$WORKDIR/nojudge/cmux"; mkdir -p "$NOJUDGE"
-cp "$SCRIPT_DIR/../cmux/cmux-next-model.sh" "$SCRIPT_DIR/../cmux/lib-model-view.sh" "$SCRIPT_DIR/../cmux/lib-vault-tasks.sh" "$SCRIPT_DIR/../cmux/lib-cmux-workspace.sh" "$NOJUDGE/"
+cp "$SCRIPT_DIR/../dock/executor/cmux-next-model.sh" "$SCRIPT_DIR/../dock/executor/lib-model-view.sh" "$SCRIPT_DIR/../dock/executor/lib-vault-tasks.sh" "$SCRIPT_DIR/../dock/executor/lib-cmux-workspace.sh" "$NOJUDGE/"
 d="$FX_ROOT/S-2"
 CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="$d/last-run.json" CMUX_NEXT_INVENTORY_LATEST="$d/latest.json" \
   CMUX_NEXT_HEALTH_OBSERVATION="$d/observation.json" CMUX_NEXT_RECALL_LOG="$d/vault-recall.tsv" \
@@ -816,9 +816,9 @@ assert_eq "v6_dt33(対照): 口なしでは診断 1 行＝使わない（解析�
 REPO_ROOT_V6="$(cd "$SCRIPT_DIR/.." && pwd)"
 # 対象＝config/・launchagents/（本 repo の launchd plist 置き場＝実在必須・空振り防止）・scripts/install*・dock.json（dotfiles があるときだけ）。
 # 2 つの口（CMUX_VAULT_TASKS_SANITIZE_FAIL・BOOTSTRAP_CMUX_LIB_DIR＝A-v6-7）とも 0 件。
-dt33_targets="$REPO_ROOT_V6/config $REPO_ROOT_V6/launchagents"
-assert_true "v6_dt33(静的): config/ と launchagents/ が実在する（検査の空振り防止）" "$([ -d "$REPO_ROOT_V6/config" ] && [ -d "$REPO_ROOT_V6/launchagents" ] && echo 1 || echo 0)"
-for f in "$REPO_ROOT_V6"/scripts/install*; do [ -f "$f" ] && dt33_targets="$dt33_targets $f"; done
+dt33_targets="$REPO_ROOT_V6/team/data $REPO_ROOT_V6/team/connect/claude-code/bedrock.env.sample $REPO_ROOT_V6/ai-brain/assembly $REPO_ROOT_V6/usage/assembly"
+assert_true "v6_dt33(静的): config/ と launchagents/ が実在する（検査の空振り防止）" "$([ -d "$REPO_ROOT_V6/team/data" ] && [ -d "$REPO_ROOT_V6/ai-brain/assembly" ] && [ -d "$REPO_ROOT_V6/usage/assembly" ] && echo 1 || echo 0)"
+for f in "$REPO_ROOT_V6"/*/assembly/install*; do [ -f "$f" ] && dt33_targets="$dt33_targets $f"; done
 [ -f "$HOME/work/dotfiles/cmux/dock.json" ] && dt33_targets="$dt33_targets $HOME/work/dotfiles/cmux/dock.json"
 # shellcheck disable=SC2086
 dt33_leak="$(grep -rlE -- 'CMUX_VAULT_TASKS_SANITIZE_'"FAIL"'|BOOTSTRAP_CMUX_LIB_'"DIR" $dt33_targets 2>/dev/null | grep -c . || true)"
@@ -1117,7 +1117,7 @@ done
 sleep 5
 
 echo "=== v7_impl_same_words_as_task（FR-122・D-v7-6）: 同じ状態（FD-4・5・5′・6・7）で Task 供給側 --frame の理由行と --focus の stderr が同じ語 ==="
-TASK_TARGET="$SCRIPT_DIR/../cmux/cmux-task-model.sh"
+TASK_TARGET="$SCRIPT_DIR/../dock/executor/cmux-task-model.sh"
 for spec in "4|未宣言" "5|cmux 応答なし" "5p|cmux 応答なし" "6|宣言記録破損" "7|対象不明"; do
   id="${spec%%|*}"; word="${spec#*|}"
   fd_apply "$id"

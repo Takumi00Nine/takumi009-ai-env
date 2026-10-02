@@ -2,8 +2,8 @@
 # tests/test-inprocess-gate.sh — ラッパー起動-設計-v1.1.1.md §4（D-3）・
 # 要件v1.4.3 §4.3（FR-21・FR-22）・§5（AC-14・AC-18）を検証する。
 #
-# 対象: claude/hooks/lib/profile_resolve.py の `check-inprocess` サブコマンド
-# （AC-18＝口の契約）と claude/hooks/inprocess-gate.sh（AC-14＝境界フック）。
+# 対象: team/executor/profile_resolve.py の `check-inprocess` サブコマンド
+# （AC-18＝口の契約）と team/connect/claude-code/inprocess-gate.sh（AC-14＝境界フック）。
 # 実 $HOME・実 launchd は使わない（fixture 一式は一時ディレクトリに作る）。
 #
 # 実行方法: bash tests/test-inprocess-gate.sh
@@ -12,8 +12,8 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
-GATE="$REPO_ROOT/claude/hooks/inprocess-gate.sh"
+LIB="$REPO_ROOT/team/executor/profile_resolve.py"
+GATE="$REPO_ROOT/team/connect/claude-code/inprocess-gate.sh"
 
 PASS=0
 FAIL=0

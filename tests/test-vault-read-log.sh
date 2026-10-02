@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# claude/hooks/vault-read-log.sh のユニットテスト（PostToolUse Read・利用ログ）。
+# ai-brain/executor/vault-read-log.sh のユニットテスト（PostToolUse Read・利用ログ）。
 #
 # 実 Vault($HOME/Data/obsidian)・実ログには一切依存しない。VAULT_READS_VAULT・
 # VAULT_READS_LOG 環境変数で毎回ダミーのfixtureへ差し替えて実行する
-# （環境変数名は scripts/vault-agents/vault_inventory.py と揃えている＝
+# （環境変数名は ai-brain/executor/vault_inventory.py と揃えている＝
 # 同じ vault-reads.tsv を読む側の実装に合わせる）。
 #
 # 実行方法: bash tests/test-vault-read-log.sh
@@ -12,7 +12,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/claude/hooks/vault-read-log.sh"
+SCRIPT="$REPO_ROOT/ai-brain/executor/vault-read-log.sh"
 
 PASS=0
 FAIL=0

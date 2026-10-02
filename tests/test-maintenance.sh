@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/maintenance.sh のユニットテスト（週次メンテナンスランナー本体・設計書§1・PR2）。
+# ai-brain/executor/maintenance.sh のユニットテスト（週次メンテナンスランナー本体・設計書§1・PR2）。
 #
 # 品質方針（2026-07-16リーダー指示「安全設計...と、その失敗系テストは一切
 # 簡略化不可」）: Phase0〜Phase3のオーケストレーション自体（fail-fast判定・
@@ -18,7 +18,7 @@
 # （MAINTENANCE_INTERNAL_CALLバイパスの実結線を検証するため）。
 # 例外が1つだけある: §16.6.2系統①（実cmux-task-declare.shとの結合試験・
 # DT-7とは独立）は、REPO_ROOT（このテストが実際に走っている本リポジトリ・
-# 移設先のワークツリー）配下の cmux/cmux-task-declare.sh の実物スクリプトを
+# 移設先のワークツリー）配下の dock/executor/cmux-task-declare.sh の実物スクリプトを
 # 読みに行く（cmux-session-todo v3で宣言CLIの実体がdotfilesからai-envへ
 # 移設されたため。実machineの ~/work/takumi009-ai-env が未マージでも
 # ここは常に「今テストしている木」を見るので影響されない＝検証1巡目
@@ -74,7 +74,7 @@ REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 # 本来なら実行できるはずの検査を10件分黙って落としていた。REPO_ROOT基準
 # なら「今テストしている木」に常に実体があるので、実machineの状態に
 # 依存しない。
-REAL_CMUX_TASK_DECLARE="$REPO_ROOT/cmux/cmux-task-declare.sh"
+REAL_CMUX_TASK_DECLARE="$REPO_ROOT/dock/executor/cmux-task-declare.sh"
 WORK_ROOT="$(mktemp -d)" || {
   echo "FATAL: mktemp -dに失敗しました（WORK_ROOT隔離用）。書込み可能な一時領域が無い可能性があります。" >&2
   exit 1
@@ -118,17 +118,17 @@ assert_files_identical() {
 # $1 = FAKEリポジトリのルート
 setup_fake_repo() {
   local repo="$1"
-  mkdir -p "$repo/scripts/lib" "$repo/scripts/vault-agents"
-  cp "$REPO_ROOT/scripts/maintenance.sh" "$repo/scripts/maintenance.sh"
-  cp "$REPO_ROOT/scripts/backup-vault.sh" "$repo/scripts/backup-vault.sh"
-  cp "$REPO_ROOT/scripts/lib/pid-lock.sh" "$repo/scripts/lib/pid-lock.sh"
-  cp "$REPO_ROOT/scripts/lib/status-file.sh" "$repo/scripts/lib/status-file.sh"
-  cp "$REPO_ROOT/scripts/lib/macos-notify.sh" "$repo/scripts/lib/macos-notify.sh"
-  cp "$REPO_ROOT/scripts/vault-agents/maintenance_run_step.py" "$repo/scripts/vault-agents/maintenance_run_step.py"
-  chmod +x "$repo/scripts/maintenance.sh" "$repo/scripts/backup-vault.sh"
+  mkdir -p "$repo/ai-brain/executor" "$repo/ai-brain/data" "$repo/core/executor" "$repo/core/assembly" "$repo/notify/connect/macos"
+  cp "$REPO_ROOT/ai-brain/executor/maintenance.sh" "$repo/ai-brain/executor/maintenance.sh"
+  cp "$REPO_ROOT/ai-brain/executor/backup-vault.sh" "$repo/ai-brain/executor/backup-vault.sh"
+  cp "$REPO_ROOT/core/executor/pid-lock.sh" "$repo/core/executor/pid-lock.sh"
+  cp "$REPO_ROOT/core/executor/status-file.sh" "$repo/core/executor/status-file.sh"
+  cp "$REPO_ROOT/notify/connect/macos/macos-notify.sh" "$repo/notify/connect/macos/macos-notify.sh"
+  cp "$REPO_ROOT/ai-brain/executor/maintenance_run_step.py" "$repo/ai-brain/executor/maintenance_run_step.py"
+  chmod +x "$repo/ai-brain/executor/maintenance.sh" "$repo/ai-brain/executor/backup-vault.sh"
 
   # --- FAKE check-drift.sh（環境変数で終了コード・JSON出力を制御） ---
-  cat > "$repo/scripts/check-drift.sh" <<'FAKEEOF'
+  cat > "$repo/core/assembly/check-drift.sh" <<'FAKEEOF'
 #!/usr/bin/env bash
 echo "[fake-check-drift] human readable line"
 if [[ -n "${FAKE_DRIFT_SLEEP:-}" ]]; then sleep "$FAKE_DRIFT_SLEEP"; fi
@@ -145,15 +145,15 @@ FAKE_DRIFT_DEFAULT_JSON='{"total_drift": 0, "item4_drift": 0, "drift_excluding_i
 echo "${FAKE_DRIFT_JSON:-$FAKE_DRIFT_DEFAULT_JSON}"
 exit "${FAKE_DRIFT_EXIT:-0}"
 FAKEEOF
-  chmod +x "$repo/scripts/check-drift.sh"
+  chmod +x "$repo/core/assembly/check-drift.sh"
 
   # --- FAKE export-public-vault.sh ---
-  cat > "$repo/scripts/export-public-vault.sh" <<'FAKEEOF'
+  cat > "$repo/ai-brain/executor/export-public-vault.sh" <<'FAKEEOF'
 #!/usr/bin/env bash
 echo "[fake-export] called" >> "${FAKE_EXPORT_CALL_LOG:-/dev/null}"
 exit "${FAKE_EXPORT_EXIT:-0}"
 FAKEEOF
-  chmod +x "$repo/scripts/export-public-vault.sh"
+  chmod +x "$repo/ai-brain/executor/export-public-vault.sh"
 
   # --- FAKE 検出器（Python）: fragments_log.py / vault_inventory.py ---
   # bash 3.2（macOS既定・本環境の`bash`はこれ）には`${var^^}`（大文字化）が
@@ -166,13 +166,13 @@ FAKEEOF
     # 「正常系のはずのテストがキー欠落でanomaly扱いになる」FAKE側の不整合になる）。
     default_json='{}'
     [[ "$py_detector" == "fragments_log" ]] && default_json='{"scan_error_count": 0, "fragments": [], "truncated": []}'
-    cat > "$repo/scripts/vault-agents/${py_detector}.py" <<PYEOF
+    cat > "$repo/ai-brain/executor/${py_detector}.py" <<PYEOF
 #!/usr/bin/env python3
 import os, sys
 print(os.environ.get("FAKE_${upper}_JSON", '$default_json'))
 sys.exit(int(os.environ.get("FAKE_${upper}_EXIT", "0")))
 PYEOF
-    chmod +x "$repo/scripts/vault-agents/${py_detector}.py"
+    chmod +x "$repo/ai-brain/executor/${py_detector}.py"
   done
 }
 
@@ -311,7 +311,7 @@ setup_test_env() {
   TEST_TMPDIR="$test_dir/tmp"
   mkdir -p "$TEST_TMPDIR"
 
-  mkdir -p "$VAULT/Knowledge" "$VAULT/Fragments" "$AIENV_REPO/vault-public"
+  mkdir -p "$VAULT/Knowledge" "$VAULT/Fragments" "$AIENV_REPO/ai-brain/data/vault-public"
   setup_fake_repo "$REPO"
   setup_fake_osascript "$osascript_dir"
   export PATH="$osascript_dir:$PATH"
@@ -325,7 +325,7 @@ setup_test_env() {
   git -C "$AIENV_REPO" init -q -b main
   git -C "$AIENV_REPO" config user.email test@example.invalid
   git -C "$AIENV_REPO" config user.name test
-  echo readme > "$AIENV_REPO/vault-public/README.md"
+  echo readme > "$AIENV_REPO/ai-brain/data/vault-public/README.md"
   git -C "$AIENV_REPO" add -A && git -C "$AIENV_REPO" commit -q -m init >/dev/null
 }
 
@@ -357,7 +357,7 @@ run_maintenance() {
     TIMEOUT_TASK_PRUNE="$TIMEOUT_TASK_PRUNE" MAINTENANCE_TASK_PRUNE_CMD="$MAINTENANCE_TASK_PRUNE_CMD" \
     MAINTENANCE_STALE_LOCK_SECONDS="$MAINTENANCE_STALE_LOCK_SECONDS" \
     GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
-    "$@" bash "$REPO/scripts/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR"
+    "$@" bash "$REPO/ai-brain/executor/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR"
 }
 
 # 最新の実行ディレクトリ（latest symlinkの実体）を返す。
@@ -1094,11 +1094,11 @@ echo "=== 31. 統合テスト: 実物のfragments_log.py/vault_inventory.py/vaul
   LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
 
   for real_py in fragments_log vault_inventory vault_lib; do
-    cp "$REPO_ROOT/scripts/vault-agents/${real_py}.py" "$REPO/scripts/vault-agents/${real_py}.py"
-    chmod +x "$REPO/scripts/vault-agents/${real_py}.py"
+    cp "$REPO_ROOT/ai-brain/executor/${real_py}.py" "$REPO/ai-brain/executor/${real_py}.py"
+    chmod +x "$REPO/ai-brain/executor/${real_py}.py"
   done
-  [ -f "$REPO_ROOT/scripts/vault-agents/generic-aliases.txt" ] \
-    && cp "$REPO_ROOT/scripts/vault-agents/generic-aliases.txt" "$REPO/scripts/vault-agents/generic-aliases.txt"
+  [ -f "$REPO_ROOT/ai-brain/data/generic-aliases.txt" ] \
+    && cp "$REPO_ROOT/ai-brain/data/generic-aliases.txt" "$REPO/ai-brain/data/generic-aliases.txt"
 
   # 実物のfragments_log.py/vault_inventory.pyはVaultパスを$HOME/Data/obsidian
   # に固定しており（--vaultフラグを受け付けない）、$VAULT（本テストファイルの
@@ -1267,17 +1267,17 @@ echo "=== 39. Phase3宣言掃除: 入口のパスはMAINTENANCE_TASK_PRUNE_CMD�
   assert_contains "上書きしたパスの応答が反映される（・宣言掃除 実施・1件・UUIDは含まない）" "$FRAG_TEXT" "・宣言掃除 実施・1件"
 }
 
-echo "=== 39b. FR-78/AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしないとき、既定は ai-env の cmux/cmux-task-declare.sh を指す（cmux-session-todo v3・供給側の移設） ==="
+echo "=== 39b. FR-78/AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしないとき、既定は ai-env の dock/executor/cmux-task-declare.sh を指す（cmux-session-todo v3・供給側の移設） ==="
 {
   T="$WORK_ROOT/t39b"; mkdir -p "$T"
   setup_test_env "$T"
   LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
-  # 既定パスの解決先（新）は $HOME/work/takumi009-ai-env/cmux/cmux-task-declare.sh。
+  # 既定パスの解決先（新）は $HOME/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh。
   # 本ファイルの $HOME は隔離済み（冒頭 mktemp -d）なので、そこへ直接スタブを
   # 置き、MAINTENANCE_TASK_PRUNE_CMD を一切渡さずに maintenance.sh を実行する
   # （run_maintenance() は `:=$PRUNE_STUB` で常に上書きしてしまうため、ここだけ
   # 直接 bash 呼び出しにする）。
-  DEFAULT_PRUNE_DIR="$HOME/work/takumi009-ai-env/cmux"
+  DEFAULT_PRUNE_DIR="$HOME/work/takumi009-ai-env/dock/executor"
   mkdir -p "$DEFAULT_PRUNE_DIR"
   DEFAULT_PRUNE_STUB="$DEFAULT_PRUNE_DIR/cmux-task-declare.sh"
   PRUNE_CALL_LOG="$T/prune-call-39b.log"
@@ -1290,9 +1290,9 @@ echo "=== 39b. FR-78/AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしないと�
     TIMEOUT_FRAGMENTS_LOG=10 TIMEOUT_VAULT_INVENTORY=10 TIMEOUT_TASK_PRUNE=5 \
     MAINTENANCE_STALE_LOCK_SECONDS=3600 \
     GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
-    bash "$REPO/scripts/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR" || rc=$?
+    bash "$REPO/ai-brain/executor/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR" || rc=$?
   assert_eq "exit 0" "0" "$rc"
-  assert_eq "既定パスのスタブ（ai-env/cmux/cmux-task-declare.sh）が呼ばれた" \
+  assert_eq "既定パスのスタブ（ai-env/dock/executor/cmux-task-declare.sh）が呼ばれた" \
     "1" "$([ -s "$PRUNE_CALL_LOG" ] && echo 1 || echo 0)"
   rm -rf "$DEFAULT_PRUNE_DIR"
 }
@@ -1308,12 +1308,12 @@ echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経�
   if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
     fail_case "AC-104(39c・既定経路): 実物cmux-task-declare.shが見つかりません（${REAL_CMUX_TASK_DECLARE}）"
   else
-    # 既定パス（$HOME/work/takumi009-ai-env/cmux/cmux-task-declare.sh）へ
+    # 既定パス（$HOME/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh）へ
     # 実物をコピーして置く。cp なのでLIB_DIR解決（dirname "$0"）はコピー先
     # 基準になるが、cmux-task-declare.shはcmux/lib-vault-tasks.sh・
     # lib-cmux-workspace.shと同じ相対位置にある前提のため、依存libも
     # 一緑にコピーする。
-    DEFAULT_PRUNE_DIR="$HOME/work/takumi009-ai-env/cmux"
+    DEFAULT_PRUNE_DIR="$HOME/work/takumi009-ai-env/dock/executor"
     mkdir -p "$DEFAULT_PRUNE_DIR"
     cp "$REAL_CMUX_TASK_DECLARE" "$DEFAULT_PRUNE_DIR/cmux-task-declare.sh"
     REAL_CMUX_TASK_DECLARE_DIR="$(cd "$(dirname "$REAL_CMUX_TASK_DECLARE")" && pwd)"
@@ -1348,7 +1348,7 @@ echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経�
       TIMEOUT_FRAGMENTS_LOG=10 TIMEOUT_VAULT_INVENTORY=10 TIMEOUT_TASK_PRUNE=5 \
       MAINTENANCE_STALE_LOCK_SECONDS=3600 \
       GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
-      bash "$REPO/scripts/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR" || rc=$?
+      bash "$REPO/ai-brain/executor/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR" || rc=$?
     assert_eq "AC-104: exit 0（既定経路・実物）" "0" "$rc"
 
     REMAINING_KEYS="$(jq -r '.workspaces | keys | length' "$DECLARE_STATE_FILE" 2>/dev/null)"
@@ -1767,7 +1767,7 @@ echo "=== H-10. writer_steps_result_actor_from_table: 固定表（設計 §3.3�
   # runner 本体は実行せず、表の関数定義だけを抽出して評価する（表の全行を 1 回の
   # 実行で発生させることはできないため）。抽出範囲は関数定義の開始行から
   # 直後の「^}」まで。
-  TABLE_FUNCS="$(sed -n '/^step_name() {/,/^}/p; /^step_actor() {/,/^}/p' "$REPO_ROOT/scripts/maintenance.sh")"
+  TABLE_FUNCS="$(sed -n '/^step_name() {/,/^}/p; /^step_actor() {/,/^}/p' "$REPO_ROOT/ai-brain/executor/maintenance.sh")"
   eval "$TABLE_FUNCS"
   for pair in "phase0-dir:AI" "phase0-lock:AI" "phase0-backup:AI" "phase0-export:AI" \
               "phase1-fragments:AI" "phase1-inventory:AI" "phase3-summary:AI" "phase3-backup:AI" "phase3-record:AI"; do
@@ -1878,7 +1878,7 @@ echo "=== H-13c. writer_completed_record_log_ref_follows_fail_on_fold（A-2・�
   # 実走では通らない（impl-A-notes 判断4・現行は実害なし）。この分岐自体を
   # 狙い撃ちで検査するため、同じ step_id へ warn→fail の順で異なる log_ref を
   # 積んだ STEP_RECORDS を直接与える。
-  RECORD_FUNC="$(sed -n '/^write_completed_record() {/,/^}/p' "$REPO_ROOT/scripts/maintenance.sh")"
+  RECORD_FUNC="$(sed -n '/^write_completed_record() {/,/^}/p' "$REPO_ROOT/ai-brain/executor/maintenance.sh")"
   eval "$RECORD_FUNC"
   LAST_RUN_FILE="$T/last-run.json"
   RUN_ID="2026-09-20/000000-1"

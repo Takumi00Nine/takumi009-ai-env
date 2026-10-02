@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude/hooks/bootstrap-vault.sh のユニットテスト（メイン/サブ両方の回帰テスト）。
+# core/connect/claude-code/session-start-compose.sh のユニットテスト（メイン/サブ両方の回帰テスト）。
 #
 # 実 Vault($HOME/Data/obsidian) には依存しない。BOOTSTRAP_VAULT 環境変数で
 # 毎回ダミーのfixtureディレクトリへ差し替えてスクリプトを実行し、
@@ -20,7 +20,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/claude/hooks/bootstrap-vault.sh"
+SCRIPT="$REPO_ROOT/core/connect/claude-code/session-start-compose.sh"
 # PATHをspyディレクトリだけに絞る外部プロセス計数テスト（§10.5）で使う。
 # 絞ったPATHでも`bash`自身が見つかるよう、絶対パスを先に確定しておく。
 REAL_BASH="$(command -v bash)"
@@ -354,7 +354,7 @@ echo "=== 5. render_item_keys_fixed（AC-1）: S-2＝項目行ちょうど 1 行
   assert_contains "S-2: step 名が逐語（V-17 差し替え後の実物）" "$items" "step=$(jq -r '.completed.steps[0].name' "$HEALTH_FX_ROOT/S-2/last-run.json")"
   assert_contains "S-2: log が逐語（V-17 差し替え後の実物）" "$items" "log=$(jq -r '.completed.steps[0].log_ref' "$HEALTH_FX_ROOT/S-2/last-run.json")"
   assert_contains "S-2: 理由 X が逐語" "$items" "$(jq -r '.completed.steps[0].reason' "$HEALTH_FX_ROOT/S-2/last-run.json")"
-  assert_contains "S-2: ③ OK に戻る条件" "$items" "ok_when=「次回の本番経路の実行（定期起動または scripts/maintenance-kick.sh）が完全正常終了する」"
+  assert_contains "S-2: ③ OK に戻る条件" "$items" "ok_when=「次回の本番経路の実行（定期起動または ai-brain/executor/maintenance-kick.sh）が完全正常終了する」"
   assert_not_contains "S-2: 項目行に stage= は無い（V-5）" "$items" "stage="
 }
 
@@ -533,7 +533,7 @@ echo "=== 8c. extras_reads_log_stale_outside_health_section（F-17・SO-8）: va
 echo "=== 8d. items_do_not_use_last_result_summary（設計 §13・静的）: 項目生成経路に last_result_summary の参照が無い ==="
 {
   assert_eq "bootstrap-vault.sh: last_result_summary の参照 0" "0" "$(grep -c 'last_result_summary' "$SCRIPT")"
-  JUDGE_LIB="$REPO_ROOT/claude/hooks/lib/health_judge.py"
+  JUDGE_LIB="$REPO_ROOT/ai-brain/executor/health_judge.py"
   assert_eq "health_judge.py: last_result_summary の参照はちょうど 1 か所" "1" "$(grep -c 'last_result_summary' "$JUDGE_LIB")"
   assert_eq "health_judge.py: その 1 か所は旧形式（legacy）フォールバックの中" "1" \
     "$(awk '/# 旧形式（移行期）/{f=1} /# 以降は新契約/{f=0} f && /last_result_summary/{n++} END{print n+0}' "$JUDGE_LIB")"

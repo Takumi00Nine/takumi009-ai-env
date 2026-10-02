@@ -778,7 +778,7 @@ sub2=""
 
 if [ -n "$sub2" ] && [ -e "$STATE/term_ignoring_hang_$sub2" ]; then
   # TERMを無視する子孫（本体は無視しない）を先に作ってからハングする
-  # （run_with_timeout の回帰用・scripts/session-handoff.sh 側の同型fixture
+  # （run_with_timeout の回帰用・core/connect/claude-code/session-handoff.sh 側の同型fixture
   # に合わせる。本体はTERMで通常どおり終了するが、子孫はTERM無視のため
   # 生き残りうる＝wait後にKILLを送らないと孤児化する）。
   ( trap '' TERM; sleep 60 ) &

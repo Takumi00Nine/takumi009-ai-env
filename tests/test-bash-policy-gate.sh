@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude/hooks/bash-policy-gate.sh のユニットテスト（ラフ＝規則ごとに陽性 1・陰性 1
+# core/connect/claude-code/bash-policy-gate.sh のユニットテスト（ラフ＝規則ごとに陽性 1・陰性 1
 # ＋不正入力 1。値の一致は deny 理由の先頭語だけ）。
 #
 # 実 ~/.claude・実Vaultには一切依存しない。PreToolUse フックの実際の呼び出し
@@ -18,7 +18,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-HOOK="$REPO_ROOT/claude/hooks/bash-policy-gate.sh"
+HOOK="$REPO_ROOT/core/connect/claude-code/bash-policy-gate.sh"
 
 PASS=0
 FAIL=0

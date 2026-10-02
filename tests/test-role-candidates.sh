@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-role-candidates.sh — claude/hooks/lib/role_candidates.py の
+# tests/test-role-candidates.sh — team/connect/claude-code/role_candidates.py の
 # 受入条件テスト（設計-v1.2.md §4「D-3 候補一覧コマンド」・
 # 要件v1.2.1 §3.3 FR-14〜24・AC-6・AC-7・AC-8）。
 #
@@ -26,7 +26,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-RC="$REPO_ROOT/claude/hooks/lib/role_candidates.py"
+RC="$REPO_ROOT/team/connect/claude-code/role_candidates.py"
 
 PASS=0
 FAIL=0
@@ -262,14 +262,14 @@ echo "=== MINOR-6(FR-21): 候補なし職種の2フィールド写像／unavaila
 
 echo "=== MINOR-8(FR-23): list-candidatesの壊れた行を捨てたらstderrへUNRESOLVEDを1行 ==="
 {
-  # role_candidates.pyのPROFILE_RESOLVE_PYは自身と同じディレクトリを見る
+  # role_candidates.pyのPROFILE_RESOLVE_PYは自身から見た ../../executor を見る
   # ため（__file__基準）、実物のコピー＋壊れた行を返す最小スタブを同じ
   # 一時ディレクトリへ置いて狙い撃ちする（test-update-sub.shのFM-G4と
   # 同じresolverスタブ方式）。
   STUBDIR="$WORK/stublib"
-  mkdir -p "$STUBDIR"
-  cp "$RC" "$STUBDIR/role_candidates.py"
-  cat > "$STUBDIR/profile_resolve.py" <<'PYSTUB'
+  mkdir -p "$STUBDIR/connect/claude-code" "$STUBDIR/executor"
+  cp "$RC" "$STUBDIR/connect/claude-code/role_candidates.py"
+  cat > "$STUBDIR/executor/profile_resolve.py" <<'PYSTUB'
 import sys
 cmd = sys.argv[1] if len(sys.argv) > 1 else ""
 if cmd == "list-candidates":
@@ -279,10 +279,10 @@ if cmd == "list-candidates":
 sys.exit(1)
 PYSTUB
 
-  stub_out="$(python3 "$STUBDIR/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>/dev/null)"
-  stub_err="$(python3 "$STUBDIR/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>&1 1>/dev/null)"
+  stub_out="$(python3 "$STUBDIR/connect/claude-code/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>/dev/null)"
+  stub_err="$(python3 "$STUBDIR/connect/claude-code/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>&1 1>/dev/null)"
   stub_rc=0
-  python3 "$STUBDIR/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" >/dev/null 2>&1 || stub_rc=$?
+  python3 "$STUBDIR/connect/claude-code/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" >/dev/null 2>&1 || stub_rc=$?
 
   assert_eq "MINOR-8: 壊れた行があってもexit0" "0" "$stub_rc"
   assert_contains "MINOR-8: 正常行(leader)はstdoutにそのまま残る" "$stub_out" "leader"

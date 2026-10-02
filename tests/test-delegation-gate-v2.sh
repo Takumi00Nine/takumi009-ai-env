@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# claude/hooks/delegation-gate-v2.sh のユニットテスト（前提修正 P-4・設計§4）。
+# team/connect/claude-code/delegation-gate-v2.sh のユニットテスト（前提修正 P-4・設計§4）。
 #
-# ⚠️ claude/hooks/delegation-gate-v2.sh の判定ロジックは変えない（deny 文面は 2026-09-19 に短縮）。
+# ⚠️ team/connect/claude-code/delegation-gate-v2.sh の判定ロジックは変えない（deny 文面は 2026-09-19 に短縮）。
 # 本ファイルは「変えていないこと」を守るための回帰ガードとして新設する
 # （フックにテストが1本も無かった＝要件§15-2）。
 #
@@ -25,7 +25,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-HOOK="$REPO_ROOT/claude/hooks/delegation-gate-v2.sh"
+HOOK="$REPO_ROOT/team/connect/claude-code/delegation-gate-v2.sh"
 
 PASS=0
 FAIL=0

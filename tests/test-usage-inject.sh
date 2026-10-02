@@ -6,8 +6,8 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-HOOK="$REPO_ROOT/claude/hooks/usage-inject.sh"
-SNAPSHOT="$REPO_ROOT/claude/hooks/lib/usage_snapshot.py"
+HOOK="$REPO_ROOT/usage/executor/usage-inject.sh"
+SNAPSHOT="$REPO_ROOT/usage/executor/usage_snapshot.py"
 NOW=1788858365
 PASS=0
 FAIL=0
@@ -106,21 +106,21 @@ out="$(printf '{}' | AIENV_USAGE_CACHE_DIR="$CACHE" AIENV_USAGE_NOW="$NOW" /bin/
 assert_eq "symlink経由でも同一出力" "$expected" "$out"
 
 echo "=== 5. settings登録とinstaller配置を静的突合する ==="
-last_command="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/claude/settings.json')); print([h['command'] for g in d['hooks']['UserPromptSubmit'] for h in g['hooks']][-1])")"
+last_command="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/core/assembly/settings.json')); print([h['command'] for g in d['hooks']['UserPromptSubmit'] for h in g['hooks']][-1])")"
 assert_eq "UserPromptSubmit末尾に登録" '$HOME/.claude/hooks/usage-inject.sh' "$last_command"
-settings_fields="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/claude/settings.json')); h=d['hooks']['UserPromptSubmit'][0]['hooks'][-1]; print(h['timeout'],h['statusMessage'])")"
+settings_fields="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/core/assembly/settings.json')); h=d['hooks']['UserPromptSubmit'][0]['hooks'][-1]; print(h['timeout'],h['statusMessage'])")"
 assert_eq "timeout/statusMessageが指定値" "5 使用率を注入中" "$settings_fields"
-install_line="$(grep '^[[:space:]]*link claude/hooks/usage-inject\.sh[[:space:]]' "$REPO_ROOT/scripts/install-main.sh" || true)"
+install_line="$(grep '^[[:space:]]*link usage/executor/usage-inject\.sh[[:space:]]' "$REPO_ROOT/core/assembly/install-main.sh" || true)"
 assert_contains "install-main.shにlink配置あり" "$install_line" 'usage-inject.sh'
-if grep -q 'install-main\.sh' "$REPO_ROOT/scripts/install-sub.sh"; then
+if grep -q 'install-main\.sh' "$REPO_ROOT/core/assembly/install-sub.sh"; then
   pass "install-sub.shはinstall-main.shへ配置を委譲"
 else
   fail_case "install-sub.shの配置経路が確認できない"
 fi
 
 echo "=== 6. macOS bash 3.2向け構文と禁止timeoutを静的検査する ==="
-if /bin/bash -n "$HOOK" "$REPO_ROOT/claude/hooks/lib/usage-block.sh"; then pass "bash -n成功"; else fail_case "bash -n失敗"; fi
-if grep -qE '(^|[[:space:]])timeout([[:space:]]|$)' "$HOOK" "$REPO_ROOT/claude/hooks/lib/usage-block.sh"; then
+if /bin/bash -n "$HOOK" "$REPO_ROOT/usage/executor/usage-block.sh"; then pass "bash -n成功"; else fail_case "bash -n失敗"; fi
+if grep -qE '(^|[[:space:]])timeout([[:space:]]|$)' "$HOOK" "$REPO_ROOT/usage/executor/usage-block.sh"; then
   fail_case "timeoutコマンドを使っている"
 else
   pass "timeoutコマンド不使用"

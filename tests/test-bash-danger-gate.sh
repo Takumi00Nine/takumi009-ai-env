@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude/hooks/bash-danger-gate.sh のユニットテスト。
+# core/connect/claude-code/bash-danger-gate.sh のユニットテスト。
 #
 # 実 ~/.claude・実Vaultには一切依存しない。フックへ渡すJSON入力（PreToolUse
 # フックの実際の呼び出し形式＝`{"tool_input":{"command":"..."}}`）をjqで
@@ -17,7 +17,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-HOOK="$REPO_ROOT/claude/hooks/bash-danger-gate.sh"
+HOOK="$REPO_ROOT/core/connect/claude-code/bash-danger-gate.sh"
 
 PASS=0
 FAIL=0

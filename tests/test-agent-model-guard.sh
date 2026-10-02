@@ -4,8 +4,8 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-GUARD="$REPO_ROOT/claude/hooks/agent-model-guard.sh"
-SETTINGS="$REPO_ROOT/claude/settings.json"
+GUARD="$REPO_ROOT/team/connect/claude-code/agent-model-guard.sh"
+SETTINGS="$REPO_ROOT/core/assembly/settings.json"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/agent-model-guard.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -108,10 +108,10 @@ assert len(entries)==1 and entries[0]['matcher']=='^Agent$'
 assert re.search(entries[0]['matcher'],'Bash') is None
 PY
 
-echo "=== 対象職種（claude/agents/*.md の列挙・AC-4①）・許容4別名の設定一致 ==="
+echo "=== 対象職種（team/rules/agents/*.md の列挙・AC-4①）・許容4別名の設定一致 ==="
 # roles-config-only 設計 v1.2 §4.2: 職種名を列挙せず repo の定義集合そのもの
 # を回す（model 無し→GD-02 と同じ deny・model=opus→PASS の 2 判定）。
-for f in "$REPO_ROOT"/claude/agents/*.md; do
+for f in "$REPO_ROOT"/team/rules/agents/*.md; do
   role="${f##*/}"; role="${role%.md}"
   run_guard "{\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"$role\"}}" "$WORK/role.out" "$WORK/role.err"
   assert_deny_case "$role のmodel欠落はGD-02と同じdeny(MODEL_ARGUMENT_REQUIRED)" "$WORK/role.out" "$WORK/role.err" 'MODEL_ARGUMENT_REQUIRED: resolve-candidate の AGENT_MODEL を Agent.model に明示してください。'
@@ -200,10 +200,10 @@ fi
 
 echo "=== AC-10②: alias_literal_only_in_guard_common（許容別名の集合はguard_common.shにしか無い・NFR-7） ==="
 {
-  GUARD_COMMON="$REPO_ROOT/claude/hooks/lib/guard_common.sh"
-  DELEGATION_GATE="$REPO_ROOT/claude/hooks/delegation-gate-v2.sh"
-  VAULT_GATE="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
-  CLAUDE_EXEC="$REPO_ROOT/scripts/claude-exec.sh"
+  GUARD_COMMON="$REPO_ROOT/team/connect/claude-code/guard_common.sh"
+  DELEGATION_GATE="$REPO_ROOT/team/connect/claude-code/delegation-gate-v2.sh"
+  VAULT_GATE="$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh"
+  CLAUDE_EXEC="$REPO_ROOT/team/connect/claude-code/claude-exec.sh"
 
   # guard_common.sh が正本を持つ（4別名すべてが1関数内に揃っている）
   if grep -qE 'fable[^\n]*opus[^\n]*sonnet[^\n]*haiku' "$GUARD_COMMON"; then
@@ -213,7 +213,7 @@ echo "=== AC-10②: alias_literal_only_in_guard_common（許容別名の集合�
   fi
 
   # agent-model-guard.sh・delegation-gate-v2.sh・vault-write-gate.sh には
-  # 別名の複製（4語すべてが同一ファイルに揃う形）が無い。scripts/claude-exec.sh
+  # 別名の複製（4語すべてが同一ファイルに揃う形）が無い。team/connect/claude-code/claude-exec.sh
   # は担当A が並行実装中で本テスト実行時点に存在しないことがあるため、
   # 存在するときだけ同じ検査を掛ける。
   dup=0
@@ -242,7 +242,7 @@ echo "=== AC-10②: alias_literal_only_in_guard_common（許容別名の集合�
   # guard_allowed_model_aliases の集合 ＝ profile_resolve.py の
   # AGENT_MODEL_ALIASES の値集合（設計-v1.1.1.md §3 末尾）
   guard_set="$(bash -c 'source "$0"; guard_allowed_model_aliases' "$GUARD_COMMON" | tr ' ' '\n' | sort | paste -sd ',' -)"
-  py_set="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c 'import profile_resolve as pr; print(",".join(sorted(set(pr.AGENT_MODEL_ALIASES.values()))))')"
+  py_set="$(PYTHONPATH="$REPO_ROOT/team/executor" python3 -c 'import profile_resolve as pr; print(",".join(sorted(set(pr.AGENT_MODEL_ALIASES.values()))))')"
   assert_eq_local() {
     if [ "$1" = "$2" ]; then pass "$3"; else fail_case "$3 (guard=[$1] profile_resolve=[$2])"; fi
   }
@@ -251,9 +251,9 @@ echo "=== AC-10②: alias_literal_only_in_guard_common（許容別名の集合�
 
 echo "=== AC-10②(裁定A): vault_folders_literal_only_in_guard_common（Vault6フォルダの判定literalはguard_common.shにしか無い） ==="
 {
-  GUARD_COMMON="$REPO_ROOT/claude/hooks/lib/guard_common.sh"
-  DELEGATION_GATE="$REPO_ROOT/claude/hooks/delegation-gate-v2.sh"
-  VAULT_GATE="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
+  GUARD_COMMON="$REPO_ROOT/team/connect/claude-code/guard_common.sh"
+  DELEGATION_GATE="$REPO_ROOT/team/connect/claude-code/delegation-gate-v2.sh"
+  VAULT_GATE="$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh"
 
   # guard_common.sh のguard_vault_ai_prefixesが6フォルダすべての正本を持つ
   # （printfの複数引数に分かれているため複数行にまたがる＝1関数の本文
@@ -346,7 +346,7 @@ echo "=== I1-M3(検証1巡目・vault-write-gate.sh・test-claude-exec.shには�
   # tests/test-claude-exec.sh の担当だが、同ファイルは担当Cの担当範囲外
   # （tests/test-claude-exec.shは触らない）のため、symlink回帰ケースは
   # ここへ置く（リーダー裁定）。
-  VAULT_GATE="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
+  VAULT_GATE="$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh"
   VG_LINK_DIR="$WORK/linked-vault-hooks"
   mkdir -p "$VG_LINK_DIR"
   ln -s "$VAULT_GATE" "$VG_LINK_DIR/vault-write-gate.sh"
@@ -408,7 +408,7 @@ echo "=== I2-m5(検証2巡目): source失敗時のfail-close分岐そのもの�
   fi
 
   # vault-write-gate.sh: lib/無しでコピー起動するとdeny(GUARD_COMMON_UNREADABLE)・exit 0（素通しにならない）
-  VAULT_GATE="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
+  VAULT_GATE="$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh"
   NOLIB_VG_DIR="$WORK/nolib-vault-write-gate"
   mkdir -p "$NOLIB_VG_DIR"
   cp "$VAULT_GATE" "$NOLIB_VG_DIR/vault-write-gate.sh"
@@ -428,19 +428,19 @@ echo "=== I2-m5(検証2巡目): source失敗時のfail-close分岐そのもの�
 echo "=== RC-G（職種の追加・削除を設定だけで・roles-config-only 設計 v1.2 §2・§4.2） ==="
 {
   # 設計 §2.3: 差替口は env 変数でなく複製配置（I2-m5 と同じ方式）。
-  # $WORK/<名前>/claude/hooks/agent-model-guard.sh（repo からコピー）＋
+  # $WORK/<名前>/team/connect/claude-code/agent-model-guard.sh（repo からコピー）＋
   # $WORK/<名前>/claude/hooks/lib（repo lib への symlink）＋
-  # $WORK/<名前>/claude/agents/（複製元を cp・省略時は repo の実定義）。
+  # $WORK/<名前>/team/rules/agents/（複製元を cp・省略時は repo の実定義）。
   # コピーした本体は SELF_DIR＝$WORK/<名前>/claude/hooks に解決するので
   # AGENTS_DIR が fixture を指す。
   make_guard_fixture() {
     fx_name=$1
-    fx_src="${2:-$REPO_ROOT/claude/agents}"
-    fx_root="$WORK/$fx_name/claude"
-    mkdir -p "$fx_root/hooks" "$fx_root/agents"
-    cp "$GUARD" "$fx_root/hooks/agent-model-guard.sh"
-    ln -s "$REPO_ROOT/claude/hooks/lib" "$fx_root/hooks/lib"
-    cp "$fx_src"/*.md "$fx_root/agents/"
+    fx_src="${2:-$REPO_ROOT/team/rules/agents}"
+    fx_root="$WORK/$fx_name/team"
+    mkdir -p "$fx_root/connect/claude-code" "$fx_root/rules/agents"
+    cp "$GUARD" "$fx_root/connect/claude-code/agent-model-guard.sh"
+    ln -s "$REPO_ROOT/team/connect/claude-code/guard_common.sh" "$fx_root/connect/claude-code/guard_common.sh"
+    cp "$fx_src"/*.md "$fx_root/rules/agents/"
     echo "$fx_root"
   }
 
@@ -493,23 +493,23 @@ echo "=== RC-G（職種の追加・削除を設定だけで・roles-config-only 
 
   # ---- RC-G1（AC-1②）: 実定義の複製に probe を置く → 管理職種になる
   FX1="$(make_guard_fixture rc-g1)"
-  FX1_GUARD="$FX1/hooks/agent-model-guard.sh"
-  write_probe "$FX1/agents/zz-probe.md" zz-probe
+  FX1_GUARD="$FX1/connect/claude-code/agent-model-guard.sh"
+  write_probe "$FX1/rules/agents/zz-probe.md" zz-probe
   rc_g_managed_pair "RC-G1" "$FX1_GUARD" zz-probe s1
 
   # ---- RC-G2（AC-2②）: probe を除く → 未知扱い、戻す → 再び GD-02
-  rm -f "$FX1/agents/zz-probe.md"
+  rm -f "$FX1/rules/agents/zz-probe.md"
   rc_g_unknown "RC-G2(除去後)" "$FX1_GUARD" zz-probe s2
-  write_probe "$FX1/agents/zz-probe.md" zz-probe
+  write_probe "$FX1/rules/agents/zz-probe.md" zz-probe
   rc_g_managed_pair "RC-G2(戻した後)" "$FX1_GUARD" zz-probe s2b
 
   # ---- RC-G3（AC-2b③ ガード側）: 改名 → 新名は管理・旧名は未知
-  rm -f "$FX1/agents/zz-probe.md"
-  write_probe "$FX1/agents/zz-probe-b.md" zz-probe-b
+  rm -f "$FX1/rules/agents/zz-probe.md"
+  write_probe "$FX1/rules/agents/zz-probe-b.md" zz-probe-b
   rc_g_managed_pair "RC-G3(新名)" "$FX1_GUARD" zz-probe-b s3
   rc_g_unknown "RC-G3(旧名)" "$FX1_GUARD" zz-probe s3old
-  rm -f "$FX1/agents/zz-probe-b.md"
-  write_probe "$FX1/agents/zz-probe.md" zz-probe
+  rm -f "$FX1/rules/agents/zz-probe-b.md"
+  write_probe "$FX1/rules/agents/zz-probe.md" zz-probe
 
   # ---- RC-G4（AC-4②・AC-5 Explore）: 組込み種別・未知の名前は PASS＋マーカー
   rc_g_unknown "RC-G4" "$FX1_GUARD" Explore s4a
@@ -518,9 +518,9 @@ echo "=== RC-G（職種の追加・削除を設定だけで・roles-config-only 
   rc_g_unknown "RC-G4" "$FX1_GUARD" zz-nowhere s4d
 
   # ---- RC-G5（D-1）: dangling symlink は数えない
-  ln -s "$FX1/agents/zz-not-there.md" "$FX1/agents/zz-dang.md"
+  ln -s "$FX1/rules/agents/zz-not-there.md" "$FX1/rules/agents/zz-dang.md"
   rc_g_unknown "RC-G5(dangling symlink)" "$FX1_GUARD" zz-dang s5
-  rm -f "$FX1/agents/zz-dang.md"
+  rm -f "$FX1/rules/agents/zz-dang.md"
 
   # ---- RC-G6（AC-4⑤）: 一覧が取れない／空は fail-close（HF と同じ check_error 形式・マーカー無し）
   check_error_at() {
@@ -535,17 +535,17 @@ echo "=== RC-G（職種の追加・削除を設定だけで・roles-config-only 
   S6_MARKER="$MARKER_DIR/claude-delegated-ok-s6"
 
   FX6A="$(make_guard_fixture rc-g6-del)"
-  rm -rf "$FX6A/agents"
-  check_error_at "RC-G6a agents/不在(AGENTS_DIR_UNREADABLE)" "$FX6A/hooks/agent-model-guard.sh" "$managed_input" AGENTS_DIR_UNREADABLE "$S6_MARKER"
+  rm -rf "$FX6A/rules/agents"
+  check_error_at "RC-G6a agents/不在(AGENTS_DIR_UNREADABLE)" "$FX6A/connect/claude-code/agent-model-guard.sh" "$managed_input" AGENTS_DIR_UNREADABLE "$S6_MARKER"
 
   FX6B="$(make_guard_fixture rc-g6-perm)"
-  chmod 000 "$FX6B/agents"
-  check_error_at "RC-G6b agents/権限なし(AGENTS_DIR_UNREADABLE)" "$FX6B/hooks/agent-model-guard.sh" "$managed_input" AGENTS_DIR_UNREADABLE "$S6_MARKER"
-  chmod 755 "$FX6B/agents"
+  chmod 000 "$FX6B/rules/agents"
+  check_error_at "RC-G6b agents/権限なし(AGENTS_DIR_UNREADABLE)" "$FX6B/connect/claude-code/agent-model-guard.sh" "$managed_input" AGENTS_DIR_UNREADABLE "$S6_MARKER"
+  chmod 755 "$FX6B/rules/agents"
 
   FX6C="$(make_guard_fixture rc-g6-empty)"
-  rm -f "$FX6C"/agents/*.md
-  check_error_at "RC-G6c *.md 0件(AGENTS_DIR_EMPTY)" "$FX6C/hooks/agent-model-guard.sh" "$managed_input" AGENTS_DIR_EMPTY "$S6_MARKER"
+  rm -f "$FX6C"/rules/agents/*.md
+  check_error_at "RC-G6c *.md 0件(AGENTS_DIR_EMPTY)" "$FX6C/connect/claude-code/agent-model-guard.sh" "$managed_input" AGENTS_DIR_EMPTY "$S6_MARKER"
 
   # ---- RC-G7（AC-4⑥）: HOME に配役表・models.conf が無くても結果が変わらない
   mkdir -p "$WORK/empty-home"
@@ -558,15 +558,15 @@ echo "=== RC-G（職種の追加・削除を設定だけで・roles-config-only 
   RC_G_HOME=""
 
   # ---- RC-G8（AC-4③）: hooks/lib のコード行に職種名の引用リテラル・case パターンが無い
-  # 対象＝定義集合の全名（ls claude/agents ＋ zz-probe）。非コメント行
+  # 対象＝定義集合の全名（ls team/rules/agents ＋ zz-probe）。非コメント行
   # （^\s*# を除く）に "N"／'N'／N) が 0 件。走査対象名は tests/ にだけ置く。
   rc_g8_hits=0
   rc_g8_names="zz-probe"
-  for f in "$REPO_ROOT"/claude/agents/*.md; do
+  for f in "$REPO_ROOT"/team/rules/agents/*.md; do
     n="${f##*/}"; rc_g8_names="$rc_g8_names ${n%.md}"
   done
   for n in $rc_g8_names; do
-    for f in "$REPO_ROOT"/claude/hooks/*.sh "$REPO_ROOT"/claude/hooks/lib/*.py "$REPO_ROOT"/claude/hooks/lib/*.sh; do
+    for f in $(awk -F'\t' '$1 ~ /^claude\/hooks\/.*\.(sh|py)$/ {print "'"$REPO_ROOT"'/" $2}' "$REPO_ROOT/core/data/moves.tsv"); do
       [ -f "$f" ] || continue
       hit="$(grep -vE '^[[:space:]]*#' "$f" | grep -nE "[\"']${n}[\"']|${n}\\)" || true)"
       if [ -n "$hit" ]; then

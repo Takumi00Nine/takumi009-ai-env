@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/export-public-vault.sh のユニットテスト（設計§8「ユニット層」）。
+# ai-brain/executor/export-public-vault.sh のユニットテスト（設計§8「ユニット層」）。
 #
 # 実 Vault($HOME/Data/obsidian)・実 GitHub には一切依存しない。
 # VAULT/AIENV_REPO を環境変数で毎回ダミーのfixtureディレクトリへ差し替えて
@@ -23,7 +23,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/export-public-vault.sh"
+SCRIPT="$REPO_ROOT/ai-brain/executor/export-public-vault.sh"
 
 PASS=0
 FAIL=0
@@ -212,17 +212,17 @@ echo "=== 1. 正常系: public のみコピー・private は空+README ==="
   assert_eq "exit code 0" "0" "$rc"
 
   assert_true "Preferences/sample-pref.md がコピーされている" \
-    "$([[ -f "$REPO_DIR/vault-public/Preferences/sample-pref.md" ]] && echo 1 || echo 0)"
+    "$([[ -f "$REPO_DIR/ai-brain/data/vault-public/Preferences/sample-pref.md" ]] && echo 1 || echo 0)"
 
   for dir in Personal Knowledge Decisions Projects Fragments Explorations Blogs; do
-    n=$(find "$REPO_DIR/vault-public/$dir" -mindepth 1 | wc -l | tr -d ' ')
+    n=$(find "$REPO_DIR/ai-brain/data/vault-public/$dir" -mindepth 1 | wc -l | tr -d ' ')
     assert_eq "$dir はREADME.mdのみ（ファイル数1）" "1" "$n"
     assert_true "$dir/README.md が存在する" \
-      "$([[ -f "$REPO_DIR/vault-public/$dir/README.md" ]] && echo 1 || echo 0)"
+      "$([[ -f "$REPO_DIR/ai-brain/data/vault-public/$dir/README.md" ]] && echo 1 || echo 0)"
   done
 
   assert_true "Personal/career-private.md はコピーされていない（骨格のみ）" \
-    "$([[ ! -f "$REPO_DIR/vault-public/Personal/career-private.md" ]] && echo 1 || echo 0)"
+    "$([[ ! -f "$REPO_DIR/ai-brain/data/vault-public/Personal/career-private.md" ]] && echo 1 || echo 0)"
 
   commits=$(count_commits "$REPO_DIR")
   assert_eq "commit が1つ作られている" "1" "$commits"
@@ -805,7 +805,7 @@ echo "=== 5. 冪等性: 2回連続実行しても2回目は無変更commitなし
   rm -rf "$WORK"
 }
 
-echo "=== 6. チェック失敗時に vault-public/ は本番から一切変更されない（ステージング昇格順序） ==="
+echo "=== 6. チェック失敗時に ai-brain/data/vault-public/ は本番から一切変更されない（ステージング昇格順序） ==="
 {
   WORK="$(mktemp -d)"
   VAULT_DIR="$WORK/vault"
@@ -820,7 +820,7 @@ echo "=== 6. チェック失敗時に vault-public/ は本番から一切変更�
 
   BASELINE_HEAD="$(git -C "$REPO_DIR" rev-parse HEAD)"
   SNAPSHOT_DIR="$WORK/vault-public-snapshot"
-  cp -R "$REPO_DIR/vault-public" "$SNAPSHOT_DIR"
+  cp -R "$REPO_DIR/ai-brain/data/vault-public" "$SNAPSHOT_DIR"
 
   # ここから private link を混入させ、機械チェックを意図的に失敗させる（2aと同種の欠陥）。
   cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
@@ -832,16 +832,16 @@ EOF
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
   assert_eq "チェック失敗でexit 1" "1" "$rc"
   # 意図した理由（Personal link検出）で失敗したことも確認する（Codexレビュー指摘・Minor:
-  # 別の理由で早期失敗しても vault-public が無変更なら誤ってpassしてしまう抜け穴を塞ぐ）。
+  # 別の理由で早期失敗しても ai-brain/data/vault-public が無変更なら誤ってpassしてしまう抜け穴を塞ぐ）。
   assert_stderr_has "理由=フォルダ付きprivate link検出（ステージング安全性テスト）" "$WORK" \
     "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
 
-  # 「チェック失敗時に vault-public/ が変更されていない」を直接アサートする（設計①の受入条件）。
-  diff_out="$(diff -r "$SNAPSHOT_DIR" "$REPO_DIR/vault-public" 2>&1 || true)"
-  assert_eq "vault-public はベースラインと完全一致（無変更）" "" "$diff_out"
+  # 「チェック失敗時に ai-brain/data/vault-public/ が変更されていない」を直接アサートする（設計①の受入条件）。
+  diff_out="$(diff -r "$SNAPSHOT_DIR" "$REPO_DIR/ai-brain/data/vault-public" 2>&1 || true)"
+  assert_eq "ai-brain/data/vault-public はベースラインと完全一致（無変更）" "" "$diff_out"
 
-  git_status="$(git -C "$REPO_DIR" status --porcelain -- vault-public)"
-  assert_eq "git status(vault-public)も無変更" "" "$git_status"
+  git_status="$(git -C "$REPO_DIR" status --porcelain -- ai-brain/data/vault-public)"
+  assert_eq "git status(ai-brain/data/vault-public)も無変更" "" "$git_status"
 
   new_head="$(git -C "$REPO_DIR" rev-parse HEAD)"
   assert_eq "HEADのcommitも変わっていない" "$BASELINE_HEAD" "$new_head"
@@ -853,7 +853,7 @@ EOF
   rm -rf "$WORK"
 }
 
-echo "=== 6b. vault-public/ が未作成（初回実行前）の状態でチェック失敗しても作成されない ==="
+echo "=== 6b. ai-brain/data/vault-public/ が未作成（初回実行前）の状態でチェック失敗しても作成されない ==="
 {
   WORK="$(mktemp -d)"
   VAULT_DIR="$WORK/vault"
@@ -864,17 +864,17 @@ echo "=== 6b. vault-public/ が未作成（初回実行前）の状態でチェ�
 うっかり private へのリンク（初回チェック失敗テスト用）: [[Personal/career-private]]
 EOF
   new_repo "$REPO_DIR"
-  # vault-public/ はまだ一度も生成していない（本テストの主眼: mkdir すら本番側に残さないこと）。
+  # ai-brain/data/vault-public/ はまだ一度も生成していない（本テストの主眼: mkdir すら本番側に残さないこと）。
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
   assert_eq "初回でチェック失敗はexit 1" "1" "$rc"
   # 意図した理由（Personal link検出）で失敗したことも確認する（Codexレビュー指摘・Minor:
-  # 別の理由で早期失敗しても vault-public/ が未作成なら誤ってpassしてしまう抜け穴を塞ぐ）。
+  # 別の理由で早期失敗しても ai-brain/data/vault-public/ が未作成なら誤ってpassしてしまう抜け穴を塞ぐ）。
   assert_stderr_has "理由=フォルダ付きprivate link検出（初回チェック失敗テスト）" "$WORK" \
     "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
-  assert_true "vault-public/ 自体が作られていない（空ディレクトリも残らない）" \
-    "$([[ ! -e "$REPO_DIR/vault-public" ]] && echo 1 || echo 0)"
+  assert_true "ai-brain/data/vault-public/ 自体が作られていない（空ディレクトリも残らない）" \
+    "$([[ ! -e "$REPO_DIR/ai-brain/data/vault-public" ]] && echo 1 || echo 0)"
 
   # ステージング領域（.export-tmp.*）も残らないことを確認する（trap の初回失敗ケース検証）。
   leftover=$(find "$REPO_DIR" -maxdepth 1 -name '.export-tmp.*' 2>/dev/null | wc -l | tr -d ' ')
@@ -962,7 +962,7 @@ EOF
 
 # --- 前提修正 P-1 の回帰テスト（2026-09-07）:
 #     1-a) linked worktree を AIENV_REPO に指定しても git init が走らない
-#     1-b) git commit にパス指定（-- vault-public）が付き、他の stage 済み差分を
+#     1-b) git commit にパス指定（-- ai-brain/data/vault-public）が付き、他の stage 済み差分を
 #          巻き込まない ---
 
 echo "=== 8. PA-1: linked worktree を AIENV_REPO に指定しても git init が走らない ==="
@@ -1001,7 +1001,7 @@ echo "=== 8. PA-1: linked worktree を AIENV_REPO に指定しても git init �
   rm -rf "$WORK"
 }
 
-echo "=== 9. PA-2: vault-public 以外を stage した状態で実行しても commit は vault-public/ 配下のみ ==="
+echo "=== 9. PA-2: ai-brain/data/vault-public 以外を stage した状態で実行しても commit は ai-brain/data/vault-public/ 配下のみ ==="
 {
   WORK="$(mktemp -d)"
   VAULT_DIR="$WORK/vault"
@@ -1009,7 +1009,7 @@ echo "=== 9. PA-2: vault-public 以外を stage した状態で実行しても c
   make_base_vault "$VAULT_DIR"
   new_repo "$REPO_DIR"
 
-  # vault-public/ と無関係なファイルを stage したままにしておく。
+  # ai-brain/data/vault-public/ と無関係なファイルを stage したままにしておく。
   echo "unrelated change" > "$REPO_DIR/other-file.txt"
   git -C "$REPO_DIR" add other-file.txt
 
@@ -1020,10 +1020,10 @@ echo "=== 9. PA-2: vault-public 以外を stage した状態で実行しても c
   # このコミットは repo 最初の commit（親を持たない root commit）なので、
   # diff-tree で親との差分を出すには --root が要る（無いと空になる）。
   changed_paths="$(git -C "$REPO_DIR" diff-tree --no-commit-id --name-only -r --root HEAD)"
-  non_vault_public=$(printf '%s\n' "$changed_paths" | grep -v '^vault-public/' || true)
-  assert_eq "コミットの変更パスは vault-public/ 配下のみ" "" "$non_vault_public"
-  assert_true "vault-public/ 配下の変更が含まれている" \
-    "$(printf '%s\n' "$changed_paths" | grep -q '^vault-public/' && echo 1 || echo 0)"
+  non_vault_public=$(printf '%s\n' "$changed_paths" | grep -v '^ai-brain/data/vault-public/' || true)
+  assert_eq "コミットの変更パスは ai-brain/data/vault-public/ 配下のみ" "" "$non_vault_public"
+  assert_true "ai-brain/data/vault-public/ 配下の変更が含まれている" \
+    "$(printf '%s\n' "$changed_paths" | grep -q '^ai-brain/data/vault-public/' && echo 1 || echo 0)"
 
   staged_status="$(git -C "$REPO_DIR" status --porcelain -- other-file.txt)"
   assert_eq "stage したままの other-file.txt は index に残っている（A  other-file.txt）" \
@@ -1052,7 +1052,7 @@ echo "=== 10. AC-1 large-denylist-report: report対象(Knowledge)のbasename den
   # 生成される基準パターンファイルの実バイト数を直接確認する（scripts/lib/
   # personal-link-check.shを読み取り専用でsourceして計測。編集はしない）。
   pattern_size=$(
-    source "$REPO_ROOT/scripts/lib/personal-link-check.sh"
+    source "$REPO_ROOT/ai-brain/executor/personal-link-check.sh"
     DENY="$(mktemp)"; PAT="$(mktemp)"
     personal_link_build_basename_denylist "$VAULT_DIR" Knowledge "$DENY"
     personal_link_build_basename_pattern_file "$DENY" "$PAT"
@@ -1082,7 +1082,7 @@ echo "=== 11. AC-2 large-denylist-failfast: fail-fast対象(Personal)のbasename
   new_repo "$REPO_DIR"
 
   pattern_size=$(
-    source "$REPO_ROOT/scripts/lib/personal-link-check.sh"
+    source "$REPO_ROOT/ai-brain/executor/personal-link-check.sh"
     DENY="$(mktemp)"; PAT="$(mktemp)"
     personal_link_build_basename_denylist "$VAULT_DIR" Personal "$DENY"
     personal_link_build_basename_pattern_file "$DENY" "$PAT"

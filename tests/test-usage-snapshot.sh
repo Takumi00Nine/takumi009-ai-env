@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-usage-snapshot.sh — claude/hooks/lib/usage_snapshot.py の
+# tests/test-usage-snapshot.sh — usage/executor/usage_snapshot.py の
 # ユニットテスト（B1a「使用率の見える化」-実装-2026-09-08.md §2.3）。
 #
 # 2026-09-08 worker-driven一次レビュー（Codex・2巡）BLOCKING/MAJOR/MINOR
@@ -79,7 +79,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB="$REPO_ROOT/claude/hooks/lib/usage_snapshot.py"
+LIB="$REPO_ROOT/usage/executor/usage_snapshot.py"
 
 PASS=0
 FAIL=0
@@ -316,7 +316,7 @@ echo "=== FX-3: claudeのみ欠落（陽性） ==="
   human3="$(run_human "$FX3")"
   n_lines3="$(printf '%s\n' "$human3" | wc -l | tr -d ' ')"
   assert_eq "FX-3 欠落時も人可読は3行のまま（行数を変えない）" "3" "$n_lines3"
-  assert_contains "FX-3 Claude枠が導入手順つきの固定文" "$human3" "Claude枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: scripts/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
+  assert_contains "FX-3 Claude枠が導入手順つきの固定文" "$human3" "Claude枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: usage/assembly/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
 }
 
 # ============================================================
@@ -587,7 +587,7 @@ print(len(p['windows']))
 # ============================================================
 # FX-14: last_error.type="curl"（陽性・検証職1巡目MINOR-6対応）
 # ============================================================
-# scripts/usage-fetch.sh のD-3はcurl系の通信エラー（curl_exit=5/6/7/28/52/
+# usage/executor/usage-fetch.sh のD-3はcurl系の通信エラー（curl_exit=5/6/7/28/52/
 # 55/56）をtype="curl"で記録する。usage_snapshot.pyの許可リストにcurlが
 # 無いと、常に汎用の伏せ字文言へ丸められてしまう（取得器とsnapshotの
 # 許可リストが不一致だった穴）。

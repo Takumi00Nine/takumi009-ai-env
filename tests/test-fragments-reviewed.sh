@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/fragments-reviewed.sh のユニットテスト（昇格の締めCLI・要件・設計＝
+# ai-brain/executor/fragments-reviewed.sh のユニットテスト（昇格の締めCLI・要件・設計＝
 # requirements-design-v1.md FR-3〜5・§2.3・§2.4・2026-09-20）。
 #
 # 実 $HOME・実 last-run.json・実 fragments_log.py（実Vault）には一切触れない:
@@ -13,7 +13,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/fragments-reviewed.sh"
+SCRIPT="$REPO_ROOT/ai-brain/executor/fragments-reviewed.sh"
 
 HOME="$(mktemp -d)" || { echo "FATAL: mktemp -d に失敗" >&2; exit 1; }
 [[ -n "$HOME" && "$HOME" != "/" && -d "$HOME" ]] || { echo "FATAL: HOME 隔離に失敗" >&2; exit 1; }

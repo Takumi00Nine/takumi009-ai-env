@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/vault-agents/maintenance_run_step.py のユニットテスト（maintenance.sh
+# ai-brain/executor/maintenance_run_step.py のユニットテスト（maintenance.sh
 # Phase1の各検出ステップ起動用・タイムアウト+プロセスグループ単位kill・
 # 設計書§1.2）。
 #
@@ -9,7 +9,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/vault-agents/maintenance_run_step.py"
+SCRIPT="$REPO_ROOT/ai-brain/executor/maintenance_run_step.py"
 
 # 全テスト共通の一時ディレクトリ（並列実行時の固定/tmpパス衝突を避ける・
 # Codexレビュー指摘Minor対応）。
@@ -311,7 +311,7 @@ echo "=== 17. SIGINT: マスク解除(pthread_sigmask SIG_SETMASK)直後とい�
   # 作り込み、proc_holderが空になる形で症状が出たため、実測して発見・修正した）。
   out="$(python3 -c "
 import sys, signal, os
-sys.path.insert(0, '$REPO_ROOT/scripts/vault-agents')
+sys.path.insert(0, '$REPO_ROOT/ai-brain/executor')
 import maintenance_run_step as mrs
 
 real_pthread_sigmask = signal.pthread_sigmask

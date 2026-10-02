@@ -10,7 +10,7 @@
 #   柵   team/connect/claude-code/codex-direct-call-gate.sh。stdin＝{"tool_input":{"command":…}[,"cwd":…]}。
 #        常に exit 0。deny は stdout の JSON（permissionDecision＝deny）、allow は無出力（分割前と同じ）。
 #   許可するラッパー＝台帳の鍵 team.codex-exec を lookup で引いたもの（上書き口 AIENV_LEDGER）。
-#     全部入りの deny 文＝分割前の文の scripts/codex-exec.sh を新パス team/connect/codex/codex-exec.sh に置き換えたもの。
+#     全部入りの deny 文＝分割前の文の team/connect/codex/codex-exec.sh を新パス team/connect/codex/codex-exec.sh に置き換えたもの。
 #     鍵なし＝ラッパー無し＝直叩きは deny（fail-close）。
 #     台帳異常・実体異常＝deny（fail-close）し、deny 文に照会の固定文（LEDGER: ledger …／LEDGER: part team.codex-exec …）を
 #     添え、同じ固定文を stderr へも出す。
@@ -88,7 +88,7 @@ echo "=== 5. 新設ルール③（2巡目レビューCritical対応）: 複合�
 assert_denied "直後に無関係な echo codex-exec.sh を混ぜてもdeny（複合コマンドの別断片）" \
   "codex exec --sandbox read-only 'hi'; echo codex-exec.sh" "$RULE3_REASON"
 assert_denied "scripts/codex-exec.shを別断片に置いてもdeny" \
-  "echo scripts/codex-exec.sh; codex exec --sandbox read-only 'hi'" "$RULE3_REASON"
+  "echo team/connect/codex/codex-exec.sh; codex exec --sandbox read-only 'hi'" "$RULE3_REASON"
 assert_denied "無関係な echo --help を混ぜてもdeny（--helpは別断片）" \
   "echo --help; codex exec --sandbox read-only 'hi'" "$RULE3_REASON"
 assert_denied "無害な codex --version の直後に codex exec を混ぜてもdeny" \

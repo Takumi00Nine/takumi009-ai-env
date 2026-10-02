@@ -148,11 +148,11 @@ assert_true "FX-25: moves 行が由来の空いた新パスを報告" "$(lines_o
 
 echo "=== 8. 検査 ⑥（AC-3 ④ 後段）: 転送のリンク先が主後継と違う＝forward 行で報告 ==="
 fresh_copy
-ln -sfn ../dock/executor/cmux-task-model.sh "$FX/cmux/cmux-next-model.sh"
+ln -sfn ../dock/executor/cmux-task-model.sh "$FX/dock/executor/cmux-next-model.sh"
 lf_commit_all "$FX"
 run_check "$FX"
 assert_true "⑥ 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
-assert_eq "⑥ forward 行がその転送を報告" "1" "$(lines_of forward | grep -c 'cmux/cmux-next-model.sh' || true)"
+assert_eq "⑥ forward 行がその転送を報告" "1" "$(lines_of forward | grep -c 'dock/executor/cmux-next-model.sh' || true)"
 
 echo "=== 9. 検査 ⑦（AC-3 ⑤・FR-14 ②）: 登録フックの実体が実行可能でない＝live 行で報告 ==="
 fresh_copy

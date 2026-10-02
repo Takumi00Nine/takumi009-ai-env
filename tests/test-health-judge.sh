@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude/hooks/lib/health_judge.py（外部脳ヘルスの判定機）のユニットテスト。
+# ai-brain/executor/health_judge.py（外部脳ヘルスの判定機）のユニットテスト。
 # 案件 health-self-explain（要件 v1.3.2 §4 S-1〜S-23・設計 v1.2 §4／§8／§10.2）。
 # 判定機 1 本の入出力で要件 fixture 23 本を閉じる（bootstrap・Dock は「判定機の写し」であることを
 # tests/test-bootstrap-vault.sh・tests/test-cmux-next-model.sh が少数のケースで検査する）。
@@ -8,7 +8,7 @@
 # 実行方法: bash tests/test-health-judge.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-JUDGE="$SCRIPT_DIR/../claude/hooks/lib/health_judge.py"
+JUDGE="$SCRIPT_DIR/../ai-brain/executor/health_judge.py"
 FX_ROOT="$SCRIPT_DIR/fixtures/health"
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/health-judge-test.XXXXXX")" || {

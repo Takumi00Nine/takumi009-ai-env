@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vault-public/Preferences/core-conduct.md・core-workflow.md 内の {{…}} プレース
+# ai-brain/data/vault-public/Preferences/core-conduct.md・core-workflow.md 内の {{…}} プレース
 # ホルダ集合が、最小能力表の能力軸3キー（§3.3.0。2026-09-07能力軸整理で
 # 7→3キーへ縮小）、または設計上認められた文書参照名
 # （DOC_REFERENCE_KNOWN_KEYS。2026-09-02追加・配役表解凍-設計-2026-09-01.md
@@ -46,8 +46,8 @@ fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 # FIXEDからschema_version/profile_slugを除いたもの）だけを
 # 唯一の正本として実行時ソースで取得する（ハードコード再列挙しない）。
 # ⚠️ 旧v1/v2の突合テスト（旧section 8）は突合相手が消えたため削除した。
-BOOTSTRAP_VAULT_SH="$REPO_ROOT/claude/hooks/bootstrap-vault.sh"
-PROFILE_RESOLVE_PY_FOR_KEYS="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
+BOOTSTRAP_VAULT_SH="$REPO_ROOT/core/connect/claude-code/session-start-compose.sh"
+PROFILE_RESOLVE_PY_FOR_KEYS="$REPO_ROOT/team/executor/profile_resolve.py"
 KNOWN_KEYS=()
 if [ -f "$PROFILE_RESOLVE_PY_FOR_KEYS" ]; then
   _fixed_line="$(python3 "$PROFILE_RESOLVE_PY_FOR_KEYS" known-keys 2>/dev/null | grep '^FIXED:' || true)"
@@ -105,7 +105,7 @@ check_file() {
   # 右辺で参照するとset -u下でunbound variableになる既知の癖があるため、
   # 各代入を別行に分ける（本リポジトリの既存作法）。
   local relpath="$1"
-  local abspath="$TESTS_DIR/../vault-public/$relpath"
+  local abspath="$TESTS_DIR/../ai-brain/data/vault-public/$relpath"
   if [ ! -f "$abspath" ]; then
     fail_case "$relpath が見つからない（vault-public未export・checkout破損等の可能性）"
     return
@@ -187,8 +187,8 @@ echo "=== 4. 回帰: ハイフン等を含む未知形式のプレースホル�
 
 echo "=== 5. 必読ファイル集合の3重管理（bootstrap FILES／keyword_recall_helper EXCLUDE_RELPATHS／vault_inventory BOOTSTRAP_FILES）が集合として一致する（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応。registry・版管理は作らず3ファイルの現物を静的抽出して突合するだけ） ==="
 {
-  KEYWORD_RECALL_PY="$REPO_ROOT/claude/hooks/lib/keyword_recall_helper.py"
-  VAULT_INVENTORY_PY="$REPO_ROOT/scripts/vault-agents/vault_inventory.py"
+  KEYWORD_RECALL_PY="$REPO_ROOT/ai-brain/executor/keyword_recall_helper.py"
+  VAULT_INVENTORY_PY="$REPO_ROOT/ai-brain/executor/vault_inventory.py"
 
   # bootstrap-vault.sh・keyword_recall_helper.py・vault_inventory.pyの現物
   # テキストを静的抽出するだけ（実行はしない＝python3コード自体はこのテストの
@@ -267,23 +267,23 @@ PYEOF
   fi
 }
 
-echo "=== 6. 静的（設定ファイルsample配布・2026-09-08本人裁定A案）: config/profile.md.sample が installer の雛形配置がそのままコピーできる生ファイル形式である（先頭---・role.leader・schema_version） ==="
+echo "=== 6. 静的（設定ファイルsample配布・2026-09-08本人裁定A案）: team/data/profile.md.sample が installer の雛形配置がそのままコピーできる生ファイル形式である（先頭---・role.leader・schema_version） ==="
 {
   # 2026-09-08 本人裁定A案: 雛形配置の読み元がVaultノート
-  # （vault-public/Preferences/profile-sample.md・Obsidianノート＋```yaml
+  # （ai-brain/data/vault-public/Preferences/profile-sample.md・Obsidianノート＋```yaml
   # フェンス構造）からrepo管理下の生ファイルconfig/profile.md.sampleへ
   # 付け替わり、scripts/install-main.shのextract_profile_schema_block()
   # （```yamlフェンス抽出）は撤去された。単純にファイルをそのままコピー
   # するだけになったため、本セクションも「フェンスから抽出できるか」ではなく
   # 「生ファイルとして単体で必要な形を満たしているか」を直接検査する形へ
   # 差し替えた。
-  PROFILE_SAMPLE="$REPO_ROOT/config/profile.md.sample"
+  PROFILE_SAMPLE="$REPO_ROOT/team/data/profile.md.sample"
 
   if [ ! -f "$PROFILE_SAMPLE" ]; then
-    fail_case "config/profile.md.sample が見つからない"
+    fail_case "team/data/profile.md.sample が見つからない"
   else
     SAMPLE_CONTENT="$(cat "$PROFILE_SAMPLE")"
-    pass "config/profile.md.sample を読み取れる"
+    pass "team/data/profile.md.sample を読み取れる"
     if [[ "$(printf '%s\n' "$SAMPLE_CONTENT" | head -1)" == "---" ]]; then
       pass "先頭行が---（installerがそのままコピーする雛形フォーマット）"
     else
@@ -304,21 +304,21 @@ echo "=== 6. 静的（設定ファイルsample配布・2026-09-08本人裁定A�
 
 echo "=== 7. 静的（設定ファイルsample配布・2026-09-08本人裁定A案）: 固定キー集合＋動的プレフィックス2種＋期待版がconfig/profile.md.sampleとprofile_resolve.py（known-keys／print-schema-version）で一致する（§3.4・profile-resolve-contract-2026-09-01.md§7） ==="
 {
-  PROFILE_RESOLVE_PY="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
-  # 2026-09-08 本人裁定A案: 読み元をVaultノート（vault-public/Preferences/
+  PROFILE_RESOLVE_PY="$REPO_ROOT/team/executor/profile_resolve.py"
+  # 2026-09-08 本人裁定A案: 読み元をVaultノート（ai-brain/data/vault-public/Preferences/
   # profile-sample.md）からrepo管理下の生ファイルconfig/profile.md.sampleへ
   # 付け替えた（extract_profile_schema_block()は撤去済み・セクション6参照）。
-  PROFILE_SAMPLE="$REPO_ROOT/config/profile.md.sample"
+  PROFILE_SAMPLE="$REPO_ROOT/team/data/profile.md.sample"
 
   if [ ! -f "$PROFILE_RESOLVE_PY" ]; then
-    # 担当Aの成果物（claude/hooks/lib/profile_resolve.py）が本ブランチへ未着地の
+    # 担当Aの成果物（team/executor/profile_resolve.py）が本ブランチへ未着地の
     # 間は、契約（profile-resolve-contract-2026-09-01.md）どおりにテストだけを
     # 先に書いておき、lib着地後にこのテストを再実行して結合確認する運用
     # （リーダー指示・2026-09-01）。したがってこの分岐に入っている間のNGは
     # このテスト自体の不具合ではなく「担当A成果物の未着地」を示す。
-    fail_case "claude/hooks/lib/profile_resolve.py が未配置のため known-keys/print-schema-version との一致を検証できない（担当A成果物の未着地待ち・契約＝profile-resolve-contract-2026-09-01.md §7。着地後に本テストを再実行して結合確認すること）"
+    fail_case "team/executor/profile_resolve.py が未配置のため known-keys/print-schema-version との一致を検証できない（担当A成果物の未着地待ち・契約＝profile-resolve-contract-2026-09-01.md §7。着地後に本テストを再実行して結合確認すること）"
   elif [ ! -f "$PROFILE_SAMPLE" ]; then
-    fail_case "config/profile.md.sample が見つからない"
+    fail_case "team/data/profile.md.sample が見つからない"
   else
     # `VAR="$(cmd)"`単独（`||`無し）はset -e下でcmdが非0を返すと即座にスクリプト
     # 全体を終了させてしまう（Codex一次レビュー指摘・Major対応）。以下すべての
@@ -463,7 +463,7 @@ PYEOF
 echo "=== 9. AC-14: core-workflow.md §7の統合行が公開スナップショットにあり、旧2行と{{reviewer}}が現れない ==="
 {
   NEW_LINE='**検証職が空席** → リーダー職が受入条件と1対1の最小検証を行い「独立検証なし・リーダー検証のみ」を成果物と報告に明記する'
-  for label_path in "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
+  for label_path in "公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/core-workflow.md"; do
     label="${label_path%%:*}"; f="${label_path#*:}"
     if [ ! -f "$f" ]; then
       fail_case "AC-14(${label}): core-workflow.mdが見つからない"
@@ -553,9 +553,9 @@ echo "=== 10. AC-5: 廃止した能力軸・マーカー・別名トークンが
 
 echo "=== 11. AC-2/AC-8: known-keysの3行目がSCHEMA_VERSION:7に完全一致する（代替配役の層と禁止モデル列挙の層の撤去-要件-2026-09-16.mdで期待版を6から7へ引き上げ） ==="
 {
-  PROFILE_RESOLVE_PY_AC2="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
+  PROFILE_RESOLVE_PY_AC2="$REPO_ROOT/team/executor/profile_resolve.py"
   if [ ! -f "$PROFILE_RESOLVE_PY_AC2" ]; then
-    fail_case "claude/hooks/lib/profile_resolve.py が見つからない"
+    fail_case "team/executor/profile_resolve.py が見つからない"
   else
     kk_ac2="$(python3 "$PROFILE_RESOLVE_PY_AC2" known-keys)"
     line3="$(printf '%s\n' "$kk_ac2" | sed -n '3p')"
@@ -573,8 +573,8 @@ echo "=== 12. AC-7: プレースホルダ{{廃止5キー}}が公開スナップ�
   # 対象＝tests/配下のため、自分自身が引っかからないよう実行時に組み立てる）。
   _u12='_'
   RETIRED_PLACEHOLDER_PAT="\\{\\{(inventory${_u12}source|vault${_u12}write|ui\\.user${_u12}call|git${_u12}role|web${_u12}verification)\\}\\}"
-  for label_path in "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-conduct.md" \
-                     "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
+  for label_path in "公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/core-conduct.md" \
+                     "公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/core-workflow.md"; do
     label="${label_path%%:*}"; f="${label_path#*:}"
     fname="$(basename "$f")"
     if [ ! -f "$f" ]; then
@@ -599,7 +599,7 @@ echo "=== 13. AC-10: core-workflow.md §5について、廃止済みgit上の立
   # 次の`## `見出しの直前までを抽出してから検査する。
   _u13='_'
   legacy_placeholder_13="{{git${_u13}role}}"
-  for label_path in "公開スナップショット:$REPO_ROOT/vault-public/Preferences/core-workflow.md"; do
+  for label_path in "公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/core-workflow.md"; do
     label="${label_path%%:*}"; f="${label_path#*:}"
     if [ ! -f "$f" ]; then
       fail_case "AC-10(${label}): core-workflow.mdが見つからない"
@@ -630,7 +630,7 @@ echo "=== 13. AC-10: core-workflow.md §5について、廃止済みgit上の立
 echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃止済みの旧マーカー語が0件・machine_roleが1件以上（公開スナップショット） ==="
 {
   for name in "vault-operation.md" "core-workflow.md"; do
-    for label_path in "公開スナップショット:$REPO_ROOT/vault-public/Preferences/${name}"; do
+    for label_path in "公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/${name}"; do
       label="${label_path%%:*}"; f="${label_path#*:}"
       if [ ! -f "$f" ]; then
         fail_case "AC-12①(${label}:${name}): ファイルが見つからない"
@@ -701,19 +701,19 @@ echo "=== 15. モデル定義ファイルと候補指定-要件-2026-09-08.md AC
 # 柔軟性を損なう（本人指摘 2026-09-16）。要件書 FR-2 により、検査するのは
 # 「XXXX雛形トークンが無い（実値規約）」「resolverの定義パーサ
 # （load_model_defs()）が例外なく読める（1件以上）」の2点のみへ縮小した。
-# ⚠️ 公開スナップショット（vault-public/）を読む assert は置かない
+# ⚠️ 公開スナップショット（ai-brain/data/vault-public/）を読む assert は置かない
 # （export のタイミングに依存する＝要件書 §7.4 と同型の脆さ）。
-echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実値規約（XXXX無し）を満たし、resolverの定義パーサで例外なく読める（要件書 AC-4） ==="
+echo "=== 16. 設定ファイルsample配布: team/data/models.conf.sample が実値規約（XXXX無し）を満たし、resolverの定義パーサで例外なく読める（要件書 AC-4） ==="
 {
-  MODELS_SAMPLE_D16="$REPO_ROOT/config/models.conf.sample"
+  MODELS_SAMPLE_D16="$REPO_ROOT/team/data/models.conf.sample"
   if [ ! -f "$MODELS_SAMPLE_D16" ]; then
-    fail_case "config/models.conf.sample が見つからない"
+    fail_case "team/data/models.conf.sample が見つからない"
   else
     xxxx_hit="$(grep -n 'XXXX' "$MODELS_SAMPLE_D16" || true)"
     if [ -z "$xxxx_hit" ]; then
-      pass "config/models.conf.sample にXXXX雛形トークンが無い（実値規約）"
+      pass "team/data/models.conf.sample にXXXX雛形トークンが無い（実値規約）"
     else
-      fail_case "config/models.conf.sample にXXXX雛形トークンが残っている: ${xxxx_hit}"
+      fail_case "team/data/models.conf.sample にXXXX雛形トークンが残っている: ${xxxx_hit}"
     fi
 
     # `x="$(cmd)"`単独（`||`無し）はset -e下でcmdが非0を返すと即座にスクリプト
@@ -724,7 +724,7 @@ echo "=== 16. 設定ファイルsample配布: config/models.conf.sample が実�
     defs_count=""
     defs_count="$(python3 -c "
 import sys
-sys.path.insert(0, '$REPO_ROOT/claude/hooks/lib')
+sys.path.insert(0, '$REPO_ROOT/team/executor')
 import profile_resolve as pr
 try:
     defs = pr.load_model_defs('$MODELS_SAMPLE_D16')

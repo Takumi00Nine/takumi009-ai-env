@@ -1,6 +1,6 @@
 # tests/fixtures/health — 外部脳ヘルス判定機の fixture（要件 v1.3.2 §4 S-1〜S-23＋設計 v1.2 §10.2 X-1〜X-5）
 
-所有＝実装 B（設計 §10.1・V-17）。判定機 `claude/hooks/lib/health_judge.py` の入力 4 本＋判定時刻を
+所有＝実装 B（設計 §10.1・V-17）。判定機 `ai-brain/executor/health_judge.py` の入力 4 本＋判定時刻を
 1 ディレクトリに置く。`tests/test-health-judge.sh`（判定機 1 本で 23 本を閉じる）・
 `tests/test-bootstrap-vault.sh`・`tests/test-cmux-next-model.sh`（判定機の写しであることを検査）が読む。
 

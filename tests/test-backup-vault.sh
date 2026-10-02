@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/backup-vault.sh のユニットテスト。
+# ai-brain/executor/backup-vault.sh のユニットテスト。
 #
 # 実 Vault($HOME/Data/obsidian)・実 GitHub には一切依存しない。VAULT/LOCK_FILE を
 # 環境変数で毎回ダミーのfixtureディレクトリへ差し替えて backup-vault.sh を
@@ -11,14 +11,14 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/backup-vault.sh"
-# shellcheck source=scripts/lib/pid-lock.sh
+SCRIPT="$REPO_ROOT/ai-brain/executor/backup-vault.sh"
+# shellcheck source=core/executor/pid-lock.sh
 # テスト14・14b・14c・14d・19で、Vault書込ロックのfixtureを手書きの1行
 # (PIDのみ)形式ではなく acquire_pid_lock() が実際に生成する形式
 # （2026-08-30 PID再利用対策改修で1行目=PID・2行目=指紋の2行形式へ変更済み）
 # で作るためにsourceする（2026-08-30 リーダー追補・tester独立検証指摘:
 # 手書き1行fixtureのままだと実フォーマットに対する回帰を検出できない）。
-source "$REPO_ROOT/scripts/lib/pid-lock.sh"
+source "$REPO_ROOT/core/executor/pid-lock.sh"
 
 PASS=0
 FAIL=0
@@ -279,7 +279,7 @@ echo "=== 8b. ブランチSSOT: VAULTが対象ブランチ(main)上ならその�
 
 echo "=== 8c. ブランチSSOT: 現在のブランチがVAULT_BACKUP_BRANCHと不一致ならFAILし、自動checkoutしない（2026-07-14 リーダー指摘対応） ==="
 {
-  # scripts/check-drift.sh ⑦は VAULT_BACKUP_BRANCH（既定main）だけを固定監視して
+  # core/assembly/check-drift.sh ⑦は VAULT_BACKUP_BRANCH（既定main）だけを固定監視して
   # いるため、backup-vault.shが「今checkoutされているブランチ」へ無条件にcommit
   # していると、main以外がcheckoutされたままの場合にSSOT不一致（backupは別
   # ブランチへ蓄積・check-drift.shは健全と誤判定）が起き得た。不一致時は

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/claude-exec.sh のユニットテスト（設計 docs/design-v1.1.1.md §9.1・
+# team/connect/claude-code/claude-exec.sh のユニットテスト（設計 docs/design-v1.1.1.md §9.1・
 # 実装A担当ケース）。
 #
 # 実 claude コマンドには依存しない。tests/fake-claude/claude（偽シム）を
@@ -12,12 +12,12 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/claude-exec.sh"
+SCRIPT="$REPO_ROOT/team/connect/claude-code/claude-exec.sh"
 STUB_SRC="$TESTS_DIR/fake-claude/claude"
-CLAUDE_EXEC_PY="$REPO_ROOT/claude/hooks/lib/claude_exec.py"
-GUARD_COMMON_SH="$REPO_ROOT/claude/hooks/lib/guard_common.sh"
-DELEGATION_GATE_SH="$REPO_ROOT/claude/hooks/delegation-gate-v2.sh"
-REAL_AGENTS_DIR="$REPO_ROOT/claude/agents"
+CLAUDE_EXEC_PY="$REPO_ROOT/team/connect/claude-code/claude_exec.py"
+GUARD_COMMON_SH="$REPO_ROOT/team/connect/claude-code/guard_common.sh"
+DELEGATION_GATE_SH="$REPO_ROOT/team/connect/claude-code/delegation-gate-v2.sh"
+REAL_AGENTS_DIR="$REPO_ROOT/team/rules/agents"
 
 PASS=0
 FAIL=0
@@ -417,7 +417,7 @@ print(n)
   assert_true "fake_keys_absent_and_not_in_sources: ANTHROPIC_FAKEが子環境に無い" "$([ "$(stub_env_keys_has "ANTHROPIC_FAKE_$RAND_SUFFIX")" = "0" ] && echo 1 || echo 0)"
   assert_true "fake_keys_absent_and_not_in_sources: AWS_FAKEが子環境に無い" "$([ "$(stub_env_keys_has "AWS_FAKE_$RAND_SUFFIX")" = "0" ] && echo 1 || echo 0)"
   assert_true "fake_keys_absent_and_not_in_sources: CLAUDE_CODE_FAKEが子環境に無い" "$([ "$(stub_env_keys_has "CLAUDE_CODE_FAKE_$RAND_SUFFIX")" = "0" ] && echo 1 || echo 0)"
-  hits="$(grep -RF "$RAND_SUFFIX" "$REPO_ROOT/scripts/claude-exec.sh" "$CLAUDE_EXEC_PY" 2>/dev/null | wc -l | tr -d ' ')"
+  hits="$(grep -RF "$RAND_SUFFIX" "$REPO_ROOT/team/connect/claude-code/claude-exec.sh" "$CLAUDE_EXEC_PY" 2>/dev/null | wc -l | tr -d ' ')"
   assert_eq "fake_keys_absent_and_not_in_sources: 架空キー名はソース中に0件" "0" "$hits"
   unset ANTHROPIC_API_KEY AWS_ACCESS_KEY_ID CLAUDE_CODE_SOME_DUMMY
   unset "ANTHROPIC_FAKE_$RAND_SUFFIX" "AWS_FAKE_$RAND_SUFFIX" "CLAUDE_CODE_FAKE_$RAND_SUFFIX"
@@ -837,7 +837,7 @@ echo "=== 新設①: allowed_tools_matches_role_tools ==="
 {
   new_fixture
   run_wrapper --role vault-scribe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-newac1 --model-def sonnet-noeffort
-  expect_tools="$(python3 "$REPO_ROOT/claude/hooks/lib/agent_def.py" allowed-tools --dir "$AGENTS_DIR" --role vault-scribe)"
+  expect_tools="$(python3 "$REPO_ROOT/team/connect/claude-code/agent_def.py" allowed-tools --dir "$AGENTS_DIR" --role vault-scribe)"
   actual_tools="$(stub_arg_after --allowedTools)"
   assert_eq "allowed_tools_matches_role_tools: agent_def.pyの出力と一致" "$expect_tools" "$actual_tools"
 }
@@ -909,14 +909,14 @@ echo "=== 設計固有の失敗経路: resolver_hang_times_out(4) ==="
   new_fixture
   FAKELIB="$WORK/fake-lib"
   mkdir -p "$FAKELIB"
-  cp "$REPO_ROOT/claude/hooks/lib/agent_def.py" "$FAKELIB/agent_def.py"
-  cp "$REPO_ROOT/claude/hooks/lib/claude_exec.py" "$FAKELIB/claude_exec.py"
+  cp "$REPO_ROOT/team/connect/claude-code/agent_def.py" "$FAKELIB/agent_def.py"
+  cp "$REPO_ROOT/team/connect/claude-code/claude_exec.py" "$FAKELIB/claude_exec.py"
   cat > "$FAKELIB/profile_resolve.py" <<'EOF'
 import sys, time
 time.sleep(60)
 EOF
   FAKESCRIPT="$WORK/fake-claude-exec.sh"
-  sed "s#LIB_DIR=\"\$REPO_ROOT/claude/hooks/lib\"#LIB_DIR=\"$FAKELIB\"#" "$SCRIPT" > "$FAKESCRIPT"
+  sed -e "s#LIB_DIR=\"\$SCRIPT_DIR\"#LIB_DIR=\"$FAKELIB\"#" -e "s#PROFILE_RESOLVE_PY=\"\$REPO_ROOT/team/executor/profile_resolve.py\"#PROFILE_RESOLVE_PY=\"$FAKELIB/profile_resolve.py\"#" "$SCRIPT" > "$FAKESCRIPT"
   chmod +x "$FAKESCRIPT"
   START=$(date +%s)
   RUN_STDOUT="$(bash "$FAKESCRIPT" --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-hang --model-def t-sonnet-high < /dev/null 2>"$WORK/hang-stderr.log")"
@@ -958,13 +958,13 @@ echo "=== 設計固有の失敗経路: vault_gate_denies_ai_folders ==="
   VAULT_TARGET="$HOME/Data/obsidian/Knowledge/vg-test.md"
   mkdir -p "$(dirname "$VAULT_TARGET")"
   in1="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"file_path":sys.argv[1]},"cwd":sys.argv[2]}))' "$VAULT_TARGET" "$WORK")"
-  out1="$(printf '%s' "$in1" | bash "$REPO_ROOT/claude/hooks/vault-write-gate.sh")"
+  out1="$(printf '%s' "$in1" | bash "$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh")"
   assert_true "vault_gate_denies_ai_folders: 6フォルダ配下はdeny" "$(is_gate_denied "$out1")"
 
   NONVAULT_TARGET="$HOME/Data/obsidian/Blogs/vg-test2.md"
   mkdir -p "$(dirname "$NONVAULT_TARGET")"
   in2="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"file_path":sys.argv[1]},"cwd":sys.argv[2]}))' "$NONVAULT_TARGET" "$WORK")"
-  out2="$(printf '%s' "$in2" | bash "$REPO_ROOT/claude/hooks/vault-write-gate.sh")"
+  out2="$(printf '%s' "$in2" | bash "$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh")"
   assert_true "vault_gate_denies_ai_folders: 配下でないパスは素通り" "$([ -z "$out2" ] && echo 1 || echo 0)"
 }
 
@@ -1020,7 +1020,7 @@ PYPROF
 # child-settings を直叩きする。結果はグローバル CS_STDOUT / CS_STDERR / CS_RC。
 run_child_settings() {
   local role="$1" dir="$2"
-  CS_STDOUT="$(python3 "$CLAUDE_EXEC_PY" child-settings --src "$REPO_ROOT/claude/settings.json" --role "$role" --child-cwd "$WORK" --agents-dir "$dir" 2>"$WORK/cs-stderr.log")"
+  CS_STDOUT="$(python3 "$CLAUDE_EXEC_PY" child-settings --src "$REPO_ROOT/core/assembly/settings.json" --role "$role" --child-cwd "$WORK" --agents-dir "$dir" 2>"$WORK/cs-stderr.log")"
   CS_RC=$?
   CS_STDERR="$(cat "$WORK/cs-stderr.log" 2>/dev/null || true)"
 }
@@ -1113,7 +1113,7 @@ echo "=== RC-X5. 実定義の全件: vault_declared_writable の真偽と child-
     [ -f "$f" ] || continue
     rcx5_n=$((rcx5_n + 1))
     role="${f##*/}"; role="${role%.md}"
-    declared="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c 'import sys, agent_def; print(agent_def.vault_declared_writable(sys.argv[1], sys.argv[2]))' "$REAL_AGENTS_DIR" "$role" 2>&1)"
+    declared="$(PYTHONPATH="$REPO_ROOT/team/connect/claude-code" python3 -c 'import sys, agent_def; print(agent_def.vault_declared_writable(sys.argv[1], sys.argv[2]))' "$REAL_AGENTS_DIR" "$role" 2>&1)"
     run_child_settings "$role" "$REAL_AGENTS_DIR"
     assert_eq "RC-X5 $role: child-settings exit 0" "0" "$CS_RC"
     case "$declared" in

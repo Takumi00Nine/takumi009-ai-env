@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/test-managed-symlink.sh
 #
-# scripts/lib/managed-symlink.sh の sync_managed_symlink() を直接 source して
+# core/assembly/managed-symlink.sh の sync_managed_symlink() を直接 source して
 # 検査する（2026-09-19 着手順3・設計 §4.4）。install-main.sh・update-sub.sh・
 # check-drift.sh の各テストに散っていた「symlink 同期」の重複ケースをここ 1 本に
 # 統合し、代表 1 件ずつ 5 ケースだけ置く（テストはラフに＝Decision 2026-09-17）。
@@ -18,7 +18,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB="$REPO_ROOT/scripts/lib/managed-symlink.sh"
+LIB="$REPO_ROOT/core/assembly/managed-symlink.sh"
 
 PASS=0
 FAIL=0
@@ -54,7 +54,7 @@ assert_eq() {
 }
 
 # 共有 lib を直接 source する（呼び出し元スクリプトの log() 等に依存しない設計）。
-# shellcheck source=../scripts/lib/managed-symlink.sh
+# shellcheck source=../core/assembly/managed-symlink.sh
 source "$LIB"
 
 # make_fixture — src（repo 側の実体）と dest の親ディレクトリを一時領域に作る。

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/check-drift.sh のユニットテスト。
+# core/assembly/check-drift.sh のユニットテスト。
 #
 # 実 ~/.claude・~/.codex・実Vault・実リポジトリには一切依存しない。DIR/HOME/VAULT を
 # 環境変数で毎回ダミーのfixtureへ差し替えてスクリプトを実行し、①〜④それぞれの
@@ -12,7 +12,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT_REL="scripts/check-drift.sh"
+SCRIPT_REL="core/assembly/check-drift.sh"
 
 PASS=0
 FAIL=0
@@ -74,27 +74,27 @@ d_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -u -v"${n}"d +%Y-%m-%dT
 d_mtime_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%Y%m%d0000; }
 
 # 最小構成の「repo」フィクスチャを作る（check-drift.shが参照する
-# claude/・codex/・vault-public/・scripts/check-drift.sh本体だけをコピーする）。
+# claude/・codex/・ai-brain/data/vault-public/・scripts/check-drift.sh本体だけをコピーする）。
 make_fake_repo() {
   local repo="$1"
-  mkdir -p "$repo/scripts" "$repo/claude/hooks" "$repo/claude/agents" "$repo/codex" "$repo/vault-public/Preferences"
-  cp "$REPO_ROOT/$SCRIPT_REL" "$repo/scripts/check-drift.sh"
-  chmod +x "$repo/scripts/check-drift.sh"
+  mkdir -p "$repo/core/assembly" "$repo/core/connect/claude-code" "$repo/team/rules/agents" "$repo/team/connect/claude-code" "$repo/team/connect/codex" "$repo/team/executor" "$repo/ai-brain/executor" "$repo/ai-brain/connect/claude-code" "$repo/dock/executor" "$repo/usage/executor" "$repo/ai-brain/data/vault-public/Preferences"
+  cp "$REPO_ROOT/$SCRIPT_REL" "$repo/core/assembly/check-drift.sh"
+  chmod +x "$repo/core/assembly/check-drift.sh"
   # check-drift.sh ①-2 は model/effort値を自前で持たず、fixture内の
-  # scripts/install-main.sh --render-settings-json（生成関数そのもの）に
+  # core/assembly/install-main.sh --render-settings-json（生成関数そのもの）に
   # 一時ファイルへ再生成させて比べる（2026-09-19 着手順3・設計 §4.2）。
   # 実物をfixtureへコピーする（--render-settings-json は他の全処理より先に
   # exitする経路で、生成先は呼び出し側の一時ファイルのみ＝fixture内で呼んでも
   # 実システムに一切触れない）。
-  cp "$REPO_ROOT/scripts/install-main.sh" "$repo/scripts/install-main.sh"
-  chmod +x "$repo/scripts/install-main.sh"
+  cp "$REPO_ROOT/core/assembly/install-main.sh" "$repo/core/assembly/install-main.sh"
+  chmod +x "$repo/core/assembly/install-main.sh"
   # install-main.shが冒頭でscripts/lib/managed-symlink.shをsourceするため同梱する。
-  mkdir -p "$repo/scripts/lib"
-  cp "$REPO_ROOT/scripts/lib/managed-symlink.sh" "$repo/scripts/lib/managed-symlink.sh"
-  mkdir -p "$repo/claude/hooks/lib"
+  mkdir -p "$repo/core/assembly"
+  cp "$REPO_ROOT/core/assembly/managed-symlink.sh" "$repo/core/assembly/managed-symlink.sh"
+  mkdir -p "$repo/team/executor"
   # install_fake_home() が置くv2プロファイルを resolver（実物）で解決する。
-  cp "$REPO_ROOT/claude/hooks/lib/profile_resolve.py" "$repo/claude/hooks/lib/profile_resolve.py"
-  cat > "$repo/claude/settings.json" <<'EOF'
+  cp "$REPO_ROOT/team/executor/profile_resolve.py" "$repo/team/executor/profile_resolve.py"
+  cat > "$repo/core/assembly/settings.json" <<'EOF'
 {
   "permissions": {
     "allow": ["Bash(npm test)"]
@@ -103,34 +103,34 @@ make_fake_repo() {
   "effortLevel": "__AIENV_EFFORT__"
 }
 EOF
-  echo '#!/bin/bash' > "$repo/claude/hooks/bootstrap-vault.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/delegation-gate-v2.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/bash-danger-gate.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/bash-policy-gate.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/vault-recall.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/vault-read-log.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/dock-pane-resolve.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/check-sub-update.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/context-size-warn.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/agent-model-guard.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/inprocess-gate.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/vault-write-gate.sh"
-  echo '#!/bin/bash' > "$repo/claude/hooks/usage-inject.sh"
-  chmod +x "$repo"/claude/hooks/*.sh
-  echo '# agent' > "$repo/claude/agents/sample-agent.md"
-  echo '# AGENTS' > "$repo/codex/AGENTS.md"
-  echo '{}' > "$repo/codex/hooks.json"
-  cat > "$repo/codex/config.toml" <<'EOF'
+  echo '#!/bin/bash' > "$repo/core/connect/claude-code/session-start-compose.sh"
+  echo '#!/bin/bash' > "$repo/team/connect/claude-code/delegation-gate-v2.sh"
+  echo '#!/bin/bash' > "$repo/core/connect/claude-code/bash-danger-gate.sh"
+  echo '#!/bin/bash' > "$repo/core/connect/claude-code/bash-policy-gate.sh"
+  echo '#!/bin/bash' > "$repo/ai-brain/executor/vault-recall.sh"
+  echo '#!/bin/bash' > "$repo/ai-brain/executor/vault-read-log.sh"
+  echo '#!/bin/bash' > "$repo/dock/executor/dock-pane-resolve.sh"
+  echo '#!/bin/bash' > "$repo/core/assembly/check-sub-update.sh"
+  echo '#!/bin/bash' > "$repo/core/connect/claude-code/context-size-warn.sh"
+  echo '#!/bin/bash' > "$repo/team/connect/claude-code/agent-model-guard.sh"
+  echo '#!/bin/bash' > "$repo/team/connect/claude-code/inprocess-gate.sh"
+  echo '#!/bin/bash' > "$repo/ai-brain/connect/claude-code/vault-write-gate.sh"
+  echo '#!/bin/bash' > "$repo/usage/executor/usage-inject.sh"
+  chmod +x "$repo"/*/executor/*.sh "$repo"/*/connect/*/*.sh "$repo"/core/assembly/check-sub-update.sh
+  echo '# agent' > "$repo/team/rules/agents/sample-agent.md"
+  echo '# AGENTS' > "$repo/team/connect/codex/AGENTS.md"
+  echo '{}' > "$repo/team/connect/codex/hooks.json"
+  cat > "$repo/team/connect/codex/config.toml" <<'EOF'
 service_tier = "default"
 [mcp_servers.obsidian]
 args = ["__AIENV_HOME__/Data/obsidian"]
 EOF
-  echo "# サンプル方針" > "$repo/vault-public/Preferences/sample.md"
+  echo "# サンプル方針" > "$repo/ai-brain/data/vault-public/Preferences/sample.md"
 }
 
 # claude/・codex/ の symlink化（install-main.sh相当を簡易に再現）＋config.toml
 # 生成を行う。settings.json は本物の生成関数（fixtureへコピーした
-# scripts/install-main.sh --render-settings-json）で作る＝check-drift ①-2 が
+# core/assembly/install-main.sh --render-settings-json）で作る＝check-drift ①-2 が
 # 同じ入力口で再生成した生成物と一致する陰性コントロールになる（2026-09-19
 # 着手順3・設計 §4.2）。プロファイル（role.leader=fable-1m-high・
 # machine_role=main）とモデル定義は $home/.config/takumi009-ai-env/ に置く
@@ -142,28 +142,28 @@ install_fake_home() {
     write_clean_profile "$home/.config/takumi009-ai-env/profile.md"
   fi
   render_settings_json "$repo" "$home" "$home/.claude/settings.json"
-  ln -s "$repo/claude/hooks/bootstrap-vault.sh" "$home/.claude/hooks/bootstrap-vault.sh"
-  ln -s "$repo/claude/hooks/delegation-gate-v2.sh" "$home/.claude/hooks/delegation-gate-v2.sh"
-  ln -s "$repo/claude/hooks/bash-danger-gate.sh" "$home/.claude/hooks/bash-danger-gate.sh"
-  ln -s "$repo/claude/hooks/bash-policy-gate.sh" "$home/.claude/hooks/bash-policy-gate.sh"
-  ln -s "$repo/claude/hooks/vault-recall.sh" "$home/.claude/hooks/vault-recall.sh"
-  ln -s "$repo/claude/hooks/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
-  ln -s "$repo/claude/hooks/dock-pane-resolve.sh" "$home/.claude/hooks/dock-pane-resolve.sh"
-  ln -s "$repo/claude/hooks/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
-  ln -s "$repo/claude/hooks/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"
-  ln -s "$repo/claude/hooks/agent-model-guard.sh" "$home/.claude/hooks/agent-model-guard.sh"
-  ln -s "$repo/claude/hooks/inprocess-gate.sh" "$home/.claude/hooks/inprocess-gate.sh"
-  ln -s "$repo/claude/hooks/vault-write-gate.sh" "$home/.claude/hooks/vault-write-gate.sh"
-  ln -s "$repo/claude/hooks/usage-inject.sh" "$home/.claude/hooks/usage-inject.sh"
-  ln -s "$repo/claude/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
-  ln -s "$repo/codex/AGENTS.md" "$home/.codex/AGENTS.md"
-  ln -s "$repo/codex/hooks.json" "$home/.codex/hooks.json"
+  ln -s "$repo/core/connect/claude-code/session-start-compose.sh" "$home/.claude/hooks/bootstrap-vault.sh"
+  ln -s "$repo/team/connect/claude-code/delegation-gate-v2.sh" "$home/.claude/hooks/delegation-gate-v2.sh"
+  ln -s "$repo/core/connect/claude-code/bash-danger-gate.sh" "$home/.claude/hooks/bash-danger-gate.sh"
+  ln -s "$repo/core/connect/claude-code/bash-policy-gate.sh" "$home/.claude/hooks/bash-policy-gate.sh"
+  ln -s "$repo/ai-brain/executor/vault-recall.sh" "$home/.claude/hooks/vault-recall.sh"
+  ln -s "$repo/ai-brain/executor/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
+  ln -s "$repo/dock/executor/dock-pane-resolve.sh" "$home/.claude/hooks/dock-pane-resolve.sh"
+  ln -s "$repo/core/assembly/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
+  ln -s "$repo/core/connect/claude-code/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"
+  ln -s "$repo/team/connect/claude-code/agent-model-guard.sh" "$home/.claude/hooks/agent-model-guard.sh"
+  ln -s "$repo/team/connect/claude-code/inprocess-gate.sh" "$home/.claude/hooks/inprocess-gate.sh"
+  ln -s "$repo/ai-brain/connect/claude-code/vault-write-gate.sh" "$home/.claude/hooks/vault-write-gate.sh"
+  ln -s "$repo/usage/executor/usage-inject.sh" "$home/.claude/hooks/usage-inject.sh"
+  ln -s "$repo/team/rules/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
+  ln -s "$repo/team/connect/codex/AGENTS.md" "$home/.codex/AGENTS.md"
+  ln -s "$repo/team/connect/codex/hooks.json" "$home/.codex/hooks.json"
   # install-main.sh の generate_config_toml() と同じくエスケープしてから置換する
   # （$home に # を含むテスト（1b）で、エスケープ無しだと置換自体が壊れて
   # 「正しく生成されたはずのconfig.tomlがテンプレと不一致」という偽陽性になるため）。
   local escaped_home
   escaped_home=$(printf '%s' "$home" | sed -e 's/[&\]/\\&/g' -e 's/#/\\#/g')
-  sed "s#__AIENV_HOME__#${escaped_home}#g" "$repo/codex/config.toml" > "$home/.codex/config.toml"
+  sed "s#__AIENV_HOME__#${escaped_home}#g" "$repo/team/connect/codex/config.toml" > "$home/.codex/config.toml"
 }
 
 # write_clean_profile <dest> — ⑧（--check-profile）でadvisory・未知キーが出ない
@@ -194,7 +194,7 @@ write_clean_profile() {
 # プロファイル・モデル定義は $home/.config/takumi009-ai-env/ から読まれる）。
 render_settings_json() {
   local repo="$1" home="$2" dest="$3"
-  HOME="$home" bash "$repo/scripts/install-main.sh" --render-settings-json "$dest" >/dev/null 2>&1
+  HOME="$home" bash "$repo/core/assembly/install-main.sh" --render-settings-json "$dest" >/dev/null 2>&1
 }
 
 run_check() {
@@ -205,7 +205,7 @@ run_check() {
   local repo="$1"
   local home="$2"
   local vault="${3:-$home/Data/obsidian}"
-  DIR="$repo" HOME="$home" VAULT="$vault" bash "$repo/scripts/check-drift.sh"
+  DIR="$repo" HOME="$home" VAULT="$vault" bash "$repo/core/assembly/check-drift.sh"
 }
 
 # --jsonモード版run_check（2026-07-16簡素化・設計書§1.2 maintenance.sh Phase1①向け）。
@@ -213,7 +213,7 @@ run_check_json() {
   local repo="$1"
   local home="$2"
   local vault="${3:-$home/Data/obsidian}"
-  DIR="$repo" HOME="$home" VAULT="$vault" bash "$repo/scripts/check-drift.sh" --json
+  DIR="$repo" HOME="$home" VAULT="$vault" bash "$repo/core/assembly/check-drift.sh" --json
 }
 
 # --jsonモード出力の最終行（JSON本体）だけを取り出す。
@@ -376,13 +376,13 @@ echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_matches "symlink drift 0件" "$out" 'symlink総数: [0-9]+件 / drift: 0件'
   assert_contains "settings.json一致（①-2）" "$out" "settings.jsonはテンプレと一致しています"
   assert_contains "config.toml一致" "$out" "TOML三分類で一致しています"
-  assert_contains "Preferences差分なし" "$out" "差分なし（vault-public/Preferences は実Vaultの最新を反映しています）"
+  assert_contains "Preferences差分なし" "$out" "差分なし（ai-brain/data/vault-public/Preferences は実Vaultの最新を反映しています）"
   assert_contains "総drift件数0" "$out" "総drift件数: 0"
 
   rm -rf "$REPO" "$HOME_DIR"
@@ -397,7 +397,7 @@ echo "=== 1b. HOMEに # が含まれる環境でも②config.tomlチェックが
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "HOMEに#が含まれてもconfig.toml一致と判定される" "$out" "TOML三分類で一致しています"
@@ -460,13 +460,13 @@ echo "=== DR-01. Agent model guardのリンク先一致を保ったまま実行b
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  chmod a-x "$REPO/claude/hooks/agent-model-guard.sh"
+  chmod a-x "$REPO/team/connect/claude-code/agent-model-guard.sh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "非実行を汎用コードで検知" "$out" "[NOT-EXECUTABLE]"
   assert_matches "非実行だけdrift増分1" "$out" 'symlink総数: [0-9]+件 / drift: 1件'
 
-  chmod +x "$REPO/claude/hooks/agent-model-guard.sh"
+  chmod +x "$REPO/team/connect/claude-code/agent-model-guard.sh"
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_not_contains "実行bit復旧後はdrift 0" "$out" "[NOT-EXECUTABLE]"
 
@@ -481,15 +481,15 @@ echo "=== 4a. --managed-symlinks-onlyは同じ管理一覧だけを検査し、h
   install_fake_home "$REPO" "$HOME_DIR"
 
   rc=0
-  DIR="$REPO" HOME="$HOME_DIR" bash "$REPO/scripts/check-drift.sh" \
+  DIR="$REPO" HOME="$HOME_DIR" bash "$REPO/core/assembly/check-drift.sh" \
     --managed-symlinks-only >"$REPO/managed-ok.out" 2>&1 || rc=$?
   assert_eq_num "管理symlinkが健全なら内部検査はexit 0" "$rc" "0"
   assert_not_contains "内部検査は①-2以降を実行しない" \
     "$(<"$REPO/managed-ok.out")" "①-2 ~/.claude/settings.json"
 
-  chmod -x "$REPO/claude/hooks/usage-inject.sh"
+  chmod -x "$REPO/usage/executor/usage-inject.sh"
   rc=0
-  DIR="$REPO" HOME="$HOME_DIR" bash "$REPO/scripts/check-drift.sh" \
+  DIR="$REPO" HOME="$HOME_DIR" bash "$REPO/core/assembly/check-drift.sh" \
     --managed-symlinks-only >"$REPO/managed-ng.out" 2>&1 || rc=$?
   assert_eq_num "hook実体が非実行なら内部検査はexit 1" "$rc" "1"
   assert_contains "非実行の分類を出す" "$(<"$REPO/managed-ng.out")" "[NOT-EXECUTABLE]"
@@ -519,7 +519,7 @@ echo "=== SD-1. ①-2 実settings.jsonがrender生成物のコピーなら差分
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "SD-1: 生成物と一致（settings.jsonはテンプレと一致）" "$out" "settings.jsonはテンプレと一致しています"
@@ -576,7 +576,7 @@ echo "=== 4k. ①-2 settings.jsonが旧versionのまま(symlink)残っている�
   # 旧方式（2026-08-21より前）を再現: settings.jsonを削除し、repoテンプレへの
   # symlinkに置き換える（テンプレ側は__AIENV_MODEL__が未置換のまま）。
   rm "$HOME_DIR/.claude/settings.json"
-  ln -s "$REPO/claude/settings.json" "$HOME_DIR/.claude/settings.json"
+  ln -s "$REPO/core/assembly/settings.json" "$HOME_DIR/.claude/settings.json"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "UNEXPECTED-SYMLINK検知" "$out" "[UNEXPECTED-SYMLINK]"
@@ -618,7 +618,7 @@ echo "=== 5. ②テンプレ記載キーの値がテンプレと異なる場合�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # service_tier はテンプレでキュレートされているキー（denylist/既知アプリ管理
   # キー一覧のどちらにも属さない）で、手動編集がここに入れば必ずdrift計上
   # されなければならない。
@@ -640,7 +640,7 @@ echo "=== 5b. ②既知アプリ管理キーのみ差分の場合はdriftにな�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # Codexアプリが実運用で自動追加/書き換えする類のキー・セクションを模擬して
   # live側だけに付加する（テンプレには意図的に存在しない）。
   # 実ホームパスを含む行（args・source等）は $HOME_DIR で埋める（クォート無し
@@ -687,12 +687,12 @@ echo "=== 5b2. ②テンプレ記載キーでもis_app_managedに該当すれば
   # テンプレにも既知アプリ管理キー一覧該当のキーを記載する（実際の
   # NODE_REPL_TRUSTED_CODE_PATHSと同じ状況を再現＝テンプレにも記載があり
   # installの基底値提供に使われるが、監視からは除外したいキー）。
-  cat >> "$REPO/codex/config.toml" <<'EOF'
+  cat >> "$REPO/team/connect/codex/config.toml" <<'EOF'
 NODE_REPL_TRUSTED_CODE_PATHS = "__AIENV_HOME__/.codex"
 EOF
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # アプリが自パスを追記した状態を模擬する（テンプレ値との差分）。
   sed "s#NODE_REPL_TRUSTED_CODE_PATHS = \"${HOME_DIR}/.codex\"#NODE_REPL_TRUSTED_CODE_PATHS = \"${HOME_DIR}/.codex:/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules\"#" "$HOME_DIR/.codex/config.toml" > "$HOME_DIR/.codex/config.toml.tmp"
   mv "$HOME_DIR/.codex/config.toml.tmp" "$HOME_DIR/.codex/config.toml"
@@ -717,12 +717,12 @@ echo "=== 5b3. ②テンプレ記載+アプリ管理キーがlive側から完全
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
-  cat >> "$REPO/codex/config.toml" <<'EOF'
+  cat >> "$REPO/team/connect/codex/config.toml" <<'EOF'
 NODE_REPL_TRUSTED_CODE_PATHS = "__AIENV_HOME__/.codex"
 EOF
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # live側からキーの行ごと削除する（テンプレには記載があるが実ファイルには
   # 無い状態＝通常のテンプレ記載キーならMISSING-KEY相当になるケース）。
   grep -v '^NODE_REPL_TRUSTED_CODE_PATHS' "$HOME_DIR/.codex/config.toml" > "$HOME_DIR/.codex/config.toml.tmp"
@@ -743,7 +743,7 @@ echo "=== 5c. ②テンプレ記載キーがlive側から欠落していると[M
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # テンプレには service_tier があるが、live側からその行ごと削除する
   # （手動での誤削除を想定）。
   grep -v '^service_tier' "$HOME_DIR/.codex/config.toml" > "$HOME_DIR/.codex/config.toml.tmp"
@@ -763,7 +763,7 @@ echo "=== 5d. ②テンプレにも既知アプリ管理キー一覧にも無い
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # "[projects_backup]" は既知アプリ管理キー一覧の "projects" と前方一致する
   # 文字列だが、TOML解析後のキーパス比較では別のトップレベルキーとして扱われ、
   # 「除外」ではなく「未知キー」に分類される（旧denylistの前方一致誤爆問題は
@@ -809,7 +809,7 @@ echo "=== TC-1. ②Codex Desktopが書き直す3テーブル（plugins・mcp_ser
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   # テンプレ＝本人が決めた7キー＋同梱MCP・バンドルプラグイン（08-10版の形）。
-  cat > "$REPO/codex/config.toml" <<'EOF'
+  cat > "$REPO/team/connect/codex/config.toml" <<'EOF'
 service_tier = "default"
 approval_policy = "never"
 model = "gpt-5"
@@ -839,7 +839,7 @@ enabled = false
 EOF
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # live＝アプリが起動時に書き直した後の形（computer-use MCP欠落・plugins差・
   # node_repl.env差・desktopテーブル追加）。7キーは不変。
   cat > "$HOME_DIR/.codex/config.toml" <<EOF
@@ -885,7 +885,7 @@ echo "=== TC-2. ②3テーブルを除外しても監視7キー（model等）は
   REPO="$(mktemp -d)"
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
-  cat > "$REPO/codex/config.toml" <<'EOF'
+  cat > "$REPO/team/connect/codex/config.toml" <<'EOF'
 service_tier = "default"
 model = "gpt-5"
 
@@ -915,7 +915,7 @@ echo "=== 5e. ②config.tomlがTOMLとして解析できない場合は監視不
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # 壊れたTOML（閉じていない文字列リテラル）を live 側に置く。
   cat > "$HOME_DIR/.codex/config.toml" <<'EOF'
 service_tier = "default
@@ -937,16 +937,16 @@ echo "=== 5f. ②repoテンプレ側のconfig.tomlがTOMLとして解析でき�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # live側は正常なまま、repo側のテンプレだけを壊れたTOMLへ差し替える。
-  cat > "$REPO/codex/config.toml" <<'EOF'
+  cat > "$REPO/team/connect/codex/config.toml" <<'EOF'
 service_tier = "default
 this is not valid toml [[[
 EOF
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "テンプレ側のTOMLパース失敗を検知する" "$out" "[TOML-PARSE-FAILED]"
-  assert_contains "テンプレ側であることが分かるメッセージが出る" "$out" "$REPO/codex/config.toml"
+  assert_contains "テンプレ側であることが分かるメッセージが出る" "$out" "$REPO/team/connect/codex/config.toml"
   assert_contains "監視不能である旨を明示する" "$out" "監視不能"
   assert_contains "総drift件数1" "$out" "総drift件数: 1"
 
@@ -960,13 +960,13 @@ echo "=== 6. ③repoに未commitの変更があるとUNCOMMITTEDを検知する 
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$REPO" init -q
   git -C "$REPO" config user.name test
   git -C "$REPO" config user.email test@example.invalid
   git -C "$REPO" add -A
   git -C "$REPO" commit -q -m "initial"
-  echo "dirty change" >> "$REPO/vault-public/Preferences/sample.md"
+  echo "dirty change" >> "$REPO/ai-brain/data/vault-public/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "UNCOMMITTED検知" "$out" "[UNCOMMITTED]"
@@ -981,7 +981,7 @@ echo "=== 7. ③repoがcommit済みでクリーンならUNCOMMITTEDは出ない 
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$REPO" init -q
   git -C "$REPO" config user.name test
   git -C "$REPO" config user.email test@example.invalid
@@ -1005,7 +1005,7 @@ echo "=== 7b. ③git status --porcelain の実行自体が失敗した場合は�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$REPO" init -q
   git -C "$REPO" config user.name test
   git -C "$REPO" config user.email test@example.invalid
@@ -1034,7 +1034,7 @@ echo "=== 8. ④実Vaultとvault-publicのPreferencesに差分があるとINFO�
   echo "# 実Vault側だけの更新（未エクスポート）" > "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
-  assert_contains "Preferences差分はℹ️ INFO表示（driftにしない・2026-09-19 設計 §4.3）" "$out" "ℹ️ INFO: 実Vault と vault-public/Preferences に差分が"
+  assert_contains "Preferences差分はℹ️ INFO表示（driftにしない・2026-09-19 設計 §4.3）" "$out" "ℹ️ INFO: 実Vault と ai-brain/data/vault-public/Preferences に差分が"
   assert_contains "エクスポート漏れの可能性メッセージ" "$out" "export-public-vault.sh の再実行が必要な可能性"
   assert_contains "総drift件数0（④はinformational）" "$out" "総drift件数: 0"
 
@@ -1051,17 +1051,17 @@ echo "=== 8b. ④diff -rq の実行自体が失敗した場合は『差分なし
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # vault-public側のファイルを読み取り不能にして diff -rq をエラー終了させる
   # （ディレクトリ自体の権限は残す＝一覧はできるが個別ファイルが読めない状態）。
-  chmod 000 "$REPO/vault-public/Preferences/sample.md"
+  chmod 000 "$REPO/ai-brain/data/vault-public/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "DIFF-CHECK-FAILEDが検知される" "$out" "[DIFF-CHECK-FAILED]"
   assert_not_contains "偽の健全表示にはならない" "$out" "✅ 差分なし"
   assert_not_contains "DIFFと誤分類はしない（別種別）" "$out" "[DIFF]"
 
-  chmod 644 "$REPO/vault-public/Preferences/sample.md"
+  chmod 644 "$REPO/ai-brain/data/vault-public/Preferences/sample.md"
   rm -rf "$REPO" "$HOME_DIR"
 }
 
@@ -1076,8 +1076,8 @@ echo "=== I4-2. --json: ④のdiff -rq自体の失敗(DIFF-CHECK-FAILED)はinfor
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
-  chmod 000 "$REPO/vault-public/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  chmod 000 "$REPO/ai-brain/data/vault-public/Preferences/sample.md"
 
   rc=0
   out="$(run_check_json "$REPO" "$HOME_DIR")" || rc=$?
@@ -1087,7 +1087,7 @@ echo "=== I4-2. --json: ④のdiff -rq自体の失敗(DIFF-CHECK-FAILED)はinfor
   assert_eq_num "drift_excluding_item4=1(実行異常は通常drift)" "$(json_field "$json" drift_excluding_item4)" "1"
   assert_contains "実際に[DIFF-CHECK-FAILED]は検知されている" "$out" "[DIFF-CHECK-FAILED]"
 
-  chmod 644 "$REPO/vault-public/Preferences/sample.md"
+  chmod 644 "$REPO/ai-brain/data/vault-public/Preferences/sample.md"
   rm -rf "$REPO" "$HOME_DIR"
 }
 
@@ -1131,7 +1131,7 @@ echo "=== 11. --json: ズレ無しなら total_drift/item4_drift/drift_excluding
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   rc=0
   out="$(run_check_json "$REPO" "$HOME_DIR")" || rc=$?
@@ -1173,7 +1173,7 @@ echo "=== I4-1. --json: ④の差分2件はinformational＝総drift件数0・ite
   assert_eq_num "total_drift=0" "$(json_field "$json" total_drift)" "0"
   assert_eq_num "item4_drift=2（件数はJSONに残す）" "$(json_field "$json" item4_drift)" "2"
   assert_eq_num "drift_excluding_item4=0" "$(json_field "$json" drift_excluding_item4)" "0"
-  assert_contains "ℹ️ INFOとして表示されている" "$out" "ℹ️ INFO: 実Vault と vault-public/Preferences に差分が 2 件"
+  assert_contains "ℹ️ INFOとして表示されている" "$out" "ℹ️ INFO: 実Vault と ai-brain/data/vault-public/Preferences に差分が 2 件"
 
   rm -rf "$REPO" "$HOME_DIR"
 }
@@ -1185,14 +1185,14 @@ echo "=== 13. --json: ④以外(例: ③UNCOMMITTED)のdriftはdrift_excluding_i
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$REPO" init -q
   git -C "$REPO" config user.name test
   git -C "$REPO" config user.email test@example.invalid
   git -C "$REPO" add -A
   git -C "$REPO" commit -q -m "initial"
-  # vault-public/Preferences以外の(④に影響しない)ファイルを変更してUNCOMMITTEDを
-  # 起こす（vault-public/Preferences自体を変更すると④も同時にdriftしてしまい、
+  # ai-brain/data/vault-public/Preferences以外の(④に影響しない)ファイルを変更してUNCOMMITTEDを
+  # 起こす（ai-brain/data/vault-public/Preferences自体を変更すると④も同時にdriftしてしまい、
   # このテストの主眼〈④以外のみのdrift〉を検証できなくなるため・実装中に自分で
   # 気付いて修正）。
   echo "dirty change" >> "$REPO/scripts/check-drift.sh.orig-marker"
@@ -1221,7 +1221,7 @@ echo "=== 14. --json: ③drift＋④差分なら total_drift=drift_excluding_ite
   git -C "$REPO" config user.email test@example.invalid
   git -C "$REPO" add -A
   git -C "$REPO" commit -q -m "initial"
-  echo "dirty change" >> "$REPO/vault-public/Preferences/sample.md"  # ③drift
+  echo "dirty change" >> "$REPO/ai-brain/data/vault-public/Preferences/sample.md"  # ③drift
 
   rc=0
   out="$(run_check_json "$REPO" "$HOME_DIR")" || rc=$?
@@ -1242,7 +1242,7 @@ echo "=== 15. --json以外の不明な引数はexit 2でFAILメッセージが�
   install_fake_home "$REPO" "$HOME_DIR"
 
   rc=0
-  err="$(DIR="$REPO" HOME="$HOME_DIR" bash "$REPO/scripts/check-drift.sh" --bogus-flag 2>&1 1>/dev/null)" || rc=$?
+  err="$(DIR="$REPO" HOME="$HOME_DIR" bash "$REPO/core/assembly/check-drift.sh" --bogus-flag 2>&1 1>/dev/null)" || rc=$?
   assert_eq_num "不明な引数はexit 2" "$rc" "2"
   assert_contains "FAILメッセージが出る" "$err" "不明な引数です"
 
@@ -1256,7 +1256,7 @@ echo "=== 16. --json未指定時は従来どおりJSON行を一切出さない(�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_not_contains "total_driftというJSON風の文字列は出ない" "$out" "total_drift"
@@ -1333,7 +1333,7 @@ echo "=== 11. ⑤Vault・私的パッチrepoとも PRIVATE ならdriftになら�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$HOME_DIR/Data/obsidian" init -q
   git -C "$HOME_DIR/Data/obsidian" remote add origin git@github.com:someone/myvault.git
   make_git_repo_with_remote "$PRIVATE_REPO" "https://github.com/someone/aienv-private.git"
@@ -1357,7 +1357,7 @@ echo "=== 12. ⑤GitHub上でPUBLICになっているとdriftとして検知す�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$HOME_DIR/Data/obsidian" init -q
   git -C "$HOME_DIR/Data/obsidian" remote add origin git@github.com:someone/myvault.git
   make_git_repo_with_remote "$PRIVATE_REPO" "https://github.com/someone/aienv-private.git"
@@ -1379,7 +1379,7 @@ echo "=== 13. ⑤gh コマンドが無い場合はWARN表示のみでdriftにし
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$HOME_DIR/Data/obsidian" init -q
   git -C "$HOME_DIR/Data/obsidian" remote add origin git@github.com:someone/myvault.git
   make_git_repo_with_remote "$PRIVATE_REPO" "https://github.com/someone/aienv-private.git"
@@ -1404,7 +1404,7 @@ echo "=== 14. ⑤gh はあるが repo view が失敗（未認証等）ならGH-C
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$HOME_DIR/Data/obsidian" init -q
   git -C "$HOME_DIR/Data/obsidian" remote add origin git@github.com:someone/myvault.git
   make_mock_gh "$BINDIR" "fail"
@@ -1425,7 +1425,7 @@ echo "=== 15. ⑤remote未設定・GitHub以外のremoteは対象外メッセー
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # Vault: git init はするがremoteは追加しない（未設定を模擬）
   git -C "$HOME_DIR/Data/obsidian" init -q
   # 私的パッチrepo: GitHub以外のremote（gitlab）を設定
@@ -1462,7 +1462,7 @@ echo "=== 16. ⑤GitHub remote URLの表記ゆれ（認証情報付きHTTPS・ss
     make_fake_repo "$REPO"
     install_fake_home "$REPO" "$HOME_DIR"
     mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-    cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+    cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
     git -C "$HOME_DIR/Data/obsidian" init -q
     git -C "$HOME_DIR/Data/obsidian" remote add origin "$url"
 
@@ -1484,7 +1484,7 @@ echo "=== 17. ⑤解析できないGitHubらしきURLは対象外ではなく[GH
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$HOME_DIR/Data/obsidian" init -q
   # ownerもrepoも取れない異常系URL（github.comは含むがパス部が無い）
   git -C "$HOME_DIR/Data/obsidian" remote add origin "https://github.com"
@@ -1505,7 +1505,7 @@ echo "=== 18. ⑤解析できない/GitHub以外のURLに認証情報が含ま�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # Vault: github.comらしきURLだがパス部が無く解析不能（[GH-URL-UNPARSEABLE]経路）
   git -C "$HOME_DIR/Data/obsidian" init -q
   git -C "$HOME_DIR/Data/obsidian" remote add origin "https://user:sup3rSecretToken@github.com"
@@ -1527,7 +1527,7 @@ echo "=== 19. ⑥vault-agentsが健全（maintenance週次ランナー・ログ�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   setup_maintenance_fixture "$HOME_DIR" 0
   printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
   printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
@@ -1548,7 +1548,7 @@ echo "=== 20. ⑥maintenance週次ランナーの最終開始(started_at)が期�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # 目安8日を超える10日前が最終started_at
   setup_maintenance_fixture "$HOME_DIR" -10
   printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
@@ -1569,7 +1569,7 @@ echo "=== 21. ⑥plistは導入済みだがlast-run.jsonが一度も生成され
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs" "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # plistは導入済み・launchd上ロード済みだが、last-run.json（started_at記録先）
   # 自体が一度も生成されていない（maintenance.shが一度も実行されていない）状態。
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.maintenance.plist"
@@ -1594,7 +1594,7 @@ echo "=== 21b. ⑥last-run.jsonは存在するがstarted_atが壊れている/�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs/maintenance" "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.maintenance.plist"
   FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.maintenance"
   refresh_fake_launchctl
@@ -1621,7 +1621,7 @@ echo "=== 21c. ⑥MAINTENANCE_LAST_RUN_FILEのパスにシングルクォート�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/Library/LaunchAgents" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.maintenance.plist"
   FAKE_LAUNCHCTL_LOADED_LABELS="com.takumi009.maintenance"
   refresh_fake_launchctl
@@ -1649,7 +1649,7 @@ echo "=== 23. ⑥reads/recallログの死活は個別に検知される（片方
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   setup_maintenance_fixture "$HOME_DIR" 0
   # reads: 目安7日を超える10日前が最終記録（STALE）／recall: 一度も記録が無い（DEAD）
   printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts -10)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
@@ -1670,7 +1670,7 @@ echo "=== 25. ⑥ログがERROR行だけ積み上がっている（鮮度は健�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   setup_maintenance_fixture "$HOME_DIR" 0
   # 直近のログ行は全てERROR行（3列目=空）。最終行の鮮度だけ見ると健全に見える。
   {
@@ -1698,7 +1698,7 @@ echo "=== 26. ⑥未来日時のmaintenance開始/ログは「健全」に誤判
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # 10年後の日付（システム時計のズレ・ファイル破損を模擬）
   setup_maintenance_fixture "$HOME_DIR" 3650
   printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 3650)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
@@ -1719,7 +1719,7 @@ echo "=== 27. ⑥有効行だけが未来日時で最終行(ERROR)は現在時�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   setup_maintenance_fixture "$HOME_DIR" 0
   # 1行目=未来日時の有効行／2行目(最終行)=現在時刻のERROR行。最終行だけを見る
   # チェックだと"新しすぎるので健全"に誤判定しうる境界ケース。
@@ -1744,7 +1744,7 @@ echo "=== 28. ⑥ログ時刻はUTCとして解析される（N-5・ローカル
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   setup_maintenance_fixture "$HOME_DIR" 0
   # 目安7日(VAULT_AGENT_LOG_STALE_DAYS既定値)ぎりぎり内側＝UTCで7日15時間前。
   # 正しくUTCとして解析すれば経過日数は7日(floor)＝閾値超過ではなく健全。
@@ -1774,7 +1774,7 @@ echo "=== 24. ⑥vault-agentsの出力(maintenance/reads/recallログ)が1件も
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # $HOME_DIR/.claude/logs/{maintenance/last-run.json,vault-reads.tsv,vault-recall.tsv}・
   # com.takumi009.maintenance.plist は一切作らない（vault-agents未導入 or
   # 純粋なサブ機想定）
@@ -1793,10 +1793,10 @@ echo "=== 29. ⑥標準フック(reads/recall)は動いているがmaintenance�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # vault-recall.sh/vault-read-log.sh は install-main.sh で標準導入されるため、
   # このfixtureのようにreads/recallログだけが存在するのはごく普通のmain機構成
-  # （maintenance.shはメイン専用機能＝scripts/install-maintenance.sh を
+  # （maintenance.shはメイン専用機能＝ai-brain/assembly/install-maintenance.sh を
   # 実行していなければ$HOME/Library/LaunchAgents/com.takumi009.maintenance.plist
   # は存在しない）。
   printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
@@ -1820,7 +1820,7 @@ echo "=== 30. ⑥plistは導入済みだがlaunchd上にロードされていな
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # last-run.json自体は健全（started_at新しい）が、launchd上にはロードされて
   # いない（bootstrap未実行 or 手動bootout後）状態を模擬。plist存在だけでは
   # わからない「稼働しているか」を検知できることを確認する。
@@ -1847,7 +1847,7 @@ echo "=== 40. ⑦Vaultがgit管理下に無ければ対象外（サブ機・私�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # $HOME_DIR/Data/obsidian は git init しない（サブ機想定）。
 
   out="$(run_check "$REPO" "$HOME_DIR")"
@@ -1865,7 +1865,7 @@ echo "=== 41. ⑦Vaultにremote originが未設定なら対象外 ==="
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   git -C "$HOME_DIR/Data/obsidian" init -q -b main
   git -C "$HOME_DIR/Data/obsidian" config user.name test
   git -C "$HOME_DIR/Data/obsidian" config user.email test@example.invalid
@@ -1887,7 +1887,7 @@ echo "=== 42. ⑦mainとorigin/mainが同一コミット（push済み・健全�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -240)" "old commit (10日前)"
   git -C "$HOME_DIR/Data/obsidian" push -q origin main
@@ -1908,7 +1908,7 @@ echo "=== 42b. ⑦ローカルmainがorigin/mainより単に古い（reset等で
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "first"
   first_sha="$(git -C "$HOME_DIR/Data/obsidian" rev-parse HEAD)"
@@ -1935,7 +1935,7 @@ echo "=== 43. ⑦分岐しているが24時間以内なら様子見でdriftに�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -2)" "pushed 2時間前"
   git -C "$HOME_DIR/Data/obsidian" push -q origin main
@@ -1957,7 +1957,7 @@ echo "=== 44. ⑦未反映commit自体が24時間超過して待たされてい�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   # origin側のtipは100時間前（十分に古いが、それ自体はもうpush済みなので無関係）。
   # 「未反映のまま30時間待たされているcommit」がある、という状態を再現する
@@ -1983,7 +1983,7 @@ echo "=== 44b. ⑦origin tipは古いが未反映commit自体は新しい場合�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   # origin tipは100時間前（旧実装ならこれだけでSTALE誤検知した）だが、
   # 未反映commit自体は1時間前にできたばかり＝pushはまだ「詰まっている」とは言えない。
@@ -2006,7 +2006,7 @@ echo "=== 45. ⑦一度もpushしていない（origin/main参照が無い）が
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -1)" "never pushed yet, but recent"
   # push しない（origin/main 参照がローカルに無い状態を模擬）
@@ -2027,7 +2027,7 @@ echo "=== 45b. ⑦一度もpushしていない状態が24時間超続くとVAULT
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -30)" "never pushed, 30時間前のまま"
   # push しない（初回pushが認証不良等で30時間ずっと失敗し続けている状態を模擬）
@@ -2048,7 +2048,7 @@ echo "=== 45c. ⑦ローカルブランチ自体が無い（commitが1つも無�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   # commitを1つも作らない（unborn main。install-backup.sh導入直後・初回backup-vault.sh
   # 実行前を模擬）。
@@ -2069,7 +2069,7 @@ echo "=== 46. ⑦未反映commit自体の時刻が未来日時ならVAULT-PUSH-F
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "pushed 50時間前（正常な日時）"
   git -C "$HOME_DIR/Data/obsidian" push -q origin main
@@ -2091,14 +2091,14 @@ echo "=== 47. ⑦VAULT_BACKUP_PUSH_STALE_HOURSで閾値を上書きできる ===
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -20)" "pushed 20時間前"
   git -C "$HOME_DIR/Data/obsidian" push -q origin main
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -4)" "unpushed 4時間前"
 
   out="$(VAULT_BACKUP_PUSH_STALE_HOURS=3 DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
-    bash "$REPO/scripts/check-drift.sh")"
+    bash "$REPO/core/assembly/check-drift.sh")"
   assert_contains "しきい値3時間に短縮すると4時間前の未反映commitでVAULT-PUSH-STALEが検知される" "$out" "[VAULT-PUSH-STALE]"
   assert_contains "総drift件数1" "$out" "総drift件数: 1"
 
@@ -2113,7 +2113,7 @@ echo "=== 48. ⑦未反映commitの並び(git rev-listの出力順)とコミッ�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -200)" "pushed 200時間前"
   git -C "$HOME_DIR/Data/obsidian" push -q origin main
@@ -2140,7 +2140,7 @@ echo "=== 49. ⑦git rev-list自体の実行失敗（gitオブジェクト破損
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "pushed 50時間前"
   git -C "$HOME_DIR/Data/obsidian" push -q origin main
@@ -2167,7 +2167,7 @@ echo "=== 50. ⑦未反映commitが複数あり、そのうち最古(=STALE基�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   make_vault_with_bare_origin "$HOME_DIR/Data/obsidian" "$BARE"
   vault_commit_at "$HOME_DIR/Data/obsidian" "$(d_epoch_hours -50)" "pushed 50時間前"
   git -C "$HOME_DIR/Data/obsidian" push -q origin main
@@ -2194,7 +2194,7 @@ echo "=== 51. ⑥weekly-reviewが健全（最新canvasのmtimeが新しい）な
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
            "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # weekly-reviewは takumi009-ai-env-private 側の任意機能。LaunchAgent plistの
   # 実在で導入判定する（他のvault-agentsと同じゲート方式）。
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
@@ -2221,7 +2221,7 @@ echo "=== 52. ⑥weekly-reviewが一度も生成されていない(DEAD)と検�
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
            "$HOME_DIR/Data/obsidian/Fragments" \
            "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
   # ディレクトリはあるが中身が空（一度も生成されていない）。Fragments記録は存在する。
   echo "# fragment" > "$HOME_DIR/Data/obsidian/Fragments/$(d_date -3).md"
@@ -2242,7 +2242,7 @@ echo "=== 52b. ⑥weekly-review未生成でもFragments記録が一度も無け�
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
            "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
   # canvasもFragmentsも一度も無い（$HOME_DIR/Data/obsidian/Fragments 自体を作らない）。
 
@@ -2263,7 +2263,7 @@ echo "=== 53. ⑥weekly-reviewが期限超過(STALE)だと検知する（ファ�
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
            "$HOME_DIR/Data/obsidian/Fragments" \
            "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
   CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
   echo '{}' > "$CANVAS"
@@ -2288,7 +2288,7 @@ echo "=== 53b. ⑥weekly-reviewが古くても、生成以降Fragments記録が�
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
            "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
   CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
   echo '{}' > "$CANVAS"
@@ -2316,7 +2316,7 @@ echo "=== 53c. ⑥weekly-review: canvas生成と同じ暦日に書かれたFragm
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
            "$HOME_DIR/Data/obsidian/Fragments" \
            "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
   CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
   echo '{}' > "$CANVAS"
@@ -2346,7 +2346,7 @@ echo "=== 53d. ⑥weekly-review: Fragments探索自体が失敗した場合は�
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
            "$HOME_DIR/Data/obsidian/Fragments/sub" \
            "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
   CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
   echo '{}' > "$CANVAS"
@@ -2370,7 +2370,7 @@ echo "=== 54. ⑥weekly-review未導入（LaunchAgent plist無し）ならチェ
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" "$HOME_DIR/Library/LaunchAgents" "$HOME_DIR/.claude/logs"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # plistもExplorations/weekly-reviewディレクトリも置かない＝未導入を模擬。
   printf '%s\tsess1\tKnowledge/x.md\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-reads.tsv"
   printf '%s\tsess1\tKnowledge/x.md\tk\n' "$(d_ts 0)" > "$HOME_DIR/.claude/logs/vault-recall.tsv"
@@ -2396,7 +2396,7 @@ echo "=== 55. ⑥weekly-reviewのcanvasはVault同期される出力のため、
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # weekly-reviewのLaunchAgent plistは置かない（このマシンには未導入）。
   # reads/recallログも置かない（このマシンでは標準フックすら未セットアップの想定）。
   # canvasだけがVault同期で存在する状態を模擬する。
@@ -2425,7 +2425,7 @@ echo "=== 56. ⑥age_days_from_epoch: 24時間未満の未来mtimeも切り捨�
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences" \
            "$HOME_DIR/Data/obsidian/Explorations/weekly-review" \
            "$HOME_DIR/Library/LaunchAgents"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   touch "$HOME_DIR/Library/LaunchAgents/com.takumi009.weekly-review.plist"
   CANVAS="$HOME_DIR/Data/obsidian/Explorations/weekly-review/$(d_date -7).canvas"
   echo '{}' > "$CANVAS"
@@ -2450,7 +2450,7 @@ echo "=== 57. ⑦-2 backup-vault.shのロック回収ミューテックスが長
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   FAKE_LOCK="$HOME_DIR/fake-backup-vault.lock"
   mkdir -p "${FAKE_LOCK}.reclaim"
   # 20分前のmtimeにして「回収処理中にクラッシュして固着した」状況を模擬する
@@ -2458,7 +2458,7 @@ echo "=== 57. ⑦-2 backup-vault.shのロック回収ミューテックスが長
   touch -t "$(date -v-20M +%Y%m%d%H%M)" "${FAKE_LOCK}.reclaim"
 
   out="$(VAULT_BACKUP_LOCK_FILE="$FAKE_LOCK" DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
-    bash "$REPO/scripts/check-drift.sh")"
+    bash "$REPO/core/assembly/check-drift.sh")"
   assert_contains "VAULT-BACKUP-LOCK-STUCKが検知される" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
   assert_contains "手動解除の案内が含まれる" "$out" "rmdir ${FAKE_LOCK}.reclaim"
 
@@ -2472,13 +2472,13 @@ echo "=== 58. ⑦-2 ロック回収ミューテックスが目安時間以内（
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   FAKE_LOCK="$HOME_DIR/fake-backup-vault.lock"
   mkdir -p "${FAKE_LOCK}.reclaim"
   # 作成直後（0分前）＝目安10分以内のため様子見。
 
   out="$(VAULT_BACKUP_LOCK_FILE="$FAKE_LOCK" DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
-    bash "$REPO/scripts/check-drift.sh")"
+    bash "$REPO/core/assembly/check-drift.sh")"
   assert_not_contains "VAULT-BACKUP-LOCK-STUCKは出ない（目安時間以内）" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
   assert_contains "様子見メッセージが出る" "$out" "様子見です"
 
@@ -2492,12 +2492,12 @@ echo "=== 59. ⑦-2 ロック回収ミューテックスが無ければ健全表
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   FAKE_LOCK="$HOME_DIR/fake-backup-vault.lock"
   # 回収ミューテックス自体を作らない（通常状態）。
 
   out="$(VAULT_BACKUP_LOCK_FILE="$FAKE_LOCK" DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
-    bash "$REPO/scripts/check-drift.sh")"
+    bash "$REPO/core/assembly/check-drift.sh")"
   assert_not_contains "VAULT-BACKUP-LOCK-STUCKは出ない" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
   assert_contains "健全メッセージが出る" "$out" "✅ ロック回収ミューテックスは残っていません"
 
@@ -2513,13 +2513,13 @@ echo "=== 60. ⑦-2 ロック回収ミューテックスの更新時刻が未来
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   FAKE_LOCK="$HOME_DIR/fake-backup-vault.lock"
   mkdir -p "${FAKE_LOCK}.reclaim"
   touch -t "$(date -v+2H +%Y%m%d%H%M)" "${FAKE_LOCK}.reclaim"
 
   out="$(VAULT_BACKUP_LOCK_FILE="$FAKE_LOCK" DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
-    bash "$REPO/scripts/check-drift.sh")"
+    bash "$REPO/core/assembly/check-drift.sh")"
   assert_contains "VAULT-BACKUP-LOCK-FUTURE-DATEが検知される" "$out" "[VAULT-BACKUP-LOCK-FUTURE-DATE]"
   assert_not_contains "様子見の健全表示にはならない" "$out" "様子見です"
   assert_not_contains "STUCK扱いにもしない（別種別に分離）" "$out" "[VAULT-BACKUP-LOCK-STUCK]"
@@ -2534,9 +2534,9 @@ echo "=== 65. ①-3 ANTHROPIC_MODEL環境変数が設定されているとEFFECT
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
-  out="$(ANTHROPIC_MODEL='claude-should-not-leak' DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/scripts/check-drift.sh")"
+  out="$(ANTHROPIC_MODEL='claude-should-not-leak' DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/core/assembly/check-drift.sh")"
   assert_contains "EFFECTIVE_MODEL_OVERRIDE_PRESENTが検知される" "$out" "[EFFECTIVE_MODEL_OVERRIDE_PRESENT]"
   assert_contains "ANTHROPIC_MODELというキー名は出る" "$out" "ANTHROPIC_MODEL"
   assert_not_contains "値そのものは出ない" "$out" "claude-should-not-leak"
@@ -2551,9 +2551,9 @@ echo "=== 66. ①-3 CLAUDE_CODE_EFFORT_LEVEL環境変数が設定されている
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
-  out="$(CLAUDE_CODE_EFFORT_LEVEL='xhigh-should-not-leak' DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/scripts/check-drift.sh")"
+  out="$(CLAUDE_CODE_EFFORT_LEVEL='xhigh-should-not-leak' DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/core/assembly/check-drift.sh")"
   assert_contains "EFFECTIVE_EFFORT_OVERRIDE_PRESENTが検知される" "$out" "[EFFECTIVE_EFFORT_OVERRIDE_PRESENT]"
   assert_contains "CLAUDE_CODE_EFFORT_LEVELというキー名は出る" "$out" "CLAUDE_CODE_EFFORT_LEVEL"
   assert_not_contains "値そのものは出ない" "$out" "xhigh-should-not-leak"
@@ -2568,10 +2568,10 @@ echo "=== 67. ①-3 上書き経路が何も無ければdrift計上せずチェ�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
 
   out="$(env -u ANTHROPIC_MODEL -u ANTHROPIC_DEFAULT_MODEL -u CLAUDE_CODE_EFFORT_LEVEL \
-    DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/scripts/check-drift.sh")"
+    DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" bash "$REPO/core/assembly/check-drift.sh")"
   assert_not_contains "EFFECTIVE_MODEL_OVERRIDE_PRESENTは出ない" "$out" "[EFFECTIVE_MODEL_OVERRIDE_PRESENT]"
   assert_not_contains "EFFECTIVE_EFFORT_OVERRIDE_PRESENTは出ない" "$out" "[EFFECTIVE_EFFORT_OVERRIDE_PRESENT]"
   assert_contains "既知の上書き経路は検出されなかった旨の健全表示が出る" "$out" "実効model/effortを上書きしうる既知の経路"
@@ -2604,7 +2604,7 @@ echo "=== 69. ⑧ プロファイル実体がまだ存在しない場合はPROFI
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # ローカル実体プロファイルを消す（P1ロールアウト未完了機を模す。①-2 は
   # 再生成できず[SETTINGS-RENDER-FAILED]になるが、ここでは⑧だけを見る）。
   rm -rf "$HOME_DIR/.config/takumi009-ai-env"
@@ -2622,7 +2622,7 @@ echo "=== 70. ⑧ advisory（V1-a・V9-f）がdriftとして週次通知に出�
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  echo "# researcher" > "$REPO/claude/agents/researcher.md"
+  echo "# researcher" > "$REPO/team/rules/agents/researcher.md"
   write_v2_profile "$HOME_DIR/.config/takumi009-ai-env/profile.md" \
     "configured model=t-sonnet-high" \
     "role.researcher: configured model=opus-46-xhigh" \
@@ -2674,7 +2674,7 @@ echo "=== 70c. ⑧ advisory JUDGEMENT_UNKNOWN（ワーカーのBedrock経路有�
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  echo "# researcher" > "$REPO/claude/agents/researcher.md"
+  echo "# researcher" > "$REPO/team/rules/agents/researcher.md"
   # bedrock.envをディレクトリにする＝bedrock_env_file_kind()がUNAVAILABLEを
   # 返し、provider=bedrockのワーカー行に対してbedrock_route_enabled()が
   # 'unknown'を返す（§3.7の判定不能。leader以外は通しつつJUDGEMENT_UNKNOWNを
@@ -2697,7 +2697,7 @@ echo "=== 70d. ⑧ advisory EFFORT_COMPATIBILITY_UNVERIFIED（Bedrock別名で�
   HOME_DIR="$(mktemp -d)"
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
-  echo "# researcher" > "$REPO/claude/agents/researcher.md"
+  echo "# researcher" > "$REPO/team/rules/agents/researcher.md"
   # provider=bedrockのmodel別名（opus/sonnet/haiku/fable）はeffort=xhighと
   # 組み合わさっても実モデルの版を判別できないため、V9-fではなく
   # EFFORT_COMPATIBILITY_UNVERIFIEDになる（profile_resolve.py
@@ -2721,8 +2721,8 @@ echo "=== 70e. ⑧ advisory T4（版が仮想補完された）もdriftとして
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
-  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cat > "$REPO/core/assembly/install-main.sh" <<'EOF'
 #!/bin/bash
 case "$1" in
   --render-settings-json)
@@ -2737,7 +2737,7 @@ case "$1" in
 esac
 exit 1
 EOF
-  chmod +x "$REPO/scripts/install-main.sh"
+  chmod +x "$REPO/core/assembly/install-main.sh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "T4がPROFILE-ADVISORYとして検知される" "$out" "[PROFILE-ADVISORY:T4]"
@@ -2754,8 +2754,8 @@ echo "=== 70f. ⑧ プロファイル契約（§3）の6コードのいずれと
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
-  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cat > "$REPO/core/assembly/install-main.sh" <<'EOF'
 #!/bin/bash
 case "$1" in
   --render-settings-json)
@@ -2770,7 +2770,7 @@ case "$1" in
 esac
 exit 1
 EOF
-  chmod +x "$REPO/scripts/install-main.sh"
+  chmod +x "$REPO/core/assembly/install-main.sh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "未知コードはPROFILE-ADVISORY-UNKNOWNとしてdrift計上される" "$out" "[PROFILE-ADVISORY-UNKNOWN:FUTURE-UNKNOWN-CODE]"
@@ -2787,10 +2787,10 @@ echo "=== 71. ⑧ --check-profileがexit 0でもOK行・v1委譲の既知文言�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # install-main.shを「--check-profileがexit 0だが未知の応答を返す」スタブへ
   # 差し替える（契約違反の出力を模す）。
-  cat > "$REPO/scripts/install-main.sh" <<'EOF'
+  cat > "$REPO/core/assembly/install-main.sh" <<'EOF'
 #!/bin/bash
 case "$1" in
   --render-settings-json)
@@ -2805,7 +2805,7 @@ case "$1" in
 esac
 exit 1
 EOF
-  chmod +x "$REPO/scripts/install-main.sh"
+  chmod +x "$REPO/core/assembly/install-main.sh"
 
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "PROFILE-VALIDATION-FAILEDとして検知される（無条件の健全表示にならない）" "$out" "[PROFILE-VALIDATION-FAILED]"
@@ -2821,7 +2821,7 @@ echo "=== 72. ①-3 live settings.jsonのmodelSettingsが辞書型でない（�
   make_fake_repo "$REPO"
   install_fake_home "$REPO" "$HOME_DIR"
   mkdir -p "$HOME_DIR/Data/obsidian/Preferences"
-  cp "$REPO/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   # live側のmodelSettingsを辞書型ではなく配列にする（壊れた/想定外の構造）。
   python3 -c "
 import json
@@ -2850,7 +2850,7 @@ echo "=== 75. 配役表-能力軸整理: AIENV_AGENTS_DIRが未設定でもset -
 
   rc=0
   out="$(env -u AIENV_AGENTS_DIR DIR="$REPO" HOME="$HOME_DIR" VAULT="$HOME_DIR/Data/obsidian" \
-    bash "$REPO/scripts/check-drift.sh" 2>&1)" || rc=$?
+    bash "$REPO/core/assembly/check-drift.sh" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ]; then
     pass "AIENV_AGENTS_DIR未設定でも正常終了する(exit 0)"
   else

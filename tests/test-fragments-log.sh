@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/vault-agents/fragments_log.py のユニットテスト（2026-07-16簡素化・
+# ai-brain/executor/fragments_log.py のユニットテスト（2026-07-16簡素化・
 # Fragments週次昇格候補検出への縮小＝設計書§3.1）。
 #
 # 実Vault($HOME/Data/obsidian)には一切依存しない。VAULT_ROOT環境変数で
@@ -11,7 +11,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/vault-agents/fragments_log.py"
+SCRIPT="$REPO_ROOT/ai-brain/executor/fragments_log.py"
 
 PASS=0
 FAIL=0
@@ -53,7 +53,7 @@ run_fragments_log() {
   local vault="$1"; shift
   python3 -c "
 import sys
-sys.path.insert(0, '$REPO_ROOT/scripts/vault-agents')
+sys.path.insert(0, '$REPO_ROOT/ai-brain/executor')
 import pathlib
 import fragments_log as fl
 fl.VAULT = pathlib.Path('$vault')

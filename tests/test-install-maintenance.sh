@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/install-maintenance.sh のユニットテスト（新ラベル設置・冪等・再実行・
+# ai-brain/assembly/install-maintenance.sh のユニットテスト（新ラベル設置・冪等・再実行・
 # 失敗時の exit 1 の検証。旧ラベル 4 本の移行の検査は 2026-09-19 着手順 1 で
 # 退役＝ラベルは repo の plist から動的に取る）。tests/test-install-backup.sh
 # と同じ設計。
@@ -17,7 +17,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/install-maintenance.sh"
+SCRIPT="$REPO_ROOT/ai-brain/assembly/install-maintenance.sh"
 
 PASS=0
 FAIL=0
@@ -43,7 +43,7 @@ assert_true() {
   fi
 }
 
-NEW_LABEL="$(plutil -extract Label raw -o - "$REPO_ROOT"/launchagents/com.takumi009.maintenance.plist)"
+NEW_LABEL="$(plutil -extract Label raw -o - "$REPO_ROOT"/ai-brain/assembly/com.takumi009.maintenance.plist)"
 
 # 偽launchctl（呼ばれたら引数をログへ記録するだけ・本物のlaunchdには一切触れない）
 # を$FAKE_BIN/launchctlとして用意し、PATHの先頭へ差し込む。
@@ -93,7 +93,7 @@ echo "=== 2. 通常実行: 新ラベルのplistが生成される・実launchctl
   DEST="$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist"
   assert_true "新ラベルのplistが生成される" "$([[ -f "$DEST" ]] && echo 1 || echo 0)"
   assert_true "__AIENV_HOME__が実HOME(FAKE_HOME)へ置換されている" \
-    "$(grep -q "$FAKE_HOME/work/takumi009-ai-env/scripts/maintenance.sh" "$DEST" && echo 1 || echo 0)"
+    "$(grep -q "$FAKE_HOME/work/takumi009-ai-env/ai-brain/executor/maintenance.sh" "$DEST" && echo 1 || echo 0)"
   assert_true "プレースホルダ(__AIENV_HOME__)が残っていない" \
     "$(grep -q '__AIENV_HOME__' "$DEST" && echo 0 || echo 1)"
   # 2026-09-10週次メンテ障害対応: EnvironmentVariables.USERにヘッドレスClaude
@@ -308,16 +308,17 @@ EOF
 echo "=== 15. checkout破損: scripts/maintenance.shが見つからなければFAILする ==="
 {
   FAKE_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/scripts" "$FAKE_REPO/scripts"
-  cp -R "$REPO_ROOT/launchagents" "$FAKE_REPO/launchagents"
-  rm -f "$FAKE_REPO/scripts/maintenance.sh"
+  mkdir -p "$FAKE_REPO/ai-brain"
+  cp -R "$REPO_ROOT/ai-brain/executor" "$FAKE_REPO/ai-brain/executor"
+  cp -R "$REPO_ROOT/ai-brain/assembly" "$FAKE_REPO/ai-brain/assembly"
+  rm -f "$FAKE_REPO/ai-brain/executor/maintenance.sh"
 
   FAKE_HOME="$(mktemp -d)"
   rc=0
-  HOME="$FAKE_HOME" bash "$FAKE_REPO/scripts/install-maintenance.sh" >/dev/null 2>"$FAKE_HOME/stderr.log" || rc=$?
+  HOME="$FAKE_HOME" bash "$FAKE_REPO/ai-brain/assembly/install-maintenance.sh" >/dev/null 2>"$FAKE_HOME/stderr.log" || rc=$?
   assert_eq "scripts/maintenance.sh欠落はexit 1" "1" "$rc"
   assert_true "FAILメッセージが出る" \
-    "$(grep -q "scripts/maintenance.sh が見つかりません" "$FAKE_HOME/stderr.log" && echo 1 || echo 0)"
+    "$(grep -q "ai-brain/executor/maintenance.sh が見つかりません" "$FAKE_HOME/stderr.log" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_REPO" "$FAKE_HOME"
 }
@@ -325,13 +326,14 @@ echo "=== 15. checkout破損: scripts/maintenance.shが見つからなければF
 echo "=== 16. checkout破損: launchagents/com.takumi009.maintenance.plistが見つからなければFAILする ==="
 {
   FAKE_REPO="$(mktemp -d)"
-  cp -R "$REPO_ROOT/scripts" "$FAKE_REPO/scripts"
-  cp -R "$REPO_ROOT/launchagents" "$FAKE_REPO/launchagents"
-  rm -f "$FAKE_REPO/launchagents/com.takumi009.maintenance.plist"
+  mkdir -p "$FAKE_REPO/ai-brain"
+  cp -R "$REPO_ROOT/ai-brain/executor" "$FAKE_REPO/ai-brain/executor"
+  cp -R "$REPO_ROOT/ai-brain/assembly" "$FAKE_REPO/ai-brain/assembly"
+  rm -f "$FAKE_REPO/ai-brain/assembly/com.takumi009.maintenance.plist"
 
   FAKE_HOME="$(mktemp -d)"
   rc=0
-  HOME="$FAKE_HOME" bash "$FAKE_REPO/scripts/install-maintenance.sh" >/dev/null 2>"$FAKE_HOME/stderr.log" || rc=$?
+  HOME="$FAKE_HOME" bash "$FAKE_REPO/ai-brain/assembly/install-maintenance.sh" >/dev/null 2>"$FAKE_HOME/stderr.log" || rc=$?
   assert_eq "plistソース欠落はexit 1" "1" "$rc"
   assert_true "FAILメッセージが出る" \
     "$(grep -q "リポジトリのファイルが見つかりません" "$FAKE_HOME/stderr.log" && echo 1 || echo 0)"

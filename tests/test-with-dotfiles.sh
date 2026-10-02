@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/install-main.sh・scripts/install-sub.sh の --with-dotfiles オプションの
+# core/assembly/install-main.sh・core/assembly/install-sub.sh の --with-dotfiles オプションの
 # ユニットテスト。
 #
 # 実GitHub（Takumi00Nine/dotfiles）には一切依存しない。DOTFILES_REPO_URL を
@@ -87,7 +87,7 @@ make_fake_home() {
   mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex"
   # 配役表-能力軸整理-設計-2026-09-07.md §3: schema 5・新3キーの実体を
   # あらかじめ置く。本ファイルの主眼＝--with-dotfilesの呼び分けとは無関係
-  # なので、install-main.sh の雛形配置（config/profile.md.sample からの
+  # なので、install-main.sh の雛形配置（team/data/profile.md.sample からの
   # コピー。2026-09-08 本人裁定A案で読み元をvault-public/Preferences/
   # profile-sample.mdから付け替え）に依存させない（テストの独立性・
   # §10「機能差分なし」を字面どおり保つため）。
@@ -110,7 +110,7 @@ echo "=== 1. install-main.sh: 既定（--with-dotfiles無し）ではdotfilesに
   HOME_DIR="$(mktemp -d)"
   make_fake_home "$HOME_DIR"
 
-  out=$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" bash "$REPO_ROOT/scripts/install-main.sh")
+  out=$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" bash "$REPO_ROOT/core/assembly/install-main.sh")
   assert_true "出力にdotfilesという語が出ない" \
     "$(echo "$out" | grep -qi dotfiles && echo 0 || echo 1)"
   assert_true "\$HOME/work が作られない" \
@@ -127,7 +127,7 @@ echo "=== 2. install-main.sh --dry-run --with-dotfiles: 何も実行しない ==
   make_fake_home "$HOME_DIR"
 
   out=$(HOME="$HOME_DIR" DOTFILES_REPO_URL="$DOTFILES_SRC" DOTFILES_DIR="$HOME_DIR/work/dotfiles" \
-    bash "$REPO_ROOT/scripts/install-main.sh" --dry-run --with-dotfiles)
+    bash "$REPO_ROOT/core/assembly/install-main.sh" --dry-run --with-dotfiles)
   assert_true "would runでcloneが計画される" \
     "$(echo "$out" | grep -q 'would run: git clone' && echo 1 || echo 0)"
   assert_true "実際にはcloneされていない" \
@@ -144,7 +144,7 @@ echo "=== 3. install-main.sh --with-dotfiles: 未clone状態からclone+install.
   make_fake_home "$HOME_DIR"
 
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" DOTFILES_REPO_URL="$DOTFILES_SRC" DOTFILES_DIR="$HOME_DIR/work/dotfiles" \
-    bash "$REPO_ROOT/scripts/install-main.sh" --with-dotfiles >/dev/null
+    bash "$REPO_ROOT/core/assembly/install-main.sh" --with-dotfiles >/dev/null
 
   assert_true "dotfilesがcloneされている" \
     "$([[ -f "$HOME_DIR/work/dotfiles/install.sh" ]] && echo 1 || echo 0)"
@@ -162,11 +162,11 @@ echo "=== 4. install-main.sh --with-dotfiles: 既存なら再clone せず instal
   make_fake_home "$HOME_DIR"
 
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" DOTFILES_REPO_URL="$DOTFILES_SRC" DOTFILES_DIR="$HOME_DIR/work/dotfiles" \
-    bash "$REPO_ROOT/scripts/install-main.sh" --with-dotfiles >/dev/null
+    bash "$REPO_ROOT/core/assembly/install-main.sh" --with-dotfiles >/dev/null
   rm -f "$HOME_DIR/.fake-dotfiles-installed-marker"
 
   out=$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" DOTFILES_REPO_URL="$DOTFILES_SRC" DOTFILES_DIR="$HOME_DIR/work/dotfiles" \
-    bash "$REPO_ROOT/scripts/install-main.sh" --with-dotfiles)
+    bash "$REPO_ROOT/core/assembly/install-main.sh" --with-dotfiles)
   assert_true "2回目はcloneをskipするメッセージが出る" \
     "$(echo "$out" | grep -q 'clone はskipします' && echo 1 || echo 0)"
   assert_true "install.shは2回目も実行される（マーカー再生成）" \
@@ -187,7 +187,7 @@ echo "=== 5. install-sub.sh --with-dotfiles: install-main.shへ正しく委譲�
   # 別目的（週次drift通知LaunchAgent向け・現在は未使用）で宣言しているための
   # 互換目的として付けておく（tests/test-install-sub.sh と同じ方針）。
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" DOTFILES_REPO_URL="$DOTFILES_SRC" DOTFILES_DIR="$HOME_DIR/work/dotfiles" \
-    bash "$REPO_ROOT/scripts/install-sub.sh" --with-dotfiles >/dev/null
+    bash "$REPO_ROOT/core/assembly/install-sub.sh" --with-dotfiles >/dev/null
 
   assert_true "install-sub.sh経由でもdotfilesがcloneされる" \
     "$([[ -f "$HOME_DIR/work/dotfiles/install.sh" ]] && echo 1 || echo 0)"
@@ -204,7 +204,7 @@ echo "=== 6. install-sub.sh: --with-dotfiles無しならdotfilesに一切触れ�
   HOME_DIR="$(mktemp -d)"
   make_fake_home "$HOME_DIR"
 
-  out=$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" bash "$REPO_ROOT/scripts/install-sub.sh")
+  out=$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" bash "$REPO_ROOT/core/assembly/install-sub.sh")
   assert_true "出力にdotfilesという語が出ない" \
     "$(echo "$out" | grep -qi dotfiles && echo 0 || echo 1)"
   assert_true "\$HOME/work/dotfiles が作られない" \
@@ -220,7 +220,7 @@ echo "=== 7. clone失敗（不正なURL）でもinstall-main.sh自体は失敗�
 
   rc=0
   out=$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" DOTFILES_REPO_URL="/nonexistent/path/to/repo" DOTFILES_DIR="$HOME_DIR/work/dotfiles" \
-    bash "$REPO_ROOT/scripts/install-main.sh" --with-dotfiles 2>&1) || rc=$?
+    bash "$REPO_ROOT/core/assembly/install-main.sh" --with-dotfiles 2>&1) || rc=$?
   assert_eq "clone失敗してもexit 0（soft-fail）" "0" "$rc"
   assert_true "WARNメッセージが出る" \
     "$(echo "$out" | grep -q 'WARN.*clone.*失敗' && echo 1 || echo 0)"

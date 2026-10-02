@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# claude/agents/*.md と Vault ノートの「内容契約」を見る静的テスト
+# team/rules/agents/*.md と Vault ノートの「内容契約」を見る静的テスト
 # （3モード体制-設計-2026-09-06.md §10.3・新設）。
 #
-# AC-11・AC-12・AC-25 は claude/agents/*.md と Vault ノートの内容契約を
+# AC-11・AC-12・AC-25 は team/rules/agents/*.md と Vault ノートの内容契約を
 # 見るもので、既存のどのスイートも収容先を持たなかったため新設する
 # （test-core-docs-placeholder-schema.sh はコア文書のプレースホルダ検査が
 # 主題で、こちらとは主題が異なる）。
@@ -23,8 +23,8 @@ REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 # §4.3・§6.2＝`AIENV_AGENT_SOURCE_DIR=<dir> bash tests/test-agent-definitions.sh`。
 # 固定職種の内容検査（1・2・4・7・9）も同じディレクトリに掛かるので、<dir> は
 # 実定義の複製に fixture を足したものにする）。
-AGENTS_DIR="${AIENV_AGENT_SOURCE_DIR:-$REPO_ROOT/claude/agents}"
-AGENT_DEF_LIB="$REPO_ROOT/claude/hooks/lib"
+AGENTS_DIR="${AIENV_AGENT_SOURCE_DIR:-$REPO_ROOT/team/rules/agents}"
+AGENT_DEF_LIB="$REPO_ROOT/team/connect/claude-code"
 
 PASS=0
 FAIL=0
@@ -333,7 +333,7 @@ EOF
   rm -rf "$ADC3_WORK"
 }
 
-echo "=== 1. AC-12①: claude/agents/verifier.md が在り、tester.md が無い ==="
+echo "=== 1. AC-12①: team/rules/agents/verifier.md が在り、tester.md が無い ==="
 {
   assert_true "verifier.md が実在する" "$([ -f "$AGENTS_DIR/verifier.md" ] && echo 1 || echo 0)"
   assert_true "tester.md が存在しない（退役済み）" "$([ ! -f "$AGENTS_DIR/tester.md" ] && echo 1 || echo 0)"
@@ -395,15 +395,15 @@ echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）
 MCP_EXEC_PAT="execution=external-"
 MCP_EXEC_PAT="${MCP_EXEC_PAT}mcp"
 
-echo "=== 5. AC-11: 退役キーrole.(primary-reviewer|tester): がclaude/hooks/・claude/agents/で0件。CORE_ROLES_WITHOUT_REPO_AGENT_FILEにprimary-reviewerを含まない ==="
+echo "=== 5. AC-11: 退役キーrole.(primary-reviewer|tester): がclaude/hooks/・team/rules/agents/で0件。CORE_ROLES_WITHOUT_REPO_AGENT_FILEにprimary-reviewerを含まない ==="
 {
-  hits="$(grep -rEn '^role\.(primary-reviewer|tester):' "$REPO_ROOT/claude/hooks" "$REPO_ROOT/claude/agents" 2>/dev/null || true)"
+  hits="$(grep -rEn '^role\.(primary-reviewer|tester):' "$REPO_ROOT/ai-brain/executor" "$REPO_ROOT/ai-brain/connect" "$REPO_ROOT/team/executor" "$REPO_ROOT/team/connect" "$REPO_ROOT/usage/executor" "$REPO_ROOT/dock/executor" "$REPO_ROOT/core/connect" "$REPO_ROOT/core/assembly" "$REPO_ROOT/notify/connect" "$REPO_ROOT/team/rules/agents" 2>/dev/null || true)"
   assert_eq "claude/hooks・claude/agentsに退役キーが0件" "" "$hits"
 
-  hits_mcp="$(grep -rn "$MCP_EXEC_PAT" "$REPO_ROOT/claude/hooks" "$REPO_ROOT/claude/agents" 2>/dev/null || true)"
+  hits_mcp="$(grep -rn "$MCP_EXEC_PAT" "$REPO_ROOT/ai-brain/executor" "$REPO_ROOT/ai-brain/connect" "$REPO_ROOT/team/executor" "$REPO_ROOT/team/connect" "$REPO_ROOT/usage/executor" "$REPO_ROOT/dock/executor" "$REPO_ROOT/core/connect" "$REPO_ROOT/core/assembly" "$REPO_ROOT/notify/connect" "$REPO_ROOT/team/rules/agents" 2>/dev/null || true)"
   assert_eq "claude/hooks・claude/agentsに廃止したMCP経路のexecution値が0件" "" "$hits_mcp"
 
-  core_manifest="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c 'import profile_resolve as pr; print("primary-reviewer" in pr.CORE_ROLES_WITHOUT_REPO_AGENT_FILE)')"
+  core_manifest="$(PYTHONPATH="$REPO_ROOT/team/executor" python3 -c 'import profile_resolve as pr; print("primary-reviewer" in pr.CORE_ROLES_WITHOUT_REPO_AGENT_FILE)')"
   assert_eq "CORE_ROLES_WITHOUT_REPO_AGENT_FILEにprimary-reviewerを含まない" "False" "$core_manifest"
 
   # ⚠️ 2026-09-08 本人裁定A案: Vault正本・公開スナップショットは案内ノート化
@@ -473,7 +473,7 @@ echo "=== 9. agents/verifier.md の出力形式に、出力先ファイルの先
 
 echo "=== 11. 新設②(設計-v1.1.1.md §7・D-6・要件AC-11b②): agents_json_matches_source_and_has_no_effort（検査対象ディレクトリの全定義） ==="
 {
-  AGENT_DEF="$REPO_ROOT/claude/hooks/lib/agent_def.py"
+  AGENT_DEF="$REPO_ROOT/team/connect/claude-code/agent_def.py"
   result="$(python3 - "$AGENT_DEF" "$AGENTS_DIR" <<'PYCHECK'
 import json
 import subprocess
@@ -566,7 +566,7 @@ PYCHECK
 
 echo "=== 12. 検証1巡目 I1-m6 対応: agent_def.py の --role 検査（陰性ケース） ==="
 {
-  AGENT_DEF="$REPO_ROOT/claude/hooks/lib/agent_def.py"
+  AGENT_DEF="$REPO_ROOT/team/connect/claude-code/agent_def.py"
   I1M6_WORK="$(mktemp -d)"
 
   # --role が ^[a-z][a-z-]*$ に一致しない（`../`混入・大文字・空文字・

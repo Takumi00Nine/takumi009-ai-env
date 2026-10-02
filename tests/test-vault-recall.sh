@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude/hooks/vault-recall.sh のユニットテスト（UserPromptSubmit・想起支援）。
+# ai-brain/executor/vault-recall.sh のユニットテスト（UserPromptSubmit・想起支援）。
 #
 # 実 Vault($HOME/Data/obsidian)・実ログには一切依存しない。VAULT_RECALL_VAULT・
 # VAULT_RECALL_LOG 環境変数で毎回ダミーのfixtureへ差し替えて実行する。
@@ -10,7 +10,7 @@ set -uo pipefail   # -e は使わない（jqの非0終了を明示的に見た�
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/claude/hooks/vault-recall.sh"
+SCRIPT="$REPO_ROOT/ai-brain/executor/vault-recall.sh"
 
 PASS=0
 FAIL=0

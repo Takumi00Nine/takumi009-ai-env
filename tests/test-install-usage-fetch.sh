@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/install-usage-fetch.sh のユニットテスト（bootstrap+enable だけの
+# usage/assembly/install-usage-fetch.sh のユニットテスト（bootstrap+enable だけの
 # 直線 installer。設計＝ai-env 全体最適化 着手順1 設計 §6.4 U-1〜U-7）。
 #
 # ⚠️ 実 launchd には一切触れない。PATH 先頭の偽 launchctl が状態
@@ -12,8 +12,8 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/install-usage-fetch.sh"
-PLIST_SRC="$REPO_ROOT/launchagents/com.takumi009.usage-fetch.plist"
+SCRIPT="$REPO_ROOT/usage/assembly/install-usage-fetch.sh"
+PLIST_SRC="$REPO_ROOT/usage/assembly/com.takumi009.usage-fetch.plist"
 
 PASS=0
 FAIL=0
