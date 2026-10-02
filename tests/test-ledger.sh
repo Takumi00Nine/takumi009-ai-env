@@ -145,6 +145,18 @@ lf_commit_all "$FX"
 run_check "$FX"
 assert_true "FX-25: 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
 assert_true "FX-25: moves 行が由来の空いた新パスを報告" "$(lines_of moves | grep -qF "$NEW_A" && echo 1 || echo 0)"
+# FX-25b（FR-13＝新構成のスイートにも由来が 1 件）: 変更の無いスイートの行（旧＝新の tests/ 行・種別 移動）を
+# 1 本消すと、そのスイートの由来が無くなる＝⑤ が不合格・そのスイートを報告。
+SUITE_ROW="$(awk -F'\t' '!/^#/ && $1==$2 && $1 ~ /^tests\// && $3=="移動" {print NR"\t"$1; exit}' "$BASE/$LF_MOVES_REL" 2>/dev/null)"
+SUITE_LNO="$(printf '%s' "$SUITE_ROW" | cut -f1)"; SUITE_PATH="$(printf '%s' "$SUITE_ROW" | cut -f2)"
+assert_true "FX-25b: 移動表に変更の無いスイートの行（旧＝新・移動）がある" "$([ -n "$SUITE_PATH" ] && echo 1 || echo 0)"
+fresh_copy
+awk -v l="${SUITE_LNO:-0}" 'NR!=l' "$BASE/$LF_MOVES_REL" > "$FX/$LF_MOVES_REL"
+lf_commit_all "$FX"
+run_check "$FX"
+assert_true "FX-25b: 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
+assert_true "FX-25b: moves 行が由来の無いスイートを報告" \
+  "$([ -n "$SUITE_PATH" ] && lines_of moves | grep -qF "$SUITE_PATH" && echo 1 || echo 0)"
 
 echo "=== 8. 検査 ⑥（AC-3 ④ 後段）: 転送のリンク先が主後継と違う＝forward 行で報告 ==="
 fresh_copy
