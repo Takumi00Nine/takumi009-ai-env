@@ -40,7 +40,7 @@ lf_mk_fx6 "$WORK/stub"
 NOCLI_PATH="$WORK/stub:$(lf_path_without claude codex)"
 BASE="$WORK/base"
 lf_copy_repo "$REPO_ROOT" "$BASE"
-VAULT_PUBLIC_REL="$(lf_ledger_paths "$BASE/$LF_LEDGER_REL" '$1=="part" && $2 ~ /ai-brain/data/vault-public\/$/' 2>/dev/null | head -1)"
+VAULT_PUBLIC_REL="$(lf_ledger_paths "$BASE/$LF_LEDGER_REL" '$1=="part" && $2 ~ /ai-brain\/data\/vault-public\/$/' 2>/dev/null | head -1)"
 
 echo "=== 0. 前提: FX-6 の PATH に claude・codex が無い ==="
 assert_true "command -v claude が非 0" "$(PATH="$NOCLI_PATH" command -v claude >/dev/null 2>&1 && echo 0 || echo 1)"
@@ -53,8 +53,9 @@ entry() { bash "$1/$LF_LEDGER_TOOL_REL" lookup "$2" 2>/dev/null | head -1; }
 # brain_judge <repo> <ラベル> — AI Brain 判定（AC-1 ①〜④）。毎回 新しい HOME（FX-3）と Vault の複製を使う。
 brain_judge() {
   local repo="$1" label="$2" e out rc fx4 fx5 n0 n1 th
+  # 引数の先頭の VAR=値（入口ごとの上書き口）も環境変数として渡すため env を通す。
   run_env() { HOME="$th" PATH="$NOCLI_PATH" LOCK_FILE="$th/backup.lock" \
-      VAULT_WRITER_LOCK_FILE="$th/vault-writer.lock" "$@"; }
+      VAULT_WRITER_LOCK_FILE="$th/vault-writer.lock" env "$@"; }
   [ -n "$VAULT_PUBLIC_REL" ] || { fail_case "$label: FX-4 の元（ai-brain/data/vault-public/）が台帳で引けない"; return; }
 
   th="$WORK/$label-home1"; mkdir -p "$th"; fx4="$WORK/$label-fx4"

@@ -875,10 +875,17 @@ print('OK' if len(c) == 1 and c[0]['id'] == 'RateLimitResetCredit_ok' else 'NG:'
 
   # --- 変異確認（coding-doc-style §4「陽性fixtureが実際に拒否経路／正常
   # 経路を通っているか」の直接検証） ---
+  # 変異コピーは提示器の実体位置からの相対（../../core/assembly/ledger-tool.sh）で台帳ツールを引き、
+  # 照会結果（<repo ルート>/usage/connect/…）の接続を列挙する（v1.1 設計 §5.3・§5.6）。複製先を
+  # repo と同じ形（$WORK/usage/executor/）にし、core/ と usage/connect/ は実 repo への symlink にする。
+  MUT_DIR="$WORK/usage/executor"
+  mkdir -p "$MUT_DIR"
+  ln -sfn "$REPO_ROOT/core" "$WORK/core"
+  ln -sfn "$REPO_ROOT/usage/connect" "$WORK/usage/connect"
   # (i) FX-16aが検出する不具合（負のavailable_countをそのまま信用する）を
   # 意図的に再現した壊れコピーへ差し戻すと、同じfixtureが確実に失敗側へ
   # 転じることを確認する。
-  MUT_LIB_NOGUARD="$WORK/usage_snapshot_mutant_noguard.py"
+  MUT_LIB_NOGUARD="$MUT_DIR/usage_snapshot_mutant_noguard.py"
   python3 -c "
 src = open('$LIB', encoding='utf-8').read()
 marker = '    if available_count is not None and available_count < 0:\n        available_count = None\n'
@@ -893,7 +900,7 @@ open('$MUT_LIB_NOGUARD', 'w', encoding='utf-8').write(mutated)
   # 裏付けが必須」というfail-closed化を意図的に復元した壊れコピーへ戻すと、
   # FX-16b（count-only・正常形）が「取得不可」へ誤って転じることを確認する
   # （撤回が正しく効いていることの直接証拠）。
-  MUT_LIB_OVERCLOSED="$WORK/usage_snapshot_mutant_overclosed.py"
+  MUT_LIB_OVERCLOSED="$MUT_DIR/usage_snapshot_mutant_overclosed.py"
   python3 -c "
 src = open('$LIB', encoding='utf-8').read()
 marker = '''    return {
@@ -918,7 +925,7 @@ open('$MUT_LIB_OVERCLOSED', 'w', encoding='utf-8').write(mutated)
   # (k) FX-16gが検出する不具合（idが無いcreditを受理する）を意図的に
   # 再現した壊れコピーへ差し戻すと、当該creditがcredits[]へ残ることを
   # 確認する。
-  MUT_LIB_NOIDCHECK="$WORK/usage_snapshot_mutant_noidcheck.py"
+  MUT_LIB_NOIDCHECK="$MUT_DIR/usage_snapshot_mutant_noidcheck.py"
   python3 -c "
 src = open('$LIB', encoding='utf-8').read()
 marker = '    if not (isinstance(id_, str) and id_ != \"\"):\n        return None\n'

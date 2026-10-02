@@ -882,10 +882,11 @@ EOF
   assert_true "usage-snapshot --json: 非秘密JSON1行が出る（poolsを含む）" \
     "$(printf '%s' "$out_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if "pools" in d and len(d["pools"])==3 else 1)' 2>/dev/null && echo 1 || echo 0)"
 
-  # 静的検査（AC-97⑦の判定方法の一つ＝rg -n）: subprocess・urllib・socket等の
-  # 外向き通信APIの呼び出しが0件であることも合わせて確認する。
+  # 静的検査（AC-97⑦の判定方法の一つ＝rg -n）: urllib・socket等の外向き通信APIの呼び出しが0件であることも
+  # 合わせて確認する。subprocess は対象外＝v1.1 設計 §5.3・§5.6 で台帳ツールの照会（接続の列挙）に使う
+  # （通信ゼロの実測は上の CALL_LOG＝curl/security/codex が一度も呼ばれないこと）。
   assert_true "usage-snapshot: 静的検査でも通信系APIの呼び出しが0件" \
-    "$(grep -qE 'subprocess|urllib|socket\.|requests\.|http\.client' "$REPO_ROOT/usage/executor/usage_snapshot.py" && echo 0 || echo 1)"
+    "$(grep -qE 'urllib|socket\.|requests\.|http\.client' "$REPO_ROOT/usage/executor/usage_snapshot.py" && echo 0 || echo 1)"
 
   rm -rf "$E" "$LOGGING_BIN"
 fi
