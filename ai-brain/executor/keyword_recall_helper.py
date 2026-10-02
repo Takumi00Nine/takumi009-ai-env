@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""外部脳ハイブリッド検索・柱①の想起フック補助（claude/hooks/vault-recall.shからsubprocess
+"""外部脳ハイブリッド検索・柱①の想起フック補助（ai-brain/executor/vault-recall.shからsubprocess
 で呼ばれる。8.2ラウンド「統一リファクタリング」で追加）。
 
 役割: 旧claude/hooks/vault-recall.sh（8.0/8.1ラウンド版）にbashでインライン実装されていた

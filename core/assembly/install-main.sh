@@ -425,7 +425,7 @@ fi
 # から中途半端な状態でpython3不在に気付くより、着手前に明確な指示を出す。
 # --dry-run は実際には何も生成しない＝python3を必要としないため対象外。
 if [ "$DRY_RUN" != "1" ]; then
-  command -v python3 >/dev/null 2>&1 || fail_settings_generation "python3 が見つかりません（claude/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
+  command -v python3 >/dev/null 2>&1 || fail_settings_generation "python3 が見つかりません（core/assembly/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
 fi
 # バックアップは「.pre-aienv.bak がまだ無いときだけ」作る（何度実行しても
 # 常にインストール前オリジナルを保持する。symlink化後は dest が symlink に
@@ -856,7 +856,7 @@ else
     log "ローカル実体プロファイルの雛形を作成しました: $AIENV_LOCAL_PROFILE_PATH <- ${PROFILE_SAMPLE_SRC}（team/data/profile.md.sampleをそのままコピー）"
   else
     rm -f "$profile_tmp"
-    warn "config/profile.md.sampleを読み取れませんでした（無い・checkout破損・権限不足等の可能性）。雛形コピーをskipします: ${PROFILE_SAMPLE_SRC}（詳細: ${PROFILE_COPY_ERR}）"
+    warn "team/data/profile.md.sampleを読み取れませんでした（無い・checkout破損・権限不足等の可能性）。雛形コピーをskipします: ${PROFILE_SAMPLE_SRC}（詳細: ${PROFILE_COPY_ERR}）"
   fi
 fi
 

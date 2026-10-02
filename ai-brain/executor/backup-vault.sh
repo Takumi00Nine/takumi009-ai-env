@@ -41,7 +41,14 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# lib は実体の位置から引く＝旧パスの転送 symlink（配置済み LaunchAgent の起動対象）から起動されてもリンクを辿る。
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _dir="$(cd "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_dir/$_self" ;; esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 # 多重起動防止ロック（PIDファイル方式・stale自動解除）は ai-brain/executor/maintenance.sh
 # （週次ランナー・PR2）とも共有する（2026-07-16簡素化・cleanup決定#10・PR1.5③）。
 # status-file.shは--status-fileの読み書き（同じくPR2のmaintenance.shと共用）。
@@ -185,7 +192,7 @@ if [[ -z "$current_branch" ]]; then
   fail "VAULT(${VAULT})のHEADがブランチを指していません（detached HEAD等の可能性）。バックアップ対象ブランチ（${VAULT_BACKUP_BRANCH}）へcommitしてよいか判断できないため中断します。確認: git -C ${VAULT} status ／ 復帰: git -C ${VAULT} checkout ${VAULT_BACKUP_BRANCH}"
 fi
 if [[ "$current_branch" != "$VAULT_BACKUP_BRANCH" ]]; then
-  fail "VAULT(${VAULT})の現在のブランチ（${current_branch}）がバックアップ対象ブランチ（${VAULT_BACKUP_BRANCH}。scripts/check-drift.shのVAULT_BACKUP_BRANCHと同一のSSOT）と一致しません。意図しないブランチへの蓄積を避けるため、自動checkoutはせず中断します。本人が状況を確認したうえで、必要なら手動で 'git -C ${VAULT} checkout ${VAULT_BACKUP_BRANCH}' を実行してください。"
+  fail "VAULT(${VAULT})の現在のブランチ（${current_branch}）がバックアップ対象ブランチ（${VAULT_BACKUP_BRANCH}。core/assembly/check-drift.shのVAULT_BACKUP_BRANCHと同一のSSOT）と一致しません。意図しないブランチへの蓄積を避けるため、自動checkoutはせず中断します。本人が状況を確認したうえで、必要なら手動で 'git -C ${VAULT} checkout ${VAULT_BACKUP_BRANCH}' を実行してください。"
 fi
 
 # --- 4. git add -A → 差分があれば commit ---

@@ -38,7 +38,14 @@
 # (README "Usage fetcher" 2026-09-19) `usage/executor/usage-fetch.sh` fetches Claude's OAuth usage percentages, Codex's `rateLimits`, and (since 2026-09-09) Codex's banked rate-limit reset credits (`reset_credits`, see "Codex tickets" in usage/executor/usage_snapshot.py) once a minute (LaunchAgent `com.takumi009.usage-fetch`) and writes them atomically to `~/.cache/claude-codex-usage/{claude,codex}-cache.json` — the same paths and `schema_version` (1) that the Dock-rendering display script `cmux-usage-watch.sh` reads (bundled in the separate `dotfiles` repo).
 # A rate-limited (429) response is a complete no-op (not a byte of the cache changes); any other failure (timeout, network error, malformed response, missing `codex` command) is recorded as `last_error` without touching `fetched_at`, so a display reading a stale-but-`ok` cache and a display reading a freshly-recorded failure are always distinguishable.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# lib は実体の位置から引く＝旧パスの転送 symlink（配置済み LaunchAgent の起動対象）から起動されてもリンクを辿る。
+_self="${BASH_SOURCE[0]:-$0}"
+while [ -L "$_self" ]; do
+  _dir="$(cd "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_dir/$_self" ;; esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 
 # shellcheck source=usage/executor/usage-source.sh
 . "$SCRIPT_DIR/usage-source.sh"

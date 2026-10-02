@@ -123,7 +123,7 @@ STALE_LINE_OK = re.compile(r"廃止|撤去|deprecated|旧方式|旧「|旧C|は�
 
 # 現役ルールとして正しい記述（レポートに出さない）: (ファイル, 行に含まれる文字列)
 STALE_ALLOWLIST = [
-    ("Preferences/absolute-rules.md", "Codex へ委任する全プロンプト"),  # 現役ルール（codex-exec.sh の必読強制・2026-09-16 文面追補で「（初回も --resume も）」が入った）
+    ("Preferences/absolute-rules.md", "Codex へ委任する全プロンプト"),  # 現役ルール（Codex の口の必読強制・2026-09-16 文面追補で「（初回も --resume も）」が入った）
     ("Knowledge/core-rules-compression-archive.md", "Codex へ委任する全プロンプト"),  # 同上の原文保管（圧縮台帳）
     ("Preferences/web-verify-before-acting.md", "毎回 Codex に委任すると"),  # Why欄の経緯説明
     ("Knowledge/anthropic-claude-models-2026-06.md", "02-05 Opus 4.6"),  # リリース履歴（事実）
@@ -854,7 +854,7 @@ def main():
     L.append("")
     L.append(f"# 外部脳 棚卸しレポート {today.isoformat()}")
     L.append("")
-    L.append(f"自動生成（`work/takumi009-ai-env/scripts/vault-agents/`）。ノート {len(notes)} 件を検査し、"
+    L.append(f"自動生成（`work/takumi009-ai-env/ai-brain/executor/`）。ノート {len(notes)} 件を検査し、"
              f"**要確認 {actionable} 件（対処可能な項目のみ。停滞・未読・サイズは各節の情報表示）**。"
              "本レポートは検出のみで自動対処はしない（2026-07-16簡素化で"
              "「最初のセッションでリーダーが自律対処」運用は撤去済み）。綻び（鮮度・リンク切れ・alias）は"

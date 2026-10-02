@@ -25,7 +25,14 @@
 
 set -u
 
-LIB_DIR="$(cd -P "$(dirname "$0")" && pwd)"
+# 共有 lib は実体と同じフォルダ＝旧パスの転送 symlink（dotfiles の既定供給パス）から起動されてもリンクを辿った先を見る。
+_self="$0"
+while [ -L "$_self" ]; do
+  _dir="$(cd -P "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_dir/$_self" ;; esac
+done
+LIB_DIR="$(cd -P "$(dirname "$_self")" && pwd)"
 if [ ! -r "$LIB_DIR/lib-model-view.sh" ]; then
   echo "lib-model-view.sh が見つかりません: $LIB_DIR/lib-model-view.sh" >&2
   exit 1

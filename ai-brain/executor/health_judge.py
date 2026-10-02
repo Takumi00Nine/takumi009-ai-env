@@ -5,7 +5,7 @@
 `last-run.json`・棚卸しの `latest.json`・SessionStart の観測記録・想起ログ）を
 読み、段階（OK／WARNING／ERROR）・要対処項目・付記を JSON 1 個
 （`health-verdict/1`）で返す。bootstrap-vault.sh（注入ブロック）と
-cmux-next-model.sh（Dock の B 行）はどちらもこの出力の写しを描くだけで、
+Dock の Project 供給（B 行）はどちらもこの出力の写しを描くだけで、
 自分では判定しない。
 
   python3 health_judge.py judge --last-run <last-run.json> \

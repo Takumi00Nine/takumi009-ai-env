@@ -1317,9 +1317,9 @@ EOF
     log "  -> 週次振り返りcanvas: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.weekly-review.plist が無い。takumi009-ai-env-private/install-private.sh --with-launchagents 未実行。メイン専用の個人ツール）のためチェック対象外"
   fi
   check_log_freshness "$VAULT_READS_LOG" "VAULT-READS-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
-    "vault-reads.tsv" "claude/hooks/vault-read-log.sh"
+    "vault-reads.tsv" "ai-brain/executor/vault-read-log.sh"
   check_log_freshness "$VAULT_RECALL_LOG" "VAULT-RECALL-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
-    "vault-recall.tsv" "claude/hooks/vault-recall.sh" \
+    "vault-recall.tsv" "ai-brain/executor/vault-recall.sh" \
     "、またはヒット0件の日々が続いている可能性（ヒット時のみ記録する仕様のため区別できません）"
 fi
 
@@ -1447,7 +1447,7 @@ EOF
 fi
 
 echo
-echo "⑦-2. scripts/backup-vault.sh のロック回収ミューテックス固着チェック"
+echo "⑦-2. ai-brain/executor/backup-vault.sh のロック回収ミューテックス固着チェック"
 # 2026-07-14 追加（Codex二次レビュー指摘・Major対応）。backup-vault.shの
 # stale判定〜片付け〜再作成を1プロセスに直列化するmkdir排他ミューテックス
 # （$LOCK_FILE.reclaim）は、旧来あった自己修復（stat mtime→rmdir）を

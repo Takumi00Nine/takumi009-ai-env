@@ -64,7 +64,14 @@
 
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# repo ルートは実体の位置から導く＝旧更新コマンドが固定で呼ぶ旧パスの転送 symlink から起動されてもリンクを辿る。
+_self="${BASH_SOURCE[0]}"
+while [ -L "$_self" ]; do
+  _dir="$(cd "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  case "$_self" in /*) ;; *) _self="$_dir/$_self" ;; esac
+done
+DIR="$(cd "$(dirname "$_self")/../.." && pwd)"
 : "${VAULT:=$HOME/Data/obsidian}"
 # 配役表-能力軸整理-設計-2026-09-07.md §5.1: 案内ログ（step 5）が参照する
 # だけの既定値。install-main.sh も同じ既定値を自分で宣言しており両者は
@@ -125,7 +132,7 @@ fi
 # ⚠️ --check-profile モードでは、この見出しログ自体を出さない
 # （install-main.sh 側の「stdout 1行目＝resolve 行」の出力契約を、本スクリプト側の
 # 前置きログで壊さないため）。
-[ "$CHECK_PROFILE" != "1" ] && log "claude/・codex/ の配置は install-main.sh に委譲します"
+[ "$CHECK_PROFILE" != "1" ] && log "Claude Code・Codex のライブ位置への配置は install-main.sh に委譲します"
 main_args=(--sub-delegate)
 [ "$DRY_RUN" = "1" ] && main_args+=(--dry-run)
 [ "$WITH_DOTFILES" = "1" ] && main_args+=(--with-dotfiles)
@@ -164,7 +171,7 @@ log "（サブ専用の定期更新LaunchAgentも廃止済みのためインス�
 # --- 5. 機役割（machine_role）の案内（サブ機として使うための本人操作を示す） ---
 # 配役表-能力軸整理-設計-2026-09-07.md §5.1: 実体プロファイルへ`machine_role`を
 # 書く処理は足さない（FR-15＝実体を編集するのは本人だけ）。案内を1行出す。
-log "この機をサブ機として使うには、実体プロファイルへ machine_role: configured value=sub を1行書いてください（本スクリプトは実体を書き換えません。既存の実体が対象で、実体がまだ無い場合はconfig/profile.md.sampleからの新規作成のみ行います）: ${AIENV_LOCAL_PROFILE_PATH}"
+log "この機をサブ機として使うには、実体プロファイルへ machine_role: configured value=sub を1行書いてください（本スクリプトは実体を書き換えません。既存の実体が対象で、実体がまだ無い場合はteam/data/profile.md.sampleからの新規作成のみ行います）: ${AIENV_LOCAL_PROFILE_PATH}"
 
 if [ "$DRY_RUN" = "1" ]; then
   log "[dry-run] 完了。実際の変更は一切行っていません。"
