@@ -460,19 +460,47 @@ PYEOF
 # だったbootstrap-vault.shの既知キー配列本体（v1側の第2正本）が撤去され、
 # 能力軸の正本はprofile_resolve.pyのCAPABILITY_KEYS側だけになったため。
 
-echo "=== 9. AC-14: core-workflow.md §7の統合行が公開スナップショットにあり、旧2行と{{reviewer}}が現れない ==="
+echo "=== 9. AC-14: 統合行がrole-vacancy.md（公開スナップショット）にあり、core-workflow.mdは空席は品質ゲートの消滅ではない＋role-vacancyへの参照を持ち、両ファイルで旧2行と{{reviewer}}が現れない（2026-09-22 Vault改訂でcore-workflow.md §7からrole-vacancy.mdへ分離） ==="
 {
   NEW_LINE='**検証職が空席** → リーダー職が受入条件と1対1の最小検証を行い「独立検証なし・リーダー検証のみ」を成果物と報告に明記する'
-  for label_path in "公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/core-workflow.md"; do
-    label="${label_path%%:*}"; f="${label_path#*:}"
-    if [ ! -f "$f" ]; then
-      fail_case "AC-14(${label}): core-workflow.mdが見つからない"
-      continue
-    fi
+  GATE_LINE='空席は品質ゲートの消滅ではない'
+  REF_TOKEN='role-vacancy'
+
+  label_path="公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/role-vacancy.md"
+  label="${label_path%%:*}"; f="${label_path#*:}"
+  if [ ! -f "$f" ]; then
+    fail_case "AC-14(${label}): role-vacancy.mdが見つからない"
+  else
     if grep -qF "$NEW_LINE" "$f"; then
       pass "AC-14(${label}): 統合行（検証職が空席…）がある"
     else
       fail_case "AC-14(${label}): 統合行（検証職が空席…）が無い（Vault反映後／export-public-vault.sh再生成後に緑化想定）"
+    fi
+  fi
+
+  label_path2="公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/core-workflow.md"
+  label2="${label_path2%%:*}"; f2="${label_path2#*:}"
+  if [ ! -f "$f2" ]; then
+    fail_case "AC-14(${label2}): core-workflow.mdが見つからない"
+  else
+    if grep -qF "$GATE_LINE" "$f2"; then
+      pass "AC-14(${label2}): §7に「空席は品質ゲートの消滅ではない」が1件以上ある"
+    else
+      fail_case "AC-14(${label2}): §7に「空席は品質ゲートの消滅ではない」が無い"
+    fi
+    if grep -qF "$REF_TOKEN" "$f2"; then
+      pass "AC-14(${label2}): role-vacancyへの参照が1件以上ある"
+    else
+      fail_case "AC-14(${label2}): role-vacancyへの参照が無い"
+    fi
+  fi
+
+  for label_path in "公開スナップショット(role-vacancy.md):$REPO_ROOT/ai-brain/data/vault-public/Preferences/role-vacancy.md" \
+                     "公開スナップショット(core-workflow.md):$REPO_ROOT/ai-brain/data/vault-public/Preferences/core-workflow.md"; do
+    label="${label_path%%:*}"; f="${label_path#*:}"
+    if [ ! -f "$f" ]; then
+      fail_case "AC-14(${label}): ファイルが見つからない"
+      continue
     fi
     if grep -qF '一次レビュアー職が空席' "$f" || grep -qF 'tester が空席' "$f"; then
       fail_case "AC-14(${label}): 旧2行（一次レビュアー職が空席／tester が空席）が残っている"
@@ -627,7 +655,7 @@ echo "=== 13. AC-10: core-workflow.md §5について、廃止済みgit上の立
   done
 }
 
-echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃止済みの旧マーカー語が0件・machine_roleが1件以上（公開スナップショット） ==="
+echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃止済みの旧マーカー語が0件（公開スナップショット。machine_roleの1件以上要求はvault-operation.mdからcore-workflow.md §5へ移ったためAC-10が担保・本検査では外す） ==="
 {
   for name in "vault-operation.md" "core-workflow.md"; do
     for label_path in "公開スナップショット:$REPO_ROOT/ai-brain/data/vault-public/Preferences/${name}"; do
@@ -644,13 +672,6 @@ echo "=== 14. AC-12①: vault-operation.md・core-workflow.mdについて、廃�
         pass "AC-12①(${label}:${name}): 廃止済みの旧マーカー語が0件"
       else
         fail_case "AC-12①(${label}:${name}): 廃止済みの旧マーカー語が残っている: ${hit}"
-      fi
-      rc2=0
-      hit2="$(grep -nF 'machine_role' "$f" 2>&1)" || rc2=$?
-      if [ "$rc2" -eq 0 ] && [ -n "$hit2" ]; then
-        pass "AC-12①(${label}:${name}): machine_roleが1件以上"
-      else
-        fail_case "AC-12①(${label}:${name}): machine_roleが1件も無い"
       fi
     done
   done
