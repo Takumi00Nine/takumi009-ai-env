@@ -1118,6 +1118,10 @@ echo "=== v1.2 FR-9/D-7: NG 語ファイルの既定解決（core/data/ngwords.t
   mkdir -p "$FAKE_ROOT/ai-brain/executor" "$FAKE_ROOT/core/executor" "$FAKE_ROOT/core/data" "$FAKE_ROOT/scripts"
   cp "$SCRIPT" "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh"
   cp "$REPO_ROOT/ai-brain/executor/personal-link-check.sh" "$FAKE_ROOT/ai-brain/executor/personal-link-check.sh"
+  # v1.2 T4＝export-public-vault.sh は $SCRIPT_DIR/../data/templates/readme-<dir>.md を読む。
+  # fixture の木にも複製する（無いとテンプレ不在で止まる・B-2 の実測）。
+  mkdir -p "$FAKE_ROOT/ai-brain/data"
+  cp -R "$REPO_ROOT/ai-brain/data/templates" "$FAKE_ROOT/ai-brain/data/templates"
   NGWORDS_SHARED_LIB="$REPO_ROOT/core/executor/ngwords-path.sh"
   if [ -f "$NGWORDS_SHARED_LIB" ]; then
     cp "$NGWORDS_SHARED_LIB" "$FAKE_ROOT/core/executor/ngwords-path.sh"

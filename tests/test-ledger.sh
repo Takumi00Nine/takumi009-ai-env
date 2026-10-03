@@ -162,6 +162,9 @@ leak_case FX-20 'c=claude; "$c" --version >/dev/null 2>&1 || :'
 leak_case FX-21 '[ -d "$HOME/.codex/sessions" ] || :'
 
 echo "=== 7. AC-3 ④ 移動表（FX-24・FX-25）＝⑤ が不合格・該当の行を報告 ==="
+# ⚠️ ここで言う「FX-24」「FX-25」は本ファイルが元々使っていた v1.1 §7 の識別子（この
+# echo 直下のローカルな仮の名）で、要件 v1.2 requirements-v1.md §7 の FX-24 PART・
+# FX-25a〜c LBAD（tests/test-notify.sh・test-code27-call-clear.sh が見る）とは別物。
 # 旧も新も 1 行にしか現れない行（＝移動）を 2 つ選ぶ。
 pick_moves() {
   awk -F'\t' '!/^#/ && NF>=2 && $1!="" && $2!="" {o[$1]++; n[$2]++; row[NR]=$1"\t"$2}
@@ -184,18 +187,13 @@ lf_commit_all "$FX"
 run_check "$FX"
 assert_true "FX-25: 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
 assert_true "FX-25: moves 行が由来の空いた新パスを報告" "$(lines_of moves | grep -qF "$NEW_A" && echo 1 || echo 0)"
-# FX-25b（FR-13＝新構成のスイートにも由来が 1 件）: 変更の無いスイートの行（旧＝新の tests/ 行・種別 移動）を
-# 1 本消すと、そのスイートの由来が無くなる＝⑤ が不合格・そのスイートを報告。
-SUITE_ROW="$(awk -F'\t' '!/^#/ && $1==$2 && $1 ~ /^tests\// && $3=="移動" {print NR"\t"$1; exit}' "$BASE/$LF_MOVES_REL" 2>/dev/null)"
-SUITE_LNO="$(printf '%s' "$SUITE_ROW" | cut -f1)"; SUITE_PATH="$(printf '%s' "$SUITE_ROW" | cut -f2)"
-assert_true "FX-25b: 移動表に変更の無いスイートの行（旧＝新・移動）がある" "$([ -n "$SUITE_PATH" ] && echo 1 || echo 0)"
-fresh_copy
-awk -v l="${SUITE_LNO:-0}" 'NR!=l' "$BASE/$LF_MOVES_REL" > "$FX/$LF_MOVES_REL"
-lf_commit_all "$FX"
-run_check "$FX"
-assert_true "FX-25b: 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
-assert_true "FX-25b: moves 行が由来の無いスイートを報告" \
-  "$([ -n "$SUITE_PATH" ] && lines_of moves | grep -qF "$SUITE_PATH" && echo 1 || echo 0)"
+# v1.2 T5（リーダー裁定）＝旧 FX-25b「変更の無いスイートの移動表の行を消すと非 0・由来の
+# 無いスイートを報告」は v1.2 FR-20（台帳の検査は移動表に行の無い部品・スイートを
+# 不合格にしない）と矛盾するため撤去した。FR-20 の正の側（移動表に行の無い新規部品・
+# スイートを不合格にしないこと）は tests/test-ledger.sh の
+# 「v1.2 FR-20: 移動表に行の無い新規部品・スイートを不合格にしない（FX-11 ZZD）」節で見る。
+# 移動表に行の「ある」部品・スイートに v1.1 FR-13 の 3 条件を保つことは、直前の FX-24・
+# FX-25（行はあるが新パスが重なる／空いている＝不合格）がそのまま見ている。
 
 echo "=== 8. 検査 ⑥（AC-3 ④ 後段）: 転送のリンク先が主後継と違う＝forward 行で報告 ==="
 fresh_copy

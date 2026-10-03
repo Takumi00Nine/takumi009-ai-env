@@ -83,6 +83,9 @@ make_fake_repo() {
   # なったため、fixture repoにも同ファイルを複製する（cleanup決定#5）。
   mkdir -p "$repo/ai-brain/executor"
   cp "$REPO_ROOT/ai-brain/executor/personal-link-check.sh" "$repo/ai-brain/executor/personal-link-check.sh"
+  # v1.2 T2＝audit.sh は core/executor/ngwords-path.sh を source する（D-7の共有部品）。
+  # fixture repo にも同ファイルを複製する（personal-link-check.sh と同じ形）。
+  cp "$REPO_ROOT/core/executor/ngwords-path.sh" "$repo/core/executor/ngwords-path.sh"
   echo "# README（テスト用ダミー）" > "$repo/README.md"
   echo "MIT（テスト用ダミー）" > "$repo/LICENSE"
   cat > "$repo/.gitignore" <<'EOF'
@@ -515,8 +518,15 @@ echo "=== 18. v1.2 FR-9/AC-6: NG 語ファイルの既定解決（core/data/ngwo
   mkdir -p "$VAULT_DIR/Personal"
   rc=0
   REPO="$REPO_DIR" VAULT="$VAULT_DIR" "$BASH_BIN" "$REPO_DIR/core/executor/audit.sh" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
-  assert_true "N1: NGWORDS_FILEを渡さなくても新既定を読んで NGWORD_ALPHA を検出する→exit 1（見つからないエラーではない）" \
-    "$([ "$rc" = "1" ] && grep -q "NGWORD_ALPHA" "$WORK/stdout.log" && ! grep -q "見つかりません" "$WORK/stdout.log" "$WORK/stderr.log" && echo 1 || echo 0)"
+  # v1.2 T3＝NG 語の字面が出力に出ることは要求しない（出すと漏えいの逆効果）。観測は
+  # 終了コード（検出＝1）と、現行の監査が出す件数の行（例＝「1行検出（<パス> 参照）」）・
+  # 「見つかりません」「読み取れません」の判定が出ていないことで行う。
+  assert_true "N1: NGWORDS_FILEを渡さなくても新既定を読んで検出する→exit 1（件数の行が出る・見つからない/読めない判定ではない）" \
+    "$([ "$rc" = "1" ] \
+      && grep -qE '行検出' "$WORK/stdout.log" \
+      && ! grep -q "見つかりません" "$WORK/stdout.log" "$WORK/stderr.log" \
+      && ! grep -q "読み取れません" "$WORK/stdout.log" "$WORK/stderr.log" \
+      && echo 1 || echo 0)"
   rm -rf "$REPO_DIR" "$VAULT_DIR" "$WORK"
 
   # N2 両方＝新既定だけを読む（旧既定にしか無い語は検出されない）。
@@ -530,7 +540,10 @@ echo "=== 18. v1.2 FR-9/AC-6: NG 語ファイルの既定解決（core/data/ngwo
   mkdir -p "$VAULT_DIR/Personal"
   rc=0
   REPO="$REPO_DIR" VAULT="$VAULT_DIR" "$BASH_BIN" "$REPO_DIR/core/executor/audit.sh" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
-  assert_not_contains "N2: 旧既定にしか無い語は検出されない（新既定だけを読む）" "$(cat "$WORK/stdout.log")" "NGWORD_GAMMA"
+  # v1.2 T3＝NG 語の字面でなく、件数の行（「0件」＝検出なし）と終了コードで見る。
+  # 旧既定の語（GAMMA）しか履歴に無いので、新既定だけを読むなら item 1 は 0 件→exit 0。
+  assert_true "N2: 旧既定にしか無い語は検出されない（新既定だけを読む→item1は0件・exit0）" \
+    "$([ "$rc" = "0" ] && grep -q '✅ NGワード（履歴）: 0件' "$WORK/stdout.log" && echo 1 || echo 0)"
   rm -rf "$REPO_DIR" "$VAULT_DIR" "$WORK"
 
   # N0 未移行（旧既定だけ）＝非0・移す1コマンドを示す。
@@ -581,7 +594,8 @@ echo "=== 19. v1.2 FX-21: 旧既定が相対リンク（実体はダミー語2�
     rc=0
     REPO="$REPO_DIR" VAULT="$VAULT_DIR" "$BASH_BIN" "$REPO_DIR/core/executor/audit.sh" >"$WORK/stdout2.log" 2>"$WORK/stderr2.log" || rc=$?
     assert_eq "FX-21: 移した後は新既定で読めて検出する→exit 1" "1" "$rc"
-    assert_contains "FX-21: NGWORD_ALPHAを検出（移動後）" "$(cat "$WORK/stdout2.log")" "NGWORD_ALPHA"
+    # v1.2 T3＝字面でなく件数の行で見る（出力に NG 語そのものを出さない設計・漏えいの逆効果）。
+    assert_true "FX-21: 新既定で検出する（移動後・件数の行）" "$(grep -qE '行検出' "$WORK/stdout2.log" && echo 1 || echo 0)"
     assert_true "FX-21: 新既定はリンクのまま実体が実在（切れていない）" \
       "$([ -e "$REPO_DIR/core/data/ngwords.txt" ] && echo 1 || echo 0)"
   fi
