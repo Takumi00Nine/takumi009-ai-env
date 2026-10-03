@@ -905,6 +905,56 @@ mk_maintenance_state() {
 # T群: タイミング（v2 design §11.2 の足跡方式と同型・ハング検査用）
 # ==========================================================================
 
+# v1.2 NFR-5（設計 v1.3 §2.6・実装計画 §1）＝所要時間の上限を持つ判定は、単調時計で
+# 同じ固定入力を既存の回数だけ連続して測り、中央値 ≤ 上限 L だけで判定する（最大値は
+# 使わない）。1 回の実行に実行タイムアウト（既定 30 秒・AIENV_TIMING_RUN_TIMEOUT_SECS
+# で上書き）を掛け、超えたら SIGKILL で打ち切り、その回を不合格にする（終わらない
+# 停止を拾う）。対象＝AC-117（本ファイル・test-cmux-task-model.sh）・v5_ac146（本ファイル）
+# の3箇所（着手ゲート B3 で grep して確定・AC-78 は対象外）。
+#
+# timing_judge_median <回数> <結果を書く時間ファイル> <実行する関数名>
+#   <実行する関数名> を <回数> 回、単調時計で計測しながら呼ぶ（固定入力は呼び出し側が
+#   その関数の中で・または export 済みの環境変数で用意する。リダイレクトも関数の中で
+#   行う）。標準出力へ "<all_ok=0/1> <中央値>" を 1 行返す（all_ok=0 のとき中央値は
+#   "nan"＝実行タイムアウトに当たった回がある、または非 0 終了の回があった）。
+timing_judge_median() {
+  local n="$1" timesfile="$2" fn="$3"
+  local run_timeout="${AIENV_TIMING_RUN_TIMEOUT_SECS:-30}"
+  : > "$timesfile"
+  local i=0 all_ok=1 rc pid watcher t0 t1
+  while [ "$i" -lt "$n" ]; do
+    t0="$(python3 -c 'import time; print(time.monotonic())')"
+    "$fn" &
+    pid=$!
+    ( sleep "$run_timeout"; kill -9 "$pid" 2>/dev/null ) &
+    watcher=$!
+    rc=0
+    wait "$pid" 2>/dev/null || rc=$?
+    kill "$watcher" 2>/dev/null
+    wait "$watcher" 2>/dev/null
+    t1="$(python3 -c 'import time; print(time.monotonic())')"
+    [ "$rc" = "0" ] || all_ok=0
+    python3 -c "print($t1 - $t0)" >> "$timesfile"
+    i=$((i + 1))
+  done
+  local median
+  median="$(python3 -c "
+import statistics
+vals = [float(x) for x in open('$timesfile')]
+print(statistics.median(vals))
+" 2>/dev/null)"
+  [ -n "$median" ] || median="nan"
+  printf '%s %s\n' "$all_ok" "$median"
+}
+
+# timing_pass <timing_judge_median の出力 1 行> <上限 L>  … 中央値 <= L なら 1、他 0。
+timing_pass() {
+  local line="$1" limit="$2" ok med
+  ok="${line%% *}"; med="${line#* }"
+  if [ "$ok" != "1" ]; then echo 0; return; fi
+  python3 -c "print(1 if $med <= $limit else 0)"
+}
+
 # $1 のファイルにパターン($2)が現れるまで$3秒ポーリングする（0.1秒間隔）。
 wait_for_pattern() {
   local file="$1" pattern="$2" timeout="$3" i

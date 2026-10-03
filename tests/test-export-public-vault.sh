@@ -49,6 +49,15 @@ assert_true() {
   fi
 }
 
+assert_contains() {
+  local desc="$1" haystack="$2" needle="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    pass "$desc"
+  else
+    fail_case "$desc (含まれない: \"$needle\")"
+  fi
+}
+
 # exit code だけでなく、意図した理由で失敗したかを stderr メッセージで確認する
 # （exit 1 が別の理由＝セットアップ不備等で出ていないことを保証するため。Codexレビュー指摘）
 assert_stderr_has() {
@@ -1098,6 +1107,52 @@ echo "=== 11. AC-2 large-denylist-failfast: fail-fast対象(Personal)のbasename
   assert_output_not_has "AC-2: basename checkのrg実行エラーでfailしない" "$WORK" "rg 実行エラー (basename check"
 
   rm -rf "$WORK"
+}
+
+echo "=== v1.2 FR-9/D-7: NG 語ファイルの既定解決（core/data/ngwords.txt・NGWORDS_FILE を渡さない）＝audit.sh と同じ共有部品を使う ==="
+{
+  # export-public-vault.sh を、依存する personal-link-check.sh ごと最小の木へ複製し
+  # （SCRIPT_DIR 相対の既定解決をそのまま働かせるため・test-audit.sh と同じ流儀）、
+  # core/executor/ngwords-path.sh（共有部品）も複製して既定解決を実地で確かめる。
+  FAKE_ROOT="$(mktemp -d)"
+  mkdir -p "$FAKE_ROOT/ai-brain/executor" "$FAKE_ROOT/core/executor" "$FAKE_ROOT/core/data" "$FAKE_ROOT/scripts"
+  cp "$SCRIPT" "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh"
+  cp "$REPO_ROOT/ai-brain/executor/personal-link-check.sh" "$FAKE_ROOT/ai-brain/executor/personal-link-check.sh"
+  NGWORDS_SHARED_LIB="$REPO_ROOT/core/executor/ngwords-path.sh"
+  if [ -f "$NGWORDS_SHARED_LIB" ]; then
+    cp "$NGWORDS_SHARED_LIB" "$FAKE_ROOT/core/executor/ngwords-path.sh"
+  fi
+  chmod +x "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh"
+
+  assert_true "D-7: audit.sh と export-public-vault.sh が同じ共有部品ファイルを使う（D-7 の『共有部品1つ』）" \
+    "$(grep -q 'ngwords-path\.sh' "$REPO_ROOT/core/executor/audit.sh" 2>/dev/null \
+      && grep -q 'ngwords-path\.sh' "$REPO_ROOT/ai-brain/executor/export-public-vault.sh" 2>/dev/null \
+      && echo 1 || echo 0)"
+
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"; REPO_DIR="$WORK/repo"
+  make_base_vault "$VAULT_DIR"
+  new_repo "$REPO_DIR"
+  printf 'NGWORD_ALPHA\nNGWORD_BETA' > "$FAKE_ROOT/core/data/ngwords.txt"
+  rc=0
+  VAULT="$VAULT_DIR" AIENV_REPO="$REPO_DIR" \
+    "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+  assert_eq "N1: NGWORDS_FILEを渡さなくても新既定（core/data/ngwords.txt）を読んでexit 0" "0" "$rc"
+  rm -rf "$WORK"
+
+  WORK="$(mktemp -d)"
+  VAULT_DIR="$WORK/vault"; REPO_DIR="$WORK/repo"
+  make_base_vault "$VAULT_DIR"
+  new_repo "$REPO_DIR"
+  rm -f "$FAKE_ROOT/core/data/ngwords.txt"
+  printf 'NGWORD_ALPHA\nNGWORD_BETA' > "$FAKE_ROOT/scripts/ngwords.txt"
+  rc=0
+  VAULT="$VAULT_DIR" AIENV_REPO="$REPO_DIR" \
+    "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+  out="$(cat "$WORK/stdout.log" "$WORK/stderr.log" 2>/dev/null)"
+  assert_true "N0（旧既定だけ）: 非0" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+  assert_contains "N0: 旧→新へ移す1コマンドを出力に示す（core/data/ngwords.txt を含む）" "$out" "core/data/ngwords.txt"
+  rm -rf "$WORK" "$FAKE_ROOT"
 }
 
 echo

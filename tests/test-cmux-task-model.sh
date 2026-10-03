@@ -615,35 +615,22 @@ assert_eq "AC-63′: 状態欄が記載順（[x]x5,[ ]x5,[/],[ ]）" '[x]
 [/]
 [ ]' "$(printf '%s\n' "$ac63_list_out" | awk -F '\t' '{print $4}')"
 
-echo "=== AC-117: 実際の供給側（スタブでない）を表示基底（V-1）で20回連続実行し、中央値・最大値ともに0.4秒以下（単調時計） ==="
+echo "=== v1.2 NFR-5: AC-117 を表示基底（V-1）で20回連続実行し、中央値のみ0.4秒以下で判定（最大値は使わない・1回の実行タイムアウトは AIENV_TIMING_RUN_TIMEOUT_SECS 既定30秒） ==="
 if command -v python3 >/dev/null 2>&1; then
   reset_stub_state "$STUB_STATE"
   mk_note_V1 "$VAULT"
   mk_decl_single "v1proj" "$STATE_FILE"
   AC117_TIMES="$WORKDIR/ac117_times.txt"
-  : > "$AC117_TIMES"
-  ac117_ok=1
-  i=1
-  while [ "$i" -le 20 ]; do
-    t0="$(python3 -c 'import time; print(time.monotonic())')"
+  ac117_run_once() {
     CMUX_TASK_VAULT="$VAULT" CMUX_TASK_STATE="$STATE_FILE" \
-      bash "$TARGET" --list >/dev/null 2>"$WORKDIR/ac117_err" || ac117_ok=0
-    t1="$(python3 -c 'import time; print(time.monotonic())')"
-    python3 -c "print($t1 - $t0)" >> "$AC117_TIMES"
-    i=$((i + 1))
-  done
-  assert_true "AC-117(Task): 20回とも正常終了" "$ac117_ok"
-  AC117_STATS="$(python3 -c "
-import statistics
-vals = [float(x) for x in open('$AC117_TIMES')]
-print(statistics.median(vals), max(vals))
-")"
-  AC117_MEDIAN="${AC117_STATS% *}"
-  AC117_MAX="${AC117_STATS#* }"
-  assert_true "AC-117(Task): 中央値が0.4秒以下（実測 ${AC117_MEDIAN}秒）" \
-    "$(python3 -c "print(1 if $AC117_MEDIAN <= 0.4 else 0)")"
-  assert_true "AC-117(Task): 最大値が0.4秒以下（実測 ${AC117_MAX}秒）" \
-    "$(python3 -c "print(1 if $AC117_MAX <= 0.4 else 0)")"
+      bash "$TARGET" --list >/dev/null 2>"$WORKDIR/ac117_err"
+  }
+  AC117_RESULT="$(timing_judge_median 20 "$AC117_TIMES" ac117_run_once)"
+  AC117_OK="${AC117_RESULT%% *}"
+  AC117_MEDIAN="${AC117_RESULT#* }"
+  assert_true "AC-117(Task): 20回とも実行タイムアウト内に正常終了" "$AC117_OK"
+  assert_true "AC-117(Task): 中央値が0.4秒以下（最大値は使わない・実測 ${AC117_MEDIAN}秒）" \
+    "$(timing_pass "$AC117_RESULT" 0.4)"
 else
   echo "SKIP: python3が無いためAC-117(Task)の単調時計計測を省略します"
 fi

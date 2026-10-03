@@ -45,6 +45,21 @@ cl_run_suites() {
 # README の一括テスト実行の対象（tests/test-*.sh）
 cl_all_suites() { ( cd "$1" && ls tests/test-*.sh ); }
 
+# cl_run_all <wt> <outdir> — v1.2 要件 §2「一括実行の合格」＝`bash tests/run-all.sh` を文字どおり 1 回実行する
+#   （cl_run_suites と同じ安全策＝実 HOME に触れない使い捨ての HOME・claude/codex を除いた PATH・
+#   SKIP_LAUNCHCTL 等を継がない。全スイートを 1 プロセスの中で続けて動かす run-all.sh 自身の仕様どおり、
+#   使い捨て HOME は実行全体で 1 つ＝個々の test-*.sh が自分の中で mktemp 等により自己隔離する前提）。
+#   戻り値＝run-all.sh の終了コード。<outdir>/run-all.log に全スイートの出力をまとめて残す。
+cl_run_all() {
+  local wt="$1" od="$2" rc=0
+  mkdir -p "$od/h" "$od/t"
+  ( cd "$wt" && env -u SKIP_LAUNCHCTL -u LAUNCHCTL_TIMEOUT_SECS HOME="$od/h" TMPDIR="$od/t/" PATH="$(cl_plain_path)" \
+      python3 -c 'import os,signal,sys; [signal.signal(x, signal.SIG_DFL) for x in (signal.SIGINT, signal.SIGQUIT)]; os.execvp("bash", ["bash", "tests/run-all.sh"])' \
+  ) </dev/null >"$od/run-all.log" 2>&1 || rc=$?
+  rm -rf "$od/h" "$od/t"
+  return "$rc"
+}
+
 # 台帳の列（実装計画 §3＝種類 パス 機能 層 提供元 鍵 備考）からスイート行を「機能<TAB>パス」で出す
 cl_ledger_suites() {
   awk -F'\t' -v k="$CLOSING_LEDGER_SUITE_KIND" '$0 !~ /^#/ && $1 == k { print $3 "\t" $2 }' "$1/$CLOSING_LEDGER_REL"

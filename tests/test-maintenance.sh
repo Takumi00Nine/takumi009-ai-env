@@ -123,14 +123,50 @@ assert_files_identical() {
 # $1 = FAKEリポジトリのルート
 setup_fake_repo() {
   local repo="$1"
-  mkdir -p "$repo/ai-brain/executor" "$repo/ai-brain/data" "$repo/core/executor" "$repo/core/assembly" "$repo/notify/connect/macos"
+  mkdir -p "$repo/ai-brain/executor" "$repo/ai-brain/data" "$repo/core/executor" "$repo/core/assembly" "$repo/core/data" \
+    "$repo/notify/executor" "$repo/notify/connect/macos"
   cp "$REPO_ROOT/ai-brain/executor/maintenance.sh" "$repo/ai-brain/executor/maintenance.sh"
   cp "$REPO_ROOT/ai-brain/executor/backup-vault.sh" "$repo/ai-brain/executor/backup-vault.sh"
   cp "$REPO_ROOT/core/executor/pid-lock.sh" "$repo/core/executor/pid-lock.sh"
   cp "$REPO_ROOT/core/executor/status-file.sh" "$repo/core/executor/status-file.sh"
-  cp "$REPO_ROOT/notify/connect/macos/macos-notify.sh" "$repo/notify/connect/macos/macos-notify.sh"
   cp "$REPO_ROOT/ai-brain/executor/maintenance_run_step.py" "$repo/ai-brain/executor/maintenance_run_step.py"
   chmod +x "$repo/ai-brain/executor/maintenance.sh" "$repo/ai-brain/executor/backup-vault.sh"
+
+  # --- v1.2 束 B（口への付け替え）: メンテは Core の知らせの共通部品（実物）だけに
+  # 依存する（旧 notify/connect/macos/macos-notify.sh の直接ソースはしない＝設計 D-2）。
+  # 口（notify.sh）自体は本ファイルの対象外（tests/test-notify.sh が見る）ので、
+  # 台帳の鍵 notify.send が指す先は「FAKE の口」＝偽 osascript へそのまま橋渡しする
+  # だけの最小実体にする（受け取った題・本文が偽 osascript の記録まで届けば、
+  # 既存の全assert（$OSASCRIPT_LOG の内容検査）はそのまま成り立つ＝NFR-1）。
+  if [ -f "$REPO_ROOT/core/executor/notice.sh" ]; then
+    cp "$REPO_ROOT/core/executor/notice.sh" "$repo/core/executor/notice.sh"
+  fi
+  if [ -f "$REPO_ROOT/core/assembly/ledger-tool.sh" ]; then
+    cp "$REPO_ROOT/core/assembly/ledger-tool.sh" "$repo/core/assembly/ledger-tool.sh"
+    chmod +x "$repo/core/assembly/ledger-tool.sh"
+  fi
+  cat > "$repo/notify/executor/notify.sh" <<'FAKEEOF'
+#!/bin/bash
+# FAKE 口（本ファイル専用）: call <区分> <題> <本文> [<音>] を受け、偽 osascript へ
+# そのまま橋渡しする。口自体の挙動（台帳の知らせ列・送り手の選択等）は
+# tests/test-notify.sh の対象＝ここでは「メンテが共通部品経由で口まで正しく
+# 知らせを渡せるか」だけを見る。
+set -u
+kind="${1:-}"
+case "$kind" in
+  call)
+    title="${3:-}"; body="${4:-}"
+    osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title (item 2 of argv)' -e 'end run' \
+      "$body" "$title" >/dev/null 2>&1
+    exit 0
+    ;;
+  answer) exit 0 ;;
+  *) echo "usage: notify.sh call <区分> <題> <本文> [<音>] | notify.sh answer" >&2; exit 64 ;;
+esac
+FAKEEOF
+  chmod +x "$repo/notify/executor/notify.sh"
+  printf 'part\tnotify/executor/notify.sh\tnotify\texecutor\t-\tnotify.send\tFAKE 口（test-maintenance 専用）\n' \
+    > "$repo/core/data/ledger.tsv"
 
   # --- FAKE check-drift.sh（環境変数で終了コード・JSON出力を制御） ---
   cat > "$repo/core/assembly/check-drift.sh" <<'FAKEEOF'
@@ -2124,6 +2160,23 @@ echo "=== H-21. writer_stale_lock_seconds_invalid_fails_fast（A-9）: MAINTENAN
   rc=0
   MAINTENANCE_STALE_LOCK_SECONDS="-5" run_maintenance || rc=$?
   assert_eq "負数は正の整数でない → 終了 1" "1" "$rc"
+}
+
+echo "=== v1.2 FR-5 (a) AC-4 ①: 口が無い（台帳に notify.send の鍵が無い）→ 働き不変・自分のログへ 1 行（design v1.3 §2.2） ==="
+{
+  T="$WORK_ROOT/notify-absent"; mkdir -p "$T"
+  setup_test_env "$T"
+  LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+  EMPTY_LEDGER="$T/empty-ledger.tsv"; : > "$EMPTY_LEDGER"
+  rc=0
+  AIENV_LEDGER="$EMPTY_LEDGER" MAINTENANCE_STALE_LOCK_SECONDS="abc" run_maintenance || rc=$?
+  assert_eq "終了コードは口ありのとき（H-21）と同じ＝1" "1" "$rc"
+  assert_contains "stderr の FAIL 案内は不変" "$(cat "$LAST_STDERR")" "MAINTENANCE_STALE_LOCK_SECONDSが正の整数ではありません"
+  assert_eq "last_result=fail は口ありのときと同じく記録される" "fail" "$(lr '.last_result')"
+  assert_file_not_exists "口が無いので偽 osascript は呼ばれない" "$OSASCRIPT_LOG"
+  assert_contains "自分のログへ『口が無いため知らせを送りません: <題> — <本文>』が1行残る（題を含む）" \
+    "$(cat "$LAST_STDOUT" "$LAST_STDERR" 2>/dev/null)" \
+    "口が無いため知らせを送りません: maintenance.sh 異常終了 — MAINTENANCE_STALE_LOCK_SECONDSの設定が不正なため中断しました: abc"
 }
 
 echo

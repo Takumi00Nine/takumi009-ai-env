@@ -127,7 +127,9 @@ cl_check_env() {
 # ---------------------------------------------------------------- Vault（FX-4・FX-5）
 cl_mk_vault_fx4() {  # cl_mk_vault_fx4 <dest>（中身は基準の vault-public＝両側で同じ入力）
   mkdir -p "$(dirname "$1")"
-  cp -R "$WT0/vault-public" "$1"
+  # -L＝vault-public がシンボリックリンク（v1.1 以降の既定＝ai-brain/data/vault-public を指す）でも
+  # 実体を辿って複製する（束 B の着手ゲート B1 の実測＝素の -R だと壊れたリンクが複製されるだけ）。
+  cp -RL "$WT0/vault-public" "$1"
   cat > "$1/Knowledge/zz-probe.md" <<'EOF'
 ---
 aliases: ["想起プローブ甲"]

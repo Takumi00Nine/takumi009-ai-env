@@ -76,9 +76,13 @@ ac12_run() {
   repo="$h/$CLOSING_REPO_HOME_REL"; V="$h/$CLOSING_VAULT_REL"
   st="$rd/stdin"; : > "$st"
   case "$id" in
-    ab-backup|ab-maint) cl_mk_vault_fx5 "$V" ;;
-    team-dry|usage-fetch) : ;;
+    ab-backup|ab-maint|fx9-maint) cl_mk_vault_fx5 "$V" ;;
+    team-dry|usage-fetch|fx9-usage) : ;;
     *) cl_mk_vault_fx4 "$V" ;;
+  esac
+  # v1.2 FX-9 (a)＝メンテが異常ありで終わる入力（Vault の branch を main 以外にして backup-vault.sh を失敗させる＝Phase0 中断）
+  case "$id" in
+    fx9-maint) git -C "$V" checkout -q -b other-branch ;;
   esac
   case "$id" in
     hk-ups-*) ac12_usage "$h" "$rd/s" "$repo" "$side" "$mode" >/dev/null 2>&1; : > "$rd/s/calls.log" ;;
@@ -110,7 +114,8 @@ ac12_run() {
     ab-recall-*) old="$CLOSING_RECALL_OLD" ;;
     ab-bootstrap) old="$CLOSING_BOOTSTRAP_OLD" ;;
     ab-backup) old="$CLOSING_BACKUP_OLD" ;;
-    ab-maint) old="$CLOSING_MAINT_OLD" ;;
+    ab-maint|fx9-maint) old="$CLOSING_MAINT_OLD" ;;
+    fx9-usage) old="$CLOSING_USAGE_FETCH_OLD" ;;
     team-dry) old="$CLOSING_CLAUDE_EXEC_OLD" ;;
     dock-next-*) old="$(printf '%s\n' $CLOSING_DOCK_OLD | sed -n 1p)" ;;
     dock-task-*) old="$(printf '%s\n' $CLOSING_DOCK_OLD | sed -n 2p)" ;;
@@ -124,12 +129,18 @@ ac12_run() {
     case "$id" in
       ab-recall-*|ab-bootstrap) cl_run "$h" "$rd/s" "$wt" "$repo/$e" < "$st" ;;
       ab-backup) cl_run "$h" "$rd/s" "$wt" "$repo/$e" </dev/null ;;
-      ab-maint) cl_run "$h" "$rd/s" "$wt" AIENV_REPO="$wt" "$repo/$e" </dev/null ;;
+      ab-maint|fx9-maint) cl_run "$h" "$rd/s" "$wt" AIENV_REPO="$wt" "$repo/$e" </dev/null ;;
       team-dry) cl_run "$h" "$rd/s" "$wt" "$(cl_path "$rd/s" "$WT0/tests/fake-claude")" \
           AIENV_LOCAL_PROFILE_PATH="$rd/profile.md" AIENV_MODEL_DEFS_FILE="$rd/models.conf" \
           "$repo/$e" --role implementer --prompt-file "$rd/prompt.txt" --out "$rd/out.json" \
           --task-id t-closing --model-def t-sonnet-high --dry-run </dev/null ;;
       usage-fetch) ac12_usage "$h" "$rd/s" "$repo" "$side" "$mode" ;;
+      # v1.2 FX-9 (b)＝Usage の取得で警告の閾値（既定 80）を超える固定の取得結果（v1.1 FX-26 の Usage 入力を使用率だけ変えたもの）
+      fx9-usage) cl_run "$h" "$rd/s" "$wt" "$(cl_path "$rd/s" "$CL_FIX/usage-bin")" \
+          STUB_CURL_STATUS=200 STUB_CURL_BODY="$CLOSING_USAGE_WARN_BODY" \
+          STUB_SECURITY_JSON='{"claudeAiOauth":{"accessToken":"tok-abc","expiresAt":99999999999999}}' \
+          STUB_CODEX_RESULT_LINE="$(cat "$CL_FIX/usage-bin/codex_success_result_line.json")" \
+          "$repo/$e" </dev/null ;;
       dock-*) cl_run "$h" "$rd/s" "$wt" STUB_STATE="$rd/cmux-state" "$repo/$e" "$opt" </dev/null ;;
       hk-sessionstart) ac12_hooks "$h" "$rd/s" "$wt" SessionStart "" "$st" ;;
       hk-ups-*) ac12_hooks "$h" "$rd/s" "$wt" UserPromptSubmit "" "$st" ;;

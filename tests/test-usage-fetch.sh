@@ -894,21 +894,27 @@ EOF
   rm -rf "$E" "$LOGGING_BIN"
 fi
 
-echo "=== 検証職1巡目 MINOR-7: 通知タイトルは移設元のまま（Q-3「現行挙動のまま」） ==="
+echo "=== 検証職1巡目 MINOR-7: 通知タイトルは移設元のまま（Q-3「現行挙動のまま」）＝v1.2 で usage/executor/usage-notify.sh へ移動（D-2・送る段は口へ分離） ==="
 {
-  assert_true "MINOR-7回帰: usage-notify.shの通知タイトルはclaude-codex-usageのまま" \
-    "$(grep -q 'with title "claude-codex-usage"' "$REPO_ROOT/notify/connect/macos/usage-notify.sh" && echo 1 || echo 0)"
+  assert_true "MINOR-7回帰: usage-notify.sh（移動後）がある" \
+    "$([ -f "$REPO_ROOT/usage/executor/usage-notify.sh" ] && echo 1 || echo 0)"
+  assert_true "MINOR-7回帰: 通知タイトルはclaude-codex-usageのまま（口へ渡す題として埋め込み・AppleScriptの直書きは問わない）" \
+    "$(grep -q 'claude-codex-usage' "$REPO_ROOT/usage/executor/usage-notify.sh" && echo 1 || echo 0)"
   assert_true "MINOR-7回帰: 新しいタイトル文言(takumi009-ai-env usage-fetch)は使わない" \
-    "$(grep -q 'takumi009-ai-env usage-fetch' "$REPO_ROOT/notify/connect/macos/usage-notify.sh" && echo 0 || echo 1)"
+    "$(grep -q 'takumi009-ai-env usage-fetch' "$REPO_ROOT/usage/executor/usage-notify.sh" && echo 0 || echo 1)"
+  assert_true "v1.2 D-2: 旧置き場 notify/connect/macos/usage-notify.sh は無い（移動のみ・分割後の複製を残さない）" \
+    "$([ ! -e "$REPO_ROOT/notify/connect/macos/usage-notify.sh" ] && echo 1 || echo 0)"
 }
 
-echo "=== 検証職1巡目 MINOR-8: 通知失敗（osascript失敗）は取得成功を損なわず観測可能になる ==="
+echo "=== 検証職1巡目 MINOR-8 → v1.2 D-2: 通知失敗（osascript失敗）は取得成功を損なわず、知らせの記録（口）へ観測可能になる ==="
 {
   E="$(new_env)"; load_entry_for "$E"; reset_stubs; valid_claude_token
   # WARN_THRESHOLD(既定80)を超える値でwarn通知イベントを発生させ、
-  # osascriptが失敗する状況（AIENV_USAGE_TEST_NOTIFY_LOGを使わず実経路を
-  # 通す）でも取得結果自体は正常に記録され、失敗がログへ1行残ることを
-  # 確認する。
+  # osascriptが失敗する状況（AIENV_USAGE_TEST_NOTIFY_LOGを使わず実経路＝
+  # 口→macOSの送り手→osascript を通す）でも取得結果自体は正常に記録され、
+  # 失敗が知らせの記録（design v1.3 §4＝既定 $HOME/.claude/logs/notify.tsv）
+  # へ1行残ることを確認する（送る段は常に成功を返す＝Usage の通知状態は
+  # 送信の成否に依らず更新される＝設計 D-2）。
   STUB_CURL_STATUS=200
   STUB_CURL_BODY='{"five_hour":{"used_percent":85,"resets_at":"2026-09-09T00:00:00Z"},"seven_day":{"used_percent":85,"resets_at":"2026-09-14T00:00:00Z"}}'
   cat > "$FAKE_BIN/osascript" <<'EOF'
@@ -917,14 +923,57 @@ exit 1
 EOF
   chmod +x "$FAKE_BIN/osascript"; hash -r
   unset AIENV_USAGE_TEST_NOTIFY_LOG
-  out="$(refresh_service claude 2>&1)"
-  rc=$?
+  NOTIFY_LOG="$E/home/.claude/logs/notify.tsv"
+  rc=0
+  refresh_service claude >/dev/null 2>&1 || rc=$?
   assert_eq "MINOR-8回帰: osascript失敗でも取得結果はrefresh_service=0のまま" "0" "$rc"
   assert_eq "MINOR-8回帰: five_hour.used_percentは正常に記録される" "85" "$(jq -r '.five_hour.used_percent' "$CLAUDE_CACHE")"
-  assert_true "MINOR-8回帰: osascript失敗がログへ観測可能な形で残る" \
-    "$(printf '%s' "$out" | grep -q "osascript" && echo 1 || echo 0)"
+  assert_true "v1.2: 知らせの記録に failed 行が残る（既定 \$HOME/.claude/logs/notify.tsv）" \
+    "$([ -f "$NOTIFY_LOG" ] && grep -q "	failed	" "$NOTIFY_LOG" && echo 1 || echo 0)"
+  assert_true "v1.2: その行に題 claude-codex-usage を含む" \
+    "$([ -f "$NOTIFY_LOG" ] && grep -q "claude-codex-usage" "$NOTIFY_LOG" && echo 1 || echo 0)"
   rm -f "$FAKE_BIN/osascript"; hash -r
   rm -rf "$E"
+}
+
+echo "=== v1.2 FR-5 (a): Notify の鍵（notify.send）が台帳に無い → 取得結果は不変・Usage 自身のログへ 1 行（題を含む） ==="
+{
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs; valid_claude_token
+  STUB_CURL_STATUS=200
+  STUB_CURL_BODY='{"five_hour":{"used_percent":85,"resets_at":"2026-09-09T00:00:00Z"},"seven_day":{"used_percent":85,"resets_at":"2026-09-14T00:00:00Z"}}'
+  unset AIENV_USAGE_TEST_NOTIFY_LOG
+  NOLEDGER_DIR="$(mktemp -d)"
+  awk -F'\t' '$6!="notify.send"' "$REPO_ROOT/core/data/ledger.tsv" > "$NOLEDGER_DIR/ledger-nokey.tsv" 2>/dev/null
+  NOTIFY_LOG="$E/home/.claude/logs/notify.tsv"
+  rc=0
+  AIENV_LEDGER="$NOLEDGER_DIR/ledger-nokey.tsv" refresh_service claude >"$E/out.log" 2>&1 || rc=$?
+  assert_eq "口が無くても refresh_service=0 のまま（働き不変）" "0" "$rc"
+  assert_eq "five_hour.used_percentは正常に記録される（働き不変）" "85" "$(jq -r '.five_hour.used_percent' "$CLAUDE_CACHE")"
+  assert_true "自分のログへ『口が無いため知らせを送りません: <題> — <本文>』を含む1行（題 claude-codex-usage を含む）" \
+    "$(grep -q '口が無いため知らせを送りません: claude-codex-usage' "$E/out.log" && echo 1 || echo 0)"
+  assert_eq "知らせの記録ファイルは作られない（鍵なしは共通部品のログだけ・予定された省略）" "0" \
+    "$([ -f "$NOTIFY_LOG" ] && echo 1 || echo 0)"
+  rm -rf "$E" "$NOLEDGER_DIR"
+}
+
+echo "=== v1.2 D-2: AIENV_USAGE_TEST_NOTIFY_LOG は今までどおり共通部品より先に効く（鍵なしの台帳でも口を経由しない） ==="
+{
+  E="$(new_env)"; load_entry_for "$E"; reset_stubs; valid_claude_token
+  STUB_CURL_STATUS=200
+  STUB_CURL_BODY='{"five_hour":{"used_percent":85,"resets_at":"2026-09-09T00:00:00Z"},"seven_day":{"used_percent":85,"resets_at":"2026-09-14T00:00:00Z"}}'
+  TESTDOUBLE_LOG="$E/testdouble.log"
+  AIENV_USAGE_TEST_NOTIFY_LOG="$TESTDOUBLE_LOG"
+  NOLEDGER_DIR="$(mktemp -d)"
+  awk -F'\t' '$6!="notify.send"' "$REPO_ROOT/core/data/ledger.tsv" > "$NOLEDGER_DIR/ledger-nokey.tsv" 2>/dev/null
+  rc=0
+  AIENV_LEDGER="$NOLEDGER_DIR/ledger-nokey.tsv" refresh_service claude >"$E/out.log" 2>&1 || rc=$?
+  assert_eq "テスト用差し替え口を使っても refresh_service=0" "0" "$rc"
+  assert_true "テスト用差し替え口へ本文が書かれる（台帳の鍵なしでも共通部品を経由せず先に効く）" \
+    "$([ -s "$TESTDOUBLE_LOG" ] && echo 1 || echo 0)"
+  assert_eq "『口が無い』の自分ログは出ない（差し替え口が先に成立するため）" "0" \
+    "$(grep -c '口が無いため知らせを送りません' "$E/out.log" 2>/dev/null || true)"
+  unset AIENV_USAGE_TEST_NOTIFY_LOG
+  rm -rf "$E" "$NOLEDGER_DIR"
 }
 
 echo "=== V-08（設計 §5.6）: 接続の列挙（台帳の鍵 usage.fetch）の照会 3 分類＝鍵なし（0 件＝失敗記録「取得口なし」）／台帳異常・実体異常（固定文をログへ・同じ縮退） ==="

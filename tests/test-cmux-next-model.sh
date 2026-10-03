@@ -377,40 +377,27 @@ run_frame_raw
 after="$(vault_snapshot "$VAULT")"
 assert_true "AC-33: 実行前後でVaultが不変" "$([ "$before" = "$after" ] && echo 1 || echo 0)"
 
-echo "=== AC-117: 実際の供給側（スタブでない）をNext Project基底（N-0〜N-8全件）で20回連続実行し、中央値・最大値ともに0.4秒以下（単調時計） ==="
+echo "=== v1.2 NFR-5: AC-117 を Next Project基底（N-0〜N-8全件）で20回連続実行し、中央値のみ0.4秒以下で判定（最大値は使わない・1回の実行タイムアウトは AIENV_TIMING_RUN_TIMEOUT_SECS 既定30秒） ==="
 if command -v python3 >/dev/null 2>&1; then
   reset_vault
   mk_notes_N_all "$VAULT"
   mk_inventory_report "$INV_DIR" "2026-09-08" 3
   mk_maintenance_state "$MAINT_FILE" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   AC117_TIMES="$WORKDIR/ac117_times.txt"
-  : > "$AC117_TIMES"
-  ac117_ok=1
-  i=1
-  while [ "$i" -le 20 ]; do
-    t0="$(python3 -c 'import time; print(time.monotonic())')"
+  ac117_run_once() {
     CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" CMUX_NEXT_MAINT_STATE="$MAINT_FILE" \
       CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
       CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
       CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
       CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
-      bash "$TARGET" --list >/dev/null 2>"$WORKDIR/ac117_err" || ac117_ok=0
-    t1="$(python3 -c 'import time; print(time.monotonic())')"
-    python3 -c "print($t1 - $t0)" >> "$AC117_TIMES"
-    i=$((i + 1))
-  done
-  assert_true "AC-117(Project): 20回とも正常終了" "$ac117_ok"
-  AC117_STATS="$(python3 -c "
-import statistics
-vals = [float(x) for x in open('$AC117_TIMES')]
-print(statistics.median(vals), max(vals))
-")"
-  AC117_MEDIAN="${AC117_STATS% *}"
-  AC117_MAX="${AC117_STATS#* }"
-  assert_true "AC-117(Project): 中央値が0.4秒以下（実測 ${AC117_MEDIAN}秒）" \
-    "$(python3 -c "print(1 if $AC117_MEDIAN <= 0.4 else 0)")"
-  assert_true "AC-117(Project): 最大値が0.4秒以下（実測 ${AC117_MAX}秒）" \
-    "$(python3 -c "print(1 if $AC117_MAX <= 0.4 else 0)")"
+      bash "$TARGET" --list >/dev/null 2>"$WORKDIR/ac117_err"
+  }
+  AC117_RESULT="$(timing_judge_median 20 "$AC117_TIMES" ac117_run_once)"
+  AC117_OK="${AC117_RESULT%% *}"
+  AC117_MEDIAN="${AC117_RESULT#* }"
+  assert_true "AC-117(Project): 20回とも実行タイムアウト内に正常終了" "$AC117_OK"
+  assert_true "AC-117(Project): 中央値が0.4秒以下（最大値は使わない・実測 ${AC117_MEDIAN}秒）" \
+    "$(timing_pass "$AC117_RESULT" 0.4)"
 else
   echo "SKIP: python3が無いためAC-117(Project)の単調時計計測を省略します"
 fi
@@ -583,31 +570,40 @@ assert_eq "v5_ac146_no_cmux_call: cmux の呼び出し 0 件" "0" "$(wc -l < "$C
 assert_true "v5_ac146_vault_bytes: 実行前後で Vault がバイト不変" "$([ "$before_v5" = "$after_v5" ] && echo 1 || echo 0)"
 assert_eq "v5_ac146: --list の行数＝基底 8＋WU-B 16" "24" "$(wc -l < "$WORKDIR/list_stdout" | tr -d ' ')"
 if command -v python3 >/dev/null 2>&1; then
-  # NFR-15 v5.8＝29 ノート入力で中央値 0.8 秒以下・最大値 1.2 秒以下（20 回・単調時計）。計時は python 1 プロセスの
-  # 中で供給側を 20 回起動して行う＝python 自身の起動時間（1 回 30〜40 ms）を供給側の
-  # 所要に混ぜない（AC-117 の「python3 -c を前後で起こす」形はそれを含んでいた）。
+  # v1.2 NFR-5＝29 ノート入力で中央値 0.8 秒以下だけで判定（最大値は使わない）。計時は
+  # python 1 プロセスの中で供給側を 20 回起動して行う＝python 自身の起動時間（1 回
+  # 30〜40 ms）を供給側の所要に混ぜない（AC-117 の「python3 -c を前後で起こす」形は
+  # それを含んでいた）。1 回ごとに実行タイムアウト（既定 30 秒・
+  # AIENV_TIMING_RUN_TIMEOUT_SECS で上書き）を掛け、超えたらその回を不合格にする。
+  # 最終判定（中央値 ≤ L）は tests/lib-cmux-fixtures.sh の timing_pass を使う（判定関数は 1 つ）。
   V5_STATS="$(CMUX_NEXT_JUDGE_NOW="$T0" CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" \
     CMUX_NEXT_MAINT_STATE="$MAINT_FILE" CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
     CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
     CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
     CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
+    AIENV_TIMING_RUN_TIMEOUT_SECS="${AIENV_TIMING_RUN_TIMEOUT_SECS:-30}" \
     python3 - "$TARGET" <<'PY'
-import statistics, subprocess, sys, time
+import os, statistics, subprocess, sys, time
+run_timeout = float(os.environ.get("AIENV_TIMING_RUN_TIMEOUT_SECS", "30"))
 vals, ok = [], 1
 for _ in range(20):
     t0 = time.monotonic()
-    r = subprocess.run(["bash", sys.argv[1], "--list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        r = subprocess.run(["bash", sys.argv[1], "--list"], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=run_timeout)
+        rc = r.returncode
+    except subprocess.TimeoutExpired:
+        rc = 124
     vals.append(time.monotonic() - t0)
-    if r.returncode != 0:
+    if rc != 0:
         ok = 0
-print(ok, statistics.median(vals), max(vals))
+print(ok, statistics.median(vals))
 PY
 )"
   set -- $V5_STATS
-  echo "v5_ac146_perf_20runs: 実測 中央値=${2}秒 最大値=${3}秒"
-  assert_true "v5_ac146_perf_20runs: 20 回とも rc=0" "$1"
-  assert_true "v5_ac146_perf_20runs: 中央値 0.8 秒以下（実測 ${2}秒）" "$(python3 -c "print(1 if $2 <= 0.8 else 0)")"
-  assert_true "v5_ac146_perf_20runs: 最大値 1.2 秒以下（実測 ${3}秒）" "$(python3 -c "print(1 if $3 <= 1.2 else 0)")"
+  echo "v5_ac146_perf_20runs: 実測 中央値=${2}秒"
+  assert_true "v5_ac146_perf_20runs: 20 回とも実行タイムアウト内に rc=0" "$1"
+  assert_true "v5_ac146_perf_20runs: 中央値 0.8 秒以下（最大値は使わない・実測 ${2}秒）" "$(timing_pass "$1 $2" 0.8)"
 else
   echo "SKIP: python3 が無いため v5_ac146_perf_20runs を省略します"
 fi

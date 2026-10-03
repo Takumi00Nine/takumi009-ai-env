@@ -1,0 +1,5 @@
+#!/bin/bash
+# 偽 CODE27 取次（消去の入口）＝起動を記録して exit 0（FX-4 の最小実装・README 参照）。
+log="${CODE27_CALL_LOG:-$(cd "$(dirname "$0")/.." && pwd)/calls.log}"
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$log"
+exit 0

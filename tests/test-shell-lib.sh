@@ -111,74 +111,66 @@ echo "=== 5c. status-file.sh: read_status_fileはファイル内容が4状態語
   rm -f "$F"
 }
 
-echo "=== 6. macos-notify.sh: osascriptが無い環境ではexit code 2でWARNを出す(fail-open) ==="
+# 旧 6〜9（macos-notify.sh の notify_macos 関数の単体試験）は v1.2 束 B で
+# notify/connect/macos/deliver.sh（実行可能な送り手）へ置き換わり、送り手の
+# 試験として tests/test-notify.sh へ移した（実装計画 §4 スイートの割当）。
+#
+# 契約（テストが決めた口。実装計画・設計 §2.2(5) に名前の指定が無いので、
+# test-ledger.sh 冒頭と同じ流儀＝足りない分だけここで決める）:
+#   core/executor/notice.sh は共有 lib（実行入口を持たない）で、source した
+#   shell へ最低限 2 関数を公開する。
+#     run_with_timeout <秒> <コマンド...>   … 上限を超えたら子を打ち切り非 0（repo 内に
+#                                             既存の同名複製が複数あり＝設計§8 申し送り・
+#                                             同じ名前を使うことで重複を増やさない）。
+#     notice_record_append <ファイル> <語> <届け先> <題> <詳細>
+#       … 親フォルダが無ければ作ってから、§4 の符号化（\→\\→改行→\n→TAB→\t の順）を
+#         各欄へ施し TAB 区切り 1 行で追記する。
+
+echo "=== 6. core/executor/notice.sh（知らせの共通部品）: run_with_timeout が上限を超えた子を打ち切る（bash 3.2・設計 §2.1） ==="
 {
-  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
-  BINDIR="$(mktemp -d)"
-  for t in echo; do
-    p="$(command -v "$t")"
-    [ -n "$p" ] && ln -s "$p" "$BINDIR/$t"
-  done
-  rc=0
-  err="$(PATH="$BINDIR" notify_macos "タイトル" "本文" 2>&1)" || rc=$?
-  assert_eq "exit code 2" "2" "$rc"
-  [[ "$err" == *"osascript が見つかりません"* ]] && pass "見つからない旨のWARNが出る" || fail_case "見つからない旨のWARNが出る (実際: $err)"
-  rm -rf "$BINDIR"
+  NOTICE_LIB="$REPO_ROOT/core/executor/notice.sh"
+  if [ ! -f "$NOTICE_LIB" ]; then
+    fail_case "core/executor/notice.sh が実在（v1.2 束 B・未実装）"
+  else
+    rc=0
+    out="$(/bin/bash -c '
+      source "$1"
+      t0=$(date +%s)
+      run_with_timeout 1 sleep 5
+      rc=$?
+      t1=$(date +%s)
+      echo "$rc $((t1 - t0))"
+    ' _ "$NOTICE_LIB" 2>&1)" || rc=$?
+    dur="$(printf '%s' "$out" | awk '{print $2}')"
+    assert_true "上限 1 秒で打ち切られる（実測が 1〜4 秒に収まる＝終わらない停止にしない）" \
+      "$([ -n "$dur" ] && [ "$dur" -ge 1 ] && [ "$dur" -le 4 ] && echo 1 || echo 0)"
+  fi
 }
 
-echo "=== 7. macos-notify.sh: osascriptがあれば実際に呼び出しtitle/messageが渡る ==="
+echo "=== 7. core/executor/notice.sh: 記録の追記（親フォルダの作成・1 件 1 行・符号化は §4 の順） ==="
 {
-  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
-  BINDIR="$(mktemp -d)"
-  CALLS="$(mktemp)"
-  cat > "$BINDIR/osascript" <<CALLEOF
-#!/bin/bash
-echo "\$@" >> "$CALLS"
-exit 0
-CALLEOF
-  chmod +x "$BINDIR/osascript"
-  rc=0
-  PATH="$BINDIR:$PATH" notify_macos "テスト通知" "本文だよ" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  call_text="$(cat "$CALLS")"
-  [[ "$call_text" == *"テスト通知"* ]] && pass "titleが渡る" || fail_case "titleが渡る (実際: $call_text)"
-  [[ "$call_text" == *"本文だよ"* ]] && pass "messageが渡る" || fail_case "messageが渡る"
-  rm -rf "$BINDIR" "$CALLS"
-}
-
-echo "=== 8. macos-notify.sh: title/message中のダブルクォート・バックスラッシュがエスケープされAppleScript文字列を壊さない ==="
-{
-  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
-  BINDIR="$(mktemp -d)"
-  CALLS="$(mktemp)"
-  cat > "$BINDIR/osascript" <<CALLEOF
-#!/bin/bash
-echo "\$@" >> "$CALLS"
-exit 0
-CALLEOF
-  chmod +x "$BINDIR/osascript"
-  rc=0
-  PATH="$BINDIR:$PATH" notify_macos '危険な"タイトル"' '本文\に"引用符"を含む' || rc=$?
-  assert_eq "exit code 0（クォート混入でもクラッシュしない）" "0" "$rc"
-  call_text="$(cat "$CALLS")"
-  [[ "$call_text" == *'\"タイトル\"'* ]] && pass "ダブルクォートがエスケープされて渡る" || fail_case "ダブルクォートがエスケープされて渡る (実際: $call_text)"
-  rm -rf "$BINDIR" "$CALLS"
-}
-
-echo "=== 9. macos-notify.sh: osascript自体が失敗(非0終了)したらexit code 1でWARNを出す ==="
-{
-  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
-  BINDIR="$(mktemp -d)"
-  cat > "$BINDIR/osascript" <<'CALLEOF'
-#!/bin/bash
-exit 1
-CALLEOF
-  chmod +x "$BINDIR/osascript"
-  rc=0
-  err="$(PATH="$BINDIR:$PATH" notify_macos "タイトル" "本文" 2>&1)" || rc=$?
-  assert_eq "exit code 1" "1" "$rc"
-  [[ "$err" == *"通知に失敗しました"* ]] && pass "失敗の旨のWARNが出る" || fail_case "失敗の旨のWARNが出る (実際: $err)"
-  rm -rf "$BINDIR"
+  NOTICE_LIB="$REPO_ROOT/core/executor/notice.sh"
+  if [ ! -f "$NOTICE_LIB" ]; then
+    fail_case "core/executor/notice.sh が実在（v1.2 束 B・未実装）"
+  else
+    D="$(mktemp -d)"
+    REC="$D/nested/notify.tsv"
+    rc=0
+    /bin/bash -c '
+      source "$1"
+      notice_record_append "$2" "no-dest" "-" "$(printf "行1\n行2")" "本文	タブ入り\バックスラッシュ"
+    ' _ "$NOTICE_LIB" "$REC" || rc=$?
+    assert_eq "exit 0（親フォルダが無くても作って書ける）" "0" "$rc"
+    assert_true "親フォルダが作られ、1 行で記録される" \
+      "$([ -f "$REC" ] && [ "$(wc -l < "$REC" | tr -d ' ')" = "1" ] && echo 1 || echo 0)"
+    line="$(cat "$REC" 2>/dev/null)"
+    # 符号化の順＝\→\\・改行→\n・TAB→\t（設計§4）。元の題「行1<LF>行2」は符号化後 `行1\n行2`。
+    assert_true "改行が符号化後の文字列 行1\\n行2 として残る（実改行は含まない）" \
+      "$(printf '%s' "$line" | grep -qF '行1\n行2' && [ "$(printf '%s' "$line" | wc -l | tr -d ' ')" = "0" ] && echo 1 || echo 0)"
+    assert_true "TAB・バックスラッシュを含む本文が符号化されて 1 列に残る" \
+      "$(printf '%s' "$line" | grep -qF '本文\tタブ入り\\バックスラッシュ' && echo 1 || echo 0)"
+    rm -rf "$D"
+  fi
 }
 
 echo "=== 10. pid-lock.sh: ロックファイルのパスにシングルクォートを含んでいても取得・解放できる（Codex一次レビュー指摘・Major対応: trap文字列への直接埋め込みからグローバル変数+名前付き関数方式への変更） ==="
