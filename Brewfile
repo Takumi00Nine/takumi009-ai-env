@@ -7,7 +7,7 @@
 
 brew "ripgrep"   # export-public-vault.sh・check-drift.sh 等の private link / NGワード検出（rg コマンド）
 brew "gitleaks"  # export-public-vault.sh 等のシークレット検出
-brew "jq"        # Claude Code hooks（claude/hooks/*.sh）・settings.json の hook コマンドが使用
+brew "jq"        # Claude Code hooks（各機能の hook 部品）・settings.json の hook コマンドが使用
 brew "gh"        # GitHub CLI。private repo 作成・operateの運用（Preferences/git-workflow）で使用。
                  # check-drift.sh の private repo可視性検証（gh repo view）でも使用（未導入でも
                  # driftにはせずWARN表示のみで動作する＝必須ではないが導入を推奨）。

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude/hooks/code27-call-clear.sh のユニットテスト（📣 通知取次 v1・実機スモーク指摘b＝
+# notify/connect/code27/code27-call-clear.sh のユニットテスト（📣 通知取次 v1・実機スモーク指摘b＝
 # 入力時フックは「人の入力」だけで全消去し、背景タスクの完了通知（<task-notification>
 # で始まる入力）では消さない。design notify-v1-design.md v1.3 §2 入力時フック行）。
 #
@@ -14,7 +14,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-HOOK="$REPO_ROOT/claude/hooks/code27-call-clear.sh"
+HOOK="$REPO_ROOT/notify/connect/code27/code27-call-clear.sh"
 
 WORK_DIR="$(mktemp -d)" || { echo "FATAL: mktemp -d に失敗しました" >&2; exit 1; }
 case "$WORK_DIR" in

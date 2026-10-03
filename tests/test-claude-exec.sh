@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/claude-exec.sh のユニットテスト（設計 docs/design-v1.1.1.md §9.1・
+# team/connect/claude-code/claude-exec.sh のユニットテスト（設計 docs/design-v1.1.1.md §9.1・
 # 実装A担当ケース）。
 #
 # 実 claude コマンドには依存しない。tests/fake-claude/claude（偽シム）を
@@ -12,16 +12,22 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/claude-exec.sh"
+SCRIPT="$REPO_ROOT/team/connect/claude-code/claude-exec.sh"
 STUB_SRC="$TESTS_DIR/fake-claude/claude"
-CLAUDE_EXEC_PY="$REPO_ROOT/claude/hooks/lib/claude_exec.py"
-GUARD_COMMON_SH="$REPO_ROOT/claude/hooks/lib/guard_common.sh"
-DELEGATION_GATE_SH="$REPO_ROOT/claude/hooks/delegation-gate-v2.sh"
-REAL_AGENTS_DIR="$REPO_ROOT/claude/agents"
+CLAUDE_EXEC_PY="$REPO_ROOT/team/connect/claude-code/claude_exec.py"
+GUARD_COMMON_SH="$REPO_ROOT/team/connect/claude-code/guard_common.sh"
+DELEGATION_GATE_SH="$REPO_ROOT/team/connect/claude-code/delegation-gate-v2.sh"
+REAL_AGENTS_DIR="$REPO_ROOT/team/rules/agents"
 
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
+
+# AC-5（1 機能を除いた木＝FX-9）: 他機能の鍵が台帳に無い（lookup が rc 1＝鍵なし）ときだけ、その機能の実体を
+# 使う検査を skip する（`skip - <理由>` を 1 行・PASS/FAIL に数えない）。rc 0／2／3 は今までどおり実行する。
+# 鍵 ai-brain.write-gate なし＝子設定に Vault の柵を載せないのが仕様（設計 §5.6）＝「載る」側の検査だけを skip する。
+key_absent() { bash "$REPO_ROOT/core/assembly/ledger-tool.sh" lookup "$1" >/dev/null 2>&1; [ "$?" -eq 1 ]; }
+skip_case() { echo "  skip - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
 assert_eq() {
@@ -417,7 +423,7 @@ print(n)
   assert_true "fake_keys_absent_and_not_in_sources: ANTHROPIC_FAKEが子環境に無い" "$([ "$(stub_env_keys_has "ANTHROPIC_FAKE_$RAND_SUFFIX")" = "0" ] && echo 1 || echo 0)"
   assert_true "fake_keys_absent_and_not_in_sources: AWS_FAKEが子環境に無い" "$([ "$(stub_env_keys_has "AWS_FAKE_$RAND_SUFFIX")" = "0" ] && echo 1 || echo 0)"
   assert_true "fake_keys_absent_and_not_in_sources: CLAUDE_CODE_FAKEが子環境に無い" "$([ "$(stub_env_keys_has "CLAUDE_CODE_FAKE_$RAND_SUFFIX")" = "0" ] && echo 1 || echo 0)"
-  hits="$(grep -RF "$RAND_SUFFIX" "$REPO_ROOT/scripts/claude-exec.sh" "$CLAUDE_EXEC_PY" 2>/dev/null | wc -l | tr -d ' ')"
+  hits="$(grep -RF "$RAND_SUFFIX" "$REPO_ROOT/team/connect/claude-code/claude-exec.sh" "$CLAUDE_EXEC_PY" 2>/dev/null | wc -l | tr -d ' ')"
   assert_eq "fake_keys_absent_and_not_in_sources: 架空キー名はソース中に0件" "0" "$hits"
   unset ANTHROPIC_API_KEY AWS_ACCESS_KEY_ID CLAUDE_CODE_SOME_DUMMY
   unset "ANTHROPIC_FAKE_$RAND_SUFFIX" "AWS_FAKE_$RAND_SUFFIX" "CLAUDE_CODE_FAKE_$RAND_SUFFIX"
@@ -485,7 +491,9 @@ EOF
   new_fixture
   run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g1 --model-def t-sonnet-high
   s_impl="$(stub_settings_json)"
-  assert_contains "child_settings_has_vault_gate_for_non_scribe" "$s_impl" "vault-write-gate.sh"
+  if key_absent ai-brain.write-gate; then skip_case "child_settings_has_vault_gate_for_non_scribe（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_contains "child_settings_has_vault_gate_for_non_scribe" "$s_impl" "vault-write-gate.sh"
+  fi
 
   new_fixture
   run_wrapper --role vault-scribe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g2 --model-def sonnet-noeffort
@@ -496,6 +504,31 @@ EOF
   # agent-model-guard.shのみ)が丸ごと落ちること（=matcher "^Agent$" が
   # 残った--settingsに現れない）
   assert_not_contains "child_settings_drops_empty_entry: ^Agent\$エントリが残らない" "$s_impl" '"^Agent$"'
+
+  # V-08（設計 §5.6）: 子向け柵（台帳の鍵 ai-brain.write-gate）の照会 3 分類。
+  # 鍵なし＝子設定にその柵を載せない（起動は続く）／台帳異常・実体異常＝stderr に照会の固定文＋起動を止める（exit8）。
+  LEDGER_REAL="$REPO_ROOT/core/data/ledger.tsv"
+  new_fixture
+  awk -F'\t' '$6!="ai-brain.write-gate"' "$LEDGER_REAL" > "$WORK/ledger-nokey.tsv"
+  AIENV_LEDGER="$WORK/ledger-nokey.tsv" run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-v08a --model-def t-sonnet-high
+  assert_eq "V-08 鍵なし: 起動は続く(exit0)" "0" "$RC"
+  assert_not_contains "V-08 鍵なし: 子設定に vault-write-gate を載せない" "$(stub_settings_json)" "vault-write-gate.sh"
+  assert_eq "V-08 鍵なし: stderr に LEDGER: 行なし" "0" "$(printf '%s\n' "$RUN_STDERR" | grep -c '^LEDGER: ' || true)"
+
+  new_fixture
+  AIENV_LEDGER="$WORK/no-such-dir/ledger.tsv" run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-v08b --model-def t-sonnet-high
+  assert_eq "V-08 台帳異常: 起動を止める(exit8)" "8" "$RC"
+  assert_eq "V-08 台帳異常: stub 0行" "0" "$(stub_lines)"
+  assert_eq "V-08 台帳異常: stderr に LEDGER: ledger の固定文" "1" "$(printf '%s\n' "$RUN_STDERR" | grep -c '^LEDGER: ledger ' || true)"
+
+  new_fixture
+  { awk -F'\t' '$6!="ai-brain.write-gate"' "$LEDGER_REAL"
+    printf 'part\tai-brain/connect/claude-code/zz-missing-gate.sh\tai-brain\tconnect\tclaude-code\tai-brain.write-gate\t\n'; } > "$WORK/ledger-badpart.tsv"
+  AIENV_LEDGER="$WORK/ledger-badpart.tsv" run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-v08c --model-def t-sonnet-high
+  assert_eq "V-08 実体異常: 起動を止める(exit8)" "8" "$RC"
+  assert_eq "V-08 実体異常: stub 0行" "0" "$(stub_lines)"
+  assert_eq "V-08 実体異常: stderr に LEDGER: part ai-brain.write-gate の固定文" "1" \
+    "$(printf '%s\n' "$RUN_STDERR" | grep -c '^LEDGER: part ai-brain.write-gate ' || true)"
 
   # reject_when_local_settings_present(9)
   new_fixture
@@ -837,7 +870,7 @@ echo "=== 新設①: allowed_tools_matches_role_tools ==="
 {
   new_fixture
   run_wrapper --role vault-scribe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-newac1 --model-def sonnet-noeffort
-  expect_tools="$(python3 "$REPO_ROOT/claude/hooks/lib/agent_def.py" allowed-tools --dir "$AGENTS_DIR" --role vault-scribe)"
+  expect_tools="$(python3 "$REPO_ROOT/team/connect/claude-code/agent_def.py" allowed-tools --dir "$AGENTS_DIR" --role vault-scribe)"
   actual_tools="$(stub_arg_after --allowedTools)"
   assert_eq "allowed_tools_matches_role_tools: agent_def.pyの出力と一致" "$expect_tools" "$actual_tools"
 }
@@ -909,14 +942,14 @@ echo "=== 設計固有の失敗経路: resolver_hang_times_out(4) ==="
   new_fixture
   FAKELIB="$WORK/fake-lib"
   mkdir -p "$FAKELIB"
-  cp "$REPO_ROOT/claude/hooks/lib/agent_def.py" "$FAKELIB/agent_def.py"
-  cp "$REPO_ROOT/claude/hooks/lib/claude_exec.py" "$FAKELIB/claude_exec.py"
+  cp "$REPO_ROOT/team/connect/claude-code/agent_def.py" "$FAKELIB/agent_def.py"
+  cp "$REPO_ROOT/team/connect/claude-code/claude_exec.py" "$FAKELIB/claude_exec.py"
   cat > "$FAKELIB/profile_resolve.py" <<'EOF'
 import sys, time
 time.sleep(60)
 EOF
   FAKESCRIPT="$WORK/fake-claude-exec.sh"
-  sed "s#LIB_DIR=\"\$REPO_ROOT/claude/hooks/lib\"#LIB_DIR=\"$FAKELIB\"#" "$SCRIPT" > "$FAKESCRIPT"
+  sed -e "s#LIB_DIR=\"\$SCRIPT_DIR\"#LIB_DIR=\"$FAKELIB\"#" -e "s#PROFILE_RESOLVE_PY=\"\$REPO_ROOT/team/executor/profile_resolve.py\"#PROFILE_RESOLVE_PY=\"$FAKELIB/profile_resolve.py\"#" "$SCRIPT" > "$FAKESCRIPT"
   chmod +x "$FAKESCRIPT"
   START=$(date +%s)
   RUN_STDOUT="$(bash "$FAKESCRIPT" --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-hang --model-def t-sonnet-high < /dev/null 2>"$WORK/hang-stderr.log")"
@@ -954,18 +987,22 @@ echo "=== 設計固有の失敗経路: warnings_go_to_stderr_only ==="
 
 echo "=== 設計固有の失敗経路: vault_gate_denies_ai_folders ==="
 {
+if key_absent ai-brain.write-gate; then
+  skip_case "vault_gate_denies_ai_folders（AI Brain の鍵 ai-brain.write-gate なし）"
+else
   new_fixture
   VAULT_TARGET="$HOME/Data/obsidian/Knowledge/vg-test.md"
   mkdir -p "$(dirname "$VAULT_TARGET")"
   in1="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"file_path":sys.argv[1]},"cwd":sys.argv[2]}))' "$VAULT_TARGET" "$WORK")"
-  out1="$(printf '%s' "$in1" | bash "$REPO_ROOT/claude/hooks/vault-write-gate.sh")"
+  out1="$(printf '%s' "$in1" | bash "$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh")"
   assert_true "vault_gate_denies_ai_folders: 6フォルダ配下はdeny" "$(is_gate_denied "$out1")"
 
   NONVAULT_TARGET="$HOME/Data/obsidian/Blogs/vg-test2.md"
   mkdir -p "$(dirname "$NONVAULT_TARGET")"
   in2="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"file_path":sys.argv[1]},"cwd":sys.argv[2]}))' "$NONVAULT_TARGET" "$WORK")"
-  out2="$(printf '%s' "$in2" | bash "$REPO_ROOT/claude/hooks/vault-write-gate.sh")"
+  out2="$(printf '%s' "$in2" | bash "$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh")"
   assert_true "vault_gate_denies_ai_folders: 配下でないパスは素通り" "$([ -z "$out2" ] && echo 1 || echo 0)"
+fi
 }
 
 # ============================================================
@@ -1020,7 +1057,7 @@ PYPROF
 # child-settings を直叩きする。結果はグローバル CS_STDOUT / CS_STDERR / CS_RC。
 run_child_settings() {
   local role="$1" dir="$2"
-  CS_STDOUT="$(python3 "$CLAUDE_EXEC_PY" child-settings --src "$REPO_ROOT/claude/settings.json" --role "$role" --child-cwd "$WORK" --agents-dir "$dir" 2>"$WORK/cs-stderr.log")"
+  CS_STDOUT="$(python3 "$CLAUDE_EXEC_PY" child-settings --src "$REPO_ROOT/core/assembly/settings.json" --role "$role" --child-cwd "$WORK" --agents-dir "$dir" 2>"$WORK/cs-stderr.log")"
   CS_RC=$?
   CS_STDERR="$(cat "$WORK/cs-stderr.log" 2>/dev/null || true)"
 }
@@ -1042,7 +1079,9 @@ echo "=== RC-X1. child-settings 直叩き: 宣言の 4 状態（なし／有効�
 
   run_child_settings decl-none "$RCX_DIR"
   assert_eq "RC-X1 decl-none: exit 0" "0" "$CS_RC"
-  assert_eq "RC-X1 decl-none: vault-write-gate エントリ 1 件" "1" "$(count_vault_gate_entries "$CS_STDOUT")"
+  if key_absent ai-brain.write-gate; then skip_case "RC-X1 decl-none: vault-write-gate エントリ 1 件（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_eq "RC-X1 decl-none: vault-write-gate エントリ 1 件" "1" "$(count_vault_gate_entries "$CS_STDOUT")"
+  fi
 
   for pair in "decl-bad:VAULT_WRITE_DECLARATION_INVALID" \
               "decl-dup:VAULT_WRITE_DECLARATION_DUPLICATE" \
@@ -1085,7 +1124,9 @@ echo "=== RC-X3. ラッパー経由: 実定義の複製＋probe（宣言なし�
   run_wrapper --role zz-probe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-rcx3 --model-def t-sonnet-high
   assert_eq "RC-X3: exit 0" "0" "$RC"
   assert_eq "RC-X3: --agents のトップキー={zz-probe}" "zz-probe" "$(stub_arg_after --agents | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
-  assert_eq "RC-X3: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  if key_absent ai-brain.write-gate; then skip_case "RC-X3: --settings に vault-write-gate ちょうど 1 件（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_eq "RC-X3: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  fi
   assert_eq "RC-X3: --allowedTools=Read" "Read" "$(stub_arg_after --allowedTools)"
 }
 
@@ -1101,7 +1142,9 @@ echo "=== RC-X4. ラッパー経由: probe を zz-probe-b へ改名（削除＋�
   run_wrapper --role zz-probe-b --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-rcx4 --model-def t-sonnet-high
   assert_eq "RC-X4: exit 0" "0" "$RC"
   assert_eq "RC-X4: --agents のトップキー={zz-probe-b}" "zz-probe-b" "$(stub_arg_after --agents | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
-  assert_eq "RC-X4: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  if key_absent ai-brain.write-gate; then skip_case "RC-X4: --settings に vault-write-gate ちょうど 1 件（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_eq "RC-X4: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  fi
   assert_eq "RC-X4: --allowedTools=Read" "Read" "$(stub_arg_after --allowedTools)"
 }
 
@@ -1113,7 +1156,7 @@ echo "=== RC-X5. 実定義の全件: vault_declared_writable の真偽と child-
     [ -f "$f" ] || continue
     rcx5_n=$((rcx5_n + 1))
     role="${f##*/}"; role="${role%.md}"
-    declared="$(PYTHONPATH="$REPO_ROOT/claude/hooks/lib" python3 -c 'import sys, agent_def; print(agent_def.vault_declared_writable(sys.argv[1], sys.argv[2]))' "$REAL_AGENTS_DIR" "$role" 2>&1)"
+    declared="$(PYTHONPATH="$REPO_ROOT/team/connect/claude-code" python3 -c 'import sys, agent_def; print(agent_def.vault_declared_writable(sys.argv[1], sys.argv[2]))' "$REAL_AGENTS_DIR" "$role" 2>&1)"
     run_child_settings "$role" "$REAL_AGENTS_DIR"
     assert_eq "RC-X5 $role: child-settings exit 0" "0" "$CS_RC"
     case "$declared" in
@@ -1121,7 +1164,9 @@ echo "=== RC-X5. 実定義の全件: vault_declared_writable の真偽と child-
       False) want=1 ;;
       *)     want="(vault_declared_writable failed: $declared)" ;;
     esac
-    assert_eq "RC-X5 $role: 宣言=$declared ↔ vault-write-gate エントリ $want 件" "$want" "$(count_vault_gate_entries "$CS_STDOUT")"
+    if [ "$want" = "1" ] && key_absent ai-brain.write-gate; then skip_case "RC-X5 $role: 宣言と vault-write-gate エントリの件数（AI Brain の鍵 ai-brain.write-gate なし）"; else
+      assert_eq "RC-X5 $role: 宣言=$declared ↔ vault-write-gate エントリ $want 件" "$want" "$(count_vault_gate_entries "$CS_STDOUT")"
+    fi
   done
   assert_true "RC-X5: 実定義が 1 件以上ある（空虚な真の禁止）" "$([ "$rcx5_n" -ge 1 ] && echo 1 || echo 0)"
 }

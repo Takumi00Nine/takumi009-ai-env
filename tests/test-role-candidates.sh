@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-role-candidates.sh — claude/hooks/lib/role_candidates.py の
+# tests/test-role-candidates.sh — team/connect/claude-code/role_candidates.py の
 # 受入条件テスト（設計-v1.2.md §4「D-3 候補一覧コマンド」・
 # 要件v1.2.1 §3.3 FR-14〜24・AC-6・AC-7・AC-8）。
 #
@@ -26,12 +26,17 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-RC="$REPO_ROOT/claude/hooks/lib/role_candidates.py"
+RC="$REPO_ROOT/team/connect/claude-code/role_candidates.py"
 
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
+
+# AC-5（1 機能を除いた木＝FX-9）: 他機能の鍵が台帳に無い（lookup が rc 1＝鍵なし）ときだけ、その機能の実体を
+# 使うケースを skip する（`skip - <理由>` を 1 行・PASS/FAIL に数えない）。rc 0／2／3 は今までどおり実行する。
+key_absent() { bash "$REPO_ROOT/core/assembly/ledger-tool.sh" lookup "$1" >/dev/null 2>&1; [ "$?" -eq 1 ]; }
+skip_case() { echo "  skip - $1"; }
 
 assert_eq() {
   local desc="$1" expected="$2" actual="$3"
@@ -185,6 +190,9 @@ echo "=== AC-7: 未参照の定義を出さない ==="
 
 echo "=== AC-8: okが2条件だけで決まる（枠 fixture／resolver fixture／欠損 fixture） ==="
 {
+  if key_absent usage.snapshot; then
+    skip_case "AC-8(枠): 使用率の実値（h5）で ok／no が決まる（Usage の鍵 usage.snapshot なし）"
+  else
   # --- 枠 fixture: claude-subscriptionのfive_hourを0にする ---
   zero_out="$(RCALL "$ZERO_H5_CACHE")"
   leader_row="$(printf '%s\n' "$zero_out" | awk -F'\t' '$1=="leader"{print}')"
@@ -197,6 +205,7 @@ echo "=== AC-8: okが2条件だけで決まる（枠 fixture／resolver fixture�
   assert_eq "AC-8(枠): implementer/codex-high(external-cli枠)は無関係でok" "ok" "$(printf '%s' "$impl_cli_row" | awk -F'\t' '{print $5}')"
   assert_eq "AC-8(枠): verifier(external-cli枠)は無関係でok" "ok" "$(printf '%s' "$verifier_row" | awk -F'\t' '{print $5}')"
   assert_eq "AC-8(枠): leaderのh5列が0" "0" "$(printf '%s' "$leader_row" | awk -F'\t' '{print $6}')"
+  fi
 
   # --- resolver fixture: 健全キャッシュ下でBedrock候補(system-designer)だけがno ---
   healthy_out="$(RCALL "$HEALTHY_CACHE")"
@@ -262,14 +271,14 @@ echo "=== MINOR-6(FR-21): 候補なし職種の2フィールド写像／unavaila
 
 echo "=== MINOR-8(FR-23): list-candidatesの壊れた行を捨てたらstderrへUNRESOLVEDを1行 ==="
 {
-  # role_candidates.pyのPROFILE_RESOLVE_PYは自身と同じディレクトリを見る
+  # role_candidates.pyのPROFILE_RESOLVE_PYは自身から見た ../../executor を見る
   # ため（__file__基準）、実物のコピー＋壊れた行を返す最小スタブを同じ
   # 一時ディレクトリへ置いて狙い撃ちする（test-update-sub.shのFM-G4と
   # 同じresolverスタブ方式）。
   STUBDIR="$WORK/stublib"
-  mkdir -p "$STUBDIR"
-  cp "$RC" "$STUBDIR/role_candidates.py"
-  cat > "$STUBDIR/profile_resolve.py" <<'PYSTUB'
+  mkdir -p "$STUBDIR/connect/claude-code" "$STUBDIR/executor"
+  cp "$RC" "$STUBDIR/connect/claude-code/role_candidates.py"
+  cat > "$STUBDIR/executor/profile_resolve.py" <<'PYSTUB'
 import sys
 cmd = sys.argv[1] if len(sys.argv) > 1 else ""
 if cmd == "list-candidates":
@@ -279,15 +288,15 @@ if cmd == "list-candidates":
 sys.exit(1)
 PYSTUB
 
-  stub_out="$(python3 "$STUBDIR/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>/dev/null)"
-  stub_err="$(python3 "$STUBDIR/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>&1 1>/dev/null)"
+  stub_out="$(python3 "$STUBDIR/connect/claude-code/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>/dev/null)"
+  stub_err="$(python3 "$STUBDIR/connect/claude-code/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>&1 1>/dev/null)"
   stub_rc=0
-  python3 "$STUBDIR/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" >/dev/null 2>&1 || stub_rc=$?
+  python3 "$STUBDIR/connect/claude-code/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" >/dev/null 2>&1 || stub_rc=$?
 
   assert_eq "MINOR-8: 壊れた行があってもexit0" "0" "$stub_rc"
   assert_contains "MINOR-8: 正常行(leader)はstdoutにそのまま残る" "$stub_out" "leader"
   assert_not_contains "MINOR-8: 壊れた行(broken)はstdoutに出ない" "$stub_out" "broken"
-  assert_eq "MINOR-8: stderrにUNRESOLVED TAB INTERNAL_ERRORを1行" "$(printf 'UNRESOLVED\tINTERNAL_ERROR')" "$stub_err"
+  assert_eq "MINOR-8: stderrにUNRESOLVED TAB INTERNAL_ERRORの行がちょうど1行" "1" "$(printf '%s\n' "$stub_err" | grep -Fc "$(printf 'UNRESOLVED\tINTERNAL_ERROR')")"
 }
 
 echo "=== OPUS55-AC-2: model=claude-opus-5-5（t-opus-high）のpass列がopus ==="
@@ -298,6 +307,59 @@ echo "=== OPUS55-AC-2: model=claude-opus-5-5（t-opus-high）のpass列がopus =
   out="$(RCALL "$MISSING_CACHE")"
   leader_row="$(printf '%s\n' "$out" | awk -F'\t' '$1=="leader"{print}')"
   assert_eq "OPUS55-AC-2: leaderのpass列==opus" "opus" "$(printf '%s' "$leader_row" | awk -F'\t' '{print $4}')"
+}
+
+echo "=== V-08（設計 §5.6）: Usage 提示の照会 3 分類＝鍵なし／台帳異常／実体異常（健全キャッシュでも使用率列は -・exit 0） ==="
+{
+  LEDGER_REAL="$REPO_ROOT/core/data/ledger.tsv"
+  # rc_ledger_case <ラベル> <AIENV_LEDGER> <stderr の期待＝空 or 固定文の先頭>
+  rc_ledger_case() {
+    local label="$1" ledger="$2" want_err="$3" out err rc=0 row
+    out="$(AIENV_LEDGER="$ledger" RCALL "$HEALTHY_CACHE" 2>"$WORK/rc-ledger.err")" || rc=$?
+    err="$(cat "$WORK/rc-ledger.err")"
+    row="$(printf '%s\n' "$out" | awk -F'\t' '$1=="leader"{print}')"
+    assert_eq "$label: exit0（提示専用）" "0" "$rc"
+    assert_eq "$label: leaderのh5・d7は-（使用率を引けない）" "-	-" "$(printf '%s' "$row" | awk -F'\t' '{print $6"\t"$7}')"
+    if [ -z "$want_err" ]; then
+      assert_eq "$label: stderr に LEDGER: 行なし（予定された省略）" "0" "$(printf '%s\n' "$err" | grep -c '^LEDGER: ' || true)"
+    else
+      assert_eq "$label: stderr に固定文（${want_err}…）が 1 行" "1" "$(printf '%s\n' "$err" | grep -c "^$want_err" || true)"
+    fi
+  }
+  awk -F'\t' '$6!="usage.snapshot"' "$LEDGER_REAL" > "$WORK/ledger-nokey.tsv"
+  rc_ledger_case "鍵なし" "$WORK/ledger-nokey.tsv" ""
+  rc_ledger_case "台帳異常（台帳が無い）" "$WORK/no-such-dir/ledger.tsv" "LEDGER: ledger "
+  { cat "$WORK/ledger-nokey.tsv"
+    printf 'part\tusage/executor/zz-missing-snapshot.py\tusage\texecutor\t-\tusage.snapshot\t\n'; } > "$WORK/ledger-badpart.tsv"
+  rc_ledger_case "実体異常（パス不在）" "$WORK/ledger-badpart.tsv" "LEDGER: part usage.snapshot "
+}
+
+echo "=== V-11（裁定）: 台帳ツールの照会がrc1以外で、固定文でないstderr／空のstderrは照会失敗の定型文に正規化する ==="
+{
+  # 台帳ツールの起動先はrole_candidates.py自身の実体位置からの相対
+  # （../../../core/assembly/ledger-tool.sh）でAIENV_LEDGERでは変えられない
+  # ため、MINOR-8と同じ一時repo方式（コピー＋profile_resolve.pyはsymlink）
+  # で台帳ツール自体を偽物に差し替える。
+  V11_STUB="$WORK/v11-rc"
+  mkdir -p "$V11_STUB/team/connect/claude-code" "$V11_STUB/core/assembly"
+  cp "$RC" "$V11_STUB/team/connect/claude-code/role_candidates.py"
+  ln -sfn "$REPO_ROOT/team/executor" "$V11_STUB/team/executor"
+
+  # v11_rc_case <ラベル> <偽台帳ツールの本体> <期待rc>
+  v11_rc_case() {
+    local label="$1" stub_body="$2" want_rc="$3" out err row rc=0
+    printf '#!/usr/bin/env bash\n%s\n' "$stub_body" > "$V11_STUB/core/assembly/ledger-tool.sh"
+    out="$(python3 "$V11_STUB/team/connect/claude-code/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>"$WORK/v11-rc.err")" || rc=$?
+    err="$(cat "$WORK/v11-rc.err")"
+    row="$(printf '%s\n' "$out" | awk -F'\t' '$1=="leader"{print}')"
+    assert_eq "$label: exit0（提示専用）" "0" "$rc"
+    assert_eq "$label: leaderのh5・d7は-（鍵なしと同じ働き）" "-	-" "$(printf '%s' "$row" | awk -F'\t' '{print $6"\t"$7}')"
+    assert_eq "$label: stderrに固定文（LEDGER: ledger 台帳ツールの照会に失敗（rc=${want_rc}））が1行" "1" \
+      "$(printf '%s\n' "$err" | grep -Fc "LEDGER: ledger 台帳ツールの照会に失敗（rc=${want_rc}）")"
+  }
+  v11_rc_case "V-11(a) 固定文でないstderr" 'echo "boom" >&2
+exit 2' "2"
+  v11_rc_case "V-11(b) stderr空" 'exit 3' "3"
 }
 
 echo ""

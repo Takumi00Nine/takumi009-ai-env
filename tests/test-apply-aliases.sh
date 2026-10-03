@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/vault-agents/apply_aliases.py のユニットテスト。
+# ai-brain/executor/apply_aliases.py のユニットテスト。
 #
 # 実 Vault($HOME/Data/obsidian)には一切依存しない。--vault で毎回ダミーの
 # fixtureディレクトリを指定して実行する。generic-aliases.txt はリポジトリ本体の
@@ -13,7 +13,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/vault-agents/apply_aliases.py"
+SCRIPT="$REPO_ROOT/ai-brain/executor/apply_aliases.py"
 
 PASS=0
 FAIL=0
@@ -388,7 +388,7 @@ echo "=== 16. atomic書込み: write_note_atomic()は書込み失敗時に元フ
   PYSCRIPT="$(mktemp)"
   cat > "$PYSCRIPT" <<PYEOF
 import sys, pathlib, os
-sys.path.insert(0, "$REPO_ROOT/scripts/vault-agents")
+sys.path.insert(0, "$REPO_ROOT/ai-brain/executor")
 # write_note_atomic()は2026-07-16簡素化でvault_lib.pyへ抽出済み。
 import vault_lib
 
@@ -470,7 +470,7 @@ echo "=== 19. atomic書込み: os.fchmod()失敗時もファイルディスク�
   PYSCRIPT="$(mktemp)"
   cat > "$PYSCRIPT" <<PYEOF
 import sys, pathlib, os
-sys.path.insert(0, "$REPO_ROOT/scripts/vault-agents")
+sys.path.insert(0, "$REPO_ROOT/ai-brain/executor")
 # write_note_atomic()は2026-07-16簡素化でvault_lib.pyへ抽出済み（apply_aliases.pyも
 # 同じ実体をvault_lib経由で呼ぶ）。
 import vault_lib

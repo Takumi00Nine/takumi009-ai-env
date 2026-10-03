@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# scripts/install-main.sh のユニットテスト（settings.json登録フックとinstaller
+# core/assembly/install-main.sh のユニットテスト（settings.json登録フックとinstaller
 # 配置の突合・雛形配置・Bedrock最小セット・--render-settings-json・
 # --check-profile・職種定義の配布報告）。
 #
-# 値は resolver（claude/hooks/lib/profile_resolve.py）の直叩きと突き合わせ、
+# 値は resolver（team/executor/profile_resolve.py）の直叩きと突き合わせ、
 # テストに literal で書かない。fixture の定義名は `t-` 接頭辞（config/*.sample
 # の実名と結合しない＝tests/test-config-samples.sh AC-5）。
 #
@@ -13,8 +13,8 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/install-main.sh"
-LIB="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
+SCRIPT="$REPO_ROOT/core/assembly/install-main.sh"
+LIB="$REPO_ROOT/team/executor/profile_resolve.py"
 FIXTURES="$TESTS_DIR/fixtures"
 
 PASS=0
@@ -153,13 +153,13 @@ echo "=== 1. settings.jsonに登録済みの全フックがinstall-main.shでも
 
   SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 
-  # claude/settings.json の "command" フィールドから $HOME/.claude/hooks/*.sh の
+  # core/assembly/settings.json の "command" フィールドから $HOME/.claude/hooks/*.sh の
   # パス一覧を抽出する（bash 3.2互換のため mapfile は使わない）。
   hook_paths=()
   while IFS= read -r name; do
     [ -z "$name" ] && continue
     hook_paths+=("$name")
-  done < <(grep -o '"command": "\$HOME/\.claude/hooks/[a-zA-Z0-9_-]*\.sh"' "$REPO_ROOT/claude/settings.json" \
+  done < <(grep -o '"command": "\$HOME/\.claude/hooks/[a-zA-Z0-9_-]*\.sh"' "$REPO_ROOT/core/assembly/settings.json" \
     | sed -E 's/.*hooks\/([a-zA-Z0-9_-]+\.sh)".*/\1/' | sort -u)
 
   assert_true "settings.jsonから1件以上のフックを抽出できた" \
@@ -175,18 +175,18 @@ echo "=== 1. settings.jsonに登録済みの全フックがinstall-main.shでも
   if [[ "$missing" -eq 0 ]]; then
     pass "settings.json登録済み全フック（${#hook_paths[@]}件）がsymlink配置されている"
   fi
-  assert_eq "usage-inject.sh のsymlink先はrepo" "$REPO_ROOT/claude/hooks/usage-inject.sh" \
+  assert_eq "usage-inject.sh のsymlink先はrepo" "$REPO_ROOT/usage/executor/usage-inject.sh" \
     "$(readlink "$FAKE_HOME/.claude/hooks/usage-inject.sh")"
   # cmux/ 配下の3本は symlink せず repo内の実体を絶対パスで指す（chmod一覧への
   # 追加漏れが無いことだけを見る）。
   for f in cmux-task-model.sh cmux-next-model.sh cmux-task-declare.sh; do
     assert_true "cmux/${f} に実行権限が付与されている" \
-      "$([[ -x "$REPO_ROOT/cmux/$f" ]] && echo 1 || echo 0)"
+      "$([[ -x "$REPO_ROOT/dock/executor/$f" ]] && echo 1 || echo 0)"
   done
 
   # テンプレ収載キー（通知系2つ・profile.md の Read allow ルール）が生成側にも
   # 含まれる（期待値はテンプレから動的に取る）。
-  tpl="$REPO_ROOT/claude/settings.json"
+  tpl="$REPO_ROOT/core/assembly/settings.json"
   for key in agentPushNotifEnabled inputNeededNotifEnabled; do
     exp="$(python3 -c "import json; d=json.load(open('$tpl')); print(d.get('$key'))")"
     act="$(python3 -c "import json; d=json.load(open('$FAKE_HOME/.claude/settings.json')); print(d.get('$key'))")"
@@ -208,14 +208,14 @@ echo "=== 2. ローカル実体プロファイルの雛形配置: サンプル�
 
   # 本テストの主眼＝雛形コピー自体の正しさ。installer本体の終了コードは見ない
   # （偽HOMEにはmodels.confが無いため後段のsettings.json生成は失敗しうる）。
-  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1 || true
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" >/dev/null 2>&1 || true
 
   assert_true "profile.mdが作成される" \
     "$([[ -f "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
   assert_true "symlinkではなく実ファイルとしてコピーされる（雛形は独立した実体）" \
     "$([[ ! -L "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
-  assert_true "実体はconfig/profile.md.sampleとバイト完全一致する（生ファイルの単純コピー）" \
-    "$(diff -q "$TMP_REPO/config/profile.md.sample" "$FAKE_HOME/.config/takumi009-ai-env/profile.md" >/dev/null 2>&1 && echo 1 || echo 0)"
+  assert_true "実体はteam/data/profile.md.sampleとバイト完全一致する（生ファイルの単純コピー）" \
+    "$(diff -q "$TMP_REPO/team/data/profile.md.sample" "$FAKE_HOME/.config/takumi009-ai-env/profile.md" >/dev/null 2>&1 && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
@@ -245,7 +245,7 @@ echo "=== 3. ローカル実体プロファイルの雛形配置: 非破壊性�
     # 4種とも「profile.mdが読めない／有効でない」状態なので resolver が非0を
     # 返し、settings.json は生成されず installer は非0で中止する（S2）。
     rc=0
-    out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+    out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" 2>&1)" || rc=$?
 
     assert_true "[$kind] profile.mdが読めない/有効でない状態のためexit非0で中止する" \
       "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
@@ -269,14 +269,14 @@ echo "=== 4. ローカル実体プロファイルの雛形配置: サンプル�
   make_fake_home_no_profile "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  rm -f "$TMP_REPO/config/profile.md.sample"
+  rm -f "$TMP_REPO/team/data/profile.md.sample"
 
   # サンプル無し→雛形無し→実体無しで resolver が PROFILE_NOT_FOUND を返すため
   # settings.json は生成されず非0で終わる（既定モデルへの縮退は退役済み）。
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" 2>&1)" || rc=$?
   assert_true "サンプル未整備のWARNが出る（詳細に「No such file」相当を含む）" \
-    "$(echo "$out" | grep -q 'config/profile.md.sampleを読み取れませんでした' && echo "$out" | grep -q '詳細:.*[Nn]o such file' && echo 1 || echo 0)"
+    "$(echo "$out" | grep -q 'team/data/profile.md.sampleを読み取れませんでした' && echo "$out" | grep -q '詳細:.*[Nn]o such file' && echo 1 || echo 0)"
   assert_true "profile.mdは作成されない" \
     "$([[ ! -e "$FAKE_HOME/.config/takumi009-ai-env/profile.md" ]] && echo 1 || echo 0)"
   assert_true "実体が無いため settings.json は生成されず非0で終了する（既定モデルへ静かに倒れない）" \
@@ -600,15 +600,15 @@ echo "=== 18. 設計書S5×S8: テンプレの\"model\"が__AIENV_MODEL__の目�
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
   python3 -c "
 import json
-with open('$TMP_REPO/claude/settings.json') as f:
+with open('$TMP_REPO/core/assembly/settings.json') as f:
     data = json.load(f)
 data['model'] = 'claude-hardcoded-regression'
-with open('$TMP_REPO/claude/settings.json', 'w') as f:
+with open('$TMP_REPO/core/assembly/settings.json', 'w') as f:
     json.dump(data, f, indent=2)
 "
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" 2>&1)" || rc=$?
   assert_true "exit非0・テンプレ検証失敗の理由（__AIENV_MODEL__）が出る" \
     "$([[ "$rc" -ne 0 ]] && echo "$out" | grep -q '__AIENV_MODEL__' && echo 1 || echo 0)"
   assert_true "settings.jsonは一切生成されず、NO_GENERATED_FILEが明示される" \
@@ -678,7 +678,7 @@ PYEOF
 }
 
 # --- 職種定義の配布結果を必ず報告する（前提修正 P-2・設計§2.1）。TMP_REPO（実repoの
-#     丸ごとcopy）へ claude/agents/*.md を追加・削除して symlink 配布の挙動を検証する。 ---
+#     丸ごとcopy）へ team/rules/agents/*.md を追加・削除して symlink 配布の挙動を検証する。 ---
 
 echo "=== 21. PA-4: repo に定義を1本足して実行すると symlink ができ、AGENTS: 初回未配置 の固定文に名前が出る（終了コード0） ==="
 {
@@ -686,10 +686,10 @@ echo "=== 21. PA-4: repo に定義を1本足して実行すると symlink がで
   make_fake_home "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  echo "# PA-4 用の追加ロール定義（テスト専用・内容は問わない）" > "$TMP_REPO/claude/agents/test-pa4-role.md"
+  echo "# PA-4 用の追加ロール定義（テスト専用・内容は問わない）" > "$TMP_REPO/team/rules/agents/test-pa4-role.md"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "追加したロールのsymlinkができる" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa4-role.md" ]] && echo 1 || echo 0)"
@@ -704,16 +704,16 @@ echo "=== 22. PA-5: repo から定義を1本消して実行すると AGENTS: dan
   make_fake_home "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  echo "# PA-5 用の一時ロール定義（次に削除する）" > "$TMP_REPO/claude/agents/test-pa5-role.md"
+  echo "# PA-5 用の一時ロール定義（次に削除する）" > "$TMP_REPO/team/rules/agents/test-pa5-role.md"
 
-  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" >/dev/null 2>&1
   assert_true "前提: baseline実行でsymlinkができている" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
 
-  rm -f "$TMP_REPO/claude/agents/test-pa5-role.md"
+  rm -f "$TMP_REPO/team/rules/agents/test-pa5-role.md"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" 2>&1)" || rc=$?
   assert_true "終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_agents_line "AGENTS: dangling の固定文にtest-pa5-roleが出る" "$out" "dangling" "test-pa5-role"
   assert_true "symlink自体は消えない（本人判断・削除しない方針）" \
@@ -729,10 +729,10 @@ echo "=== 23. PA-6: 追加もdanglingも無ければ AGENTS: 行が出ず終了�
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
-  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" >/dev/null 2>&1
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "AGENTS: 行が一切出ない" \
     "$(echo "$out" | grep -q '^\[install-main\] AGENTS:' && echo 0 || echo 1)"
@@ -768,16 +768,16 @@ echo "=== 24. generate_settings_json()（意図的に毎回内容が変わる正
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 25. 共有lib（scripts/lib/managed-symlink.sh）を削ったfixtureでinstall-main.shが非0で終わる（lib欠落を静かに飲み込まない） ==="
+echo "=== 25. 共有lib（core/assembly/managed-symlink.sh）を削ったfixtureでinstall-main.shが非0で終わる（lib欠落を静かに飲み込まない） ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  rm -f "$TMP_REPO/scripts/lib/managed-symlink.sh"
+  rm -f "$TMP_REPO/core/assembly/managed-symlink.sh"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-main.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" 2>&1)" || rc=$?
 
   assert_true "共有lib欠落で非0終了し、明示的なFAILが出る" \
     "$([ "$rc" -ne 0 ] && echo "$out" | grep -q "共有ライブラリが読み取れません" && echo 1 || echo 0)"

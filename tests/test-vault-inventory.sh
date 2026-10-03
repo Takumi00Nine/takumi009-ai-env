@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/vault-agents/vault_inventory.py の §9-12 追加検出項目のユニットテスト
+# ai-brain/executor/vault_inventory.py の §9-12 追加検出項目のユニットテスト
 # （aliases 欠落・汎用/短すぎる alias・review_by 期限・未読ノート検出）。
 #
 # 実 Vault($HOME/Data/obsidian)・実ログ($HOME/.claude/logs/vault-{reads,recall}.tsv)
@@ -14,7 +14,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/vault-agents/vault_inventory.py"
+SCRIPT="$REPO_ROOT/ai-brain/executor/vault_inventory.py"
 
 PASS=0
 FAIL=0
@@ -1187,7 +1187,7 @@ echo "=== 31. §6b: statusノートのupdated/dateが未来日だと要確認と
 # だけになったため、恒久テストから外した（受入条件は締めで1回確認して終わり
 # ＝Decisions/2026-09-17-tests-rough-not-strict）。
 
-echo "=== 37. read_log()のerror_rows: claude/hooks/vault-recall.sh log_fact()由来の6列目'INFO'行はERROR件数に算入しない（旧形式のレベル列なし行は従来どおり算入・後方互換） ==="
+echo "=== 37. read_log()のerror_rows: ai-brain/executor/vault-recall.sh log_fact()由来の6列目'INFO'行はERROR件数に算入しない（旧形式のレベル列なし行は従来どおり算入・後方互換） ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"

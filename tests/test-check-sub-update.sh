@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude/hooks/check-sub-update.sh のユニットテスト。
+# core/assembly/check-sub-update.sh のユニットテスト。
 #
 # 実 ~/Data/obsidian・実 ~/work/takumi009-ai-env・実GitHubには一切依存しない。
 # ローカルの使い捨てbare repoを「origin」に見立て、cloneしたサブ相当のrepoに
@@ -24,7 +24,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/claude/hooks/check-sub-update.sh"
+SCRIPT="$REPO_ROOT/core/assembly/check-sub-update.sh"
 
 PASS=0
 FAIL=0
@@ -337,9 +337,9 @@ echo "=== 5. サブ機・1コミット遅れ: 案内メッセージが出る ===
   assert_true "遅れ1コミットの文言が出る" \
     "$(printf '%s' "$ctx" | grep -q '1 コミット遅れ' && echo 1 || echo 0)"
   assert_true "手動実行コマンドの案内が出る(update-sub.shへの実パス)" \
-    "$(printf '%s' "$ctx" | grep -qF "$SUB/scripts/update-sub.sh" && echo 1 || echo 0)"
+    "$(printf '%s' "$ctx" | grep -qF "$SUB/core/assembly/update-sub.sh" && echo 1 || echo 0)"
   assert_true "セッション内実行の ! プレフィックス形式で案内される" \
-    "$(printf '%s' "$ctx" | grep -qF "\`! $SUB/scripts/update-sub.sh\`" && echo 1 || echo 0)"
+    "$(printf '%s' "$ctx" | grep -qF "\`! $SUB/core/assembly/update-sub.sh\`" && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }

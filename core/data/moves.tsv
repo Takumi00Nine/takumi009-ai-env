@@ -1,0 +1,176 @@
+# 移動表（v1.1＝機能の部品化）。旧構成のパス → 新構成のパスの正本（設計 §6・FR-13）。
+# 列＝旧パス<TAB>新パス<TAB>種別<TAB>転送印。`#` 始まりと空行は読まない。
+#   種別＝移動／分割／新規。新規の旧パスは `-`（由来＝FR-14 の検査）。
+#   主後継＝同じ旧パスを持つ行のうち先頭行（分割は主後継を先に書く）。
+#   転送印＝`転送`＝旧パスに主後継への転送 symlink（相対リンク・git 追跡）を置く。無しは `-`。
+#   末尾 `/` の行はフォルダ単位（配下のパスへ前方一致で当てる）。
+#   スイート（tests/）は置き場を変えない。全スイートが行を持つ＝変更の無いものは旧＝新（移動）、
+#   分けた働きを新スイートへ移したものは分割、新設は新規。
+# 検査＝core/assembly/ledger-tool.sh check の moves（3 条件）・forward（転送のリンク先＝主後継）。
+
+# --- 登録フック（claude/hooks/*.sh＝14 本すべて転送） ---
+claude/hooks/bootstrap-vault.sh	core/connect/claude-code/session-start-compose.sh	分割	転送
+claude/hooks/bootstrap-vault.sh	ai-brain/executor/bootstrap-vault.sh	分割	-
+claude/hooks/bootstrap-vault.sh	team/connect/claude-code/profile-status.sh	分割	-
+claude/hooks/bootstrap-vault.sh	dock/executor/declare-state.sh	分割	-
+claude/hooks/vault-recall.sh	ai-brain/executor/vault-recall.sh	移動	転送
+claude/hooks/vault-read-log.sh	ai-brain/executor/vault-read-log.sh	移動	転送
+claude/hooks/vault-write-gate.sh	ai-brain/connect/claude-code/vault-write-gate.sh	移動	転送
+claude/hooks/agent-model-guard.sh	team/connect/claude-code/agent-model-guard.sh	移動	転送
+claude/hooks/inprocess-gate.sh	team/connect/claude-code/inprocess-gate.sh	移動	転送
+claude/hooks/delegation-gate-v2.sh	team/connect/claude-code/delegation-gate-v2.sh	移動	転送
+claude/hooks/bash-danger-gate.sh	core/connect/claude-code/bash-danger-gate.sh	分割	転送
+claude/hooks/bash-danger-gate.sh	team/connect/claude-code/codex-direct-call-gate.sh	分割	-
+claude/hooks/usage-inject.sh	usage/executor/usage-inject.sh	移動	転送
+claude/hooks/code27-call-clear.sh	notify/connect/code27/code27-call-clear.sh	移動	転送
+claude/hooks/dock-pane-resolve.sh	dock/executor/dock-pane-resolve.sh	移動	転送
+claude/hooks/bash-policy-gate.sh	core/connect/claude-code/bash-policy-gate.sh	移動	転送
+claude/hooks/context-size-warn.sh	core/connect/claude-code/context-size-warn.sh	移動	転送
+claude/hooks/check-sub-update.sh	core/assembly/check-sub-update.sh	移動	転送
+
+# --- フックの共有 lib（claude/hooks/lib/） ---
+claude/hooks/lib/health_judge.py	ai-brain/executor/health_judge.py	移動	-
+claude/hooks/lib/keyword_recall_helper.py	ai-brain/executor/keyword_recall_helper.py	移動	-
+claude/hooks/lib/profile_resolve.py	team/executor/profile_resolve.py	移動	-
+claude/hooks/lib/role_candidates.py	team/connect/claude-code/role_candidates.py	移動	-
+claude/hooks/lib/claude_exec.py	team/connect/claude-code/claude_exec.py	移動	-
+claude/hooks/lib/agent_def.py	team/connect/claude-code/agent_def.py	移動	-
+claude/hooks/lib/guard_common.sh	team/connect/claude-code/guard_common.sh	分割	-
+claude/hooks/lib/guard_common.sh	core/executor/vault-paths.sh	分割	-
+claude/hooks/lib/codex_direct_call_check.py	team/connect/claude-code/codex_direct_call_check.py	移動	-
+claude/hooks/lib/usage_snapshot.py	usage/executor/usage_snapshot.py	分割	-
+claude/hooks/lib/usage_snapshot.py	usage/connect/claude-code/usage.env	分割	-
+claude/hooks/lib/usage_snapshot.py	usage/connect/codex/usage.env	分割	-
+claude/hooks/lib/usage-block.sh	usage/executor/usage-block.sh	移動	-
+
+# --- 登録の雛形・職種定義 ---
+claude/settings.json	core/assembly/settings.json	移動	-
+claude/agents/	team/rules/agents/	移動	-
+
+# --- Dock の供給（cmux/。next-model・task-model は dotfiles の既定供給パス＝転送） ---
+cmux/cmux-next-model.sh	dock/executor/cmux-next-model.sh	移動	転送
+cmux/cmux-task-model.sh	dock/executor/cmux-task-model.sh	移動	転送
+cmux/cmux-task-declare.sh	dock/executor/cmux-task-declare.sh	移動	-
+cmux/lib-cmux-workspace.sh	dock/executor/lib-cmux-workspace.sh	移動	-
+cmux/lib-model-view.sh	dock/executor/lib-model-view.sh	移動	-
+cmux/lib-vault-tasks.sh	dock/executor/lib-vault-tasks.sh	移動	-
+
+# --- Codex の口・設定 ---
+codex/AGENTS.md	team/connect/codex/AGENTS.md	移動	-
+codex/config.toml	team/connect/codex/config.toml	移動	-
+codex/hooks.json	team/connect/codex/hooks.json	移動	-
+
+# --- 設定雛形（config/） ---
+config/profile.md.sample	team/data/profile.md.sample	移動	-
+config/models.conf.sample	team/data/models.conf.sample	移動	-
+config/bedrock.env.sample	team/connect/claude-code/bedrock.env.sample	移動	-
+
+# --- LaunchAgent 定義（launchagents/） ---
+launchagents/com.takumi009.backup-vault.plist	ai-brain/assembly/com.takumi009.backup-vault.plist	移動	-
+launchagents/com.takumi009.maintenance.plist	ai-brain/assembly/com.takumi009.maintenance.plist	移動	-
+launchagents/com.takumi009.usage-fetch.plist	usage/assembly/com.takumi009.usage-fetch.plist	移動	-
+
+# --- scripts/（LaunchAgent の起動対象 3 本と旧更新コマンドが呼ぶ install-sub は転送） ---
+scripts/backup-vault.sh	ai-brain/executor/backup-vault.sh	移動	転送
+scripts/maintenance.sh	ai-brain/executor/maintenance.sh	移動	転送
+scripts/maintenance-kick.sh	ai-brain/executor/maintenance-kick.sh	移動	-
+scripts/export-public-vault.sh	ai-brain/executor/export-public-vault.sh	移動	-
+scripts/fragments-reviewed.sh	ai-brain/executor/fragments-reviewed.sh	移動	-
+scripts/install-backup.sh	ai-brain/assembly/install-backup.sh	移動	-
+scripts/install-maintenance.sh	ai-brain/assembly/install-maintenance.sh	移動	-
+scripts/claude-exec.sh	team/connect/claude-code/claude-exec.sh	移動	-
+scripts/experiments/worker-provider-probe.sh	team/connect/claude-code/worker-provider-probe.sh	移動	-
+scripts/codex-exec.sh	team/connect/codex/codex-exec.sh	移動	-
+scripts/usage-fetch.sh	usage/executor/usage-fetch.sh	移動	転送
+scripts/install-usage-fetch.sh	usage/assembly/install-usage-fetch.sh	移動	-
+scripts/audit.sh	core/executor/audit.sh	移動	-
+scripts/session-handoff.sh	core/connect/claude-code/session-handoff.sh	移動	-
+scripts/install-main.sh	core/assembly/install-main.sh	移動	-
+scripts/install-sub.sh	core/assembly/install-sub.sh	移動	転送
+scripts/update-sub.sh	core/assembly/update-sub.sh	移動	-
+scripts/check-drift.sh	core/assembly/check-drift.sh	移動	-
+scripts/lib/personal-link-check.sh	ai-brain/executor/personal-link-check.sh	移動	-
+scripts/lib/usage-source.sh	usage/executor/usage-source.sh	分割	-
+scripts/lib/usage-source.sh	usage/connect/claude-code/fetch.sh	分割	-
+scripts/lib/usage-source.sh	usage/connect/codex/fetch.sh	分割	-
+scripts/lib/macos-notify.sh	notify/connect/macos/macos-notify.sh	移動	-
+scripts/lib/usage-notify.sh	notify/connect/macos/usage-notify.sh	移動	-
+scripts/lib/pid-lock.sh	core/executor/pid-lock.sh	移動	-
+scripts/lib/status-file.sh	core/executor/status-file.sh	移動	-
+scripts/lib/managed-symlink.sh	core/assembly/managed-symlink.sh	移動	-
+scripts/vault-agents/apply_aliases.py	ai-brain/executor/apply_aliases.py	移動	-
+scripts/vault-agents/fragments_log.py	ai-brain/executor/fragments_log.py	移動	-
+scripts/vault-agents/maintenance_run_step.py	ai-brain/executor/maintenance_run_step.py	移動	-
+scripts/vault-agents/vault_inventory.py	ai-brain/executor/vault_inventory.py	移動	-
+scripts/vault-agents/vault_lib.py	ai-brain/executor/vault_lib.py	移動	-
+scripts/vault-agents/generic-aliases.txt	ai-brain/data/generic-aliases.txt	移動	-
+scripts/templates/	ai-brain/data/templates/	移動	-
+
+# --- 公開スナップショット（旧更新コマンドの手順 4・5 と公開 repo の目印＝転送） ---
+vault-public/	ai-brain/data/vault-public/	移動	転送
+
+# --- 新規（由来＝FR-14 の検査） ---
+-	core/data/ledger.tsv	新規	-
+-	core/data/moves.tsv	新規	-
+-	core/assembly/ledger-tool.sh	新規	-
+
+# --- スイート（分けた働きの節を新スイートへ移したもの・新設） ---
+tests/test-bootstrap-vault.sh	tests/test-bootstrap-vault.sh	分割	-
+tests/test-bootstrap-vault.sh	tests/test-session-start-compose.sh	分割	-
+tests/test-bootstrap-vault.sh	tests/test-session-status.sh	分割	-
+tests/test-bootstrap-vault.sh	tests/test-declare-state.sh	分割	-
+tests/test-bash-danger-gate.sh	tests/test-bash-danger-gate.sh	分割	-
+tests/test-bash-danger-gate.sh	tests/test-codex-direct-call-gate.sh	分割	-
+tests/test-cmux-next-model.sh	tests/test-cmux-next-model.sh	分割	-
+tests/test-cmux-next-model.sh	tests/test-integration.sh	分割	-
+-	tests/test-ledger.sh	新規	-
+-	tests/test-decoupling.sh	新規	-
+
+# --- 変更の無いスイート（旧＝新＝本人裁定 Q5 tests/ は残す） ---
+tests/test-agent-definitions.sh	tests/test-agent-definitions.sh	移動	-
+tests/test-agent-model-guard.sh	tests/test-agent-model-guard.sh	移動	-
+tests/test-apply-aliases.sh	tests/test-apply-aliases.sh	移動	-
+tests/test-audit.sh	tests/test-audit.sh	移動	-
+tests/test-backup-vault.sh	tests/test-backup-vault.sh	移動	-
+tests/test-bash-policy-gate.sh	tests/test-bash-policy-gate.sh	移動	-
+tests/test-check-drift.sh	tests/test-check-drift.sh	移動	-
+tests/test-check-sub-update.sh	tests/test-check-sub-update.sh	移動	-
+tests/test-claude-exec.sh	tests/test-claude-exec.sh	移動	-
+tests/test-cmux-task-declare.sh	tests/test-cmux-task-declare.sh	移動	-
+tests/test-cmux-task-model.sh	tests/test-cmux-task-model.sh	移動	-
+tests/test-code27-call-clear.sh	tests/test-code27-call-clear.sh	移動	-
+tests/test-codex-exec.sh	tests/test-codex-exec.sh	移動	-
+tests/test-config-samples.sh	tests/test-config-samples.sh	移動	-
+tests/test-core-docs-placeholder-schema.sh	tests/test-core-docs-placeholder-schema.sh	移動	-
+tests/test-delegation-gate-v2.sh	tests/test-delegation-gate-v2.sh	移動	-
+tests/test-dock-pane-resolve.sh	tests/test-dock-pane-resolve.sh	移動	-
+tests/test-export-public-vault.sh	tests/test-export-public-vault.sh	移動	-
+tests/test-fragments-log.sh	tests/test-fragments-log.sh	移動	-
+tests/test-fragments-reviewed.sh	tests/test-fragments-reviewed.sh	移動	-
+tests/test-health-judge.sh	tests/test-health-judge.sh	移動	-
+tests/test-inprocess-gate.sh	tests/test-inprocess-gate.sh	移動	-
+tests/test-install-backup.sh	tests/test-install-backup.sh	移動	-
+tests/test-install-main.sh	tests/test-install-main.sh	移動	-
+tests/test-install-maintenance.sh	tests/test-install-maintenance.sh	移動	-
+tests/test-install-sub.sh	tests/test-install-sub.sh	移動	-
+tests/test-install-usage-fetch.sh	tests/test-install-usage-fetch.sh	移動	-
+tests/test-keyword-recall-helper.sh	tests/test-keyword-recall-helper.sh	移動	-
+tests/test-maintenance-kick.sh	tests/test-maintenance-kick.sh	移動	-
+tests/test-maintenance-run-step.sh	tests/test-maintenance-run-step.sh	移動	-
+tests/test-maintenance.sh	tests/test-maintenance.sh	移動	-
+tests/test-managed-symlink.sh	tests/test-managed-symlink.sh	移動	-
+tests/test-model-definitions.sh	tests/test-model-definitions.sh	移動	-
+tests/test-personal-link-check.sh	tests/test-personal-link-check.sh	移動	-
+tests/test-role-candidates.sh	tests/test-role-candidates.sh	移動	-
+tests/test-session-handoff.sh	tests/test-session-handoff.sh	移動	-
+tests/test-shell-lib.sh	tests/test-shell-lib.sh	移動	-
+tests/test-update-sub.sh	tests/test-update-sub.sh	移動	-
+tests/test-usage-fetch.sh	tests/test-usage-fetch.sh	移動	-
+tests/test-usage-inject.sh	tests/test-usage-inject.sh	移動	-
+tests/test-usage-snapshot.sh	tests/test-usage-snapshot.sh	移動	-
+tests/test-vault-inventory.sh	tests/test-vault-inventory.sh	移動	-
+tests/test-vault-lib.sh	tests/test-vault-lib.sh	移動	-
+tests/test-vault-read-log.sh	tests/test-vault-read-log.sh	移動	-
+tests/test-vault-recall.sh	tests/test-vault-recall.sh	移動	-
+tests/test-vault-write-gate.sh	tests/test-vault-write-gate.sh	移動	-
+tests/test-with-dotfiles.sh	tests/test-with-dotfiles.sh	移動	-

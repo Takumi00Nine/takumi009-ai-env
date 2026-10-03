@@ -17,7 +17,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB_DIR="$REPO_ROOT/scripts/lib"
+LIB_DIR="$REPO_ROOT/core/executor"
 
 PASS=0
 FAIL=0
@@ -113,7 +113,7 @@ echo "=== 5c. status-file.sh: read_status_fileはファイル内容が4状態語
 
 echo "=== 6. macos-notify.sh: osascriptが無い環境ではexit code 2でWARNを出す(fail-open) ==="
 {
-  source "$LIB_DIR/macos-notify.sh"
+  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
   BINDIR="$(mktemp -d)"
   for t in echo; do
     p="$(command -v "$t")"
@@ -128,7 +128,7 @@ echo "=== 6. macos-notify.sh: osascriptが無い環境ではexit code 2でWARN�
 
 echo "=== 7. macos-notify.sh: osascriptがあれば実際に呼び出しtitle/messageが渡る ==="
 {
-  source "$LIB_DIR/macos-notify.sh"
+  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
   BINDIR="$(mktemp -d)"
   CALLS="$(mktemp)"
   cat > "$BINDIR/osascript" <<CALLEOF
@@ -148,7 +148,7 @@ CALLEOF
 
 echo "=== 8. macos-notify.sh: title/message中のダブルクォート・バックスラッシュがエスケープされAppleScript文字列を壊さない ==="
 {
-  source "$LIB_DIR/macos-notify.sh"
+  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
   BINDIR="$(mktemp -d)"
   CALLS="$(mktemp)"
   cat > "$BINDIR/osascript" <<CALLEOF
@@ -167,7 +167,7 @@ CALLEOF
 
 echo "=== 9. macos-notify.sh: osascript自体が失敗(非0終了)したらexit code 1でWARNを出す ==="
 {
-  source "$LIB_DIR/macos-notify.sh"
+  source "$REPO_ROOT/notify/connect/macos/macos-notify.sh"
   BINDIR="$(mktemp -d)"
   cat > "$BINDIR/osascript" <<'CALLEOF'
 #!/bin/bash
@@ -789,6 +789,49 @@ os.utime('$LOCK', (t, t))
   kill "$HOLDER_PID" 2>/dev/null
   wait "$HOLDER_PID" 2>/dev/null
   rm -rf "$D" "$STUBDIR"
+}
+
+# 27〜: Vault パス述語（v1.1 で team/connect/claude-code/guard_common.sh から Core の実行器 core/executor/vault-paths.sh へ
+# 分けた＝設計 v1.2 §4.2・§4.3。由来＝tests/test-agent-model-guard.sh「AC-10②(裁定A)」の正本検査）。
+# 契約: 関数名は分割前のまま（guard_vault_ai_prefixes・guard_is_vault_ai_path）＝呼ぶ側（AI Brain の子向け柵・
+# Team の委任柵）の行を変えない。source して使う。$HOME/Data/obsidian 配下の AI 向け 6 フォルダを判定する。
+VAULT_PATHS_SH="$REPO_ROOT/core/executor/vault-paths.sh"
+
+echo "=== 27. vault-paths.sh: AI 向け 6 フォルダのプレフィックスを固定順で 6 行出す ==="
+VP_HOME="/tmp/aienv-vp-home"   # 判定は文字列だけ（ファイルは作らない）
+{
+  source "$VAULT_PATHS_SH" 2>/dev/null || true
+  assert_eq "6 フォルダ（Fragments・Knowledge・Decisions・Projects・Preferences・Personal）" \
+    "$(printf '%s\n' "$VP_HOME/Data/obsidian/Fragments" "$VP_HOME/Data/obsidian/Knowledge" "$VP_HOME/Data/obsidian/Decisions" \
+         "$VP_HOME/Data/obsidian/Projects" "$VP_HOME/Data/obsidian/Preferences" "$VP_HOME/Data/obsidian/Personal")" \
+    "$(HOME="$VP_HOME" guard_vault_ai_prefixes 2>/dev/null)"
+}
+
+echo "=== 28. vault-paths.sh: 6 フォルダ配下だけ 0・フォルダ自身／他フォルダ／似た名前／Vault 外は 1 ==="
+{
+  V="$VP_HOME/Data/obsidian"
+  for f in Fragments Knowledge Decisions Projects Preferences Personal; do
+    rc=0; HOME="$VP_HOME" guard_is_vault_ai_path "$V/$f/x.md" 2>/dev/null || rc=$?
+    assert_eq "$f 配下のファイルは 0" "0" "$rc"
+  done
+  for p in "$V/Knowledge" "$V/Templates/x.md" "$V/Knowledge2/x.md" "/tmp/other/Knowledge/x.md"; do
+    rc=0; HOME="$VP_HOME" guard_is_vault_ai_path "$p" 2>/dev/null || rc=$?
+    assert_eq "対象外は 1: $p" "1" "$rc"
+  done
+}
+
+echo "=== 29. 正本は 1 か所（NFR-7・裁定A の引き継ぎ）: 6 フォルダの literal は vault-paths.sh だけが持ち、分割後の Team の guard_common.sh は定義しない ==="
+{
+  fn_body="$(awk '/^guard_vault_ai_prefixes\(\)/{f=1} f{print} f&&/^}/{exit}' "$VAULT_PATHS_SH" 2>/dev/null)"
+  folders_ok=1
+  for name in Fragments Knowledge Decisions Projects Preferences Personal; do
+    printf '%s' "$fn_body" | grep -qF "$name" || folders_ok=0
+  done
+  assert_eq "vault-paths.sh の guard_vault_ai_prefixes が 6 フォルダの正本を持つ" "1" "$folders_ok"
+  TEAM_GUARD_COMMON="$REPO_ROOT/team/connect/claude-code/guard_common.sh"
+  assert_eq "分割後の Team の guard_common.sh が実在" "1" "$([ -f "$TEAM_GUARD_COMMON" ] && echo 1 || echo 0)"
+  assert_eq "Team の guard_common.sh は Vault 述語を定義しない" "0" \
+    "$(grep -cE '^(guard_vault_ai_prefixes|guard_is_vault_ai_path)\(\)' "$TEAM_GUARD_COMMON" 2>/dev/null || true)"
 }
 
 echo

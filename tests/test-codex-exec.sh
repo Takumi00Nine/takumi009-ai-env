@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/codex-exec.sh のユニットテスト。
+# team/connect/codex/codex-exec.sh のユニットテスト。
 #
 # 実 codex コマンドには依存しない。モックの `codex`（PATH前置）を使って、
 # 引数の組み立て（--search のグローバル位置・resume の `--` 区切り・-c の値の
@@ -16,7 +16,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/codex-exec.sh"
+SCRIPT="$REPO_ROOT/team/connect/codex/codex-exec.sh"
 
 PASS=0
 FAIL=0
@@ -533,7 +533,7 @@ echo "=== 16. --out の親ディレクトリが既存だが書き込み不能な
   rm -rf "$WORK"
 }
 
-# --- 前提修正 P-5 の結合2ケース（2026-09-07・設計§4a）: scripts/codex-exec.sh
+# --- 前提修正 P-5 の結合2ケース（2026-09-07・設計§4a）: team/connect/codex/codex-exec.sh
 #     本体は変更しない。3モード体制の設計が「補助ファイルが存在するか」で
 #     失敗の切り分けをする前提（<out>.wrapper.log／<out>.events.jsonl／
 #     <out>.stderr.log）が守られていることを、呼び出し側の手順（親を作る・

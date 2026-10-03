@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/test-model-definitions.sh — モデル定義ファイルと候補指定-要件-2026-09-08.md
 # （v1.7）§6のfixture27件＋実装回帰RG-1・版境界・cwd不変性・列ずれ回帰を
-# claude/hooks/lib/profile_resolve.py に対して直接検証する。
+# team/executor/profile_resolve.py に対して直接検証する。
 #
 # 正本: ~/work/takumi009-ai-env-private/docs/core-split/
 #   モデル定義ファイルと候補指定-要件-2026-09-08.md（fixture・AC定義）
@@ -18,8 +18,8 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
-BOOTSTRAP="$REPO_ROOT/claude/hooks/bootstrap-vault.sh"
+LIB="$REPO_ROOT/team/executor/profile_resolve.py"
+BOOTSTRAP="$REPO_ROOT/core/connect/claude-code/session-start-compose.sh"
 
 PASS=0
 FAIL=0
@@ -613,7 +613,7 @@ models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5",
 for n in range(1, 29):
     d = root / f"FX-{n:02}"
     (d / "agents").mkdir(parents=True)
-    for source in (r / "claude/agents").glob("*.md"):
+    for source in (r / "team/rules/agents").glob("*.md"):
         shutil.copy2(source, d / "agents" / source.name)
     attrs = dict(provider="anthropic-api", model=models[n-1] if n <= 11 else "claude-opus-5-5",
                  execution="subagent", effort="high")
@@ -653,7 +653,7 @@ for n in range(1, 29):
         agent.write_text(agent.read_text().replace("---\n", f"---\nmodel: {value}\n", 1))
     if n == 18: (d / "agents/requirements-analyst.md").unlink()
 
-lib = r / "claude/hooks/lib/profile_resolve.py"
+lib = r / "team/executor/profile_resolve.py"
 def run(n, *, model_def="pick", profile_path=None, command="resolve-candidate"):
     d = root / f"FX-{n:02}"
     args = ["python3", str(lib), command, str(profile_path or d / "profile.md")]
@@ -780,13 +780,13 @@ echo "=== AC-20: resolve-candidateのeffortの口（ラッパー起動-設計-v1
   assert_eq "ok_and_agent_model_unchanged: effortなし側もOK行は5列のまま" "5" "$noeff_ok_cols"
 
   # ④wrapper_does_not_parse_models_conf: ラッパー本体2ファイル
-  # （scripts/claude-exec.sh・claude/hooks/lib/claude_exec.py＝設計§1・
+  # （team/connect/claude-code/claude-exec.sh・team/connect/claude-code/claude_exec.py＝設計§1・
   # 担当A実装。並行作成中で存在しないこともある＝存在しなければ検査対象
   # 0件でPASSする）がmodels.confを自前で解析しない（判定式をresolverの
   # 外へ複製しない＝rg -nの静的検査）。
   wrapper_files=()
-  [ -f "$REPO_ROOT/scripts/claude-exec.sh" ] && wrapper_files+=("$REPO_ROOT/scripts/claude-exec.sh")
-  [ -f "$REPO_ROOT/claude/hooks/lib/claude_exec.py" ] && wrapper_files+=("$REPO_ROOT/claude/hooks/lib/claude_exec.py")
+  [ -f "$REPO_ROOT/team/connect/claude-code/claude-exec.sh" ] && wrapper_files+=("$REPO_ROOT/team/connect/claude-code/claude-exec.sh")
+  [ -f "$REPO_ROOT/team/connect/claude-code/claude_exec.py" ] && wrapper_files+=("$REPO_ROOT/team/connect/claude-code/claude_exec.py")
   if [ "${#wrapper_files[@]}" -eq 0 ]; then
     bad_files=""
   else

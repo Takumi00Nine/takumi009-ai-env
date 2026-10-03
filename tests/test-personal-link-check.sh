@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/lib/personal-link-check.sh のユニットテスト（Personal リンク検査
+# ai-brain/executor/personal-link-check.sh のユニットテスト（Personal リンク検査
 # 共通モジュール・2026-07-16簡素化・cleanup決定#5）。
 #
 # 採用条件（cleanup決定#5・設計書§6）: 共通化前後で
@@ -14,9 +14,9 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB="$REPO_ROOT/scripts/lib/personal-link-check.sh"
-EXPORT_SCRIPT="$REPO_ROOT/scripts/export-public-vault.sh"
-AUDIT_SCRIPT="$REPO_ROOT/scripts/audit.sh"
+LIB="$REPO_ROOT/ai-brain/executor/personal-link-check.sh"
+EXPORT_SCRIPT="$REPO_ROOT/ai-brain/executor/export-public-vault.sh"
+AUDIT_SCRIPT="$REPO_ROOT/core/executor/audit.sh"
 
 PASS=0
 FAIL=0
@@ -185,25 +185,25 @@ run_audit_quick() {
   REPO="$repo" VAULT="$vault" "$AUDIT_SCRIPT" --quick >"$WORK_TMP/audit-stdout.log" 2>"$WORK_TMP/audit-stderr.log"
 }
 
-# audit.sh 用のfixture repo骨格を作る（scripts/audit.sh + scripts/lib/personal-link-check.sh
-# を実体コピーし、REPO/vault-public/Personal を用意する。export-public-vault.sh側の
-# 出力(vault-public/)をそのままこのrepoへコピーして比較する）。
+# audit.sh 用のfixture repo骨格を作る（core/executor/audit.sh + ai-brain/executor/personal-link-check.sh
+# を実体コピーし、REPO/ai-brain/data/vault-public/Personal を用意する。export-public-vault.sh側の
+# 出力(ai-brain/data/vault-public/)をそのままこのrepoへコピーして比較する）。
 make_audit_repo_skeleton() {
   local repo="$1"
-  mkdir -p "$repo/scripts/lib"
-  cp "$AUDIT_SCRIPT" "$repo/scripts/audit.sh"
-  cp "$LIB" "$repo/scripts/lib/personal-link-check.sh"
-  chmod +x "$repo/scripts/audit.sh"
+  mkdir -p "$repo/core/executor" "$repo/core/assembly" "$repo/ai-brain/executor" "$repo/ai-brain/data"
+  cp "$AUDIT_SCRIPT" "$repo/core/executor/audit.sh"
+  cp "$LIB" "$repo/ai-brain/executor/personal-link-check.sh"
+  chmod +x "$repo/core/executor/audit.sh"
   echo "# README" > "$repo/README.md"
   echo "MIT" > "$repo/LICENSE"
   echo ".DS_Store" > "$repo/.gitignore"
   mkdir -p "$repo/scripts"
   printf 'NGWORD_ALPHA\nNGWORD_BETA\n' > "$repo/scripts/ngwords.txt"
-  cat > "$repo/scripts/install-main.sh" <<'EOF'
+  cat > "$repo/core/assembly/install-main.sh" <<'EOF'
 #!/usr/bin/env bash
 echo dummy
 EOF
-  chmod +x "$repo/scripts/install-main.sh"
+  chmod +x "$repo/core/assembly/install-main.sh"
   git -C "$repo" init -q
   git -C "$repo" config user.name test
   git -C "$repo" config user.email test@example.invalid
@@ -224,8 +224,8 @@ date: 2026-01-01
 ---
 参照: [[Personal/career-private]]
 EOF
-  mkdir -p "$EXPORT_REPO/scripts"
-  cp -r "$REPO_ROOT/scripts/templates" "$EXPORT_REPO/scripts/templates"
+  mkdir -p "$EXPORT_REPO/scripts" "$EXPORT_REPO/ai-brain/data"
+  cp -r "$REPO_ROOT/ai-brain/data/templates" "$EXPORT_REPO/ai-brain/data/templates"
   printf 'NGWORD_ALPHA\nNGWORD_BETA\n' > "$EXPORT_REPO/scripts/ngwords.txt"
   git -C "$EXPORT_REPO" init -q
   git -C "$EXPORT_REPO" config user.name test
@@ -244,14 +244,14 @@ EOF
   # ステージング相当のvault-publicを別途組み立てて監査する。
   AUDIT_REPO="$WORK_TMP/audit-repo"
   make_audit_repo_skeleton "$AUDIT_REPO"
-  mkdir -p "$AUDIT_REPO/vault-public/Preferences"
-  cp "$VAULT_DIR/Preferences/leak.md" "$AUDIT_REPO/vault-public/Preferences/leak.md"
+  mkdir -p "$AUDIT_REPO/ai-brain/data/vault-public/Preferences"
+  cp "$VAULT_DIR/Preferences/leak.md" "$AUDIT_REPO/ai-brain/data/vault-public/Preferences/leak.md"
   git -C "$AUDIT_REPO" add -A && git -C "$AUDIT_REPO" commit -q -m init
 
   audit_rc=0
   run_audit_quick "$AUDIT_REPO" "$VAULT_DIR" || audit_rc=$?
   audit_out="$(cat "$WORK_TMP/audit-stdout.log")"
-  assert_contains "audit.shもPersonalリンクを検出する(❌)" "$audit_out" "❌ Personal リンク（vault-public）"
+  assert_contains "audit.shもPersonalリンクを検出する(❌)" "$audit_out" "❌ Personal リンク（ai-brain/data/vault-public）"
   assert_eq "audit.sh --quickは監査失敗でexit 1" "1" "$audit_rc"
 
   rm -rf "$WORK_TMP"
@@ -272,8 +272,8 @@ date: 2026-01-01
 ---
 無害な本文。Personalへの参照は無い。[[Knowledge/some-note]]は許容対象。
 EOF
-  mkdir -p "$EXPORT_REPO/scripts"
-  cp -r "$REPO_ROOT/scripts/templates" "$EXPORT_REPO/scripts/templates"
+  mkdir -p "$EXPORT_REPO/scripts" "$EXPORT_REPO/ai-brain/data"
+  cp -r "$REPO_ROOT/ai-brain/data/templates" "$EXPORT_REPO/ai-brain/data/templates"
   printf 'NGWORD_ALPHA\nNGWORD_BETA\n' > "$EXPORT_REPO/scripts/ngwords.txt"
   git -C "$EXPORT_REPO" init -q
   git -C "$EXPORT_REPO" config user.name test
@@ -287,13 +287,13 @@ EOF
 
   AUDIT_REPO="$WORK_TMP/audit-repo"
   make_audit_repo_skeleton "$AUDIT_REPO"
-  cp -r "$EXPORT_REPO/vault-public" "$AUDIT_REPO/vault-public"
+  cp -r "$EXPORT_REPO/ai-brain/data/vault-public" "$AUDIT_REPO/ai-brain/data/vault-public"
   git -C "$AUDIT_REPO" add -A && git -C "$AUDIT_REPO" commit -q -m init
 
   audit_rc=0
   run_audit_quick "$AUDIT_REPO" "$VAULT_DIR" || audit_rc=$?
   audit_out="$(cat "$WORK_TMP/audit-stdout.log")"
-  assert_contains "audit.shも0件判定で一致する" "$audit_out" "✅ Personal リンク（vault-public）: 0件"
+  assert_contains "audit.shも0件判定で一致する" "$audit_out" "✅ Personal リンク（ai-brain/data/vault-public）: 0件"
 
   rm -rf "$WORK_TMP"
 }
@@ -314,8 +314,8 @@ date: 2026-01-01
 ---
 参照: [[career-private]]
 EOF
-  mkdir -p "$EXPORT_REPO/scripts"
-  cp -r "$REPO_ROOT/scripts/templates" "$EXPORT_REPO/scripts/templates"
+  mkdir -p "$EXPORT_REPO/scripts" "$EXPORT_REPO/ai-brain/data"
+  cp -r "$REPO_ROOT/ai-brain/data/templates" "$EXPORT_REPO/ai-brain/data/templates"
   printf 'NGWORD_ALPHA\nNGWORD_BETA\n' > "$EXPORT_REPO/scripts/ngwords.txt"
   git -C "$EXPORT_REPO" init -q
   git -C "$EXPORT_REPO" config user.name test
@@ -331,14 +331,14 @@ EOF
 
   AUDIT_REPO="$WORK_TMP/audit-repo"
   make_audit_repo_skeleton "$AUDIT_REPO"
-  mkdir -p "$AUDIT_REPO/vault-public/Preferences"
-  cp "$VAULT_DIR/Preferences/leak-basename.md" "$AUDIT_REPO/vault-public/Preferences/leak-basename.md"
+  mkdir -p "$AUDIT_REPO/ai-brain/data/vault-public/Preferences"
+  cp "$VAULT_DIR/Preferences/leak-basename.md" "$AUDIT_REPO/ai-brain/data/vault-public/Preferences/leak-basename.md"
   git -C "$AUDIT_REPO" add -A && git -C "$AUDIT_REPO" commit -q -m init
 
   audit_rc=0
   run_audit_quick "$AUDIT_REPO" "$VAULT_DIR" || audit_rc=$?
   audit_out="$(cat "$WORK_TMP/audit-stdout.log")"
-  assert_contains "audit.shもbasename形式linkを検出する(❌)" "$audit_out" "❌ Personal リンク（vault-public）"
+  assert_contains "audit.shもbasename形式linkを検出する(❌)" "$audit_out" "❌ Personal リンク（ai-brain/data/vault-public）"
   assert_eq "audit.sh --quickは監査失敗でexit 1" "1" "$audit_rc"
 
   rm -rf "$WORK_TMP"
@@ -373,8 +373,8 @@ echo "=== 12. find失敗時: export-public-vault.shはfail-fastし(set -e)、aud
            "$VAULT_DIR/Explorations" "$VAULT_DIR/Blogs"
   echo "# dummy" > "$VAULT_DIR/Personal/career-private.md"
   echo "# clean" > "$VAULT_DIR/Preferences/clean.md"
-  mkdir -p "$EXPORT_REPO/scripts"
-  cp -r "$REPO_ROOT/scripts/templates" "$EXPORT_REPO/scripts/templates"
+  mkdir -p "$EXPORT_REPO/scripts" "$EXPORT_REPO/ai-brain/data"
+  cp -r "$REPO_ROOT/ai-brain/data/templates" "$EXPORT_REPO/ai-brain/data/templates"
   printf 'NGWORD_ALPHA\nNGWORD_BETA\n' > "$EXPORT_REPO/scripts/ngwords.txt"
   git -C "$EXPORT_REPO" init -q
   git -C "$EXPORT_REPO" config user.name test
@@ -399,8 +399,8 @@ FINDEOF
 
   AUDIT_REPO="$WORK_TMP/audit-repo"
   make_audit_repo_skeleton "$AUDIT_REPO"
-  mkdir -p "$AUDIT_REPO/vault-public/Preferences"
-  echo "# clean" > "$AUDIT_REPO/vault-public/Preferences/clean.md"
+  mkdir -p "$AUDIT_REPO/ai-brain/data/vault-public/Preferences"
+  echo "# clean" > "$AUDIT_REPO/ai-brain/data/vault-public/Preferences/clean.md"
   git -C "$AUDIT_REPO" add -A && git -C "$AUDIT_REPO" commit -q -m init
 
   audit_rc=0

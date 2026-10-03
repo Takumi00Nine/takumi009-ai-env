@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/install-sub.sh のユニットテスト。
+# core/assembly/install-sub.sh のユニットテスト。
 #
 # 実 ~/.claude・~/.codex・実Vaultには一切依存しない。HOME環境変数を
 # 毎回ダミーのfixtureディレクトリへ差し替えてスクリプトを実行し、
@@ -30,7 +30,7 @@
 # 旧マーカーファイル（積極的な証明）方式へ変更した（リーダー裁定・
 # Codex一次レビュー指摘Major対応）。
 #
-# 2026-08-21: claude/settings.json を symlink から「テンプレ+生成」方式へ変更した
+# 2026-08-21: core/assembly/settings.json を symlink から「テンプレ+生成」方式へ変更した
 # （codex/config.tomlと同型）。4番を旧来のsymlink検証から生成物検証へ更新し、
 # 4eで内容保持を確認する。model 値は実体プロファイル（resolver）経由で決まる
 # （旧 legacy 経路 AIENV_MODEL_MAIN/SUB とその検証 4b/4c/4d/4f は 2026-09-19 に退役）。
@@ -53,7 +53,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/install-sub.sh"
+SCRIPT="$REPO_ROOT/core/assembly/install-sub.sh"
 
 PASS=0
 FAIL=0
@@ -138,7 +138,7 @@ make_fake_home() {
   # 配役表-能力軸整理-設計-2026-09-07.md §3: schema 5・新3キーの実体を
   # あらかじめ置く。本ファイルの主眼＝Vault骨格配置・symlink化・機役割の
   # 案内ログの検証とは無関係なテストは、install-main.shの雛形配置
-  # （config/profile.md.sample からのコピー。2026-09-08 本人裁定A案で
+  # （team/data/profile.md.sample からのコピー。2026-09-08 本人裁定A案で
   # 読み元をvault-public/Preferences/profile-sample.mdから付け替え）に
   # 依存させない（テストの独立性）。seed_v2_profile()・
   # 個別のcat上書きで置き換えるテストはこの既定値を上書きする（後勝ち）。
@@ -192,7 +192,7 @@ echo "=== 1. dry-run: 実際の変更を一切しない ==="
   rm -rf "$FAKE_HOME"
 }
 
-echo "=== 2. Vault未存在: vault-public/の中身が骨格として配置される ==="
+echo "=== 2. Vault未存在: ai-brain/data/vault-public/の中身が骨格として配置される ==="
 {
   FAKE_HOME="$(mktemp -d)"
   make_fake_home "$FAKE_HOME"
@@ -234,15 +234,15 @@ echo "=== 4. claude/・codex/ の symlink化が install-main.sh 経由で行わ�
 
   SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null
 
-  assert_eq "bootstrap-vault.shがrepoへのsymlinkになっている" "$REPO_ROOT/claude/hooks/bootstrap-vault.sh" \
+  assert_eq "bootstrap-vault.shがrepoへのsymlinkになっている" "$REPO_ROOT/core/connect/claude-code/session-start-compose.sh" \
     "$(readlink "$FAKE_HOME/.claude/hooks/bootstrap-vault.sh")"
-  assert_eq "agent-model-guard.shがrepoへのsymlinkになっている" "$REPO_ROOT/claude/hooks/agent-model-guard.sh" \
+  assert_eq "agent-model-guard.shがrepoへのsymlinkになっている" "$REPO_ROOT/team/connect/claude-code/agent-model-guard.sh" \
     "$(readlink "$FAKE_HOME/.claude/hooks/agent-model-guard.sh")"
   assert_true "agent-model-guard.shの実体が実行可能" \
     "$([[ -f "$FAKE_HOME/.claude/hooks/agent-model-guard.sh" && -x "$FAKE_HOME/.claude/hooks/agent-model-guard.sh" ]] && echo 1 || echo 0)"
   assert_true "settings.jsonにAgent guardが登録されている" \
     "$(grep -qF '"command": "$HOME/.claude/hooks/agent-model-guard.sh"' "$FAKE_HOME/.claude/settings.json" && echo 1 || echo 0)"
-  assert_eq "usage-inject.shもinstall-main.sh委譲経由でrepoへのsymlinkになっている" "$REPO_ROOT/claude/hooks/usage-inject.sh" \
+  assert_eq "usage-inject.shもinstall-main.sh委譲経由でrepoへのsymlinkになっている" "$REPO_ROOT/usage/executor/usage-inject.sh" \
     "$(readlink "$FAKE_HOME/.claude/hooks/usage-inject.sh")"
   assert_true "settings.jsonが生成されている（symlinkではなく実ファイル。2026-08-21 機役割対応でsymlinkから変更）" \
     "$([[ -f "$FAKE_HOME/.claude/settings.json" && ! -L "$FAKE_HOME/.claude/settings.json" ]] && echo 1 || echo 0)"
@@ -317,12 +317,12 @@ echo "=== 7. 機役割の案内: 実行すると machine_role を本人が書く
     "$(echo "$out" | grep -q '本スクリプトは実体を書き換えません' && echo 1 || echo 0)"
   # 2026-09-08 Codexレビュー指摘・MINOR対応（差し戻しA案6巡目）: 「実体を
   # 書き換えない」という部分文字列だけでは、「既存の実体は対象・不在時は
-  # config/profile.md.sampleから新規作成する」という限定の有無を区別できず、
+  # team/data/profile.md.sampleから新規作成する」という限定の有無を区別できず、
   # この限定を誤って削除する回帰を検出できない。両方の限定句も検査する。
   assert_true "「既存の実体が対象」という限定が明示される" \
     "$(echo "$out" | grep -q '既存の実体が対象' && echo 1 || echo 0)"
-  assert_true "「不在時はconfig/profile.md.sampleから新規作成」という限定が明示される" \
-    "$(echo "$out" | grep -q 'config/profile.md.sampleからの新規作成' && echo 1 || echo 0)"
+  assert_true "「不在時はteam/data/profile.md.sampleから新規作成」という限定が明示される" \
+    "$(echo "$out" | grep -q 'team/data/profile.md.sampleからの新規作成' && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
@@ -384,7 +384,7 @@ echo "=== 13. --check-profile: install-main.sh へ転送され、直接呼び出
   rc_sub=0
   out_sub="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_SUB" bash "$SCRIPT" --check-profile 2>&1)" || rc_sub=$?
   rc_main=0
-  out_main="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/scripts/install-main.sh" --check-profile 2>&1)" || rc_main=$?
+  out_main="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/core/assembly/install-main.sh" --check-profile 2>&1)" || rc_main=$?
 
   assert_eq "install-sub.sh経由もexit code 0" "0" "$rc_sub"
   assert_eq "exit codeがinstall-main.sh直接呼び出しと一致" "$rc_main" "$rc_sub"
@@ -431,7 +431,7 @@ machine_role: configured value=sub
   rc_sub=0
   out_sub="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_SUB" bash "$SCRIPT" --check-profile 2>&1)" || rc_sub=$?
   rc_main=0
-  out_main="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/scripts/install-main.sh" --check-profile 2>&1)" || rc_main=$?
+  out_main="$(AIENV_MODEL_DEFS_FILE="$SHARED_MODEL_DEFS" HOME="$FAKE_HOME_MAIN" bash "$REPO_ROOT/core/assembly/install-main.sh" --check-profile 2>&1)" || rc_main=$?
 
   assert_true "install-sub.sh経由も非0終了する（委譲先の非0をexit 0へ握り潰さない）" \
     "$([[ "$rc_sub" -ne 0 ]] && echo 1 || echo 0)"
@@ -459,10 +459,10 @@ echo "=== 15. PA-4: install-sub.sh 経由でも repo に定義を1本足すと s
   make_fake_home "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  echo "# PA-4 用の追加ロール定義（テスト専用・内容は問わない）" > "$TMP_REPO/claude/agents/test-pa4-role.md"
+  echo "# PA-4 用の追加ロール定義（テスト専用・内容は問わない）" > "$TMP_REPO/team/rules/agents/test-pa4-role.md"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-sub.sh" 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "追加したロールのsymlinkができる" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa4-role.md" ]] && echo 1 || echo 0)"
@@ -478,17 +478,17 @@ echo "=== 16. PA-5: install-sub.sh 経由でも repo から定義を1本消す�
   make_fake_home "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  echo "# PA-5 用の一時ロール定義（次に削除する）" > "$TMP_REPO/claude/agents/test-pa5-role.md"
+  echo "# PA-5 用の一時ロール定義（次に削除する）" > "$TMP_REPO/team/rules/agents/test-pa5-role.md"
 
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-sub.sh" >/dev/null 2>&1
   assert_true "前提: baseline実行でsymlinkができている" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa5-role.md" ]] && echo 1 || echo 0)"
 
   # repoから消す（symlinkはFAKE_HOME側に残ったまま＝dangling化させる）。
-  rm -f "$TMP_REPO/claude/agents/test-pa5-role.md"
+  rm -f "$TMP_REPO/team/rules/agents/test-pa5-role.md"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-sub.sh" 2>&1)" || rc=$?
   assert_true "終了コードが非0" "$([[ "$rc" -ne 0 ]] && echo 1 || echo 0)"
   assert_agents_line "AGENTS: dangling の固定文にtest-pa5-roleが厳密一致で出る（件数・句読点も検査）" \
     "$out" "dangling" "test-pa5-role"
@@ -505,10 +505,10 @@ echo "=== 17. PA-6: install-sub.sh 経由で追加もdanglingも無ければ AGE
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
 
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-sub.sh" >/dev/null 2>&1
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-sub.sh" 2>&1)" || rc=$?
   assert_eq "exit code 0" "0" "$rc"
   assert_true "AGENTS: 行が一切出ない" \
     "$(echo "$out" | grep -q '\[install-main\] AGENTS:' && echo 0 || echo 1)"
@@ -522,19 +522,19 @@ echo "=== 18. PA-12: install-sub.sh 経由でも追加と削除が同時に起�
   make_fake_home "$FAKE_HOME"
   TMP_REPO="$(mktemp -d)"
   cp -R "$REPO_ROOT/." "$TMP_REPO/"
-  echo "# PA-12 用の退役予定ロール（1回目は存在・2回目に消す）" > "$TMP_REPO/claude/agents/test-pa12-old-role.md"
+  echo "# PA-12 用の退役予定ロール（1回目は存在・2回目に消す）" > "$TMP_REPO/team/rules/agents/test-pa12-old-role.md"
 
   # 1回目: old-role が repo にある状態で baseline 配置。
-  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" >/dev/null 2>&1
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-sub.sh" >/dev/null 2>&1
   assert_true "前提: old-role がbaselineで配置されている" \
     "$([[ -L "$FAKE_HOME/.claude/agents/test-pa12-old-role.md" ]] && echo 1 || echo 0)"
 
   # 2回目: old-role を退役（削除）し、new-role を新設（追加）を同時に行う。
-  rm -f "$TMP_REPO/claude/agents/test-pa12-old-role.md"
-  echo "# PA-12 用の新設ロール" > "$TMP_REPO/claude/agents/test-pa12-new-role.md"
+  rm -f "$TMP_REPO/team/rules/agents/test-pa12-old-role.md"
+  echo "# PA-12 用の新設ロール" > "$TMP_REPO/team/rules/agents/test-pa12-new-role.md"
 
   rc=0
-  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/scripts/install-sub.sh" 2>&1)" || rc=$?
+  out="$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-sub.sh" 2>&1)" || rc=$?
 
   assert_agents_line "① AGENTS: 初回未配置 に new-role が厳密一致で出る" \
     "$out" "初回未配置" "test-pa12-new-role"

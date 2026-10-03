@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/audit.sh のユニットテスト。
+# core/executor/audit.sh のユニットテスト。
 #
 # 実 Vault($HOME/Data/obsidian)・実リポジトリ・実GitHubには一切依存しない。
 # REPO/NGWORDS_FILE/VAULT を環境変数で毎回ダミーのfixtureへ差し替えて audit.sh を
@@ -18,7 +18,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT_REL="scripts/audit.sh"
+SCRIPT_REL="core/executor/audit.sh"
 
 # bash実行ファイルの絶対パスを先に確定しておく（テスト17でPATHを最小構成に
 # 差し替えた際、「PATH=... bash ...」の "bash" 自体の解決にもその一時PATHが
@@ -67,13 +67,13 @@ assert_not_contains() {
 # git init はするがcommitはしない。commitのタイミングは各テストケースに委ねる。
 make_fake_repo() {
   local repo="$1"
-  mkdir -p "$repo/scripts" "$repo/vault-public/Personal"
-  cp "$REPO_ROOT/$SCRIPT_REL" "$repo/scripts/audit.sh"
-  chmod +x "$repo/scripts/audit.sh"
+  mkdir -p "$repo/scripts" "$repo/core/executor" "$repo/core/assembly" "$repo/ai-brain/data/vault-public/Personal"
+  cp "$REPO_ROOT/$SCRIPT_REL" "$repo/core/executor/audit.sh"
+  chmod +x "$repo/core/executor/audit.sh"
   # audit.sh は2026-07-16簡素化でscripts/lib/personal-link-check.shをsourceするように
   # なったため、fixture repoにも同ファイルを複製する（cleanup決定#5）。
-  mkdir -p "$repo/scripts/lib"
-  cp "$REPO_ROOT/scripts/lib/personal-link-check.sh" "$repo/scripts/lib/personal-link-check.sh"
+  mkdir -p "$repo/ai-brain/executor"
+  cp "$REPO_ROOT/ai-brain/executor/personal-link-check.sh" "$repo/ai-brain/executor/personal-link-check.sh"
   echo "# README（テスト用ダミー）" > "$repo/README.md"
   echo "MIT（テスト用ダミー）" > "$repo/LICENSE"
   cat > "$repo/.gitignore" <<'EOF'
@@ -81,13 +81,13 @@ make_fake_repo() {
 docs/
 scripts/ngwords.txt
 EOF
-  cat > "$repo/scripts/install-main.sh" <<'EOF'
+  cat > "$repo/core/assembly/install-main.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "dummy installer"
 EOF
-  chmod +x "$repo/scripts/install-main.sh"
+  chmod +x "$repo/core/assembly/install-main.sh"
   printf 'NGWORD_ALPHA\nNGWORD_BETA\n' > "$repo/scripts/ngwords.txt"
-  echo "# Personal（骨格・テスト用ダミー）" > "$repo/vault-public/Personal/README.md"
+  echo "# Personal（骨格・テスト用ダミー）" > "$repo/ai-brain/data/vault-public/Personal/README.md"
 
   git -C "$repo" init -q
   git -C "$repo" config user.name test
@@ -112,7 +112,7 @@ force_track() {
 run_audit() {
   local repo="$1" vault="$2" outdir="$3"; shift 3
   REPO="$repo" NGWORDS_FILE="$repo/scripts/ngwords.txt" VAULT="$vault" \
-    "$BASH_BIN" "$repo/scripts/audit.sh" "$@" >"$outdir/stdout.log" 2>"$outdir/stderr.log"
+    "$BASH_BIN" "$repo/core/executor/audit.sh" "$@" >"$outdir/stdout.log" 2>"$outdir/stderr.log"
 }
 
 echo "=== 1. 全項目クリーン（陰性コントロール・フルスキャン） ==="
@@ -134,7 +134,7 @@ echo "=== 1. 全項目クリーン（陰性コントロール・フルスキャ�
   assert_contains "2.実ユーザー名パス0件" "$out" "✅ 実ユーザー名パス（履歴）: 0件"
   assert_contains "3.gitleaks検出なし" "$out" "✅ シークレット（履歴）: gitleaks検出なし"
   assert_contains "4.追跡ファイル逸脱0件" "$out" "✅ 追跡ファイルの逸脱: 0件"
-  assert_contains "5.Personalリンク0件" "$out" "✅ Personal リンク（vault-public）: 0件"
+  assert_contains "5.Personalリンク0件" "$out" "✅ Personal リンク（ai-brain/data/vault-public）: 0件"
   assert_contains "6.完備性OK" "$out" "✅ 完備性: 必須ファイル全て存在"
   assert_contains "public化可の判定" "$out" "public化可（全項目クリア）"
 
@@ -245,21 +245,21 @@ echo "=== 5. docs/・ngwords.txt・.DS_Store が追跡されていると検知�
   rm -rf "$REPO_DIR" "$VAULT_DIR" "$WORK"
 }
 
-echo "=== 6. vault-public に Personal フォルダ付きリンクがあると検知する ==="
+echo "=== 6. ai-brain/data/vault-public に Personal フォルダ付きリンクがあると検知する ==="
 {
   REPO_DIR="$(mktemp -d)"
   VAULT_DIR="$(mktemp -d)"
   WORK="$(mktemp -d)"
   make_fake_repo "$REPO_DIR"
-  mkdir -p "$REPO_DIR/vault-public/Preferences"
-  echo "関連: [[Personal/career-private]]" > "$REPO_DIR/vault-public/Preferences/leak.md"
+  mkdir -p "$REPO_DIR/ai-brain/data/vault-public/Preferences"
+  echo "関連: [[Personal/career-private]]" > "$REPO_DIR/ai-brain/data/vault-public/Preferences/leak.md"
   commit_all "$REPO_DIR" "initial (with personal folder-qualified link leak)"
 
   rc=0
   run_audit "$REPO_DIR" "$VAULT_DIR" "$WORK" --quick || rc=$?
   out="$(cat "$WORK/stdout.log")"
   assert_eq "exit code 1" "1" "$rc"
-  assert_contains "Personalリンク（フォルダ付き）検知" "$out" "❌ Personal リンク（vault-public）"
+  assert_contains "Personalリンク（フォルダ付き）検知" "$out" "❌ Personal リンク（ai-brain/data/vault-public）"
 
   rm -rf "$REPO_DIR" "$VAULT_DIR" "$WORK"
 }
@@ -270,8 +270,8 @@ echo "=== 7. 実Vaultがある場合、basename形式（フォルダ省略）の
   VAULT_DIR="$(mktemp -d)"
   WORK="$(mktemp -d)"
   make_fake_repo "$REPO_DIR"
-  mkdir -p "$REPO_DIR/vault-public/Preferences"
-  echo "関連: [[career-private]]" > "$REPO_DIR/vault-public/Preferences/leak.md"
+  mkdir -p "$REPO_DIR/ai-brain/data/vault-public/Preferences"
+  echo "関連: [[career-private]]" > "$REPO_DIR/ai-brain/data/vault-public/Preferences/leak.md"
   commit_all "$REPO_DIR" "initial (with basename link leak)"
   mkdir -p "$VAULT_DIR/Personal"
   echo "# 経歴（テスト用ダミー）" > "$VAULT_DIR/Personal/career-private.md"
@@ -280,7 +280,7 @@ echo "=== 7. 実Vaultがある場合、basename形式（フォルダ省略）の
   run_audit "$REPO_DIR" "$VAULT_DIR" "$WORK" --quick || rc=$?
   out="$(cat "$WORK/stdout.log")"
   assert_eq "exit code 1" "1" "$rc"
-  assert_contains "basename形式Personalリンク検知" "$out" "❌ Personal リンク（vault-public）"
+  assert_contains "basename形式Personalリンク検知" "$out" "❌ Personal リンク（ai-brain/data/vault-public）"
 
   rm -rf "$REPO_DIR" "$VAULT_DIR" "$WORK"
 }
@@ -291,8 +291,8 @@ echo "=== 8. 実VaultのPersonalが無い環境ではbasename形式チェック�
   VAULT_DIR="$(mktemp -d)"
   WORK="$(mktemp -d)"
   make_fake_repo "$REPO_DIR"
-  mkdir -p "$REPO_DIR/vault-public/Preferences"
-  echo "関連: [[career-private]]" > "$REPO_DIR/vault-public/Preferences/leak.md"
+  mkdir -p "$REPO_DIR/ai-brain/data/vault-public/Preferences"
+  echo "関連: [[career-private]]" > "$REPO_DIR/ai-brain/data/vault-public/Preferences/leak.md"
   commit_all "$REPO_DIR" "initial (basename link, no vault access)"
   # $VAULT_DIR/Personal を作らない（実Vaultにアクセスできない環境を模擬）
 
@@ -363,10 +363,10 @@ echo "=== 12. REPO が git リポジトリでない場合は exit 2（監査失�
   REPO_DIR="$(mktemp -d)"
   VAULT_DIR="$(mktemp -d)"
   WORK="$(mktemp -d)"
-  mkdir -p "$REPO_DIR/scripts/lib"
-  cp "$REPO_ROOT/$SCRIPT_REL" "$REPO_DIR/scripts/audit.sh"
-  cp "$REPO_ROOT/scripts/lib/personal-link-check.sh" "$REPO_DIR/scripts/lib/personal-link-check.sh"
-  chmod +x "$REPO_DIR/scripts/audit.sh"
+  mkdir -p "$REPO_DIR/core/executor" "$REPO_DIR/ai-brain/executor"
+  cp "$REPO_ROOT/$SCRIPT_REL" "$REPO_DIR/core/executor/audit.sh"
+  cp "$REPO_ROOT/ai-brain/executor/personal-link-check.sh" "$REPO_DIR/ai-brain/executor/personal-link-check.sh"
+  chmod +x "$REPO_DIR/core/executor/audit.sh"
   # git init しない
 
   rc=0
@@ -447,7 +447,7 @@ echo "=== 16. REPO を相対パスで渡しても動作する ==="
   (
     cd "$parent_dir" &&
       REPO="./${base_name}" NGWORDS_FILE="./${base_name}/scripts/ngwords.txt" VAULT="$VAULT_DIR" \
-        "$BASH_BIN" "./${base_name}/scripts/audit.sh" --quick
+        "$BASH_BIN" "./${base_name}/core/executor/audit.sh" --quick
   ) >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
   out="$(cat "$WORK/stdout.log")"
   assert_eq "相対パスのREPOでもexit 0" "0" "$rc"
@@ -476,14 +476,14 @@ echo "=== 17. gitleaksコマンドが無い環境では、フルスキャンは�
 
   rc=0
   PATH="$FAKE_BIN" REPO="$REPO_DIR" NGWORDS_FILE="$REPO_DIR/scripts/ngwords.txt" VAULT="$VAULT_DIR" \
-    "$BASH_BIN" "$REPO_DIR/scripts/audit.sh" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+    "$BASH_BIN" "$REPO_DIR/core/executor/audit.sh" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
   err="$(cat "$WORK/stderr.log")"
   assert_eq "フルスキャンはexit 2" "2" "$rc"
   assert_contains "gitleaks不在メッセージ" "$err" "gitleaks"
 
   rc=0
   PATH="$FAKE_BIN" REPO="$REPO_DIR" NGWORDS_FILE="$REPO_DIR/scripts/ngwords.txt" VAULT="$VAULT_DIR" \
-    "$BASH_BIN" "$REPO_DIR/scripts/audit.sh" --quick >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+    "$BASH_BIN" "$REPO_DIR/core/executor/audit.sh" --quick >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
   assert_eq "--quickならgitleaks不要でexit 0" "0" "$rc"
 
   rm -rf "$REPO_DIR" "$VAULT_DIR" "$WORK" "$FAKE_BIN"

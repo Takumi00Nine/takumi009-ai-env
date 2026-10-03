@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.takumi009.maintenance</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__AIENV_HOME__/work/takumi009-ai-env/ai-brain/executor/maintenance.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__AIENV_HOME__</string>
+        <!-- ヘッドレスClaude CLI（`claude`コマンド）のログイン判定に必要（launchd経由では環境変数が継承されないため明示設定・2026-09-10）。ai-brain/assembly/install-maintenance.shが実ユーザー名へ置換する。 -->
+        <key>USER</key>
+        <string>__AIENV_USER__</string>
+        <key>PATH</key>
+        <!-- maintenance.sh が呼ぶgit・python3・ヘッドレスClaude CLI（claude）の既知インストール先を広めに含める（homebrew・claude公式インストーラの既定パス等）。 -->
+        <string>__AIENV_HOME__/.anyenv/envs/nodenv/shims:__AIENV_HOME__/.anyenv/envs/pyenv/shims:__AIENV_HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>__AIENV_HOME__/Library/Logs/maintenance.log</string>
+    <key>StandardErrorPath</key>
+    <string>__AIENV_HOME__/Library/Logs/maintenance.log</string>
+</dict>
+</plist>

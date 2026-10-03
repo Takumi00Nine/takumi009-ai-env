@@ -7,14 +7,14 @@
 # 実行方法: bash tests/test-cmux-next-model.sh
 #
 # v6（requirements-v6.md・design.md §41）＝実装への契約（テストが決めた口・A-v6-7）:
-#   CMUX_VAULT_TASKS_SANITIZE_FAIL=1 ＝ Tasks 節の共有解析（cmux/lib-vault-tasks.sh）の
+#   CMUX_VAULT_TASKS_SANITIZE_FAIL=1 ＝ Tasks 節の共有解析（dock/executor/lib-vault-tasks.sh）の
 #   サニタイズ段だけを失敗させるテスト専用の差し替え口（D-v6-14・DT-33＝解析不能の作り方）。
 #   未設定／空＝通常。slug の無害化・next の切り詰め・frontmatter の読み取りには効かせない
 #   （M-v6-15）。本番設定（config/・launchd/・scripts/install*・dock.json）に名前を書かない。
 #   （フック側の口 BOOTSTRAP_CMUX_LIB_DIR は tests/test-bootstrap-vault.sh 参照）
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET="$SCRIPT_DIR/../cmux/cmux-next-model.sh"
+TARGET="$SCRIPT_DIR/../dock/executor/cmux-next-model.sh"
 
 # 外側シェルの env から独立させる（R2-1）。--recall-stale-days の期待値 7 は固定。
 unset VAULT_AGENT_LOG_STALE_DAYS
@@ -199,7 +199,7 @@ assert_eq "next:もTasks節も無ければnext欄が空文字" "" "$FIELD3_N4"
 
 # ==========================================================================
 # 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）＝契約 cmux-dock-frame/4（v5）。
-# B 行は判定機（claude/hooks/lib/health_judge.py）の写し＝1 行 3 値＋末尾付記。
+# B 行は判定機（ai-brain/executor/health_judge.py）の写し＝1 行 3 値＋末尾付記。
 # 判定は tests/test-health-judge.sh が 23 本を閉じる。ここでは供給側＝B 行の文法・
 # 付記・判定機不在の 0 行・E の整合・HEALTH_JUDGE_NOW を検査する。
 # 既定が実ファイルの env 5 本（CMUX_NEXT_MAINT_STATE・CMUX_NEXT_INVENTORY_LATEST・
@@ -233,79 +233,13 @@ printf '#!/bin/bash\nexit 1\n' > "$STUBBIN_SORT_V3/sort"; chmod +x "$STUBBIN_SOR
 PATH="$STUBBIN_SORT_V3:$PATH" run_frame_raw
 assert_eq "frame_v3_header: 理由フレームも /4" "#V	cmux-dock-frame/4	Project" "$(sed -n '1p' "$WORKDIR/frame_stdout")"
 
-echo "=== frame_b_row_ok（AC-4 供給側）: S-1 → B 行 1 行＝外部脳／ok／OK＋候補12件 ==="
-reset_vault
-mk_note_N0 "$VAULT"
-run_frame_fixture S-1
-assert_eq "frame_b_row_ok: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
-assert_eq "frame_b_row_ok: B 行はちょうど 1 行" "1" "$(b_rows | wc -l | tr -d ' ')"
-s1_cand="$(jq -r '.fragments_candidates' "$FX_ROOT/S-1/last-run.json")"
-assert_eq "frame_b_row_ok: B 行の文法（種別 外部脳・warn 欄 ok・3 値 OK・付記）" "B	外部脳	ok	OK 候補${s1_cand}件" "$(b_rows)"
-assert_eq "frame_b_row_ok: 旧種別（棚卸し／週次）の行は出ない" "0" "$(awk -F '\t' '$1=="B" && ($2=="棚卸し" || $2=="週次")' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
-p_n="$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
-assert_eq "frame_b_row_ok: E＝P 行数＋B 行数" "$(( p_n + 1 ))" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
-
-echo "=== B 行の 3 値: S-2 → warn／WARNING・S-15 → error／ERROR ==="
-run_frame_fixture S-2
-s2_cand="$(jq -r '.fragments_candidates' "$FX_ROOT/S-2/last-run.json")"
-assert_eq "S-2: B 行 warn／WARNING" "B	外部脳	warn	WARNING 候補${s2_cand}件" "$(b_rows)"
-run_frame_fixture S-15
-assert_eq "S-15: B 行 error／ERROR" "B	外部脳	error	ERROR 候補12件" "$(b_rows)"
-
-echo "=== all_fixtures_one_b_row_three_values（AC-10）: S-1〜S-23 全件で B 行ちょうど 1 行・付記を除いた文言が 3 値・数字/日付/パス/工程名なし ==="
-n_fx=0
-for d in "$FX_ROOT"/S-*; do
-  fx="$(basename "$d")"
-  n_fx=$(( n_fx + 1 ))
-  run_frame_fixture "$fx"
-  assert_eq "AC-10 $fx: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
-  assert_eq "AC-10 $fx: B 行ちょうど 1 行" "1" "$(b_rows | wc -l | tr -d ' ')"
-  text="$(b_rows | awk -F '\t' '{print $4}' | sed 's/ 候補[0-9]*件$//')"
-  kind="$(b_rows | awk -F '\t' '{print $2}')"
-  warn="$(b_rows | awk -F '\t' '{print $3}')"
-  assert_eq "AC-10 $fx: 種別＝外部脳" "外部脳" "$kind"
-  assert_true "AC-10 $fx: 付記を除いた文言が 3 値のいずれか（実測 ${text}）" \
-    "$([ "$text" = "OK" ] || [ "$text" = "WARNING" ] || [ "$text" = "ERROR" ] && echo 1 || echo 0)"
-  assert_true "AC-10 $fx: warn 欄と文言の対応（ok/OK・warn/WARNING・error/ERROR）" \
-    "$({ [ "$warn/$text" = "ok/OK" ] || [ "$warn/$text" = "warn/WARNING" ] || [ "$warn/$text" = "error/ERROR" ]; } && echo 1 || echo 0)"
-  assert_eq "AC-10 $fx: 付記を除いた文言に数字・日付・パス・工程名が無い" "0" "$(printf '%s' "$text" | grep -c '[0-9/.]\|Phase\|要確認\|日前')"
-  assert_eq "AC-10 $fx: 4 列ちょうど" "4" "$(b_rows | awk -F '\t' '{print NF}')"
-done
-assert_eq "AC-10: S-* は 23 本" "23" "$n_fx"
-
-echo "=== b_row_suffix_candidates_when_nonneg（R-2）: fragments_candidates が非負整数のときだけ末尾に「 候補N件」（0 件も表示）。キー無し・型違反は付けない ==="
-CAND_DIR="$WORKDIR/cand"; mkdir -p "$CAND_DIR"
-cp "$FX_ROOT/S-1/latest.json" "$FX_ROOT/S-1/observation.json" "$FX_ROOT/S-1/vault-recall.tsv" "$FX_ROOT/S-1/now" "$CAND_DIR/"
-run_cand() {   # $1=fragments_candidates の JSON 値（"del" でキー削除）
-  if [ "$1" = "del" ]; then
-    jq 'del(.fragments_candidates)' "$FX_ROOT/S-1/last-run.json" > "$CAND_DIR/last-run.json"
-  else
-    jq --argjson v "$1" '.fragments_candidates = $v' "$FX_ROOT/S-1/last-run.json" > "$CAND_DIR/last-run.json"
-  fi
-  CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="$CAND_DIR/last-run.json" \
-    CMUX_NEXT_INVENTORY_LATEST="$CAND_DIR/latest.json" CMUX_NEXT_HEALTH_OBSERVATION="$CAND_DIR/observation.json" \
-    CMUX_NEXT_RECALL_LOG="$CAND_DIR/vault-recall.tsv" CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
-    HEALTH_JUDGE_NOW="$(cat "$CAND_DIR/now")" bash "$TARGET" --frame > "$WORKDIR/frame_stdout" 2>/dev/null
-}
-run_cand 0
-assert_eq "候補 0 件も表示" "B	外部脳	ok	OK 候補0件" "$(b_rows)"
-run_cand 37
-assert_eq "候補 37 件" "B	外部脳	ok	OK 候補37件" "$(b_rows)"
-run_cand del
-assert_eq "キー無し: 付記なし" "B	外部脳	ok	OK" "$(b_rows)"
-run_cand '"12"'
-assert_eq "型違反（文字列）: 付記なし" "B	外部脳	ok	OK" "$(b_rows)"
-run_cand -1
-assert_eq "負数: 付記なし" "B	外部脳	ok	OK" "$(b_rows)"
-run_cand 'null'
-assert_eq "null: 付記なし" "B	外部脳	ok	OK" "$(b_rows)"
-
 echo "=== judge_missing_no_b_row_e_count_consistent（F-10・§14-7）: 判定機不在／python3 失敗＝B 行 0 行・E は P 行数・rc=0 ==="
 reset_vault
 mk_notes_N_all "$VAULT"
-# 判定機不在＝供給側スクリプトを lib だけ複製した一時ディレクトリから起動する（$LIB_DIR/../claude/hooks/lib/ が無い）。
+# 台帳異常＝供給側スクリプトを lib だけ複製した一時ディレクトリから起動する（台帳ツールが無い＝照会の失敗＝
+# 設計 §5.6 の台帳異常の経路）。Dock は AI Brain の部品名を書かない（設計 §5.2）＝記録は照会の固定文 LEDGER: …。
 NOJUDGE="$WORKDIR/nojudge/cmux"; mkdir -p "$NOJUDGE"
-cp "$SCRIPT_DIR/../cmux/cmux-next-model.sh" "$SCRIPT_DIR/../cmux/lib-model-view.sh" "$SCRIPT_DIR/../cmux/lib-vault-tasks.sh" "$SCRIPT_DIR/../cmux/lib-cmux-workspace.sh" "$NOJUDGE/"
+cp "$SCRIPT_DIR/../dock/executor/cmux-next-model.sh" "$SCRIPT_DIR/../dock/executor/lib-model-view.sh" "$SCRIPT_DIR/../dock/executor/lib-vault-tasks.sh" "$SCRIPT_DIR/../dock/executor/lib-cmux-workspace.sh" "$NOJUDGE/"
 d="$FX_ROOT/S-2"
 CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="$d/last-run.json" CMUX_NEXT_INVENTORY_LATEST="$d/latest.json" \
   CMUX_NEXT_HEALTH_OBSERVATION="$d/observation.json" CMUX_NEXT_RECALL_LOG="$d/vault-recall.tsv" \
@@ -317,52 +251,28 @@ assert_eq "判定機不在: #V は /4 のまま" "#V	cmux-dock-frame/4	Project" 
 p_n="$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
 assert_eq "判定機不在: E＝P 行数（8）" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
 assert_eq "判定機不在: P 行は 8 行そろう" "8" "$p_n"
-assert_eq "判定機不在: stderr に 1 行" "1" "$(grep -c 'health_judge.py' "$WORKDIR/frame_stderr")"
+assert_true "台帳異常: stderr に LEDGER: で始まる行が 1 行以上" "$([ "$(grep -c '^LEDGER: ' "$WORKDIR/frame_stderr")" -ge 1 ] && echo 1 || echo 0)"
+# 鍵なし（台帳は読めるが判定機の鍵の行が無い＝AI Brain が置かれていない）＝B 行を省くだけ・記録なし（設計 §5.6）。
+awk -F '\t' '$6!="ai-brain.health-judge"' "$SCRIPT_DIR/../core/data/ledger.tsv" > "$WORKDIR/ledger-nojudge.tsv"
+AIENV_LEDGER="$WORKDIR/ledger-nojudge.tsv" run_frame_fixture S-2
+assert_eq "鍵なし: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "鍵なし: B 行 0 行" "0" "$(b_rows | wc -l | tr -d ' ')"
+assert_eq "鍵なし: E＝P 行数" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
+assert_eq "鍵なし: stderr に LEDGER: 行なし（予定された省略）" "0" "$(grep -c '^LEDGER: ' "$WORKDIR/frame_stderr")"
+# 実体異常（V-08・設計 §5.6）＝判定機の鍵の行はあるがパスが無い＝B 行を省き・stderr に照会の固定文・exit 0。
+{ cat "$WORKDIR/ledger-nojudge.tsv"
+  printf 'part\tai-brain/executor/zz-missing-judge.py\tai-brain\texecutor\t-\tai-brain.health-judge\t\n'; } > "$WORKDIR/ledger-badjudge.tsv"
+AIENV_LEDGER="$WORKDIR/ledger-badjudge.tsv" run_frame_fixture S-2
+assert_eq "実体異常: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "実体異常: B 行 0 行" "0" "$(b_rows | wc -l | tr -d ' ')"
+assert_eq "実体異常: E＝P 行数" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
+assert_eq "実体異常: stderr に LEDGER: part ai-brain.health-judge の固定文が 1 行" "1" "$(grep -c '^LEDGER: part ai-brain.health-judge ' "$WORKDIR/frame_stderr")"
 STUBBIN_PY="$WORKDIR/stubbin-py"; mkdir -p "$STUBBIN_PY"
 printf '#!/bin/bash\nexit 3\n' > "$STUBBIN_PY/python3"; chmod +x "$STUBBIN_PY/python3"
 PATH="$STUBBIN_PY:$PATH" run_frame_fixture S-2
 assert_eq "python3 が非 0: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
 assert_eq "python3 が非 0: B 行 0 行（誤った段階を見せない）" "0" "$(b_rows | wc -l | tr -d ' ')"
 assert_eq "python3 が非 0: E＝P 行数" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
-
-echo "=== health_judge_now_passed_as_now（V-8(a)）: HEALTH_JUDGE_NOW が --now に写る（S-13＝予定超過は now で決まる） ==="
-# S-13 は S-2 と同じ記録・plist つき。now を fixture の値（翌週）にすると未起動が加わり WARNING、
-# now を S-2 の値（予定を跨がない）にしても WARNING（失敗 1 件）＝段階では見分けられないので、
-# 判定機を spy して --now の値そのものを検査する。
-SPY_PY="$WORKDIR/spy-py"; mkdir -p "$SPY_PY"
-REAL_PY="$(command -v python3)"
-cat > "$SPY_PY/python3" <<EOF
-#!/bin/bash
-printf '%s\n' "\$*" >> "$WORKDIR/py-args.log"
-exec "$REAL_PY" "\$@"
-EOF
-chmod +x "$SPY_PY/python3"
-: > "$WORKDIR/py-args.log"
-PATH="$SPY_PY:$PATH" run_frame_fixture S-13
-assert_eq "HEALTH_JUDGE_NOW あり: --now <fixture の now> が渡る" "1" "$(grep -c -- "--now $(cat "$FX_ROOT/S-13/now")" "$WORKDIR/py-args.log")"
-assert_eq "HEALTH_JUDGE_NOW あり: S-13 は WARNING" "warn" "$(b_rows | awk -F '\t' '{print $3}')"
-assert_eq "判定機呼び出し: --recall-stale-days 7 が渡る（I-2・bootstrap と同じ既定の渡し方＝設計 §4.1）" "1" "$(grep -c -- '--recall-stale-days 7' "$WORKDIR/py-args.log")"
-: > "$WORKDIR/py-args.log"
-d="$FX_ROOT/S-1"
-PATH="$SPY_PY:$PATH" CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="$d/last-run.json" \
-  CMUX_NEXT_INVENTORY_LATEST="$d/latest.json" CMUX_NEXT_HEALTH_OBSERVATION="$d/observation.json" \
-  CMUX_NEXT_RECALL_LOG="$d/vault-recall.tsv" CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
-  HEALTH_JUDGE_NOW="" bash "$TARGET" --frame > "$WORKDIR/frame_stdout" 2>/dev/null
-assert_eq "HEALTH_JUDGE_NOW 無し: --now を渡さない" "0" "$(grep -c -- '--now' "$WORKDIR/py-args.log")"
-assert_eq "HEALTH_JUDGE_NOW 無し: 判定機は呼ばれている" "1" "$(grep -c 'health_judge.py judge' "$WORKDIR/py-args.log")"
-
-echo "=== 判定機の入力が壊れていても B 行は出る（NFR-2）: last-run.json 解析不能＝WARNING（破損）・観測記録なし＝OK ==="
-d="$FX_ROOT/X-3"
-CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="$d/last-run.json" CMUX_NEXT_INVENTORY_LATEST="$d/latest.json" \
-  CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" CMUX_NEXT_RECALL_LOG="$d/vault-recall.tsv" \
-  CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" HEALTH_JUDGE_NOW="$(cat "$d/now")" \
-  bash "$TARGET" --frame > "$WORKDIR/frame_stdout" 2>/dev/null
-assert_eq "X-3（解析不能）: B 行 warn／WARNING" "B	外部脳	warn	WARNING" "$(b_rows)"
-CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="/nonexistent-dir/last-run.json" CMUX_NEXT_INVENTORY_LATEST="/nonexistent-dir/latest.json" \
-  CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
-  CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
-  bash "$TARGET" --frame > "$WORKDIR/frame_stdout" 2>/dev/null
-assert_eq "データ源が全部無い（サブ機初回・F-7）: 不在＝OK の B 行 1 行" "B	外部脳	ok	OK" "$(b_rows)"
 
 echo "=== no_real_home_default_in_tests（設計 §10.1・静的）: 本ファイル内の \$TARGET 直接起動に既定が実ファイルの env 5 本がすべて付いている ==="
 missing_env_lines="$(python3 - "$SCRIPT_DIR/test-cmux-next-model.sh" <<'PY'
@@ -401,9 +311,9 @@ assert_eq "空Vault: rc=0" "0" "$(cat "$WORKDIR/list_rc")"
 assert_eq "空Vault: 0行" "0" "$(wc -c < "$WORKDIR/list_stdout" | tr -d ' ')"
 run_frame_raw
 assert_eq "空Vault(--frame): P行0行" "0" "$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
-# 2026-09-20 health-self-explain: データ源が無くても判定機は「不在＝OK」を返すので B 行は常に 1 行（FR-15）＝E は 1。
-assert_eq "空Vault(--frame): B行は不在＝OKの1行" "B	外部脳	ok	OK" "$(awk -F '\t' '$1=="B"' "$WORKDIR/frame_stdout")"
-assert_eq "空Vault(--frame): E行1（P 0＋B 1）" "1" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
+# B 行の有無はヘルス判定機（AI Brain）の有無で決まる＝「空 Vault でも B 行は不在＝OK の 1 行」は
+# tests/test-integration.sh へ移した（v1.1 設計 §4.4）。ここは B 行の有無に依らない E の整合だけを見る。
+assert_eq "空Vault(--frame): E＝P 行数（0）＋B 行数" "$(awk -F '\t' '$1=="B"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
 
 echo "=== 検証2巡目#26回帰: collect_entries内のsort失敗で--list rc≠0・0バイト、--frameが理由行（1巡目#7の固定） ==="
 reset_vault
@@ -619,7 +529,7 @@ assert_eq "v5_ac138: P 行の第 2〜6 欄が --list の 5 行と順序含め完
 assert_eq "v5_ac138: 待ち行だけ待ち日時が非空" "3 4" "$(awk -F '\t' '$1=="P" && $6!=""{printf "%s%s", (n++?" ":""), $2}' "$WORKDIR/frame_stdout")"
 p_n="$(awk -F '\t' '$1=="P"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
 b_n="$(awk -F '\t' '$1=="B"' "$WORKDIR/frame_stdout" | wc -l | tr -d ' ')"
-assert_eq "v5_ac138: B 行 1 行" "1" "$b_n"
+# 「B 行 1 行」は判定機（AI Brain）が要る＝tests/test-integration.sh へ移した（v1.1 設計 §4.4）。
 assert_eq "v5_ac138: E＝P＋B" "$(( p_n + b_n ))" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
 # 理由フレーム＝Projects ディレクトリを読めない状態そのもの（AC-138）＝①chmod 000 ②ディレクトリ不在。
 chmod 000 "$VAULT/Projects"
@@ -922,9 +832,9 @@ assert_eq "v6_dt33(対照): 口なしでは診断 1 行＝使わない（解析�
 REPO_ROOT_V6="$(cd "$SCRIPT_DIR/.." && pwd)"
 # 対象＝config/・launchagents/（本 repo の launchd plist 置き場＝実在必須・空振り防止）・scripts/install*・dock.json（dotfiles があるときだけ）。
 # 2 つの口（CMUX_VAULT_TASKS_SANITIZE_FAIL・BOOTSTRAP_CMUX_LIB_DIR＝A-v6-7）とも 0 件。
-dt33_targets="$REPO_ROOT_V6/config $REPO_ROOT_V6/launchagents"
-assert_true "v6_dt33(静的): config/ と launchagents/ が実在する（検査の空振り防止）" "$([ -d "$REPO_ROOT_V6/config" ] && [ -d "$REPO_ROOT_V6/launchagents" ] && echo 1 || echo 0)"
-for f in "$REPO_ROOT_V6"/scripts/install*; do [ -f "$f" ] && dt33_targets="$dt33_targets $f"; done
+dt33_targets="$REPO_ROOT_V6/team/data $REPO_ROOT_V6/team/connect/claude-code/bedrock.env.sample $REPO_ROOT_V6/ai-brain/assembly $REPO_ROOT_V6/usage/assembly"
+assert_true "v6_dt33(静的): config/ と launchagents/ が実在する（検査の空振り防止）" "$([ -d "$REPO_ROOT_V6/team/data" ] && [ -d "$REPO_ROOT_V6/ai-brain/assembly" ] && [ -d "$REPO_ROOT_V6/usage/assembly" ] && echo 1 || echo 0)"
+for f in "$REPO_ROOT_V6"/*/assembly/install*; do [ -f "$f" ] && dt33_targets="$dt33_targets $f"; done
 [ -f "$HOME/work/dotfiles/cmux/dock.json" ] && dt33_targets="$dt33_targets $HOME/work/dotfiles/cmux/dock.json"
 # shellcheck disable=SC2086
 dt33_leak="$(grep -rlE -- 'CMUX_VAULT_TASKS_SANITIZE_'"FAIL"'|BOOTSTRAP_CMUX_LIB_'"DIR" $dt33_targets 2>/dev/null | grep -c . || true)"
@@ -1223,7 +1133,7 @@ done
 sleep 5
 
 echo "=== v7_impl_same_words_as_task（FR-122・D-v7-6）: 同じ状態（FD-4・5・5′・6・7）で Task 供給側 --frame の理由行と --focus の stderr が同じ語 ==="
-TASK_TARGET="$SCRIPT_DIR/../cmux/cmux-task-model.sh"
+TASK_TARGET="$SCRIPT_DIR/../dock/executor/cmux-task-model.sh"
 for spec in "4|未宣言" "5|cmux 応答なし" "5p|cmux 応答なし" "6|宣言記録破損" "7|対象不明"; do
   id="${spec%%|*}"; word="${spec#*|}"
   fd_apply "$id"

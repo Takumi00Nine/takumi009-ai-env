@@ -2,14 +2,14 @@
 # サブ機がローカルに書いたノートは常に「未追跡ファイル」のままなので、
 # git は追跡ファイルの変更にしか競合を起こさず、pull と衝突しない
 # （設計: docs/takumi009-ai-env-vault-split-design.md §1-3 ステップ3）。
-vault-public/Personal/*
-vault-public/Knowledge/*
-vault-public/Decisions/*
-vault-public/Projects/*
-vault-public/Fragments/*
-vault-public/Explorations/*
-vault-public/Blogs/*
-!vault-public/*/README.md
+ai-brain/data/vault-public/Personal/*
+ai-brain/data/vault-public/Knowledge/*
+ai-brain/data/vault-public/Decisions/*
+ai-brain/data/vault-public/Projects/*
+ai-brain/data/vault-public/Fragments/*
+ai-brain/data/vault-public/Explorations/*
+ai-brain/data/vault-public/Blogs/*
+!ai-brain/data/vault-public/*/README.md
 
 # --- takumi009-ai-env 全体の除外 ---
 .DS_Store

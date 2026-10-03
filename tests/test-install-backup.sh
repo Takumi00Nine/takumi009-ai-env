@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/install-backup.sh のユニットテスト（新ラベル設置・冪等・失敗時の
+# ai-brain/assembly/install-backup.sh のユニットテスト（新ラベル設置・冪等・失敗時の
 # exit 1 の検証。旧ラベル移行の検査は 2026-09-19 着手順 1 で退役＝ラベルは
 # repo の plist から動的に取る）。
 #
@@ -23,7 +23,7 @@ set -euo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/install-backup.sh"
+SCRIPT="$REPO_ROOT/ai-brain/assembly/install-backup.sh"
 
 PASS=0
 FAIL=0
@@ -49,7 +49,7 @@ assert_true() {
   fi
 }
 
-NEW_LABEL="$(plutil -extract Label raw -o - "$REPO_ROOT"/launchagents/com.takumi009.backup-vault.plist)"
+NEW_LABEL="$(plutil -extract Label raw -o - "$REPO_ROOT"/ai-brain/assembly/com.takumi009.backup-vault.plist)"
 
 # 偽launchctl（呼ばれたら引数をログへ記録するだけ・本物のlaunchdには一切触れない）
 # を$FAKE_BIN/launchctlとして用意し、PATHの先頭へ差し込む。
@@ -99,7 +99,7 @@ echo "=== 2. 通常実行: 新ラベルのplistが生成される・実launchctl
   DEST="$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist"
   assert_true "新ラベルのplistが生成される" "$([[ -f "$DEST" ]] && echo 1 || echo 0)"
   assert_true "__AIENV_HOME__が実HOME(FAKE_HOME)へ置換されている" \
-    "$(grep -q "$FAKE_HOME/work/takumi009-ai-env/scripts/backup-vault.sh" "$DEST" && echo 1 || echo 0)"
+    "$(grep -q "$FAKE_HOME/work/takumi009-ai-env/ai-brain/executor/backup-vault.sh" "$DEST" && echo 1 || echo 0)"
   assert_true "プレースホルダが残っていない" \
     "$(grep -q '__AIENV_HOME__' "$DEST" && echo 0 || echo 1)"
   assert_true "Labelキーが新ラベルになっている" \

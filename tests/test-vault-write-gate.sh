@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude/hooks/vault-write-gate.sh のユニットテスト（設計 design-step1.md §3.3）。
+# ai-brain/connect/claude-code/vault-write-gate.sh のユニットテスト（設計 design-step1.md §3.3）。
 #
 # 子（claude-exec 経由のワーカー）向けの Vault 保護柵。実 ~/.claude・実 Vault
 # には一切依存せず、偽 HOME（一時ディレクトリ）へ HOME を差し替えてフックを
@@ -17,7 +17,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-HOOK="$REPO_ROOT/claude/hooks/vault-write-gate.sh"
+HOOK="$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh"
 
 PASS=0
 FAIL=0

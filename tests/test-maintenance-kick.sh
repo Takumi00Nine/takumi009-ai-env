@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/maintenance-kick.sh のユニットテスト（health-self-explain 設計 v1.2 §7.1・
+# ai-brain/executor/maintenance-kick.sh のユニットテスト（health-self-explain 設計 v1.2 §7.1・
 # §10.1・§16.2 実装 A）。
 #
 # 実 launchd・実 $HOME・実 last-run.json には一切触れない: HOME を隔離 temp へ
@@ -13,7 +13,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/maintenance-kick.sh"
+SCRIPT="$REPO_ROOT/ai-brain/executor/maintenance-kick.sh"
 
 HOME="$(mktemp -d)" || { echo "FATAL: mktemp -d に失敗" >&2; exit 1; }
 [[ -n "$HOME" && "$HOME" != "/" && -d "$HOME" ]] || { echo "FATAL: HOME 隔離に失敗" >&2; exit 1; }

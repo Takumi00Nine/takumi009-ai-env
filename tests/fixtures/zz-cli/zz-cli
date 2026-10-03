@@ -1,0 +1,16 @@
+#!/bin/bash
+# 偽 zz-cli 実行体（FX-10・repo の外＝PATH 上に置く）。試験設計が決めた登録の書式:
+#   $HOME/.zz-cli/hooks ＝ 1 行 1 本の絶対パス（`#` 始まりと空行は読まない）。
+# 引数の問い合わせ文を stdin JSON {"query":<問い合わせ文>} にして登録のコマンドを順に起動し、
+# その stdout をそのまま出す。終了コード＝最後に起動したコマンドのもの（登録が無ければ 3）。
+set -u
+reg="$HOME/.zz-cli/hooks"
+[ -f "$reg" ] || { echo "zz-cli: 登録が無い: $reg" >&2; exit 3; }
+payload="$(jq -cn --arg q "$*" '{query:$q}')" || exit 4
+rc=3
+while IFS= read -r cmd; do
+  case "$cmd" in ''|'#'*) continue ;; esac
+  printf '%s' "$payload" | "$cmd"
+  rc=$?
+done < "$reg"
+exit "$rc"

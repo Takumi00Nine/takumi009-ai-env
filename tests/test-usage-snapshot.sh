@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-usage-snapshot.sh — claude/hooks/lib/usage_snapshot.py の
+# tests/test-usage-snapshot.sh — usage/executor/usage_snapshot.py の
 # ユニットテスト（B1a「使用率の見える化」-実装-2026-09-08.md §2.3）。
 #
 # 2026-09-08 worker-driven一次レビュー（Codex・2巡）BLOCKING/MAJOR/MINOR
@@ -60,7 +60,7 @@
 #   置く」対応）: usage_snapshot.py全体で減算(Sub)・不等号比較(Lt/LtE/Gt/GtE)
 #   演算が発生する(演算種別,関数名)ごとの**個数**を、既知の安全な関数
 #   （_extract_window・build_subscription_pool・_scrub_error・_valid_epoch・
-#   _build_codex_reset_credits・_format_ticket_text＝いずれも単一pool・
+#   _build_cache_reset_credits・_format_ticket_text＝いずれも単一pool・
 #   単一チケットの内部値だけを扱う。後半3つはB1-c「Codexチケット」対応で
 #   追加）の期待個数と完全一致させる（2巡目MAJOR対応で集合比較から個数
 #   比較へ強化＝既に許可された関数内へ演算を追加しても検出できる）。
@@ -79,7 +79,7 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB="$REPO_ROOT/claude/hooks/lib/usage_snapshot.py"
+LIB="$REPO_ROOT/usage/executor/usage_snapshot.py"
 
 PASS=0
 FAIL=0
@@ -316,7 +316,7 @@ echo "=== FX-3: claudeのみ欠落（陽性） ==="
   human3="$(run_human "$FX3")"
   n_lines3="$(printf '%s\n' "$human3" | wc -l | tr -d ' ')"
   assert_eq "FX-3 欠落時も人可読は3行のまま（行数を変えない）" "3" "$n_lines3"
-  assert_contains "FX-3 Claude枠が導入手順つきの固定文" "$human3" "Claude枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: scripts/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
+  assert_contains "FX-3 Claude枠が導入手順つきの固定文" "$human3" "Claude枠: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: usage/assembly/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
 }
 
 # ============================================================
@@ -587,7 +587,7 @@ print(len(p['windows']))
 # ============================================================
 # FX-14: last_error.type="curl"（陽性・検証職1巡目MINOR-6対応）
 # ============================================================
-# scripts/usage-fetch.sh のD-3はcurl系の通信エラー（curl_exit=5/6/7/28/52/
+# usage/executor/usage-fetch.sh のD-3はcurl系の通信エラー（curl_exit=5/6/7/28/52/
 # 55/56）をtype="curl"で記録する。usage_snapshot.pyの許可リストにcurlが
 # 無いと、常に汎用の伏せ字文言へ丸められてしまう（取得器とsnapshotの
 # 許可リストが不一致だった穴）。
@@ -666,7 +666,7 @@ for node in ast.walk(tree):
 #   _scrub_error: CMP1(100<=status<=999のHTTPステータス形式検査)
 #   _valid_epoch: CMP1(value>0＝1件のチケットが持つ1つのepoch値の健全性
 #     検査。検証職1巡目MAJOR-2対応)
-#   _build_codex_reset_credits: CMP1(available_count<0＝1件のpoolが持つ
+#   _build_cache_reset_credits: CMP1(available_count<0＝1件のpoolが持つ
 #     枚数の非負性検査。検証職1巡目MAJOR-2対応。⚠️検証職2巡目MAJOR-2対応で
 #     「available_count>0なら未失効の裏付けが必須」というCMPをもう1つ
 #     持っていたが、正常な「枚数だけ取得(count-only)」を誤ってmissingへ
@@ -680,7 +680,7 @@ ALLOWED = {
     ("CMP", "build_subscription_pool"): 2,
     ("CMP", "_scrub_error"): 1,
     ("CMP", "_valid_epoch"): 1,
-    ("CMP", "_build_codex_reset_credits"): 1,
+    ("CMP", "_build_cache_reset_credits"): 1,
     ("CMP", "_format_ticket_text"): 1,
 }
 
@@ -764,7 +764,7 @@ echo "=== FX-15: チケット（reset credit）の提示（陽性・B1-c） ==="
 # （検証職2巡目の指摘どおりの順）。
 # 各fixtureは five_hour/seven_day は完全に正常（usage_state=ok）に保ち、
 # reset_credits側の1点だけを変えることで、結果の原因が意図した検査
-# （`_build_codex_reset_credits`・`_extract_credit_entry`）以外にないことを
+# （`_build_cache_reset_credits`・`_extract_credit_entry`）以外にないことを
 # 保証する（coding-doc-style §4「陽性fixtureが実際に拒否経路を通っていない」
 # 再発防止）。
 # ============================================================
@@ -875,10 +875,17 @@ print('OK' if len(c) == 1 and c[0]['id'] == 'RateLimitResetCredit_ok' else 'NG:'
 
   # --- 変異確認（coding-doc-style §4「陽性fixtureが実際に拒否経路／正常
   # 経路を通っているか」の直接検証） ---
+  # 変異コピーは提示器の実体位置からの相対（../../core/assembly/ledger-tool.sh）で台帳ツールを引き、
+  # 照会結果（<repo ルート>/usage/connect/…）の接続を列挙する（v1.1 設計 §5.3・§5.6）。複製先を
+  # repo と同じ形（$WORK/usage/executor/）にし、core/ と usage/connect/ は実 repo への symlink にする。
+  MUT_DIR="$WORK/usage/executor"
+  mkdir -p "$MUT_DIR"
+  ln -sfn "$REPO_ROOT/core" "$WORK/core"
+  ln -sfn "$REPO_ROOT/usage/connect" "$WORK/usage/connect"
   # (i) FX-16aが検出する不具合（負のavailable_countをそのまま信用する）を
   # 意図的に再現した壊れコピーへ差し戻すと、同じfixtureが確実に失敗側へ
   # 転じることを確認する。
-  MUT_LIB_NOGUARD="$WORK/usage_snapshot_mutant_noguard.py"
+  MUT_LIB_NOGUARD="$MUT_DIR/usage_snapshot_mutant_noguard.py"
   python3 -c "
 src = open('$LIB', encoding='utf-8').read()
 marker = '    if available_count is not None and available_count < 0:\n        available_count = None\n'
@@ -893,7 +900,7 @@ open('$MUT_LIB_NOGUARD', 'w', encoding='utf-8').write(mutated)
   # 裏付けが必須」というfail-closed化を意図的に復元した壊れコピーへ戻すと、
   # FX-16b（count-only・正常形）が「取得不可」へ誤って転じることを確認する
   # （撤回が正しく効いていることの直接証拠）。
-  MUT_LIB_OVERCLOSED="$WORK/usage_snapshot_mutant_overclosed.py"
+  MUT_LIB_OVERCLOSED="$MUT_DIR/usage_snapshot_mutant_overclosed.py"
   python3 -c "
 src = open('$LIB', encoding='utf-8').read()
 marker = '''    return {
@@ -918,7 +925,7 @@ open('$MUT_LIB_OVERCLOSED', 'w', encoding='utf-8').write(mutated)
   # (k) FX-16gが検出する不具合（idが無いcreditを受理する）を意図的に
   # 再現した壊れコピーへ差し戻すと、当該creditがcredits[]へ残ることを
   # 確認する。
-  MUT_LIB_NOIDCHECK="$WORK/usage_snapshot_mutant_noidcheck.py"
+  MUT_LIB_NOIDCHECK="$MUT_DIR/usage_snapshot_mutant_noidcheck.py"
   python3 -c "
 src = open('$LIB', encoding='utf-8').read()
 marker = '    if not (isinstance(id_, str) and id_ != \"\"):\n        return None\n'
@@ -933,7 +940,7 @@ open('$MUT_LIB_NOIDCHECK', 'w', encoding='utf-8').write(mutated)
 echo "=== AST到達可能性検査（AC-95③・許可リスト方式の簡易版） ==="
 {
   ast_result="$(python3 "$AST_HELPER" "$LIB")"
-  assert_eq "実装コードの減算・不等号比較は既知の安全な関数・個数と完全一致する(_extract_window/build_subscription_pool/_scrub_error/_valid_epoch/_build_codex_reset_credits/_format_ticket_text)" "OK" "$ast_result"
+  assert_eq "実装コードの減算・不等号比較は既知の安全な関数・個数と完全一致する(_extract_window/build_subscription_pool/_scrub_error/_valid_epoch/_build_cache_reset_credits/_format_ticket_text)" "OK" "$ast_result"
 
   # 陽性fixture①: 「枠間の残量を引き算する」ような新しい関数を一時コピー
   # へ追加すると、この検査が確実に検出することを確認する。
@@ -959,6 +966,56 @@ open('$MUT_LIB_INFUNC', 'w', encoding='utf-8').write(mutated)
 "
   mut_result_infunc="$(python3 "$AST_HELPER" "$MUT_LIB_INFUNC")"
   assert_contains "陽性fixture②: 許可済み関数(build_subscription_pool)内へ演算を1つ追加すると個数不一致として検出される" "$mut_result_infunc" "SUB:build_subscription_pool=2(expected 1)"
+}
+
+echo "=== V-08（設計 §5.6）: 接続の列挙（台帳の鍵 usage.fetch）の照会 3 分類＝鍵なし（接続の枠 0・記録なし）／台帳異常・実体異常（枠 0＋stderr に固定文）・どれも exit 0 ==="
+{
+  # snap_ledger_case <ラベル> <AIENV_LEDGER> <stderr に期待する固定文の先頭（空＝LEDGER: 行なし）>
+  # 健全なキャッシュ（FX-1）を与えても、接続を引けなければ接続由来の枠（unlimited 以外）は 0。
+  snap_ledger_case() {
+    local label="$1" ledger="$2" want="$3" out rc=0
+    out="$(AIENV_LEDGER="$ledger" run_json "$FX1" 2>"$WORK/snap-ledger.err")" || rc=$?
+    assert_eq "$label: exit 0（提示専用）" "0" "$rc"
+    assert_eq "$label: 接続由来の枠は 0（unlimited だけ）" "unlimited" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(p["pool_ref"] for p in json.load(sys.stdin)["pools"]))' 2>/dev/null)"
+    if [ -z "$want" ]; then
+      assert_eq "$label: stderr に LEDGER: 行なし（予定された省略）" "0" "$(grep -c '^LEDGER: ' "$WORK/snap-ledger.err" || true)"
+    else
+      assert_eq "$label: stderr に固定文（${want}…）が 1 行" "1" "$(grep -c "^$want" "$WORK/snap-ledger.err" || true)"
+    fi
+  }
+  awk -F'\t' '$6!="usage.fetch"' "$REPO_ROOT/core/data/ledger.tsv" > "$WORK/ledger-nokey.tsv"
+  snap_ledger_case "鍵なし" "$WORK/ledger-nokey.tsv" ""
+  snap_ledger_case "台帳異常（台帳が無い）" "$WORK/no-such-dir/ledger.tsv" "LEDGER: ledger "
+  { cat "$WORK/ledger-nokey.tsv"
+    printf 'part\tusage/connect/zz-missing/fetch.sh\tusage\tconnect\tzz-missing\tusage.fetch\t\n'; } > "$WORK/ledger-badpart.tsv"
+  snap_ledger_case "実体異常（パス不在）" "$WORK/ledger-badpart.tsv" "LEDGER: part usage.fetch "
+}
+
+echo "=== V-11（裁定）: 台帳ツールの照会がrc1以外で、固定文でないstderr／空のstderrは照会失敗の定型文に正規化する ==="
+{
+  # 台帳ツールの起動先はusage_snapshot.py自身の実体位置からの相対
+  # （../../core/assembly/ledger-tool.sh）でAIENV_LEDGERでは変えられない
+  # ため、FX-16後段の変異確認と同じ一時repo方式（$WORK配下へ複製）で
+  # 台帳ツール自体を偽物に差し替える。
+  V11_STUB="$WORK/v11-us/usage/executor"
+  mkdir -p "$V11_STUB" "$WORK/v11-us/core/assembly"
+  cp "$LIB" "$V11_STUB/usage_snapshot.py"
+
+  # v11_fetch_case <ラベル> <偽台帳ツールの本体> <期待rc>
+  v11_fetch_case() {
+    local label="$1" stub_body="$2" want_rc="$3" out rc=0
+    printf '#!/usr/bin/env bash\n%s\n' "$stub_body" > "$WORK/v11-us/core/assembly/ledger-tool.sh"
+    out="$(AIENV_USAGE_CACHE_DIR="$FX1" python3 "$V11_STUB/usage_snapshot.py" --json --now "$NOW" 2>"$WORK/v11-us.err")" || rc=$?
+    assert_eq "$label: exit0（提示専用）" "0" "$rc"
+    assert_eq "$label: 接続由来の枠は0（unlimitedだけ、鍵なしと同じ働き）" "unlimited" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(p["pool_ref"] for p in json.load(sys.stdin)["pools"]))' 2>/dev/null)"
+    assert_eq "$label: stderrに固定文（LEDGER: ledger 台帳ツールの照会に失敗（rc=${want_rc}））が1行" "1" \
+      "$(grep -Fc "LEDGER: ledger 台帳ツールの照会に失敗（rc=${want_rc}）" "$WORK/v11-us.err" || true)"
+  }
+  v11_fetch_case "V-11(a) 固定文でないstderr" 'echo "boom" >&2
+exit 2' "2"
+  v11_fetch_case "V-11(b) stderr空" 'exit 3' "3"
 }
 
 echo

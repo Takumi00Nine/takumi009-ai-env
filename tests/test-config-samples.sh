@@ -13,13 +13,13 @@ set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-LIB="$REPO_ROOT/claude/hooks/lib/profile_resolve.py"
-INSTALL_MAIN="$REPO_ROOT/scripts/install-main.sh"
-CONFIG_DIR="$REPO_ROOT/config"
+LIB="$REPO_ROOT/team/executor/profile_resolve.py"
+INSTALL_MAIN="$REPO_ROOT/core/assembly/install-main.sh"
+CONFIG_DIR="$REPO_ROOT/team/data"
 PROFILE_SAMPLE="$CONFIG_DIR/profile.md.sample"
 MODELS_SAMPLE="$CONFIG_DIR/models.conf.sample"
-BEDROCK_SAMPLE="$CONFIG_DIR/bedrock.env.sample"
-AGENTS_DIR="$REPO_ROOT/claude/agents"
+BEDROCK_SAMPLE="$REPO_ROOT/team/connect/claude-code/bedrock.env.sample"
+AGENTS_DIR="$REPO_ROOT/team/rules/agents"
 # ngwords はローカル実体（private repo）にしか無いので既定では指さない。
 # 指定が無ければ AC-4 の ngwords 部分は skip（赤にしない）。
 NGWORDS_FILE="${NGWORDS_FILE:-}"
@@ -102,7 +102,7 @@ echo "=== AC-1c: 配役表の職種名が職種定義ファイルの集合に収
   fi
 }
 
-echo "=== OPUS55-AC-1: config/models.conf.sample の opus-*定義がclaude-opus-5-5・他3定義は不変 ==="
+echo "=== OPUS55-AC-1: team/data/models.conf.sample の opus-*定義がclaude-opus-5-5・他3定義は不変 ==="
 {
   # Opus 5.5 採用（opus-*定義をclaude-opus-5-5へ）AC-1: [opus-high]/[opus-medium]/
   # [opus-low]のmodel=がclaude-opus-5-5（provider/effortは変えない）。
@@ -195,7 +195,7 @@ echo "=== AC-4: ngwords・/Users/・禁止キー名を含まない（3本） ===
     echo "  skip - AC-4 ngwords: NGWORDS_FILE 未指定（または不在）"
   fi
 
-  # 禁止キー名の判定は claude/hooks/lib/profile_resolve.py の
+  # 禁止キー名の判定は team/executor/profile_resolve.py の
   # FORBIDDEN_KEY_SUBSTRINGS（V15・大小文字を問わない部分一致）を単一の値表
   # として直接読み込む（2026-09-08 Codexレビュー指摘・MAJOR対応・1巡目:
   # 固定6キー名の直書きだとOPENAI_API_KEYやCLIENT_SECRETのような新種を
