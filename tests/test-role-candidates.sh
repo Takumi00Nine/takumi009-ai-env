@@ -325,6 +325,34 @@ echo "=== V-08（設計 §5.6）: Usage 提示の照会 3 分類＝鍵なし／�
   rc_ledger_case "実体異常（パス不在）" "$WORK/ledger-badpart.tsv" "LEDGER: part usage.snapshot "
 }
 
+echo "=== V-11（裁定）: 台帳ツールの照会がrc1以外で、固定文でないstderr／空のstderrは照会失敗の定型文に正規化する ==="
+{
+  # 台帳ツールの起動先はrole_candidates.py自身の実体位置からの相対
+  # （../../../core/assembly/ledger-tool.sh）でAIENV_LEDGERでは変えられない
+  # ため、MINOR-8と同じ一時repo方式（コピー＋profile_resolve.pyはsymlink）
+  # で台帳ツール自体を偽物に差し替える。
+  V11_STUB="$WORK/v11-rc"
+  mkdir -p "$V11_STUB/team/connect/claude-code" "$V11_STUB/core/assembly"
+  cp "$RC" "$V11_STUB/team/connect/claude-code/role_candidates.py"
+  ln -sfn "$REPO_ROOT/team/executor" "$V11_STUB/team/executor"
+
+  # v11_rc_case <ラベル> <偽台帳ツールの本体> <期待rc>
+  v11_rc_case() {
+    local label="$1" stub_body="$2" want_rc="$3" out err row rc=0
+    printf '#!/usr/bin/env bash\n%s\n' "$stub_body" > "$V11_STUB/core/assembly/ledger-tool.sh"
+    out="$(python3 "$V11_STUB/team/connect/claude-code/role_candidates.py" --profile "$BASE/profile.md" --agents-dir "$BASE/agents" 2>"$WORK/v11-rc.err")" || rc=$?
+    err="$(cat "$WORK/v11-rc.err")"
+    row="$(printf '%s\n' "$out" | awk -F'\t' '$1=="leader"{print}')"
+    assert_eq "$label: exit0（提示専用）" "0" "$rc"
+    assert_eq "$label: leaderのh5・d7は-（鍵なしと同じ働き）" "-	-" "$(printf '%s' "$row" | awk -F'\t' '{print $6"\t"$7}')"
+    assert_eq "$label: stderrに固定文（LEDGER: ledger 台帳ツールの照会に失敗（rc=${want_rc}））が1行" "1" \
+      "$(printf '%s\n' "$err" | grep -Fc "LEDGER: ledger 台帳ツールの照会に失敗（rc=${want_rc}）")"
+  }
+  v11_rc_case "V-11(a) 固定文でないstderr" 'echo "boom" >&2
+exit 2' "2"
+  v11_rc_case "V-11(b) stderr空" 'exit 3' "3"
+}
+
 echo ""
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="
 [ "$FAIL" -eq 0 ]

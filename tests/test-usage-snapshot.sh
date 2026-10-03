@@ -992,6 +992,32 @@ echo "=== V-08（設計 §5.6）: 接続の列挙（台帳の鍵 usage.fetch）�
   snap_ledger_case "実体異常（パス不在）" "$WORK/ledger-badpart.tsv" "LEDGER: part usage.fetch "
 }
 
+echo "=== V-11（裁定）: 台帳ツールの照会がrc1以外で、固定文でないstderr／空のstderrは照会失敗の定型文に正規化する ==="
+{
+  # 台帳ツールの起動先はusage_snapshot.py自身の実体位置からの相対
+  # （../../core/assembly/ledger-tool.sh）でAIENV_LEDGERでは変えられない
+  # ため、FX-16後段の変異確認と同じ一時repo方式（$WORK配下へ複製）で
+  # 台帳ツール自体を偽物に差し替える。
+  V11_STUB="$WORK/v11-us/usage/executor"
+  mkdir -p "$V11_STUB" "$WORK/v11-us/core/assembly"
+  cp "$LIB" "$V11_STUB/usage_snapshot.py"
+
+  # v11_fetch_case <ラベル> <偽台帳ツールの本体> <期待rc>
+  v11_fetch_case() {
+    local label="$1" stub_body="$2" want_rc="$3" out rc=0
+    printf '#!/usr/bin/env bash\n%s\n' "$stub_body" > "$WORK/v11-us/core/assembly/ledger-tool.sh"
+    out="$(AIENV_USAGE_CACHE_DIR="$FX1" python3 "$V11_STUB/usage_snapshot.py" --json --now "$NOW" 2>"$WORK/v11-us.err")" || rc=$?
+    assert_eq "$label: exit0（提示専用）" "0" "$rc"
+    assert_eq "$label: 接続由来の枠は0（unlimitedだけ、鍵なしと同じ働き）" "unlimited" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(p["pool_ref"] for p in json.load(sys.stdin)["pools"]))' 2>/dev/null)"
+    assert_eq "$label: stderrに固定文（LEDGER: ledger 台帳ツールの照会に失敗（rc=${want_rc}））が1行" "1" \
+      "$(grep -Fc "LEDGER: ledger 台帳ツールの照会に失敗（rc=${want_rc}）" "$WORK/v11-us.err" || true)"
+  }
+  v11_fetch_case "V-11(a) 固定文でないstderr" 'echo "boom" >&2
+exit 2' "2"
+  v11_fetch_case "V-11(b) stderr空" 'exit 3' "3"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
