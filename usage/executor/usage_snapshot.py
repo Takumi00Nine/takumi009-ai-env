@@ -96,7 +96,7 @@ POOL_FIELDS = frozenset(
 # （+ state）。信用しない（`state:"missing"`へ倒す）のは`available_count`
 # そのものが非負整数として解釈できないときだけで、詳細行（credits）が
 # 無い／裏付けが無いことは正常形として受理する（公式app-serverの
-# count-only応答＝検証職2巡目MAJOR-2対応。`_build_codex_reset_credits`
+# count-only応答＝検証職2巡目MAJOR-2対応。`_build_cache_reset_credits`
 # 参照）。credits各要素の型不正は要素単位で除外する
 # （`_extract_credit_entry`参照）。unlimited は reset_credits: None（§2.2）。
 CODEX_RESET_CREDITS_FIELDS = frozenset(
@@ -165,13 +165,16 @@ def _parse_declaration(path: str):
 def _usage_fetch_lookup():
     """台帳ツールの照会（鍵=usage.fetch）を1回呼ぶ（他機能の同種の照会
     ヘルパと同じ型・依存は subprocess 経由）。
-    戻り値: (絶対パスの行のリスト or None, 台帳ツールのstderr1行 or None)。
-    鍵なし（rc1）＝行も stderr も無い＝(None, None)（fail-soft・記録なし）。
-    台帳異常・実体異常（rc2/rc3）＝行は無いが stderr に固定文1行＝
-    (None, その1行)。台帳ツールが無ければ (None, None)。
+    戻り値: (絶対パスの行のリスト or None, stderr1行 or None)。
+    鍵なし（rc1）＝記録なし＝(None, None)（fail-soft・予定された省略）。
+    台帳異常・実体異常（rc2/rc3）＝台帳ツールの stderr 固定文1行をそのまま
+    (None, その1行)。台帳ツール自身が起動できない（無い・OSError・
+    固定文なしの非0）＝台帳ツールの固定文と同じ形（先頭語＋種別語
+    `ledger`）の1行を自分で組んで返す（検証 V-09＝鍵なしだけを無記録にし、
+    起動できない場合を無言で縮退させない）。
     """
     if not os.path.isfile(LEDGER_TOOL):
-        return None, None
+        return None, "%s ledger 台帳ツールを起動できない %s" % (_LEDGER_MSG_HEAD, LEDGER_TOOL)
     try:
         proc = subprocess.run(
             ["bash", LEDGER_TOOL, "lookup", _USAGE_FETCH_KEY],
@@ -179,14 +182,16 @@ def _usage_fetch_lookup():
             text=True,
         )
     except OSError:
-        return None, None
-    lines = [line for line in proc.stdout.splitlines() if line]
-    if lines:
+        return None, "%s ledger 台帳ツールを起動できない %s" % (_LEDGER_MSG_HEAD, LEDGER_TOOL)
+    if proc.returncode == 0:
+        lines = [line for line in proc.stdout.splitlines() if line]
         return lines, None
+    if proc.returncode == 1:
+        return None, None
     stderr_lines = proc.stderr.splitlines()
     if stderr_lines:
         return None, stderr_lines[0]
-    return None, None
+    return None, "%s ledger 台帳ツールを起動できない %s" % (_LEDGER_MSG_HEAD, LEDGER_TOOL)
 
 
 def _load_usage_connections():
@@ -479,18 +484,18 @@ def _extract_credit_entry(raw) -> Optional[dict]:
     }
 
 
-def _build_codex_reset_credits(data: Optional[dict]) -> dict:
-    """codex-subscription 用の reset_credits を組み立てる。data は
-    codex-cache.json 全体（無し/壊れていれば None）。
+def _build_cache_reset_credits(data: Optional[dict]) -> dict:
+    """キャッシュの reset_credits（払い出しの枚数・詳細行）を組み立てる。
+    宣言にチケット句の固定値が無い枠（`_reset_credits_for_pool`参照）は
+    ここを通る。data はキャッシュJSON全体（無し/壊れていれば None）。
 
     ⚠️ 検証職2巡目MAJOR-2対応: `available_count`（非負整数として解釈
-    できる値）こそが権威値（公式protocol・実装記録§2「Claude側を固定
-    文言にした理由」と同じ考え方＝researcher実測の一次情報を最優先する）
-    であり、**詳細行（credits）が無い／裏付けが無いことは異常ではない**
-    （openai/codex公式app-server README・protocol v2/account.rsの
-    `credits: null`＝count-onlyの正常形）。1巡目対応で追加した
-    「available_count>0なら未失効の裏付けが必須」というfail-closed化は
-    この正常形を`state:"missing"`へ誤分類していたため撤回した。
+    できる値）こそが権威値（出典は取得器側＝researcher実測の一次情報を
+    最優先する）であり、**詳細行（credits）が無い／裏付けが無いことは
+    異常ではない**（取得器側の出典が示す count-only の正常形）。1巡目
+    対応で追加した「available_count>0なら未失効の裏付けが必須」という
+    fail-closed化はこの正常形を`state:"missing"`へ誤分類していたため
+    撤回した。
     信用しない（`state:"missing"`へ倒す）のは以下だけ:
       - `reset_credits`キー自体が無い、または型が壊れている。
       - `available_count`が負値・非整数など、非負整数として解釈できない
@@ -544,7 +549,7 @@ def _reset_credits_for_pool(pool_ref: str, data: Optional[dict]) -> dict:
     fixed = FIXED_RESET_CREDITS.get(pool_ref)
     if fixed is not None:
         return dict(fixed)
-    return _build_codex_reset_credits(data)
+    return _build_cache_reset_credits(data)
 
 
 def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_seconds: int) -> dict:
@@ -717,7 +722,7 @@ def _format_ticket_text(pool: dict, now: int) -> str:
     Vaultの資料側に書き、ここでは枚数と期限だけを出す。
 
     ⚠️ 検証職3巡目MINOR-2対応（docstring訂正）: `reset_credits`
-    （`_build_codex_reset_credits`）は「available_count>0なら未失効の
+    （`_build_cache_reset_credits`）は「available_count>0なら未失効の
     availableなチケットが最低1件ある」ことは**保証しない**（この保証は
     検証職1巡目対応で一時追加したが、2巡目MAJOR-2で撤回済み＝公式
     app-serverのcount-only応答〈`credits:null`〉は正常形であり、詳細行・
@@ -790,10 +795,12 @@ def _human_line_for_subscription(pool: dict, now: int) -> str:
     if pool["error"] is not None:
         suffix += f" ⚠️取得エラー（{pool['error']}）"
     line = f"{name}: " + "／".join(segments) + suffix
-    # B1-c（2026-09-09）: Codex行の末尾にだけチケット句を足す（本人指示
-    # 2026-09-09 02:30＝長い固定文言は載せない・行数は変えない）。Claude行
-    # には何も足さない（Claudeは残回数を返すAPIが未確認＝機械取得しない）。
-    if pool["pool_ref"] == "codex-subscription":
+    # B1-c（2026-09-09）: チケット句を足すのは「宣言にチケット句の固定値
+    # （reset_credits_fixed_*）が無い枠」＝キャッシュの reset_credits から
+    # 組んだ枠だけ（設計§5.3・本人指示2026-09-09 02:30＝長い固定文言は
+    # 載せない・行数は変えない）。宣言に固定値がある枠には何も足さない
+    # （提供元名で分岐しない）。
+    if pool["pool_ref"] not in FIXED_RESET_CREDITS:
         line += "／" + _format_ticket_text(pool, now)
     return line
 

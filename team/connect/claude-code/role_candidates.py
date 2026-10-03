@@ -104,10 +104,11 @@ def _run_list_candidates(profile_path: str, agents_dir: str) -> tuple[Optional[l
 
 
 def _lookup_usage_snapshot() -> Optional[str]:
-    """提示器のパスを台帳の鍵で照会する。鍵なし（台帳ツールが無い＝Core の外に
-    置かれた場合も含む）は None を黙って返す。台帳異常・実体異常は照会の
-    固定文を stderr へ写して None（fail-soft）。"""
+    """提示器のパスを台帳の鍵で照会する。鍵なし（rc=1）は None を黙って返す。
+    台帳ツールを起動できない・台帳異常・実体異常は照会の固定文を stderr へ
+    写して None（fail-soft）。"""
     if not os.path.isfile(LEDGER_TOOL):
+        sys.stderr.write(f"LEDGER: ledger 台帳ツールを起動できない {LEDGER_TOOL}\n")
         return None
     try:
         proc = subprocess.run(
@@ -116,6 +117,7 @@ def _lookup_usage_snapshot() -> Optional[str]:
             text=True,
         )
     except OSError:
+        sys.stderr.write(f"LEDGER: ledger 台帳ツールを起動できない {LEDGER_TOOL}\n")
         return None
     lines = proc.stdout.splitlines()
     if proc.returncode == 0 and lines:

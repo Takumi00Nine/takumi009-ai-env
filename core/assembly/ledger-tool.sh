@@ -45,12 +45,18 @@ cmd_lookup() {
     printf '%s ledger 台帳を読めない %s\n' "$MSG_HEAD" "$LEDGER" >&2
     return "$RC_LEDGER_BAD"
   fi
+  # 台帳の形式検証（check と同じ語彙＝$FUNCTIONS/$LAYERS/$ROW_KINDS を使う。種類・列数・
+  # part の機能/層・suite の機能語彙・notify の機能＝check が行う判定と同じ）。
   res="$(awk -F'\t' -v key="$key" -v kinds=" $ROW_KINDS " -v fns=" $FUNCTIONS " -v lys=" $LAYERS " '
     /^#/ || /^[[:space:]]*$/ { next }
     NF < 6 { printf "BAD\t%d 行目の列が足りない\n", NR; exit }
     index(kinds, " " $1 " ") == 0 { printf "BAD\t%d 行目の種類が語彙外\n", NR; exit }
     $1 == "part" && (index(fns, " " $3 " ") == 0 || index(lys, " " $4 " ") == 0) {
       printf "BAD\t%d 行目の機能か層が語彙外\n", NR; exit }
+    $1 == "suite" && index(fns, " " $3 " ") == 0 {
+      printf "BAD\t%d 行目の機能が語彙外\n", NR; exit }
+    $1 == "notify" && $3 != "notify" {
+      printf "BAD\t%d 行目の機能が notify でない\n", NR; exit }
     $1 == "part" && $6 == key { print "HIT\t" $2 }
   ' "$LEDGER")"
   line="$(printf '%s\n' "$res" | grep '^BAD' | head -1)"

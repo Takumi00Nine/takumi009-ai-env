@@ -36,7 +36,14 @@ slots_of() {
   esac
 }
 
-INPUT=$(cat 2>/dev/null || true)
+# stdin を読めない（閉じて起動 等）＝無出力・非 0（設計 §5.5 失敗表・V-07）。JSON として
+# 解析できない stdin は NFR-1 どおり空フィールド扱いのまま本文を出す（ここでは判定しない）。
+# 先に fd 9 へ複製して fd 0 を開いたままにする（fd 0 を閉じたまま $(cat) すると、出力を
+# 受けるパイプが fd 0 を再利用して cat が自分自身の出力待ちで止まる bash の罠を避ける）。
+if ! { exec 9<&0; } 2>/dev/null; then
+  exit 1
+fi
+INPUT=$(cat <&9 2>/dev/null) || exit 1
 INPUT_FIELDS=$(printf '%s' "$INPUT" | jq -r '[(.session_id // ""), (.agent_type // "")] | @tsv' 2>/dev/null)
 SESSION_ID="${INPUT_FIELDS%%$'\t'*}"
 AGENT_TYPE="${INPUT_FIELDS#*$'\t'}"

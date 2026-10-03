@@ -860,37 +860,6 @@ else
   fi
 fi
 
-# --- リーダー実行値と動的Bedrock許可キーの決定（雛形配置の直後・settings.json生成の直前）---
-# --dry-run では resolver を呼ばない（「--dry-run は python3 を要求しない」保証を
-# 崩さない。計画表示は generate_settings_json() の dry-run 分岐が行う）。
-AIENV_SETTINGS_MODEL=""
-AIENV_SETTINGS_EFFORT=""
-AIENV_SKIP_SETTINGS_GENERATION=0
-if [ "$DRY_RUN" != "1" ]; then
-  resolve_settings_inputs
-fi
-
-# --- claude/ ---
-# settings.json はsymlinkではなく生成（マシン別modelプレースホルダ置換。上記
-# 「例外その2」コメント参照）。
-# ⚠️ Bedrock envファイルが存在するのに読めない・解析できない場合、
-# generate_settings_json()はWARNを出しsettings.json本体の生成を中止・既存
-# ファイルを保持したまま**AIENV_DEFERRED_EXIT_CODEを立てて戻る**（設計書
-# §6.2-B S4「bedrock.envが実在するのに読めない/解析できない場合は非0終了」。
-# 詳細は同関数のコメント参照）。他の処理（hooksのsymlink化等）はそのまま
-# 続行させ、最終的な終了コードだけスクリプト末尾で非0へ反映する。これは
-# 意図した安全側の分岐であり、`|| true`のような一律の抑制は付けない
-# （2026-08-30 Codex四次レビュー指摘・BLOCKING対応: `|| true`を付けると、
-# この関数内で本当に発生した異常＝mktemp/mv/backup_once失敗等まで一緒に
-# 握り潰してしまい、`set -e`の保護が意図せず外れてしまっていた）。
-# ⚠️ 動的Bedrock許可キーの算出自体に失敗した場合（AIENV_SKIP_SETTINGS_
-# GENERATION=1）は、generate_settings_json()を呼ぶことすらせず既存ファイルを
-# 保持する（設計書§6.2-B S18・2026-09-01工程横断レビュー差し戻し・MAJOR
-# 対応。判定・WARN・AIENV_DEFERRED_EXIT_CODEの計上は上のブロックで既に
-# 済ませている）。
-if [ "$AIENV_SKIP_SETTINGS_GENERATION" != "1" ]; then
-  generate_settings_json core/assembly/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
-fi
 # bootstrap-vault.sh（旧ライブ名）は Core の SessionStart 合成器へ張る（v1.1
 # 機能の部品化・設計 §5.5 D-9＝主後継。settings.json の SessionStart 登録名は不変）。
 link core/connect/claude-code/session-start-compose.sh "$HOME/.claude/hooks/bootstrap-vault.sh"
@@ -1027,6 +996,47 @@ generate_config_toml team/connect/codex/config.toml "$HOME/.codex/config.toml"
 # docs/core-split/codex-exec-only-検討経緯-2026-09-06.md）。Codex呼び出しは
 # 各ワーカーが team/connect/codex/codex-exec.sh を直接叩く方式になったため、インストーラ側の
 # 自動登録ステップは不要になった。
+
+# --- リーダー実行値と動的Bedrock許可キーの決定・settings.json 生成（全 link・chmod・codex/ の配置の後）---
+# 検証 V-04（3 巡目 BLOCKING）対応・2026-10-03: 以前はこの決定・生成をフック／
+# 職種定義の link・chmod・codex/ の link より前に置いていたため、途中で ln が
+# 失敗すると「新しい settings.json だけが公開され、まだ配置されていない新フック
+# （例＝Codex 直叩き柵）を参照する」状態になり得た（設計 §8.1 S2「登録は配置の
+# 後」・F1「配置中失敗＝同じコマンドの再実行で前へ進む」の前提に反する・NFR-4・
+# AC-10 ③）。全 link・chmod・codex/ の配置が終わったこの位置で初めて決定・生成
+# する＝途中失敗時は旧 settings.json が残ったまま `set -euo pipefail` でここへ
+# 到達せず止まる。
+# --dry-run では resolver を呼ばない（「--dry-run は python3 を要求しない」保証を
+# 崩さない。計画表示は generate_settings_json() の dry-run 分岐が行う）。
+AIENV_SETTINGS_MODEL=""
+AIENV_SETTINGS_EFFORT=""
+AIENV_SKIP_SETTINGS_GENERATION=0
+if [ "$DRY_RUN" != "1" ]; then
+  resolve_settings_inputs
+fi
+
+# settings.json はsymlinkではなく生成（マシン別modelプレースホルダ置換。上記
+# 「例外その2」コメント参照）。
+# ⚠️ Bedrock envファイルが存在するのに読めない・解析できない場合、
+# generate_settings_json()はWARNを出しsettings.json本体の生成を中止・既存
+# ファイルを保持したまま**AIENV_DEFERRED_EXIT_CODEを立てて戻る**（設計書
+# §6.2-B S4「bedrock.envが実在するのに読めない/解析できない場合は非0終了」。
+# 詳細は同関数のコメント参照）。hooks・職種定義のsymlink化・chmod・codex/の
+# 配置はここより前で既に完走しているため、残る処理（--with-dotfiles時の
+# dotfiles導入＝独立したsoft-fail経路）はそのまま続行させ、最終的な終了コード
+# だけスクリプト末尾で非0へ反映する。これは意図した安全側の分岐であり、
+# `|| true`のような一律の抑制は付けない（2026-08-30 Codex四次レビュー指摘・
+# BLOCKING対応: `|| true`を付けると、この関数内で本当に発生した異常＝
+# mktemp/mv/backup_once失敗等まで一緒に握り潰してしまい、`set -e`の保護が
+# 意図せず外れてしまっていた）。
+# ⚠️ 動的Bedrock許可キーの算出自体に失敗した場合（AIENV_SKIP_SETTINGS_
+# GENERATION=1）は、generate_settings_json()を呼ぶことすらせず既存ファイルを
+# 保持する（設計書§6.2-B S18・2026-09-01工程横断レビュー差し戻し・MAJOR
+# 対応。判定・WARN・AIENV_DEFERRED_EXIT_CODEの計上は上のブロックで既に
+# 済ませている）。
+if [ "$AIENV_SKIP_SETTINGS_GENERATION" != "1" ]; then
+  generate_settings_json core/assembly/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
+fi
 
 # 週次drift通知LaunchAgent（com.takumi009.drift-check.plist・drift-notify.sh）は
 # 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で撤去した。
