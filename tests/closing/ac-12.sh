@@ -152,6 +152,10 @@ ac12_run() {
   } >"$od/$side.stdout" 2>"$od/$side.stderr" || rc=$?
   fi
   printf '%s\n' "$rc" > "$od/$side.rc"
+  # v1.2 の口は応答を切り離して起動する（設計 R2-01）＝入口の終了は配送・記録の完了を意味しない。
+  # hk-ups-* は UserPromptSubmit（応答）を通すので、state のスナップショット前に T+1 秒待つ
+  # （基準側は同期なので実質即終わる・両側に同じだけ待たせるので比較は公平）。
+  case "$id" in hk-ups-*) sleep "$CLOSING_NOTIFY_OBSERVE_SECS" ;; esac
   python3 "$CL_PY" snap "$h" "$rd/after.json" --exclude Library/Caches/
   python3 "$CL_PY" snapdiff "$rd/before.json" "$rd/after.json" "$h" > "$od/$side.state"
   { cat "$rd/s/calls.log"; [ -f "$rd/cmux-state/calls.log" ] && cat "$rd/cmux-state/calls.log"; } > "$od/$side.calls"

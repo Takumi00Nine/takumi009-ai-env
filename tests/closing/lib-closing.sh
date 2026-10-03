@@ -46,6 +46,21 @@ cl_result() {
 
 cl_note() { printf '%s\n' "$*" >> "$OUT/detail.log"; }
 
+# cl_wait_lines <file> <min行数> [<上限秒=$CLOSING_NOTIFY_OBSERVE_SECS>] — v1.2 の口は応答を切り離して起動する
+#   （設計 R2-01）ので、入口の終了直後に記録を写すと配送前の値を見てしまう。ファイルの行数が <min行数> 以上に
+#   なるまで 0.1 秒刻みで待ち、達したら即戻る（基準側＝同期なのでほぼ即戻る）。上限に達したら 1 を返す
+#   （「増えない」ことを確かめたい側＝呼び手は上限まで待ってから写せば「打ち切り後の値」を見られる）。
+cl_wait_lines() {
+  local f="$1" min="$2" limit="${3:-$CLOSING_NOTIFY_OBSERVE_SECS}" n t0
+  t0=$(date +%s)
+  while :; do
+    n="$([ -f "$f" ] && grep -c . "$f" 2>/dev/null)"; n="${n:-0}"
+    [ "$n" -ge "$min" ] && return 0
+    [ $(( $(date +%s) - t0 )) -ge "$limit" ] && return 1
+    sleep 0.1
+  done
+}
+
 # ---------------------------------------------------------------- worktree
 cl_new_wt() {  # cl_new_wt <dir> <commit>
   git -C "$CL_SRC" worktree add -q --detach "$1" "$2" >>"$OUT/detail.log" 2>&1 || return 1

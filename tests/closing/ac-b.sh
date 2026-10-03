@@ -23,12 +23,17 @@ clb_fx9_ups() {
     | cl_run "$h" "$s" "$wt" CODE27_CALL_BIN="$s/c27/bin/code27-call-clear" \
       "$h/.claude/hooks/code27-call-clear.sh" >"$od/$side.c1.stdout" 2>"$od/$side.c1.stderr" || rc=$?
   printf '%s\n' "$rc" > "$od/$side.c1.rc"
+  # 口は応答を切り離して起動する（設計 R2-01）＝入口の終了は配送の完了を意味しない。記録が現れるまで
+  # T+1 秒待ってから写す（基準側は同期なので実質即・新側は非同期の配送を待つ）。
+  cl_wait_lines "$s/c27/calls.log" 1
   cp "$s/c27/calls.log" "$od/$side.c1.calls"
   rc=0
   printf '{"session_id":"s1","prompt":"%s"}' "$CLOSING_FX9_UPS_EXCLUDED" \
     | cl_run "$h" "$s" "$wt" CODE27_CALL_BIN="$s/c27/bin/code27-call-clear" \
       "$h/.claude/hooks/code27-call-clear.sh" >"$od/$side.c2.stdout" 2>"$od/$side.c2.stderr" || rc=$?
   printf '%s\n' "$rc" > "$od/$side.c2.rc"
+  # 除外入力＝増えないことを確かめる側。上限まで待って「それでも増えていない」ことを写す。
+  cl_wait_lines "$s/c27/calls.log" 2
   cp "$s/c27/calls.log" "$od/$side.c2.calls"
 }
 
@@ -79,8 +84,8 @@ ac_2() {
   clb_fx9_ups base; clb_fx9_ups new
   local ups_bad="" side c1 c2
   for side in base new; do
-    c1="$(grep -c . "$od/fx9-ups/$side.c1.calls" 2>/dev/null || echo 0)"
-    c2="$(grep -c . "$od/fx9-ups/$side.c2.calls" 2>/dev/null || echo 0)"
+    c1="$({ [ -f "$od/fx9-ups/$side.c1.calls" ] && grep -c . "$od/fx9-ups/$side.c1.calls" 2>/dev/null; } || true)"
+    c2="$({ [ -f "$od/fx9-ups/$side.c2.calls" ] && grep -c . "$od/fx9-ups/$side.c2.calls" 2>/dev/null; } || true)"
     [ "$c1" = 1 ] && [ "$c2" = 1 ] || ups_bad="$ups_bad $side(1件目=$c1,2件目=$c2)"
   done
 
@@ -89,9 +94,9 @@ ac_2() {
   local ann_bad=""
   for side in base new; do
     local cmux_n title_ok say_n
-    cmux_n="$(grep -c . "$od/fx9-announce/$side.cmux.calls" 2>/dev/null || echo 0)"
+    cmux_n="$({ [ -f "$od/fx9-announce/$side.cmux.calls" ] && grep -c . "$od/fx9-announce/$side.cmux.calls" 2>/dev/null; } || true)"
     title_ok="$(grep -qF -- "--title $CLOSING_FX9_ANNOUNCE_TITLE" "$od/fx9-announce/$side.cmux.calls" 2>/dev/null && echo 1 || echo 0)"
-    say_n="$(grep -c . "$od/fx9-announce/$side.code27.calls" 2>/dev/null || echo 0)"
+    say_n="$({ [ -f "$od/fx9-announce/$side.code27.calls" ] && grep -c . "$od/fx9-announce/$side.code27.calls" 2>/dev/null; } || true)"
     { [ "$cmux_n" = 1 ] && [ "$title_ok" = 1 ] && [ "$say_n" = 0 ]; } || ann_bad="$ann_bad $side(cmux=$cmux_n,題=$title_ok,発話=$say_n)"
   done
 
@@ -206,7 +211,7 @@ ac_4() {
   e="$(cl_side_path new "$CLOSING_MAINT_OLD")" || e=""
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$wt10" AIENV_REPO="$wt10" "$wt10/$e" </dev/null >"$od/fx10-maint.stdout" 2>"$od/fx10-maint.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx10-maint.rc"
-  local fx10_osascript_maint; fx10_osascript_maint="$(grep -c . "$s/calls.log" 2>/dev/null || echo 0)"
+  local fx10_osascript_maint; fx10_osascript_maint="$({ [ -f "$s/calls.log" ] && grep -c . "$s/calls.log" 2>/dev/null; } || true)"
   local maint_log_ok; maint_log_ok="$(grep -qF '異常終了' "$od/fx10-maint.stdout" "$od/fx10-maint.stderr" 2>/dev/null && echo 1 || echo 0)"
   e="$(cl_side_path new "$CLOSING_USAGE_FETCH_OLD")" || e=""
   : > "$s/calls.log"
@@ -216,7 +221,7 @@ ac_4() {
     STUB_CODEX_RESULT_LINE="$(cat "$CL_FIX/usage-bin/codex_success_result_line.json")" \
     "$wt10/$e" </dev/null >"$od/fx10-usage.stdout" 2>"$od/fx10-usage.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx10-usage.rc"
-  local fx10_osascript_usage; fx10_osascript_usage="$(grep -c . "$s/calls.log" 2>/dev/null || echo 0)"
+  local fx10_osascript_usage; fx10_osascript_usage="$({ [ -f "$s/calls.log" ] && grep -c . "$s/calls.log" 2>/dev/null; } || true)"
   local usage_log_ok; usage_log_ok="$(grep -qF 'claude-codex-usage' "$od/fx10-usage.stdout" "$od/fx10-usage.stderr" 2>/dev/null; echo $?)"
 
   [ "$(cat "$od/fx1-maint.rc")" = "$(cat "$od/fx10-maint.rc")" ] || bad="$bad maint:rc不一致"
