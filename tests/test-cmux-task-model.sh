@@ -625,12 +625,11 @@ if command -v python3 >/dev/null 2>&1; then
     CMUX_TASK_VAULT="$VAULT" CMUX_TASK_STATE="$STATE_FILE" \
       bash "$TARGET" --list >/dev/null 2>"$WORKDIR/ac117_err"
   }
-  AC117_RESULT="$(timing_judge_median 20 "$AC117_TIMES" ac117_run_once)"
-  AC117_OK="${AC117_RESULT%% *}"
-  AC117_MEDIAN="${AC117_RESULT#* }"
-  assert_true "AC-117(Task): 20回とも実行タイムアウト内に正常終了" "$AC117_OK"
-  assert_true "AC-117(Task): 中央値が0.4秒以下（最大値は使わない・実測 ${AC117_MEDIAN}秒）" \
-    "$(timing_pass "$AC117_RESULT" 0.4)"
+  AC117_RESULT="$(timing_judge 20 0.4 ac117_run_once "$AC117_TIMES")"
+  set -- $AC117_RESULT
+  AC117_PASS="$1"; AC117_MEDIAN="$2"; AC117_ALL_OK="$3"
+  assert_true "AC-117(Task): 20回とも実行タイムアウト内に正常終了（プロセスグループごと打ち切り＝VM-02）" "$AC117_ALL_OK"
+  assert_true "AC-117(Task): 中央値が0.4秒以下（最大値は使わない・実測 ${AC117_MEDIAN}秒）" "$AC117_PASS"
 else
   echo "SKIP: python3が無いためAC-117(Task)の単調時計計測を省略します"
 fi

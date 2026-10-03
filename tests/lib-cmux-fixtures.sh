@@ -908,51 +908,99 @@ mk_maintenance_state() {
 # v1.2 NFR-5（設計 v1.3 §2.6・実装計画 §1）＝所要時間の上限を持つ判定は、単調時計で
 # 同じ固定入力を既存の回数だけ連続して測り、中央値 ≤ 上限 L だけで判定する（最大値は
 # 使わない）。1 回の実行に実行タイムアウト（既定 30 秒・AIENV_TIMING_RUN_TIMEOUT_SECS
-# で上書き）を掛け、超えたら SIGKILL で打ち切り、その回を不合格にする（終わらない
-# 停止を拾う）。対象＝AC-117（本ファイル・test-cmux-task-model.sh）・v5_ac146（本ファイル）
-# の3箇所（着手ゲート B3 で grep して確定・AC-78 は対象外）。
+# で上書き）を掛け、超えたら打ち切り、その回を不合格にする（終わらない停止を拾う）。
+# 対象＝AC-117（本ファイル・test-cmux-task-model.sh）・v5_ac146（本ファイル）の3箇所
+# （着手ゲート B3 で grep して確定・AC-78 は裁定どおり据え置き＝別の timeout 実装の試験）。
 #
-# timing_judge_median <回数> <結果を書く時間ファイル> <実行する関数名>
-#   <実行する関数名> を <回数> 回、単調時計で計測しながら呼ぶ（固定入力は呼び出し側が
-#   その関数の中で・または export 済みの環境変数で用意する。リダイレクトも関数の中で
-#   行う）。標準出力へ "<all_ok=0/1> <中央値>" を 1 行返す（all_ok=0 のとき中央値は
-#   "nan"＝実行タイムアウトに当たった回がある、または非 0 終了の回があった）。
-timing_judge_median() {
-  local n="$1" timesfile="$2" fn="$3"
-  local run_timeout="${AIENV_TIMING_RUN_TIMEOUT_SECS:-30}"
-  : > "$timesfile"
-  local i=0 all_ok=1 rc pid watcher t0 t1
-  while [ "$i" -lt "$n" ]; do
-    t0="$(python3 -c 'import time; print(time.monotonic())')"
-    "$fn" &
-    pid=$!
-    ( sleep "$run_timeout"; kill -9 "$pid" 2>/dev/null ) &
-    watcher=$!
-    rc=0
-    wait "$pid" 2>/dev/null || rc=$?
+# verifier 1巡目 VM-01（判定関数を1つへ集約）・VM-02（プロセスグループごと打ち切る）の反映＝
+# 連続測定・中央値判定・実行タイムアウトを下の1関数 timing_judge だけで行う（3箇所とも
+# これを呼ぶ・v5_ac146 の独自 Python 計測も廃止してこれを使う）。
+
+# _timing_collect_tree <root_pid> — root_pid とその子孫全部の PID を pgrep -P で再帰収集し、
+# 1 行 1 個で返す（test-maintenance.sh の kill_process_tree と同じ技法＝プロセスグループで
+# なく子孫の木を辿る。bash のジョブ制御〔set -m〕はコマンド置換の中など入れ子の script で
+# 不安定だったため採らない・新しい bash -c を介すと export -f した関数が元の非 export 変数
+# （$WORKDIR 等）を見失う問題もある＝verifier 1巡目 VM-02 の修正時に実測）。
+_timing_collect_tree() {
+  local root="$1" queue pids=() i=0 pid child
+  queue=("$root")
+  while [ "$i" -lt "${#queue[@]}" ]; do
+    pid="${queue[$i]}"; i=$((i + 1)); pids+=("$pid")
+    for child in $(pgrep -P "$pid" 2>/dev/null); do queue+=("$child"); done
+  done
+  printf '%s\n' "${pids[@]}"
+}
+
+# _timing_run_with_timeout <実行タイムアウト秒> <実行する関数名> — <実行する関数名> を
+# 同じ shell から背景起動し、<実行タイムアウト秒> を超えたらその PID を根にした子孫の木
+# 全部（起動した関数が待つ外部子プロセスを含む＝VM-02）へ TERM→1 秒後に KILL を送る。
+# 戻り値＝関数の終了コード（打ち切られたら非 0）。
+_timing_run_with_timeout() {
+  local run_timeout="$1" fn="$2" pid watcher rc marker
+  marker="$(mktemp -u)"
+  "$fn" &
+  pid=$!
+  ( sleep "$run_timeout"
+    if kill -0 "$pid" 2>/dev/null; then
+      # 打ち切りに入った印（marker）を先に置く＝呼び出し元は $pid が死んだ後、この印が
+      # あれば KILL まで watcher の完了を待つ（無ければ即 kill して良い＝通常完了）。
+      : > "$marker"
+      # 木は 1 回だけ集める（TERM で根が死ぬと孫が再割当てされ、2 回目の pgrep -P では
+      # 辿れなくなる＝最初の実装で実測した落とし穴）。同じ一覧へ TERM→1 秒後に KILL。
+      tree="$(_timing_collect_tree "$pid")"
+      for p in $tree; do kill -TERM "$p" 2>/dev/null; done
+      sleep 1
+      for p in $tree; do kill -KILL "$p" 2>/dev/null; done
+    fi
+  ) 2>/dev/null &
+  watcher=$!
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  if [ -e "$marker" ]; then
+    wait "$watcher" 2>/dev/null   # 打ち切り中＝KILL を送り終わるまで watcher の完了を待つ
+  else
     kill "$watcher" 2>/dev/null
     wait "$watcher" 2>/dev/null
+  fi
+  rm -f "$marker"
+  return "$rc"
+}
+
+# timing_judge <回数> <上限L秒> <実行する関数名> [<結果を書く時間ファイル>]
+#   NFR-5 の唯一の判定入口。<実行する関数名> を <回数> 回、単調時計（python3
+#   time.monotonic）で計測する（固定入力は呼び出し側がその関数の中で・または export 済みの
+#   環境変数で用意し、リダイレクトも関数の中で行う）。各回は _timing_run_with_timeout で
+#   独立したプロセスグループとして起動し、実行タイムアウト（既定 30 秒・
+#   AIENV_TIMING_RUN_TIMEOUT_SECS で上書き）を超えたら不合格にする。
+#   標準出力へ "<pass=0/1> <中央値 or nan> <all_ok=0/1>" を 1 行返す（pass＝all_ok=1 かつ
+#   中央値 ≤ L。all_ok=0 のとき中央値は "nan"）。
+timing_judge() {
+  local n="$1" limit="$2" fn="$3" timesfile="${4:-$(mktemp)}"
+  local run_timeout="${AIENV_TIMING_RUN_TIMEOUT_SECS:-30}"
+  : > "$timesfile"
+  local i=0 all_ok=1 rc t0 t1
+  while [ "$i" -lt "$n" ]; do
+    t0="$(python3 -c 'import time; print(time.monotonic())')"
+    rc=0
+    _timing_run_with_timeout "$run_timeout" "$fn" || rc=$?
     t1="$(python3 -c 'import time; print(time.monotonic())')"
     [ "$rc" = "0" ] || all_ok=0
     python3 -c "print($t1 - $t0)" >> "$timesfile"
     i=$((i + 1))
   done
-  local median
+  local median pass
   median="$(python3 -c "
 import statistics
 vals = [float(x) for x in open('$timesfile')]
 print(statistics.median(vals))
 " 2>/dev/null)"
   [ -n "$median" ] || median="nan"
-  printf '%s %s\n' "$all_ok" "$median"
-}
-
-# timing_pass <timing_judge_median の出力 1 行> <上限 L>  … 中央値 <= L なら 1、他 0。
-timing_pass() {
-  local line="$1" limit="$2" ok med
-  ok="${line%% *}"; med="${line#* }"
-  if [ "$ok" != "1" ]; then echo 0; return; fi
-  python3 -c "print(1 if $med <= $limit else 0)"
+  if [ "$all_ok" = "1" ]; then
+    pass="$(python3 -c "print(1 if $median <= $limit else 0)" 2>/dev/null)"
+  else
+    pass=0
+  fi
+  printf '%s %s %s\n' "${pass:-0}" "$median" "$all_ok"
 }
 
 # $1 のファイルにパターン($2)が現れるまで$3秒ポーリングする（0.1秒間隔）。

@@ -392,12 +392,11 @@ if command -v python3 >/dev/null 2>&1; then
       CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
       bash "$TARGET" --list >/dev/null 2>"$WORKDIR/ac117_err"
   }
-  AC117_RESULT="$(timing_judge_median 20 "$AC117_TIMES" ac117_run_once)"
-  AC117_OK="${AC117_RESULT%% *}"
-  AC117_MEDIAN="${AC117_RESULT#* }"
-  assert_true "AC-117(Project): 20回とも実行タイムアウト内に正常終了" "$AC117_OK"
-  assert_true "AC-117(Project): 中央値が0.4秒以下（最大値は使わない・実測 ${AC117_MEDIAN}秒）" \
-    "$(timing_pass "$AC117_RESULT" 0.4)"
+  AC117_RESULT="$(timing_judge 20 0.4 ac117_run_once "$AC117_TIMES")"
+  set -- $AC117_RESULT
+  AC117_PASS="$1"; AC117_MEDIAN="$2"; AC117_ALL_OK="$3"
+  assert_true "AC-117(Project): 20回とも実行タイムアウト内に正常終了（プロセスグループごと打ち切り＝VM-02）" "$AC117_ALL_OK"
+  assert_true "AC-117(Project): 中央値が0.4秒以下（最大値は使わない・実測 ${AC117_MEDIAN}秒）" "$AC117_PASS"
 else
   echo "SKIP: python3が無いためAC-117(Project)の単調時計計測を省略します"
 fi
@@ -570,42 +569,63 @@ assert_eq "v5_ac146_no_cmux_call: cmux の呼び出し 0 件" "0" "$(wc -l < "$C
 assert_true "v5_ac146_vault_bytes: 実行前後で Vault がバイト不変" "$([ "$before_v5" = "$after_v5" ] && echo 1 || echo 0)"
 assert_eq "v5_ac146: --list の行数＝基底 8＋WU-B 16" "24" "$(wc -l < "$WORKDIR/list_stdout" | tr -d ' ')"
 if command -v python3 >/dev/null 2>&1; then
-  # v1.2 NFR-5＝29 ノート入力で中央値 0.8 秒以下だけで判定（最大値は使わない）。計時は
-  # python 1 プロセスの中で供給側を 20 回起動して行う＝python 自身の起動時間（1 回
-  # 30〜40 ms）を供給側の所要に混ぜない（AC-117 の「python3 -c を前後で起こす」形は
-  # それを含んでいた）。1 回ごとに実行タイムアウト（既定 30 秒・
-  # AIENV_TIMING_RUN_TIMEOUT_SECS で上書き）を掛け、超えたらその回を不合格にする。
-  # 最終判定（中央値 ≤ L）は tests/lib-cmux-fixtures.sh の timing_pass を使う（判定関数は 1 つ）。
-  V5_STATS="$(CMUX_NEXT_JUDGE_NOW="$T0" CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" \
-    CMUX_NEXT_MAINT_STATE="$MAINT_FILE" CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
-    CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
-    CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
-    CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
-    AIENV_TIMING_RUN_TIMEOUT_SECS="${AIENV_TIMING_RUN_TIMEOUT_SECS:-30}" \
-    python3 - "$TARGET" <<'PY'
-import os, statistics, subprocess, sys, time
-run_timeout = float(os.environ.get("AIENV_TIMING_RUN_TIMEOUT_SECS", "30"))
-vals, ok = [], 1
-for _ in range(20):
-    t0 = time.monotonic()
-    try:
-        r = subprocess.run(["bash", sys.argv[1], "--list"], stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, timeout=run_timeout)
-        rc = r.returncode
-    except subprocess.TimeoutExpired:
-        rc = 124
-    vals.append(time.monotonic() - t0)
-    if rc != 0:
-        ok = 0
-print(ok, statistics.median(vals))
-PY
-)"
-  set -- $V5_STATS
-  echo "v5_ac146_perf_20runs: 実測 中央値=${2}秒"
-  assert_true "v5_ac146_perf_20runs: 20 回とも実行タイムアウト内に rc=0" "$1"
-  assert_true "v5_ac146_perf_20runs: 中央値 0.8 秒以下（最大値は使わない・実測 ${2}秒）" "$(timing_pass "$1 $2" 0.8)"
+  # v1.2 NFR-5＝29 ノート入力で中央値 0.8 秒以下だけで判定（最大値は使わない）。verifier
+  # 1巡目 VM-01 の反映＝独自の Python 計測を廃止し、AC-117 と同じ唯一の判定入口
+  # tests/lib-cmux-fixtures.sh の timing_judge を使う（判定関数は 1 つ）。
+  V5_TIMES="$WORKDIR/v5_ac146_times.txt"
+  v5_ac146_run_once() {
+    CMUX_NEXT_JUDGE_NOW="$T0" CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" \
+      CMUX_NEXT_MAINT_STATE="$MAINT_FILE" CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
+      CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
+      CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+      CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
+      bash "$TARGET" --list >/dev/null 2>/dev/null
+  }
+  V5_RESULT="$(timing_judge 20 0.8 v5_ac146_run_once "$V5_TIMES")"
+  set -- $V5_RESULT
+  V5_PASS="$1"; V5_MEDIAN="$2"; V5_ALL_OK="$3"
+  echo "v5_ac146_perf_20runs: 実測 中央値=${V5_MEDIAN}秒"
+  assert_true "v5_ac146_perf_20runs: 20 回とも実行タイムアウト内に rc=0（プロセスグループごと打ち切り＝VM-02）" "$V5_ALL_OK"
+  assert_true "v5_ac146_perf_20runs: 中央値 0.8 秒以下（最大値は使わない・実測 ${V5_MEDIAN}秒）" "$V5_PASS"
 else
   echo "SKIP: python3 が無いため v5_ac146_perf_20runs を省略します"
+fi
+
+echo "=== verifier 1巡目 VM-02 回帰: tests/lib-cmux-fixtures.sh の timing_judge 自身にハングを注入する ==="
+if command -v python3 >/dev/null 2>&1; then
+  # TERM を無視する子を持つ関数（design-v1.md の CODE27 偽物と同じ形＝§2.3 failure mode）。
+  # プロセスグループごと打ち切らないと、この子だけ生き残ってしまう（VM-02 の指摘そのもの）。
+  VM02_PIDFILE="$WORKDIR/vm02_hang_child.pid"
+  rm -f "$VM02_PIDFILE"
+  vm02_hang_fn() {
+    # bash 3.2 に $BASHPID は無く、$$ は（関数の中でもサブシェルの中でも）起動した
+    # 最上位シェルの PID のまま変わらない（POSIX の既定どおり・実測）。子の実際の PID は
+    # バックグラウンド化した直後の $! でしか正しく取れない。
+    ( trap '' TERM; sleep 30 ) &
+    echo "$!" > "$VM02_PIDFILE"
+    wait
+  }
+  VM02_TIMES="$WORKDIR/vm02_times.txt"
+  t0_vm02="$(python3 -c 'import time; print(time.monotonic())')"
+  VM02_RESULT="$(AIENV_TIMING_RUN_TIMEOUT_SECS=2 timing_judge 1 0.1 vm02_hang_fn "$VM02_TIMES")"
+  t1_vm02="$(python3 -c 'import time; print(time.monotonic())')"
+  dur_vm02="$(python3 -c "print($t1_vm02 - $t0_vm02)")"
+  set -- $VM02_RESULT
+  VM02_PASS="$1"; VM02_ALL_OK="$3"
+  assert_eq "VM-02: ハングは不合格になる（all_ok=0）" "0" "$VM02_ALL_OK"
+  assert_eq "VM-02: 判定も不合格（pass=0）" "0" "$VM02_PASS"
+  assert_true "VM-02: 実行タイムアウト（2秒）程度で終わる（実測 ${dur_vm02}秒・sleep 30 を待たない）" \
+    "$(python3 -c "print(1 if $dur_vm02 < 10 else 0)")"
+  # timing_judge は KILL を送り終わるまで戻らない契約だが、重負荷下でのシグナル配送・
+  # プロセス回収の遅延に余裕を見る（CPU が重いと数百 ms 伸びうる・verifier 指摘の
+  # 「別ワーカーが締めハーネスを実走中」の実測で揺れを確認）。
+  sleep 2
+  VM02_CHILD_PID="$(cat "$VM02_PIDFILE" 2>/dev/null)"
+  assert_true "VM-02: 記録された子の PID が実在する（計測できた前提の確認）" "$([ -n "$VM02_CHILD_PID" ] && echo 1 || echo 0)"
+  assert_true "VM-02: TERM を無視する子孫もプロセスグループごと打ち切られ生存しない" \
+    "$([ -n "$VM02_CHILD_PID" ] && ! kill -0 "$VM02_CHILD_PID" 2>/dev/null && echo 1 || echo 0)"
+else
+  echo "SKIP: python3 が無いため VM-02 回帰を省略します"
 fi
 
 echo "=== v5_dt17_judge_now_invalid: 固定口の不正 5 値は --list/--frame とも rc=1・stdout 0 バイト・stderr 1 行（理由フレームにしない）。境界 :59 は可 ==="

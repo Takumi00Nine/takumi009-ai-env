@@ -119,14 +119,15 @@ echo "=== 5c. status-file.sh: read_status_fileはファイル内容が4状態語
 # test-ledger.sh 冒頭と同じ流儀＝足りない分だけここで決める）:
 #   core/executor/notice.sh は共有 lib（実行入口を持たない）で、source した
 #   shell へ最低限 2 関数を公開する。
-#     run_with_timeout <秒> <コマンド...>   … 上限を超えたら子を打ち切り非 0（repo 内に
-#                                             既存の同名複製が複数あり＝設計§8 申し送り・
-#                                             同じ名前を使うことで重複を増やさない）。
+#     notice_run_with_timeout <秒> <コマンド...>   … 上限を超えたら子を打ち切り非 0（verifier
+#                                             1巡目 Vm-01 の裁定＝Usage 側の既存複製
+#                                             run_with_timeout と同名だと読込順依存になる
+#                                             ため、Core 側だけ改名した・焦点4「名前を分ける」）。
 #     notice_record_append <ファイル> <語> <届け先> <題> <詳細>
 #       … 親フォルダが無ければ作ってから、§4 の符号化（\→\\→改行→\n→TAB→\t の順）を
 #         各欄へ施し TAB 区切り 1 行で追記する。
 
-echo "=== 6. core/executor/notice.sh（知らせの共通部品）: run_with_timeout が上限を超えた子を打ち切る（bash 3.2・設計 §2.1） ==="
+echo "=== 6. core/executor/notice.sh（知らせの共通部品）: notice_run_with_timeout が上限を超えた子を打ち切る（bash 3.2・設計 §2.1・verifier Vm-01） ==="
 {
   NOTICE_LIB="$REPO_ROOT/core/executor/notice.sh"
   if [ ! -f "$NOTICE_LIB" ]; then
@@ -136,7 +137,7 @@ echo "=== 6. core/executor/notice.sh（知らせの共通部品）: run_with_tim
     out="$(/bin/bash -c '
       source "$1"
       t0=$(date +%s)
-      run_with_timeout 1 sleep 5
+      notice_run_with_timeout 1 sleep 5
       rc=$?
       t1=$(date +%s)
       echo "$rc $((t1 - t0))"

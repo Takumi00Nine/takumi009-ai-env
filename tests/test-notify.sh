@@ -43,6 +43,14 @@ assert_eq() { if [[ "$2" == "$3" ]]; then pass "$1"; else fail_case "$1 (expecte
 assert_true() { if [ "$2" = "1" ]; then pass "$1"; else fail_case "$1"; fi; }
 assert_contains() { if [[ "$2" == *"$3"* ]]; then pass "$1"; else fail_case "$1 (含まれない: [$3] 実際: [$2])"; fi; }
 
+# verifier 1巡目 VM-04＝`date +%s` の整数差は量子化誤差で「2秒未満」が約3秒でも合格しうる。
+# 単調時計を小数秒で計る（macOS の date に %N は無いので python3 time.monotonic を使う）。
+mono_now() { python3 -c 'import time; print(time.monotonic())'; }
+# mono_lt <t0> <t1> <上限（秒・小数可）>  … (t1 - t0) < 上限 なら 1、他 0（厳密な未満）。
+mono_lt() { python3 -c "print(1 if ($2 - $1) < $3 else 0)"; }
+# mono_le <t0> <t1> <上限（秒・小数可）>  … (t1 - t0) <= 上限 なら 1、他 0。
+mono_le() { python3 -c "print(1 if ($2 - $1) <= $3 else 0)"; }
+
 WORK="$(mktemp -d)" || exit 1
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 STUB="$WORK/stub"
@@ -211,6 +219,7 @@ assert_eq "FX-19: 口の終了コードが 0 でない" "1" "$rc"
 assert_true "FX-19: 記録に「届け先なし」が1行" "$(grep -q '	no-dest	' "$NOTIFY_LOG" 2>/dev/null && echo 1 || echo 0)"
 
 echo "=== FX-24 PART（陰性・複合）: 1 届け先の実行体欠落・1 届け先の無応答・残りは届く ==="
+PROMPT_ANSWER="$REPO_ROOT/core/connect/claude-code/prompt-answer.sh"
 WT24="$WORK/wt-fx24"
 lf_copy_repo "$REPO_ROOT" "$WT24"
 mkdir -p "$WT24/notify/connect/zz-dest"
@@ -231,33 +240,158 @@ T=2
 # lf_path_without（約2秒かかる fixture 準備）は窓の外で先に済ませておく。
 FX24_PATH="$HANG_STUB:$(lf_path_without cmux osascript launchctl)"
 rc=0
-start="$(date +%s)"
+# verifier 1巡目 VM-04＝date +%s の整数差でなく単調時計の小数秒で計る。
+t0="$(mono_now)"
 PATH="$FX24_PATH" \
   AIENV_LEDGER="$WT24/core/data/ledger.tsv" AIENV_NOTIFY_WAIT_SECS="$T" ZZ_DEST_LOG="$ZZ24" \
   bash "$WT24/notify/executor/notify.sh" call ask "📣 テスト呼出" "本文" >/dev/null 2>&1 || rc=$?
-end="$(date +%s)"
-dur=$((end - start))
-assert_true "FX-24: 所要が T+1 秒以内（T=${T}・実測 ${dur}s）" "$([ "$dur" -le $((T + 1)) ] && echo 1 || echo 0)"
+t1="$(mono_now)"
+assert_true "FX-24: 所要が T+1 秒以内（T=${T}・厳密な単調時計）" "$(mono_le "$t0" "$t1" "$((T + 1))")"
 assert_eq "FX-24: zz-dest の記録に1行（応答しない cmux をよそに届く）" "1" "$(grep -c . "$ZZ24" 2>/dev/null || true)"
 assert_true "FX-24: 記録に cmux の応答なし（timeout）が1行" "$(grep -q 'cmux' "$NOTIFY_LOG" 2>/dev/null && grep -q 'timeout' "$NOTIFY_LOG" 2>/dev/null && echo 1 || echo 0)"
 
 echo "--- FX-24 続き: CODE27 の実行体欠落（UserPromptSubmit 入口経由） ---"
-PROMPT_ANSWER="$REPO_ROOT/core/connect/claude-code/prompt-answer.sh"
 if [ -x "$PROMPT_ANSWER" ]; then
   rm -f "$NOTIFY_LOG"
   json='{"session_id":"s1","prompt":"了解","hook_event_name":"UserPromptSubmit"}'
   rc=0
-  start="$(date +%s)"
+  t0="$(mono_now)"
   out="$(printf '%s' "$json" | CODE27_CALL_BIN="$WORK/no-such-code27" AIENV_LEDGER="$LEDGER_REAL" AIENV_NOTIFY_WAIT_SECS="$T" \
     bash "$PROMPT_ANSWER" 2>"$WORK/prompt.err")" || rc=$?
-  end="$(date +%s)"
+  t1="$(mono_now)"
   assert_eq "入口: 終了コード0" "0" "$rc"
   assert_eq "入口: 標準出力は空" "" "$out"
-  assert_true "入口: 2秒未満で終了" "$([ $((end - start)) -le 2 ] && echo 1 || echo 0)"
+  assert_true "入口: 2秒未満で終了（厳密な単調時計・VM-04）" "$(mono_lt "$t0" "$t1" 2.0)"
   sleep 1
   assert_true "記録に CODE27（実行体なし）が1行" "$(grep -q 'code27' "$NOTIFY_LOG" 2>/dev/null && grep -q 'no-exe' "$NOTIFY_LOG" 2>/dev/null && echo 1 || echo 0)"
 else
   fail_case "core/connect/claude-code/prompt-answer.sh が実在（v1.2 束 B・未実装）"
+fi
+
+# verifier 1巡目 VB-03＝設計 §6（design-v1.md:349・plan-v1-impl.md §4）が FX-24 に必須指定した
+# 5 ケース。fixture は増やさず（裁定 D-05・R2-04・R3-01）、この FX-24 のセットアップ
+# （WT24＝zz-dest を足した worktree・HANG_STUB・T=2）をそのまま使い回す。
+
+echo "--- FX-24 (i): 実在する送り手が非0で終わる＝記録 failed・他は届く ---"
+WT24I="$WORK/wt-fx24i"
+lf_copy_repo "$REPO_ROOT" "$WT24I"
+mkdir -p "$WT24I/notify/connect/zz-dest"
+cp "$ZZDEST_FIXTURE" "$WT24I/notify/connect/zz-dest/deliver.sh"
+chmod +x "$WT24I/notify/connect/zz-dest/deliver.sh"
+printf 'part\tnotify/connect/zz-dest/deliver.sh\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\n' >> "$WT24I/core/data/ledger.tsv"
+FAILING_STUB="$WORK/failing-stub"; mkdir -p "$FAILING_STUB"
+printf '#!/bin/bash\nexit 7\n' > "$FAILING_STUB/cmux"; chmod +x "$FAILING_STUB/cmux"   # 実在するが非0で終わる
+printf '#!/bin/bash\nexit 0\n' > "$FAILING_STUB/osascript"; chmod +x "$FAILING_STUB/osascript"
+printf '#!/bin/bash\nexit 0\n' > "$FAILING_STUB/launchctl"; chmod +x "$FAILING_STUB/launchctl"
+FAILING_PATH="$FAILING_STUB:$(lf_path_without cmux osascript launchctl)"
+ZZ24I="$WORK/zz24i.log"; rm -f "$ZZ24I"
+rm -f "$NOTIFY_LOG"
+rc=0
+PATH="$FAILING_PATH" AIENV_LEDGER="$WT24I/core/data/ledger.tsv" AIENV_NOTIFY_WAIT_SECS="$T" ZZ_DEST_LOG="$ZZ24I" \
+  bash "$WT24I/notify/executor/notify.sh" call ask "📣 テスト呼出" "本文" >/dev/null 2>&1 || rc=$?
+assert_eq "(i): zz-dest へは届く（1行）" "1" "$(grep -c . "$ZZ24I" 2>/dev/null || true)"
+assert_true "(i): 記録に cmux の failed が1行" "$(grep -q 'cmux' "$NOTIFY_LOG" 2>/dev/null && grep -q 'failed' "$NOTIFY_LOG" 2>/dev/null && echo 1 || echo 0)"
+assert_eq "(i): 口の終了コードは0（1件以上届いた）" "0" "$rc"
+
+echo "--- FX-24 (ii): 記録先へ追記できない＝入口は0のまま・stderrに1行 ---"
+if [ -x "$PROMPT_ANSWER" ]; then
+  BLOCKED_FILE="$WORK/blocked-notify-log"; : > "$BLOCKED_FILE"   # ディレクトリでなくファイル＝mkdir -p が必ず失敗
+  BLOCKED_LOG="$BLOCKED_FILE/notify.tsv"
+  json='{"session_id":"s1","prompt":"了解","hook_event_name":"UserPromptSubmit"}'
+  rc=0
+  t0="$(mono_now)"
+  out="$(printf '%s' "$json" | CODE27_CALL_BIN="$CODE27_FAKE_BIN" CODE27_CALL_LOG="$WORK/ii-clear.log" \
+    AIENV_LEDGER="$LEDGER_REAL" AIENV_NOTIFY_WAIT_SECS="$T" AIENV_NOTIFY_LOG="$BLOCKED_LOG" \
+    bash "$PROMPT_ANSWER" 2>"$WORK/ii-stderr.log")" || rc=$?
+  t1="$(mono_now)"
+  assert_eq "(ii): 入口の終了コードは0のまま" "0" "$rc"
+  assert_eq "(ii): 標準出力は空" "" "$out"
+  assert_true "(ii): 2秒未満で終了" "$(mono_lt "$t0" "$t1" 2.0)"
+  assert_eq "(ii): 入口の標準エラーに1行" "1" "$(grep -c . "$WORK/ii-stderr.log" 2>/dev/null || true)"
+else
+  fail_case "(ii): core/connect/claude-code/prompt-answer.sh が実在（v1.2 束 B・未実装）"
+fi
+
+echo "--- FX-24 (iii): 台帳に偽の第2応答先 zz-answer を足し、CODE27 の偽物（TERM無視・子持ち・応答しない） ---"
+HANG_CODE27="$WORK/hang-code27.sh"
+cat > "$HANG_CODE27" <<'EOF'
+#!/bin/bash
+trap '' TERM
+( sleep 30 ) &
+wait
+EOF
+chmod +x "$HANG_CODE27"
+ZZANSWER_LOG="$WORK/zz-answer.log"; rm -f "$ZZANSWER_LOG"
+ZZANSWER_DELIVER="$WORK/zz-answer-deliver.sh"
+cat > "$ZZANSWER_DELIVER" <<EOF
+#!/bin/bash
+printf '%s\t%s\t%s\t%s\t%s\n' "\${1:-}" "\${2:-}" "\${3:-}" "\${4:-}" "\${5:-}" >> "$ZZANSWER_LOG"
+exit 0
+EOF
+chmod +x "$ZZANSWER_DELIVER"
+WT24III="$WORK/wt-fx24iii"
+lf_copy_repo "$REPO_ROOT" "$WT24III"
+mkdir -p "$WT24III/notify/connect/zz-answer"
+cp "$ZZANSWER_DELIVER" "$WT24III/notify/connect/zz-answer/deliver.sh"
+printf 'part\tnotify/connect/zz-answer/deliver.sh\tnotify\tconnect\tzz-answer\t-\t第2応答先（試験）\tanswer\n' >> "$WT24III/core/data/ledger.tsv"
+# ⚠️ AIENV_LEDGER の行の相対パスは、呼んだ ledger-tool.sh 自身の repo ルートから解決される
+# （台帳ファイルの置き場からではない）。zz-answer は実体を $REPO_ROOT に持たない新規部品
+# なので、この worktree 自身の prompt-answer.sh／notify.sh／ledger-tool.sh を呼ぶ
+# （$REPO_ROOT 側の実行体を AIENV_LEDGER だけ差し替えて呼んでも zz-answer は解決できない）。
+PROMPT_ANSWER_III="$WT24III/core/connect/claude-code/prompt-answer.sh"
+NOTIFY_III="$WT24III/notify/executor/notify.sh"
+if [ -x "$PROMPT_ANSWER_III" ]; then
+  json='{"session_id":"s1","prompt":"了解","hook_event_name":"UserPromptSubmit"}'
+  rc=0
+  t0="$(mono_now)"
+  out="$(printf '%s' "$json" | CODE27_CALL_BIN="$HANG_CODE27" AIENV_LEDGER="$WT24III/core/data/ledger.tsv" \
+    AIENV_NOTIFY_WAIT_SECS="$T" ZZ_DEST_LOG="$WORK/unused-iii.log" \
+    bash "$PROMPT_ANSWER_III" 2>"$WORK/iii-stderr.log")" || rc=$?
+  t1="$(mono_now)"
+  assert_eq "(iii): 入口の終了コードは0" "0" "$rc"
+  assert_eq "(iii): 標準出力は空" "" "$out"
+  assert_true "(iii): 入口は2秒未満で終了（切り離して即終了）" "$(mono_lt "$t0" "$t1" 2.0)"
+  sleep "$((T + 2))"
+  assert_true "(iii): T 後に CODE27 の timeout 記録が1行" \
+    "$(grep -q 'code27' "$NOTIFY_LOG" 2>/dev/null && grep -q 'timeout' "$NOTIFY_LOG" 2>/dev/null && echo 1 || echo 0)"
+  assert_eq "(iii): zz-answer へは配送される（1行）" "1" "$(grep -c . "$ZZANSWER_LOG" 2>/dev/null || true)"
+  rc2=0
+  AIENV_LEDGER="$WT24III/core/data/ledger.tsv" AIENV_NOTIFY_WAIT_SECS=1 CODE27_CALL_BIN="$HANG_CODE27" \
+    "$NOTIFY_III" answer >/dev/null 2>&1 || rc2=$?
+  assert_eq "(iii): 同じ台帳で口を直接「応答」で呼ぶと終了0（zz-answer が届くため）" "0" "$rc2"
+else
+  fail_case "(iii): core/connect/claude-code/prompt-answer.sh が実在（v1.2 束 B・未実装）"
+fi
+
+echo "--- FX-24 (iv): 空 HOME（.claude/logs/ 無し）に初回の異常記録＝親フォルダが作られる ---"
+FRESH_HOME="$WORK/fresh-home-iv"; mkdir -p "$FRESH_HOME"
+assert_eq "(iv): 開始時点で .claude/logs は無い" "0" "$([ -d "$FRESH_HOME/.claude/logs" ] && echo 1 || echo 0)"
+NODEST_LEDGER_IV="$WORK/fx24iv-ledger.tsv"
+awk -F'\t' '!/^#/ { if ($1=="part" && $4=="connect" && $3=="notify") next } { print }' "$LEDGER_REAL" > "$NODEST_LEDGER_IV"
+rc=0
+HOME="$FRESH_HOME" AIENV_LEDGER="$NODEST_LEDGER_IV" "$NOTIFY" call ask "初回異常" "本文" >/dev/null 2>&1 || rc=$?
+assert_eq "(iv): 口の終了コードは1（届け先なし）" "1" "$rc"
+assert_true "(iv): 親フォルダ .claude/logs が作られる" "$([ -d "$FRESH_HOME/.claude/logs" ] && echo 1 || echo 0)"
+assert_eq "(iv): 記録はちょうど1行" "1" "$([ -f "$FRESH_HOME/.claude/logs/notify.tsv" ] && grep -c . "$FRESH_HOME/.claude/logs/notify.tsv" || echo 0)"
+
+echo "--- FX-24 (v): (ii)+(iii) の複合＝記録不能と応答先 timeout が重なる→入口 stderr に1行・入口0 ---"
+if [ -x "$PROMPT_ANSWER_III" ]; then
+  BLOCKED_FILE_V="$WORK/blocked-notify-log-v"; : > "$BLOCKED_FILE_V"
+  BLOCKED_LOG_V="$BLOCKED_FILE_V/notify.tsv"
+  json='{"session_id":"s1","prompt":"了解","hook_event_name":"UserPromptSubmit"}'
+  rc=0
+  t0="$(mono_now)"
+  out="$(printf '%s' "$json" | CODE27_CALL_BIN="$HANG_CODE27" AIENV_LEDGER="$WT24III/core/data/ledger.tsv" \
+    AIENV_NOTIFY_WAIT_SECS="$T" AIENV_NOTIFY_LOG="$BLOCKED_LOG_V" \
+    bash "$PROMPT_ANSWER_III" 2>"$WORK/v-stderr.log")" || rc=$?
+  t1="$(mono_now)"
+  assert_eq "(v): 入口の終了コードは0のまま" "0" "$rc"
+  assert_eq "(v): 標準出力は空" "" "$out"
+  assert_true "(v): 入口は2秒未満で終了（記録不能は同期確保の段で分かる）" "$(mono_lt "$t0" "$t1" 2.0)"
+  assert_eq "(v): 記録不能と応答先timeoutが重なっても無観測にならない（stderrに1行）" "1" \
+    "$(grep -c . "$WORK/v-stderr.log" 2>/dev/null || true)"
+else
+  fail_case "(v): core/connect/claude-code/prompt-answer.sh が実在（v1.2 束 B・未実装）"
 fi
 
 echo "=== 記録の符号化（改行・TAB・\\ 入りの題が1行で残る） ==="
