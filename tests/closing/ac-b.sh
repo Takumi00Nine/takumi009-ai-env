@@ -134,15 +134,18 @@ cl_mk_fx10_rmn() {
   local wt="$1" fn="$CLOSING_NOTIFY_FN" f p old newp mark
   [ -f "$wt/$CLOSING_LEDGER_REL" ] || { echo "台帳が無い"; return 1; }
   [ -f "$wt/$CLOSING_MOVES_REL" ] || { echo "移動表が無い"; return 1; }
+  # git rm で消す（ledger-tool.sh の存在チェックは git ls-files を見るため・単なる rm だと
+  # 索引に残って「台帳の行が 0 件」の誤検知になる＝実測）。
   while IFS="$(printf '\t')" read -r f p; do
-    [ "$f" = "$fn" ] && [ -n "$p" ] && rm -f "$wt/$p"
+    [ "$f" = "$fn" ] && [ -n "$p" ] && git -C "$wt" rm -q -f --ignore-unmatch -- "$p" >/dev/null
   done <<EOF
 $(cl_ledger_suites "$wt")
 EOF
   while IFS="$(printf '\t')" read -r old newp _kind mark; do
     [ -n "$old" ] && [ "$old" != "-" ] || continue
-    case "$newp" in "$fn"/*) [ -n "$mark" ] && [ "$mark" != "-" ] && rm -f "$wt/$old" ;; esac
+    case "$newp" in "$fn"/*) [ -n "$mark" ] && [ "$mark" != "-" ] && git -C "$wt" rm -q -f --ignore-unmatch -- "$old" >/dev/null ;; esac
   done < <(awk -F'\t' '$0 !~ /^#/ && NF>=4' "$wt/$CLOSING_MOVES_REL")
+  [ -d "$wt/$fn" ] && git -C "$wt" rm -q -rf --ignore-unmatch -- "$fn" >/dev/null
   rm -rf "${wt:?}/$fn"
   awk -F'\t' -v fn="$fn" -v k1="$CLOSING_LEDGER_PART_KIND" -v k2="$CLOSING_LEDGER_SUITE_KIND" -v k3="$CLOSING_LEDGER_NOTIFY_KIND" \
     '!($0 !~ /^#/ && ($1==k1||$1==k2||$1==k3) && $3==fn)' "$wt/$CLOSING_LEDGER_REL" > "$wt/$CLOSING_LEDGER_REL.tmp" \
@@ -193,7 +196,7 @@ ac_4() {
   e="$(cl_side_path new "$CLOSING_MAINT_OLD")" || e=""
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$WT1" AIENV_REPO="$WT1" "$WT1/$e" </dev/null >"$od/fx1-maint.stdout" 2>"$od/fx1-maint.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx1-maint.rc"
-  local fx1_osascript_maint; fx1_osascript_maint="$(grep -c '異常終了' "$s/calls.log" 2>/dev/null || echo 0)"
+  local fx1_osascript_maint; fx1_osascript_maint="$(grep -c '異常終了' "$s/calls.log" 2>/dev/null || true)"
   e="$(cl_side_path new "$CLOSING_USAGE_FETCH_OLD")" || e=""
   : > "$s/calls.log"
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$WT1" "$(cl_path "$s" "$CL_FIX/usage-bin")" \
@@ -202,7 +205,7 @@ ac_4() {
     STUB_CODEX_RESULT_LINE="$(cat "$CL_FIX/usage-bin/codex_success_result_line.json")" \
     "$WT1/$e" </dev/null >"$od/fx1-usage.stdout" 2>"$od/fx1-usage.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx1-usage.rc"
-  local fx1_osascript_usage; fx1_osascript_usage="$(grep -c '警告' "$s/calls.log" 2>/dev/null || echo 0)"
+  local fx1_osascript_usage; fx1_osascript_usage="$(grep -c '警告' "$s/calls.log" 2>/dev/null || true)"
 
   # --- FX-10（Notify を除いた）側
   h="$WORK/home-ac4-fx10"; s="$WORK/s-ac4-fx10"; rm -rf "$h" "$s"; mkdir -p "$h"; cl_stubs "$s"
@@ -344,7 +347,7 @@ PY
 # ---------------------------------------------------------------- AC-12 取込み（①② だけ＝③④ は束 C）
 ac_12() {
   local od="$OUT/ac12-b" h="$WORK/home" s m1="" m2=""
-  mkdir -p "$od"
+  mkdir -p "$od" "$OUT/ac10"   # ac10_three（ac-live.sh の共有部品）は $OUT/ac10/ に固定で書く
   if ! cl_fx1_ready; then cl_result AC-12 NG "① $CL_FX1_WHY"; return; fi
 
   # ① FX-5（sub clone・origin=FX-1 へ進めた状態）で更新コマンドを 1 回

@@ -50,13 +50,17 @@ ac12_usage() {
     "$3/$e" </dev/null
 }
 
-# ac12_hooks <home> <stubdir> <wt> <event> <tool> <stdin> — 当たる全フックへ同じ stdin（stdout 連結・rc＝最大）
+# ac12_hooks <home> <stubdir> <wt> <event> <tool> <stdin> [<追加 VAR=val>] — 当たる全フックへ同じ stdin（stdout 連結・rc＝最大）
 ac12_hooks() {
-  local h="$1" s="$2" wt="$3" c rc=0 r n=0
+  local h="$1" s="$2" wt="$3" c rc=0 r n=0 extra="${7:-}"
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     n=$((n + 1)); r=0
-    cl_run "$h" "$s" "$wt" bash -c "$c" < "$6" || r=$?
+    if [ -n "$extra" ]; then
+      cl_run "$h" "$s" "$wt" "$extra" bash -c "$c" < "$6" || r=$?
+    else
+      cl_run "$h" "$s" "$wt" bash -c "$c" < "$6" || r=$?
+    fi
     [ "$r" -gt "$rc" ] && rc="$r"
   done <<EOF
 $(cl_py hooks "$h/.claude/settings.json" "$4" ${5:+"$5"})
@@ -85,7 +89,11 @@ ac12_run() {
     fx9-maint) git -C "$V" checkout -q -b other-branch ;;
   esac
   case "$id" in
-    hk-ups-*) ac12_usage "$h" "$rd/s" "$repo" "$side" "$mode" >/dev/null 2>&1; : > "$rd/s/calls.log" ;;
+    hk-ups-*) ac12_usage "$h" "$rd/s" "$repo" "$side" "$mode" >/dev/null 2>&1; : > "$rd/s/calls.log"
+      # リーダー裁定＝hk-ups-* は両側に偽 CODE27（tests/fixtures/code27-call/）を渡す（基準の
+      # code27-call-clear.sh も新側の deliver.sh も同じ CODE27_CALL_BIN を読む＝実測済み）。
+      # これで両側とも「届く」経路になり notify.tsv に差が出ない（v1.1 には無かった no-exe 記録を避ける）。
+      mkdir -p "$rd/s/c27/bin"; cp -R "$CL_DIR/../fixtures/code27-call/bin/." "$rd/s/c27/bin/" ;;
     dock-*)
       ( . "$WT0/tests/lib-cmux-fixtures.sh"
         mk_note_V1 "$V"; mk_notes_N_all "$V"
@@ -143,7 +151,7 @@ ac12_run() {
           "$repo/$e" </dev/null ;;
       dock-*) cl_run "$h" "$rd/s" "$wt" STUB_STATE="$rd/cmux-state" "$repo/$e" "$opt" </dev/null ;;
       hk-sessionstart) ac12_hooks "$h" "$rd/s" "$wt" SessionStart "" "$st" ;;
-      hk-ups-*) ac12_hooks "$h" "$rd/s" "$wt" UserPromptSubmit "" "$st" ;;
+      hk-ups-*) ac12_hooks "$h" "$rd/s" "$wt" UserPromptSubmit "" "$st" "CODE27_CALL_BIN=$rd/s/c27/bin/code27-call-clear" ;;
       hk-read) ac12_hooks "$h" "$rd/s" "$wt" PostToolUse Read "$st" ;;
       hk-bash-*) ac12_hooks "$h" "$rd/s" "$wt" PreToolUse Bash "$st" ;;
       hk-edit) ac12_hooks "$h" "$rd/s" "$wt" PreToolUse Edit "$st" ;;
