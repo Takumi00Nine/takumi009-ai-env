@@ -9,7 +9,8 @@
 # ---------------------------------------------------------------- FX-9 (c)(d)（ac12_run の単発モデルに乗らない複合入力）
 # clb_fx9_ups <side> → $OUT/ac2/fx9-ups/<side>.{c1,c2}.{rc,calls}（偽 CODE27 消去の記録＝1 件目だけ増える）
 clb_fx9_ups() {
-  local side="$1" wt="$WORK/wtb-$side" h="$WORK/home-fx9ups" s="$WORK/s-fx9ups-$side" od="$OUT/ac2/fx9-ups" commit rc=0
+  local side="$1" wt h s od="$OUT/ac2/fx9-ups" commit rc=0
+  wt="$WORK/wtb-$side"; h="$WORK/home-fx9ups"; s="$WORK/s-fx9ups-$side"
   mkdir -p "$od"
   [ "$side" = base ] && commit="$BASE_COMMIT" || commit="$FX1_COMMIT"
   rm -rf "$wt"; cl_new_wt "$wt" "$commit" || return 1
@@ -34,7 +35,8 @@ clb_fx9_ups() {
 # clb_fx9_announce <side> → $OUT/ac2/fx9-announce/<side>.{rc,cmux.calls,code27.calls}
 #   基準側＝`cmux notify` を直接。新側＝口（notify.sh call ask）経由（要件 v1.2 FX-9 (d) の定義どおり）。
 clb_fx9_announce() {
-  local side="$1" wt="$WORK/wtb-ann-$side" h="$WORK/home-ann-$side" s="$WORK/s-ann-$side" od="$OUT/ac2/fx9-announce" commit rc=0 e
+  local side="$1" wt h s od="$OUT/ac2/fx9-announce" commit rc=0 e
+  wt="$WORK/wtb-ann-$side"; h="$WORK/home-ann-$side"; s="$WORK/s-ann-$side"
   mkdir -p "$od"
   [ "$side" = base ] && commit="$BASE_COMMIT" || commit="$FX1_COMMIT"
   rm -rf "$wt"; cl_new_wt "$wt" "$commit" || return 1
@@ -116,7 +118,7 @@ ac_2() {
   if [ -z "$differ" ] && [ -z "$ups_bad" ] && [ -z "$ann_bad" ] && [ -z "$e1" ]; then
     cl_result AC-2 ok "① $same/$n 入力で一致・FX-9(c)(d) 形が合う ② 名前・登録の差分 ${extra_n} 件（1 以内）"
   else
-    cl_result AC-2 NG "①一致 $same/$n（不一致:${differ:- なし}）・FX-9(c):${ups_bad:- ok}・FX-9(d):${ann_bad:- ok} ②${e1:- ok}（ac2/）"
+    cl_result AC-2 NG "①一致 $same/${n}（不一致:${differ:- なし}）・FX-9(c):${ups_bad:- ok}・FX-9(d):${ann_bad:- ok} ②${e1:- ok}（ac2/）"
   fi
 }
 
@@ -146,7 +148,8 @@ EOF
 
 # cl_mk_fx11_zzd <wt>｜第 4 の届け先 zz-dest（共有雛形 tests/fixtures/zz-dest/）＋台帳の行（移動表は変えない＝FR-20）。
 cl_mk_fx11_zzd() {
-  local wt="$1" dest="$wt/$CLOSING_ZZD_DIR_REL"
+  local wt="$1" dest
+  dest="$wt/$CLOSING_ZZD_DIR_REL"
   [ -f "$wt/$CLOSING_LEDGER_REL" ] || { echo "台帳が無い"; return 1; }
   mkdir -p "$dest"
   cp "$CL_DIR/../../$CLOSING_ZZD_FIX_REL/connect/deliver.sh" "$dest/deliver.sh"
@@ -166,7 +169,7 @@ ac_3() {
   local rc=0
   cl_run_all "$wt" "$od/run-all" || rc=$?
   if [ "$rc" -eq 0 ]; then cl_result AC-3 ok "④ FX-11 で一括実行 exit 0（red>0 なし・ac3/run-all/）"
-  else cl_result AC-3 NG "④ FX-11 で一括実行 exit=$rc（ac3/run-all/run-all.log）"; fi
+  else cl_result AC-3 NG "④ FX-11 で一括実行 exit=${rc}（ac3/run-all/run-all.log）"; fi
 }
 
 # ---------------------------------------------------------------- AC-4 無いとき（① だけ＝②③④ は常設）
@@ -329,7 +332,7 @@ PY
   if [ "$rc" -eq 0 ] && [ -z "$e4" ]; then
     cl_result AC-7 ok "① FX-1 一括実行 exit 0（ac7/run-all/） ② tests/ 変更 $n ファイル（分類は verifier） ④ 静的検査すべて適合"
   else
-    cl_result AC-7 NG "① exit=$rc（ac7/run-all/run-all.log） ② tests/ 変更 $n ファイル ④${e4:- ok}"
+    cl_result AC-7 NG "① exit=${rc}（ac7/run-all/run-all.log） ② tests/ 変更 $n ファイル ④${e4:- ok}"
   fi
 }
 

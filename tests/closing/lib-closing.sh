@@ -76,10 +76,17 @@ cl_fx1_ready() {
   return 0
 }
 
-# cl_side_path <base|new> <基準での repo 相対パス> → その側の repo 相対パス
+# cl_side_path <base|new> <基準（FX-2）での repo 相対パス> → その側の repo 相対パス
+#   new＝移動表の主後継。移動表に行が無ければ「束 B・C で動かしていない」＝基準と同じ名前のまま
+#   （FX-1 に実在するときだけ・実在しなければ失敗＝呼び手が「引けない」と報告）。
 cl_side_path() {
   if [ "$1" = "base" ]; then printf '%s\n' "$2"; return 0; fi
-  cl_py moves-main "$WT1/$CLOSING_MOVES_REL" "$2"
+  local p
+  if p="$(cl_py moves-main "$WT1/$CLOSING_MOVES_REL" "$2")"; then
+    printf '%s\n' "$p"; return 0
+  fi
+  [ -e "$WT1/$2" ] && { printf '%s\n' "$2"; return 0; }
+  return 1
 }
 
 # ---------------------------------------------------------------- FX-6・実行環境
