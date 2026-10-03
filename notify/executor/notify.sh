@@ -63,7 +63,7 @@ while IFS=$'\t' read -r dest path; do
   [ -n "$dest" ] || continue
   n=$((n + 1))
   printf '%s' "$dest" >"$WORK/$n.dest"
-  ( run_with_timeout "$WAIT_SECS" "$path" "$kind" "$cat" "$title" "$body" ${sound:+"$sound"} >/dev/null 2>&1
+  ( notice_run_with_timeout "$WAIT_SECS" "$path" "$kind" "$cat" "$title" "$body" ${sound:+"$sound"} >/dev/null 2>&1
     echo $? >"$WORK/$n.rc" ) &
 done <<EOF
 $routes

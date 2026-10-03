@@ -15,13 +15,13 @@
 #       親フォルダを作ってから、各欄を \→\\・改行→\n・TAB→\t の順に符号化し TAB 区切り 1 行で追記。
 #       書けなければ stderr に 1 行出して 1 を返す（呼んだ側の働きは変えない）。
 #   notice_log_path   … 知らせの記録のパス（AIENV_NOTIFY_LOG で上書き）
-#   run_with_timeout <秒> <コマンド...>
+#   notice_run_with_timeout <秒> <コマンド...>
 #       上限を超えたらコマンドのプロセスグループへ TERM→1 秒後 KILL。打ち切ったら 124、それ以外はコマンドの終了コード。
 
 # ---- 設計定数（§4）＝変えるときはここだけ ----
 NOTICE_LOG_DEFAULT_REL=".claude/logs/notify.tsv"   # 知らせの記録（$HOME 相対・AIENV_NOTIFY_LOG で上書き）
 NOTICE_MOUTH_KEY="notify.send"                     # 口の鍵（台帳）
-NOTICE_TIMEOUT_RC=124                              # run_with_timeout が打ち切ったときの終了コード
+NOTICE_TIMEOUT_RC=124                              # notice_run_with_timeout が打ち切ったときの終了コード
 
 NOTICE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NOTICE_LEDGER_TOOL="$NOTICE_ROOT/core/assembly/ledger-tool.sh"
@@ -48,7 +48,7 @@ notice_record_append() {
   return 1
 }
 
-run_with_timeout() {
+notice_run_with_timeout() {
   local secs="$1" flag had_monitor=0 cmd_pid watcher_pid rc=0
   shift
   flag="$(mktemp "${TMPDIR:-/tmp}/notice-timeout.XXXXXX")" || return 1

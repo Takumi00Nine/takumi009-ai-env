@@ -47,7 +47,6 @@ while [ -L "$_self" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 
-# 知らせの共通部品は usage-source.sh より先に読む（同名の run_with_timeout は Usage 側の定義を使う）。
 # shellcheck source=core/executor/notice.sh
 . "$SCRIPT_DIR/../../core/executor/notice.sh"
 # shellcheck source=usage/executor/usage-source.sh

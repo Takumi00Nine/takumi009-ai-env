@@ -32,6 +32,7 @@ MOVES="${AIENV_MOVES:-$ROOT/$MOVES_REL}"
 FUNCTIONS="ai-brain team usage notify dock core"   # 機能の語彙
 LAYERS="data rules executor connect assembly"      # 層の語彙
 ROW_KINDS="part suite notify"                      # 台帳の種類列
+LEDGER_COLS=8                                      # 台帳の列数（コメント・空行以外はちょうどこの数。補完しない）
 NAME_RE='^[a-z][a-z0-9-]*$'                        # フォルダ名・提供元名の構文
 NOTICES="call call.alert call.usage call.ask answer"  # 「知らせ」列の語彙＝種別（呼出 call・応答 answer）か 呼出.区分
 MSG_HEAD="LEDGER:"                                 # 照会の固定文の先頭語（種別語＝ledger／part）
@@ -54,9 +55,9 @@ ledger_scan() {
   fi
   # 台帳の形式検証（check と同じ語彙＝$FUNCTIONS/$LAYERS/$ROW_KINDS を使う。種類・列数・
   # part の機能/層・suite の機能語彙・notify の機能＝check が行う判定と同じ）。
-  awk -F'\t' -v mode="$1" -v q="$2" -v kinds=" $ROW_KINDS " -v fns=" $FUNCTIONS " -v lys=" $LAYERS " '
+  awk -F'\t' -v mode="$1" -v q="$2" -v cols="$LEDGER_COLS" -v kinds=" $ROW_KINDS " -v fns=" $FUNCTIONS " -v lys=" $LAYERS " '
     /^#/ || /^[[:space:]]*$/ { next }
-    NF < 6 { printf "BAD\t%d 行目の列が足りない\n", NR; exit }
+    NF != cols { printf "BAD\t%d 行目の列が %d（%d 列であること）\n", NR, NF, cols; exit }
     index(kinds, " " $1 " ") == 0 { printf "BAD\t%d 行目の種類が語彙外\n", NR; exit }
     $1 == "part" && (index(fns, " " $3 " ") == 0 || index(lys, " " $4 " ") == 0) {
       printf "BAD\t%d 行目の機能か層が語彙外\n", NR; exit }
@@ -66,7 +67,7 @@ ledger_scan() {
       printf "BAD\t%d 行目の機能が notify でない\n", NR; exit }
     $1 != "part" { next }
     mode == "key" && $6 == q { print "HIT\t" $5 "\t" $2; next }
-    mode == "route" && NF >= 8 {
+    mode == "route" {
       n = split($8, v, ",")
       for (i = 1; i <= n; i++) if (v[i] == q || index(q, v[i] ".") == 1) { print "HIT\t" $5 "\t" $2; break }
     }
@@ -150,6 +151,7 @@ ROOT = E["LT_ROOT"]
 FUNCS = E["LT_FUNCTIONS"].split()
 LAYERS = E["LT_LAYERS"].split()
 NOTICES = E["LT_NOTICES"].split()
+LEDGER_COLS = int(E["LT_LEDGER_COLS"])
 KINDS = E["LT_ROW_KINDS"].split()
 NAME_RE = re.compile(E["LT_NAME_RE"])
 REPO_HOME_REL = E["LT_REPO_HOME_REL"]
@@ -212,7 +214,7 @@ def code_lines(p):
 class Row:
     def __init__(self, n, c):
         self.n, self.kind, self.path, self.func, self.layer, self.prov, self.key = n, *c[:6]
-        self.notice = c[7].strip() if len(c) > 7 and c[7].strip() else "-"   # 8 列目「知らせ」（無ければ -）
+        self.notice = c[7].strip() or "-"   # 8 列目「知らせ」
 
 def notice_ok(v):
     # 「知らせ」の値＝語彙（種別か 呼出.区分）のカンマ区切り。
@@ -248,8 +250,8 @@ def check_static(ledger, moves):
         mrows = []
     rows = []
     for n, c in lrows:
-        if len(c) < 6:
-            rep("part", "%s:%d" % (os.path.relpath(ledger, ROOT), n), "列が足りない")
+        if len(c) != LEDGER_COLS:
+            rep("part", "%s:%d" % (os.path.relpath(ledger, ROOT), n), "列が %d（%d 列であること）" % (len(c), LEDGER_COLS))
         elif c[0] not in KINDS:
             rep("part", c[1], "種類 %s が語彙外" % c[0])
         else:
@@ -564,7 +566,7 @@ PY
 py() {
   LT_ROOT="$ROOT" LT_FUNCTIONS="$FUNCTIONS" LT_LAYERS="$LAYERS" LT_ROW_KINDS="$ROW_KINDS" LT_NAME_RE="$NAME_RE" \
   LT_REPO_HOME_REL="$REPO_HOME_REL" LT_LEDGER_REL="$LEDGER_REL" \
-  LT_NOTICES="$NOTICES" python3 -c "$PY_CODE" "$@"
+  LT_NOTICES="$NOTICES" LT_LEDGER_COLS="$LEDGER_COLS" python3 -c "$PY_CODE" "$@"
 }
 
 WORK=""
