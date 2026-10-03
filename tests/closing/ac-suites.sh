@@ -1,7 +1,21 @@
 # スイートを流す AC（AC-2 ③④・AC-5 ①・AC-7）。run-closing.sh が source する。
 # shellcheck shell=bash
 
-# cl_run_suites <wt> <outdir> <suite...>（repo 相対）— 1 本ごとに新しい HOME（FX-3）と FX-6 で実行。
+# cl_plain_path — 子スイート用の PATH＝ハーネスを起動した PATH から、claude・codex の実行体を含むディレクトリだけ除いたもの
+#   （FX-6 の「claude・codex が PATH に無い」は保つ。偽 launchctl・osascript・cmux は置かない＝スイート自身の偽物が効く）
+cl_plain_path() {
+  local d out="" IFS=:
+  for d in $PATH; do
+    [ -n "$d" ] || continue
+    { [ -x "$d/claude" ] || [ -x "$d/codex" ]; } && continue
+    out="${out:+$out:}$d"
+  done
+  printf '%s' "$out"
+}
+
+# cl_run_suites <wt> <outdir> <suite...>（repo 相対）— 1 本ごとに新しい HOME（FX-3）で、素の環境から起動する
+#   （cl_run の env -i・SKIP_LAUNCHCTL・LAUNCHCTL_TIMEOUT_SECS・偽 launchctl 等を継がない＝スイートの「enable 失敗は exit 1」等を
+#   ハーネスの設定が握り潰さない。外から持ち込まれた SKIP_LAUNCHCTL・LAUNCHCTL_TIMEOUT_SECS も外す）。
 # <outdir>/results.tsv（rc<TAB>スイート）と各ログを残し、非 0 の本数を CL_SUITES_FAILED に入れる。
 cl_run_suites() {
   local wt="$1" od="$2" t rc n
@@ -12,16 +26,20 @@ cl_run_suites() {
   CL_SUITES_FAILED_NAMES=""
   for t in "$@"; do
     n="$(basename "$t" .sh)"
-    rm -rf "$od/h" "$od/s"; mkdir -p "$od/h"; cl_stubs "$od/s"
+    rm -rf "$od/h" "$od/t"; mkdir -p "$od/h" "$od/t"
     rc=0
-    cl_run "$od/h" "$od/s" "$wt" bash "$t" </dev/null >"$od/$n.log" 2>&1 || rc=$?
+    # SIGINT・SIGQUIT は既定に戻してから起動する（nohup・& で起動されたハーネスでは無視が子へ継がれ、bash は入口で無視された
+    # シグナルを戻せない＝SIGINT を前提にするスイートが落ちる。実測＝test-maintenance-run-step の 2 件）
+    ( cd "$wt" && env -u SKIP_LAUNCHCTL -u LAUNCHCTL_TIMEOUT_SECS HOME="$od/h" TMPDIR="$od/t/" PATH="$(cl_plain_path)" \
+        python3 -c 'import os,signal,sys; [signal.signal(x, signal.SIG_DFL) for x in (signal.SIGINT, signal.SIGQUIT)]; os.execvp("bash", ["bash", sys.argv[1]])' "$t" \
+    ) </dev/null >"$od/$n.log" 2>&1 || rc=$?
     printf '%s\t%s\n' "$rc" "$t" >> "$od/results.tsv"
     if [ "$rc" -ne 0 ]; then
       CL_SUITES_FAILED=$((CL_SUITES_FAILED + 1))
       CL_SUITES_FAILED_NAMES="$CL_SUITES_FAILED_NAMES $n"
     fi
   done
-  rm -rf "$od/h" "$od/s"
+  rm -rf "$od/h" "$od/t"
 }
 
 # README の一括テスト実行の対象（tests/test-*.sh）
@@ -33,7 +51,7 @@ cl_ledger_suites() {
 }
 
 # ---------------------------------------------------------------- FX-10（AC-2）
-# cl_mk_fx10 <wt> — FX-1 の worktree に偽 zz-cli の AI Brain 用接続フォルダと台帳の行を足す
+# cl_mk_fx10 <wt> — FX-1 の worktree に偽 zz-cli の AI Brain 用接続フォルダと、台帳の行・移動表の新規行を足す
 cl_mk_fx10() {
   local wt="$1" zz recall rel
   zz="$wt/$CLOSING_ZZ_DIR_REL"
@@ -46,6 +64,9 @@ cl_mk_fx10() {
   chmod +x "$zz/recall-shim.sh" "$zz/install.sh"
   printf '%s\t%s/\t%s\t%s\t%s\t-\t%s\n' "$CLOSING_LEDGER_PART_KIND" "$CLOSING_ZZ_DIR_REL" "$CLOSING_ZZ_FN" \
     "$CLOSING_ZZ_LAYER" "$CLOSING_ZZ_PROVIDER" "AC-2 試験の第 3 提供元（締めの実走が足す）" >> "$wt/$CLOSING_LEDGER_REL"
+  # 移動表にも由来の行（FR-13＝新規の部品にも由来が要る・列＝旧パス 新パス 種別 転送印）
+  [ -f "$wt/$CLOSING_MOVES_REL" ] || { echo "移動表 $CLOSING_MOVES_REL が無い"; return 1; }
+  printf -- '-\t%s/\t新規\t-\n' "$CLOSING_ZZ_DIR_REL" >> "$wt/$CLOSING_MOVES_REL"
 }
 
 # AC-2 ③ FX-10 で一括テスト全スイート exit 0 ／ ④ zz-cli の配置手順＋偽 zz-cli に FX-17 → Knowledge/zz-probe.md

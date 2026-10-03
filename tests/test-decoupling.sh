@@ -120,19 +120,26 @@ brain_judge "$FX8" "FX-8"
 echo "=== 3. AC-2 受入② ①②: FX-10（AI Brain の zz-cli 接続フォルダ＋台帳 1 行）＝式 A 0 行・台帳の突合が合格 ==="
 # mk_zz_connect <repo> — 共有の雛形を接続フォルダへ写し、台帳の行を足す（コミットはしない＝式 A が見る差分）。
 ZZ_TEMPLATE="$TESTS_DIR/fixtures/zz-cli/connect"
+ZZ_LEDGER_LINE=$'part\tai-brain/connect/zz-cli/\tai-brain\tconnect\tzz-cli\t-\t偽 zz-cli 接続（試験）'
+ZZ_MOVES_LINE=$'-\tai-brain/connect/zz-cli/\t新規\t-'
+# mk_zz_connect <repo> — 共有の雛形を接続フォルダへ写し、台帳と移動表（FR-13＝新規の部品にも由来が要る）に
+# 無ければ 1 行足す（既にある tree の上で重ねて呼んでも行が増えない）。
 mk_zz_connect() {
   local d="$1/ai-brain/connect/zz-cli"
   mkdir -p "$d"
   cp -p "$ZZ_TEMPLATE"/* "$d"/
   sed -i '' 's#__RECALL_REL__#../../executor/vault-recall.sh#' "$d/recall-shim.sh"
-  printf 'part\tai-brain/connect/zz-cli/\tai-brain\tconnect\tzz-cli\t-\t偽 zz-cli 接続（試験）\n' >> "$1/$LF_LEDGER_REL"
+  grep -qF -- "$ZZ_LEDGER_LINE" "$1/$LF_LEDGER_REL" || printf '%s\n' "$ZZ_LEDGER_LINE" >> "$1/$LF_LEDGER_REL"
+  grep -qF -- "$ZZ_MOVES_LINE" "$1/$LF_MOVES_REL" || printf '%s\n' "$ZZ_MOVES_LINE" >> "$1/$LF_MOVES_REL"
 }
-# 式 A（要件 §7 の形のまま。<…> を設計で決まったパスに置き換えたもの）。
+# 式 A（要件 §7 の形のまま。<…> を設計で決まったパスに置き換えたもの。台帳と同じ理由で移動表も除く＝
+# 接続フォルダの追加に必ず伴う由来の追記 (FR-13) は接続フォルダ外の変更として数えない）。
 formula_a() {
   git -C "$1" status --porcelain --untracked-files=all \
     | cut -c4- \
     | grep -vE '^ai-brain/connect/zz-cli/' \
-    | grep -vxF "$LF_LEDGER_REL"
+    | grep -vxF "$LF_LEDGER_REL" \
+    | grep -vxF "$LF_MOVES_REL"
 }
 FX10="$WORK/fx10"; cp -a "$BASE" "$FX10"
 mk_zz_connect "$FX10"
