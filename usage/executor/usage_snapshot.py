@@ -189,9 +189,9 @@ def _usage_fetch_lookup():
     if proc.returncode == 1:
         return None, None
     stderr_lines = proc.stderr.splitlines()
-    if stderr_lines:
+    if stderr_lines and stderr_lines[0].startswith(("LEDGER: ledger ", "LEDGER: part ")):
         return None, stderr_lines[0]
-    return None, "%s ledger 台帳ツールを起動できない %s" % (_LEDGER_MSG_HEAD, LEDGER_TOOL)
+    return None, "%s ledger 台帳ツールの照会に失敗（rc=%d）" % (_LEDGER_MSG_HEAD, proc.returncode)
 
 
 def _load_usage_connections():

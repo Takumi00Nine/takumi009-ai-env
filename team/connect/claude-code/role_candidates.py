@@ -122,8 +122,12 @@ def _lookup_usage_snapshot() -> Optional[str]:
     lines = proc.stdout.splitlines()
     if proc.returncode == 0 and lines:
         return lines[0]
-    if proc.returncode != 1 and proc.stderr:
-        sys.stderr.write(proc.stderr.splitlines()[0] + "\n")
+    if proc.returncode != 1:
+        stderr_lines = proc.stderr.splitlines()
+        if stderr_lines and stderr_lines[0].startswith(("LEDGER: ledger ", "LEDGER: part ")):
+            sys.stderr.write(stderr_lines[0] + "\n")
+        else:
+            sys.stderr.write(f"LEDGER: ledger 台帳ツールの照会に失敗（rc={proc.returncode}）\n")
     return None
 
 
