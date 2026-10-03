@@ -227,9 +227,12 @@ printf '#!/bin/bash\nexit 0\n' > "$HANG_STUB/launchctl"; chmod +x "$HANG_STUB/la
 ZZ24="$WORK/zz24.log"; rm -f "$ZZ24"
 rm -f "$NOTIFY_LOG"
 T=2
-start="$(date +%s)"
+# v1.2 T6（リーダー裁定）＝計測の窓（start〜end）には口の起動〜終了だけを入れる。
+# lf_path_without（約2秒かかる fixture 準備）は窓の外で先に済ませておく。
+FX24_PATH="$HANG_STUB:$(lf_path_without cmux osascript launchctl)"
 rc=0
-PATH="$HANG_STUB:$(lf_path_without cmux osascript launchctl)" \
+start="$(date +%s)"
+PATH="$FX24_PATH" \
   AIENV_LEDGER="$WT24/core/data/ledger.tsv" AIENV_NOTIFY_WAIT_SECS="$T" ZZ_DEST_LOG="$ZZ24" \
   bash "$WT24/notify/executor/notify.sh" call ask "📣 テスト呼出" "本文" >/dev/null 2>&1 || rc=$?
 end="$(date +%s)"

@@ -131,8 +131,12 @@ new_env() {
 # の関数群を使えるようにする。$1=env dir
 load_entry_for() {
   local envdir="$1"
-  HOME="$envdir/home" XDG_CACHE_HOME="$envdir/cache" XDG_CONFIG_HOME="$envdir/config" \
-    AIENV_USAGE_FETCH_TEST_LIB=1 . "$ENTRY"
+  # v1.2 T7（リーダー裁定）＝`VAR=val . file` の前置代入は bash 3.2 では source の後に
+  # 確実には残らない（実測＝記録が実 HOME に書かれていた）。export で明示的に
+  # シェル変数へ代入してから source する（呼ぶたびに上書きするので他ブロックへの
+  # 影響は無い）。
+  export HOME="$envdir/home" XDG_CACHE_HOME="$envdir/cache" XDG_CONFIG_HOME="$envdir/config"
+  AIENV_USAGE_FETCH_TEST_LIB=1 . "$ENTRY"
   CACHE_DIR="$envdir/cache/claude-codex-usage"
   CONFIG_DIR="$envdir/config/claude-codex-usage"
   LOCK_DIR="$CACHE_DIR/locks"
