@@ -257,6 +257,21 @@ assert_eq "他チームの config に載る: stdout 空" "" "$(cat "$WORK/c.out"
 TEAMS_DIR="$TEAMS" compose '{"session_id":"sess-other-9999"}'
 assert_contains "どのチームにも載らない: ブロックを出す" "$CTX" "【セッション開始ブートストラップ｜ハーネス強制注入】"
 
+echo "=== 7b. 失敗（設計 §5.5 失敗表・V-07）: stdin を読めない（閉じて起動）＝無出力・非 0 ==="
+# 上限 10 秒で打ち切る（閉じた fd 0 を後続のパイプが拾うと読み続けて返らない実装でも、スイートを止めない）。
+RC="$(hook_env python3 -c '
+import subprocess, sys
+try:
+    p = subprocess.run(["bash", "-c", "exec <&-; exec bash \"$0\"", sys.argv[1]],
+                       stdout=open(sys.argv[2], "w"), stderr=open(sys.argv[3], "w"), timeout=10)
+    print(p.returncode)
+except subprocess.TimeoutExpired:
+    print("timeout")
+' "$COMPOSER" "$WORK/c.out" "$WORK/c.err")"
+assert_true "stdin を閉じて起動: 10 秒以内に終わる" "$([ "$RC" != "timeout" ] && echo 1 || echo 0)"
+assert_true "stdin を閉じて起動: 非 0" "$([ "$RC" != "0" ] && [ "$RC" != "timeout" ] && echo 1 || echo 0)"
+assert_eq "stdin を閉じて起動: stdout 空" "" "$(cat "$WORK/c.out")"
+
 echo "=== 8. SessionStart の 2 フック（設計 §5.5 既存コードへの影響）: 登録は旧ライブ名のまま・サブ機更新確認と並ぶ ==="
 assert_eq "settings 雛形の SessionStart 登録＝bootstrap-vault.sh と check-sub-update.sh" \
   "\$HOME/.claude/hooks/bootstrap-vault.sh

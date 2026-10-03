@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 台帳・移動表・台帳ツール（FR-14 の常設検査）のテスト（Core）。
-# 正本＝docs/v1.1-components の要件 v1.4 §7（AC-3・AC-4・AC-6・AC-11）・設計 v1.2 §3・§5.6・§10.1・§10.2・§11・
+# 正本＝docs/v1.1-components の要件 v1.5 §7（AC-3・AC-4・AC-6・AC-11）・設計 v1.4 §3・§5.6・§10.1・§10.2・§11・
 # 実装計画 §2・§3・§5。
 #
 # 実行方法: bash tests/test-ledger.sh
@@ -247,6 +247,11 @@ printf 'part\tai-brain/executor/vault-recall.sh\tai-brain\n' > "$WORK/short.tsv"
 run_lookup "ai-brain.recall" "$WORK/short.tsv"
 assert_eq "台帳異常（列数不足）: 終了 2" "2" "$LOOKUP_RC"
 assert_true "台帳異常（列数不足）: LEDGER: ledger …" "$(grep -q '^LEDGER: ledger ' "$WORK/lk.err" && echo 1 || echo 0)"
+# V-06: 照会も check と同じ語彙検査をする＝suite 行の機能が語彙外の台帳は台帳異常（設計 §5.6）。
+{ cat "$LEDGER"; printf 'suite\ttests/test-ledger.sh\tzz-not-a-function\t-\t-\t-\t\n'; } > "$WORK/bad-vocab.tsv" 2>/dev/null
+run_lookup "ai-brain.recall" "$WORK/bad-vocab.tsv"
+assert_eq "台帳異常（suite 行の機能が語彙外）: 終了 2" "2" "$LOOKUP_RC"
+assert_true "台帳異常（suite 行の機能が語彙外）: LEDGER: ledger …" "$(grep -q '^LEDGER: ledger ' "$WORK/lk.err" && echo 1 || echo 0)"
 { cat "$LEDGER"; printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\tzz.missing\t\n'; } > "$WORK/bad-part.tsv" 2>/dev/null
 run_lookup "zz.missing" "$WORK/bad-part.tsv"
 assert_eq "実体異常（パス不在）: 終了 3" "3" "$LOOKUP_RC"

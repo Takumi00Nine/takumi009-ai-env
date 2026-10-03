@@ -259,6 +259,14 @@ assert_eq "鍵なし: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
 assert_eq "鍵なし: B 行 0 行" "0" "$(b_rows | wc -l | tr -d ' ')"
 assert_eq "鍵なし: E＝P 行数" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
 assert_eq "鍵なし: stderr に LEDGER: 行なし（予定された省略）" "0" "$(grep -c '^LEDGER: ' "$WORKDIR/frame_stderr")"
+# 実体異常（V-08・設計 §5.6）＝判定機の鍵の行はあるがパスが無い＝B 行を省き・stderr に照会の固定文・exit 0。
+{ cat "$WORKDIR/ledger-nojudge.tsv"
+  printf 'part\tai-brain/executor/zz-missing-judge.py\tai-brain\texecutor\t-\tai-brain.health-judge\t\n'; } > "$WORKDIR/ledger-badjudge.tsv"
+AIENV_LEDGER="$WORKDIR/ledger-badjudge.tsv" run_frame_fixture S-2
+assert_eq "実体異常: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
+assert_eq "実体異常: B 行 0 行" "0" "$(b_rows | wc -l | tr -d ' ')"
+assert_eq "実体異常: E＝P 行数" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$WORKDIR/frame_stdout")"
+assert_eq "実体異常: stderr に LEDGER: part ai-brain.health-judge の固定文が 1 行" "1" "$(grep -c '^LEDGER: part ai-brain.health-judge ' "$WORKDIR/frame_stderr")"
 STUBBIN_PY="$WORKDIR/stubbin-py"; mkdir -p "$STUBBIN_PY"
 printf '#!/bin/bash\nexit 3\n' > "$STUBBIN_PY/python3"; chmod +x "$STUBBIN_PY/python3"
 PATH="$STUBBIN_PY:$PATH" run_frame_fixture S-2

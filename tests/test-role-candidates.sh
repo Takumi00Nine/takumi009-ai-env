@@ -287,7 +287,7 @@ PYSTUB
   assert_eq "MINOR-8: 壊れた行があってもexit0" "0" "$stub_rc"
   assert_contains "MINOR-8: 正常行(leader)はstdoutにそのまま残る" "$stub_out" "leader"
   assert_not_contains "MINOR-8: 壊れた行(broken)はstdoutに出ない" "$stub_out" "broken"
-  assert_eq "MINOR-8: stderrにUNRESOLVED TAB INTERNAL_ERRORを1行" "$(printf 'UNRESOLVED\tINTERNAL_ERROR')" "$stub_err"
+  assert_eq "MINOR-8: stderrにUNRESOLVED TAB INTERNAL_ERRORの行がちょうど1行" "1" "$(printf '%s\n' "$stub_err" | grep -Fc "$(printf 'UNRESOLVED\tINTERNAL_ERROR')")"
 }
 
 echo "=== OPUS55-AC-2: model=claude-opus-5-5（t-opus-high）のpass列がopus ==="
@@ -298,6 +298,31 @@ echo "=== OPUS55-AC-2: model=claude-opus-5-5（t-opus-high）のpass列がopus =
   out="$(RCALL "$MISSING_CACHE")"
   leader_row="$(printf '%s\n' "$out" | awk -F'\t' '$1=="leader"{print}')"
   assert_eq "OPUS55-AC-2: leaderのpass列==opus" "opus" "$(printf '%s' "$leader_row" | awk -F'\t' '{print $4}')"
+}
+
+echo "=== V-08（設計 §5.6）: Usage 提示の照会 3 分類＝鍵なし／台帳異常／実体異常（健全キャッシュでも使用率列は -・exit 0） ==="
+{
+  LEDGER_REAL="$REPO_ROOT/core/data/ledger.tsv"
+  # rc_ledger_case <ラベル> <AIENV_LEDGER> <stderr の期待＝空 or 固定文の先頭>
+  rc_ledger_case() {
+    local label="$1" ledger="$2" want_err="$3" out err rc=0 row
+    out="$(AIENV_LEDGER="$ledger" RCALL "$HEALTHY_CACHE" 2>"$WORK/rc-ledger.err")" || rc=$?
+    err="$(cat "$WORK/rc-ledger.err")"
+    row="$(printf '%s\n' "$out" | awk -F'\t' '$1=="leader"{print}')"
+    assert_eq "$label: exit0（提示専用）" "0" "$rc"
+    assert_eq "$label: leaderのh5・d7は-（使用率を引けない）" "-	-" "$(printf '%s' "$row" | awk -F'\t' '{print $6"\t"$7}')"
+    if [ -z "$want_err" ]; then
+      assert_eq "$label: stderr に LEDGER: 行なし（予定された省略）" "0" "$(printf '%s\n' "$err" | grep -c '^LEDGER: ' || true)"
+    else
+      assert_eq "$label: stderr に固定文（${want_err}…）が 1 行" "1" "$(printf '%s\n' "$err" | grep -c "^$want_err" || true)"
+    fi
+  }
+  awk -F'\t' '$6!="usage.snapshot"' "$LEDGER_REAL" > "$WORK/ledger-nokey.tsv"
+  rc_ledger_case "鍵なし" "$WORK/ledger-nokey.tsv" ""
+  rc_ledger_case "台帳異常（台帳が無い）" "$WORK/no-such-dir/ledger.tsv" "LEDGER: ledger "
+  { cat "$WORK/ledger-nokey.tsv"
+    printf 'part\tusage/executor/zz-missing-snapshot.py\tusage\texecutor\t-\tusage.snapshot\t\n'; } > "$WORK/ledger-badpart.tsv"
+  rc_ledger_case "実体異常（パス不在）" "$WORK/ledger-badpart.tsv" "LEDGER: part usage.snapshot "
 }
 
 echo ""

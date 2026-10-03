@@ -497,6 +497,31 @@ EOF
   # 残った--settingsに現れない）
   assert_not_contains "child_settings_drops_empty_entry: ^Agent\$エントリが残らない" "$s_impl" '"^Agent$"'
 
+  # V-08（設計 §5.6）: 子向け柵（台帳の鍵 ai-brain.write-gate）の照会 3 分類。
+  # 鍵なし＝子設定にその柵を載せない（起動は続く）／台帳異常・実体異常＝stderr に照会の固定文＋起動を止める（exit8）。
+  LEDGER_REAL="$REPO_ROOT/core/data/ledger.tsv"
+  new_fixture
+  awk -F'\t' '$6!="ai-brain.write-gate"' "$LEDGER_REAL" > "$WORK/ledger-nokey.tsv"
+  AIENV_LEDGER="$WORK/ledger-nokey.tsv" run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-v08a --model-def t-sonnet-high
+  assert_eq "V-08 鍵なし: 起動は続く(exit0)" "0" "$RC"
+  assert_not_contains "V-08 鍵なし: 子設定に vault-write-gate を載せない" "$(stub_settings_json)" "vault-write-gate.sh"
+  assert_eq "V-08 鍵なし: stderr に LEDGER: 行なし" "0" "$(printf '%s\n' "$RUN_STDERR" | grep -c '^LEDGER: ' || true)"
+
+  new_fixture
+  AIENV_LEDGER="$WORK/no-such-dir/ledger.tsv" run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-v08b --model-def t-sonnet-high
+  assert_eq "V-08 台帳異常: 起動を止める(exit8)" "8" "$RC"
+  assert_eq "V-08 台帳異常: stub 0行" "0" "$(stub_lines)"
+  assert_eq "V-08 台帳異常: stderr に LEDGER: ledger の固定文" "1" "$(printf '%s\n' "$RUN_STDERR" | grep -c '^LEDGER: ledger ' || true)"
+
+  new_fixture
+  { awk -F'\t' '$6!="ai-brain.write-gate"' "$LEDGER_REAL"
+    printf 'part\tai-brain/connect/claude-code/zz-missing-gate.sh\tai-brain\tconnect\tclaude-code\tai-brain.write-gate\t\n'; } > "$WORK/ledger-badpart.tsv"
+  AIENV_LEDGER="$WORK/ledger-badpart.tsv" run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-v08c --model-def t-sonnet-high
+  assert_eq "V-08 実体異常: 起動を止める(exit8)" "8" "$RC"
+  assert_eq "V-08 実体異常: stub 0行" "0" "$(stub_lines)"
+  assert_eq "V-08 実体異常: stderr に LEDGER: part ai-brain.write-gate の固定文" "1" \
+    "$(printf '%s\n' "$RUN_STDERR" | grep -c '^LEDGER: part ai-brain.write-gate ' || true)"
+
   # reject_when_local_settings_present(9)
   new_fixture
   OUT9="$WORK/artifacts9/o.json"

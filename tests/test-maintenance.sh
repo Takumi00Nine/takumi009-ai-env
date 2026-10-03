@@ -1372,6 +1372,45 @@ echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経�
   fi
 }
 
+echo "=== 39d. V-08（設計 §5.6）: 宣言 CLI の照会 3 分類＝鍵なし（未導入・記録なし）／台帳異常・実体異常（未導入＋状態記録とログに固定文・run.status は completed・fully_ok は偽） ==="
+{
+  # prune_lookup_case <ラベル> <台帳の中身（printf 書式）または - ＝台帳ファイル無し> <期待する固定文の先頭（空＝記録なし）>
+  prune_lookup_case() {
+    local label="$1" ledger_fmt="$2" want="$3" rc=0 ledger
+    T="$WORK_ROOT/t39d-$RANDOM"; mkdir -p "$T"
+    setup_test_env "$T"
+    LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
+    setup_prune_ledger "$REPO" >/dev/null
+    ledger="$T/ledger-variant.tsv"
+    if [[ "$ledger_fmt" == "-" ]]; then ledger="$T/no-such-dir/ledger.tsv"; else printf "$ledger_fmt" > "$ledger"; fi
+    AIENV_LEDGER="$ledger" VAULT="$VAULT" AIENV_REPO="$AIENV_REPO" MAINTENANCE_LOG_ROOT="$LOG_ROOT" TMPDIR="$TEST_TMPDIR" \
+      FAKE_OSASCRIPT_LOG="$OSASCRIPT_LOG" FAKE_EXPORT_CALL_LOG="$EXPORT_CALL_LOG" \
+      TIMEOUT_BACKUP_VAULT=10 TIMEOUT_EXPORT_PUBLIC_VAULT=10 TIMEOUT_CHECK_DRIFT=2 \
+      TIMEOUT_FRAGMENTS_LOG=10 TIMEOUT_VAULT_INVENTORY=10 TIMEOUT_TASK_PRUNE=5 \
+      MAINTENANCE_STALE_LOCK_SECONDS=3600 \
+      GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid \
+      bash "$REPO/ai-brain/executor/maintenance.sh" > "$LAST_STDOUT" 2> "$LAST_STDERR" || rc=$?
+    local frag_line last_run all_logs
+    frag_line="$(grep -h '^- 定常メンテ(週次): ' $(find "$VAULT/Fragments" -name '20*.md') 2>/dev/null | tail -1)"
+    last_run="$(cat "$LOG_ROOT/last-run.json" 2>/dev/null)"
+    all_logs="$(cat "$LAST_STDOUT" "$LAST_STDERR" 2>/dev/null; find "$LOG_ROOT" -type f -name '*.log' -exec cat {} + 2>/dev/null)"
+    assert_eq "$label: exit 0" "0" "$rc"
+    assert_contains "$label: サマリ行は『・宣言掃除 未導入』" "$frag_line" "・宣言掃除 未導入"
+    assert_eq "$label: run.status は completed（現行どおり）" "completed" "$(jq -r '.run.status' "$LOG_ROOT/last-run.json" 2>/dev/null)"
+    if [[ -z "$want" ]]; then
+      assert_not_contains "$label: 状態記録に LEDGER: の固定文なし（予定された省略）" "$last_run" "LEDGER: "
+    else
+      assert_contains "$label: 状態記録に固定文（${want}…）" "$last_run" "$want"
+      assert_contains "$label: ログに固定文（${want}…）" "$all_logs" "$want"
+      assert_eq "$label: fully_ok は偽" "false" "$(jq -r '.completed.fully_ok' "$LOG_ROOT/last-run.json" 2>/dev/null)"
+    fi
+    assert_eq "$label: 宣言 CLI のスタブは呼ばれない" "0" "$([ -s "$PRUNE_CALL_LOG" ] && echo 1 || echo 0)"
+  }
+  prune_lookup_case "鍵なし" 'part\tdock/executor/other.sh\tdock\texecutor\t-\t-\t\n' ""
+  prune_lookup_case "台帳異常（台帳が無い）" "-" "LEDGER: ledger "
+  prune_lookup_case "実体異常（パス不在）" 'part\tdock/executor/zz-missing-declare.sh\tdock\texecutor\t-\tdock.task-declare\t\n' "LEDGER: part dock.task-declare "
+}
+
 # =============================================================================
 # §16.6.2 系統①: 実cmux-task-declare.shとの結合試験（担当Bの成果物）
 # =============================================================================

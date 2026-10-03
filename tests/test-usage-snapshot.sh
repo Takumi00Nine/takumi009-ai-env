@@ -60,7 +60,7 @@
 #   置く」対応）: usage_snapshot.py全体で減算(Sub)・不等号比較(Lt/LtE/Gt/GtE)
 #   演算が発生する(演算種別,関数名)ごとの**個数**を、既知の安全な関数
 #   （_extract_window・build_subscription_pool・_scrub_error・_valid_epoch・
-#   _build_codex_reset_credits・_format_ticket_text＝いずれも単一pool・
+#   _build_cache_reset_credits・_format_ticket_text＝いずれも単一pool・
 #   単一チケットの内部値だけを扱う。後半3つはB1-c「Codexチケット」対応で
 #   追加）の期待個数と完全一致させる（2巡目MAJOR対応で集合比較から個数
 #   比較へ強化＝既に許可された関数内へ演算を追加しても検出できる）。
@@ -666,7 +666,7 @@ for node in ast.walk(tree):
 #   _scrub_error: CMP1(100<=status<=999のHTTPステータス形式検査)
 #   _valid_epoch: CMP1(value>0＝1件のチケットが持つ1つのepoch値の健全性
 #     検査。検証職1巡目MAJOR-2対応)
-#   _build_codex_reset_credits: CMP1(available_count<0＝1件のpoolが持つ
+#   _build_cache_reset_credits: CMP1(available_count<0＝1件のpoolが持つ
 #     枚数の非負性検査。検証職1巡目MAJOR-2対応。⚠️検証職2巡目MAJOR-2対応で
 #     「available_count>0なら未失効の裏付けが必須」というCMPをもう1つ
 #     持っていたが、正常な「枚数だけ取得(count-only)」を誤ってmissingへ
@@ -680,7 +680,7 @@ ALLOWED = {
     ("CMP", "build_subscription_pool"): 2,
     ("CMP", "_scrub_error"): 1,
     ("CMP", "_valid_epoch"): 1,
-    ("CMP", "_build_codex_reset_credits"): 1,
+    ("CMP", "_build_cache_reset_credits"): 1,
     ("CMP", "_format_ticket_text"): 1,
 }
 
@@ -764,7 +764,7 @@ echo "=== FX-15: チケット（reset credit）の提示（陽性・B1-c） ==="
 # （検証職2巡目の指摘どおりの順）。
 # 各fixtureは five_hour/seven_day は完全に正常（usage_state=ok）に保ち、
 # reset_credits側の1点だけを変えることで、結果の原因が意図した検査
-# （`_build_codex_reset_credits`・`_extract_credit_entry`）以外にないことを
+# （`_build_cache_reset_credits`・`_extract_credit_entry`）以外にないことを
 # 保証する（coding-doc-style §4「陽性fixtureが実際に拒否経路を通っていない」
 # 再発防止）。
 # ============================================================
@@ -940,7 +940,7 @@ open('$MUT_LIB_NOIDCHECK', 'w', encoding='utf-8').write(mutated)
 echo "=== AST到達可能性検査（AC-95③・許可リスト方式の簡易版） ==="
 {
   ast_result="$(python3 "$AST_HELPER" "$LIB")"
-  assert_eq "実装コードの減算・不等号比較は既知の安全な関数・個数と完全一致する(_extract_window/build_subscription_pool/_scrub_error/_valid_epoch/_build_codex_reset_credits/_format_ticket_text)" "OK" "$ast_result"
+  assert_eq "実装コードの減算・不等号比較は既知の安全な関数・個数と完全一致する(_extract_window/build_subscription_pool/_scrub_error/_valid_epoch/_build_cache_reset_credits/_format_ticket_text)" "OK" "$ast_result"
 
   # 陽性fixture①: 「枠間の残量を引き算する」ような新しい関数を一時コピー
   # へ追加すると、この検査が確実に検出することを確認する。
@@ -966,6 +966,30 @@ open('$MUT_LIB_INFUNC', 'w', encoding='utf-8').write(mutated)
 "
   mut_result_infunc="$(python3 "$AST_HELPER" "$MUT_LIB_INFUNC")"
   assert_contains "陽性fixture②: 許可済み関数(build_subscription_pool)内へ演算を1つ追加すると個数不一致として検出される" "$mut_result_infunc" "SUB:build_subscription_pool=2(expected 1)"
+}
+
+echo "=== V-08（設計 §5.6）: 接続の列挙（台帳の鍵 usage.fetch）の照会 3 分類＝鍵なし（接続の枠 0・記録なし）／台帳異常・実体異常（枠 0＋stderr に固定文）・どれも exit 0 ==="
+{
+  # snap_ledger_case <ラベル> <AIENV_LEDGER> <stderr に期待する固定文の先頭（空＝LEDGER: 行なし）>
+  # 健全なキャッシュ（FX-1）を与えても、接続を引けなければ接続由来の枠（unlimited 以外）は 0。
+  snap_ledger_case() {
+    local label="$1" ledger="$2" want="$3" out rc=0
+    out="$(AIENV_LEDGER="$ledger" run_json "$FX1" 2>"$WORK/snap-ledger.err")" || rc=$?
+    assert_eq "$label: exit 0（提示専用）" "0" "$rc"
+    assert_eq "$label: 接続由来の枠は 0（unlimited だけ）" "unlimited" \
+      "$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(p["pool_ref"] for p in json.load(sys.stdin)["pools"]))' 2>/dev/null)"
+    if [ -z "$want" ]; then
+      assert_eq "$label: stderr に LEDGER: 行なし（予定された省略）" "0" "$(grep -c '^LEDGER: ' "$WORK/snap-ledger.err" || true)"
+    else
+      assert_eq "$label: stderr に固定文（${want}…）が 1 行" "1" "$(grep -c "^$want" "$WORK/snap-ledger.err" || true)"
+    fi
+  }
+  awk -F'\t' '$6!="usage.fetch"' "$REPO_ROOT/core/data/ledger.tsv" > "$WORK/ledger-nokey.tsv"
+  snap_ledger_case "鍵なし" "$WORK/ledger-nokey.tsv" ""
+  snap_ledger_case "台帳異常（台帳が無い）" "$WORK/no-such-dir/ledger.tsv" "LEDGER: ledger "
+  { cat "$WORK/ledger-nokey.tsv"
+    printf 'part\tusage/connect/zz-missing/fetch.sh\tusage\tconnect\tzz-missing\tusage.fetch\t\n'; } > "$WORK/ledger-badpart.tsv"
+  snap_ledger_case "実体異常（パス不在）" "$WORK/ledger-badpart.tsv" "LEDGER: part usage.fetch "
 }
 
 echo

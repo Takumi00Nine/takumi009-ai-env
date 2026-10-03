@@ -617,7 +617,10 @@ EOF
 }
 
 echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（B1-c・2026-09-09） ==="
-# usage/executor/usage-source.sh: transform_codex_usage() が .result.rateLimits
+# 変換の置き場＝Codex 接続の取得器（v1.1 V-03・設計 §5.3）。変異は共通部（usage-source.sh）を先に source し、
+# その上に変異させた接続を source して transform_codex_usage を呼ぶ。
+CODEX_FETCH_SH="$REPO_ROOT/usage/connect/codex/fetch.sh"
+# usage/connect/codex/fetch.sh: transform_codex_usage()（v1.1 V-03 で usage-source.sh から Codex 接続へ移した）が .result.rateLimits
 # だけでなく兄弟キー .result.rateLimitResetCredits も codex-cache.json の
 # reset_credits へ書き出すことを検査する（指示書§2.3＝あり／なし／credits
 # 空／statusがavailable以外の4fixture＋秘密値なし＋既存キー不変）。
@@ -769,11 +772,11 @@ echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（
   # （このfixtureが実際にコンテナ型検査を通っている証拠）。
   MUT_USAGE_SOURCE_NOCONTAINERGUARD="$(mktemp)"
   sed 's/(if (\$rc_raw|type) == "object" then \$rc_raw else null end) as \$rc/$rc_raw as $rc/' \
-    "$REPO_ROOT/usage/executor/usage-source.sh" > "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"
+    "$CODEX_FETCH_SH" > "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"
   assert_true "変異コピー生成: コンテナ型検査の行が実際に書き換わっている" \
-    "$(diff -q "$REPO_ROOT/usage/executor/usage-source.sh" "$MUT_USAGE_SOURCE_NOCONTAINERGUARD" >/dev/null 2>&1 && echo 0 || echo 1)"
+    "$(diff -q "$CODEX_FETCH_SH" "$MUT_USAGE_SOURCE_NOCONTAINERGUARD" >/dev/null 2>&1 && echo 0 || echo 1)"
   raw_4c2_mut='{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":77,"resetsAt":3000},"secondary":{"windowDurationMins":10080,"usedPercent":88,"resetsAt":4000}},"rateLimitResetCredits":"bad"}'
-  out_4c2_mut="$( ( . "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"; transform_codex_usage "$raw_4c2_mut" 5000 ) 2>/dev/null )"
+  out_4c2_mut="$( ( . "$REPO_ROOT/usage/executor/usage-source.sh"; . "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"; transform_codex_usage "$raw_4c2_mut" 5000 ) 2>/dev/null )"
   assert_true "陽性fixture(B1-c④c2向け): コンテナ型検査を外した変異コピーはscalarなrateLimitResetCreditsで丸ごと失敗する（fixtureが実際にこの検査を通っている証拠）" \
     "$([ -z "$out_4c2_mut" ] && echo 1 || echo 0)"
   rm -f "$MUT_USAGE_SOURCE_NOCONTAINERGUARD"
@@ -791,11 +794,11 @@ echo "=== ⑧Codexチケット（rate-limit reset credit）の取得・変換（
   # 同じ応答をtransform_codex_usageへ通すと、id欠落creditがそのまま残って
   # しまうことを確認する（このfixtureが実際にid型検査を通っている証拠）。
   MUT_USAGE_SOURCE_NOID="$(mktemp)"
-  sed 's/and ((\.id|type) == "string") and (\.id != "")//' "$REPO_ROOT/usage/executor/usage-source.sh" > "$MUT_USAGE_SOURCE_NOID"
+  sed 's/and ((\.id|type) == "string") and (\.id != "")//' "$CODEX_FETCH_SH" > "$MUT_USAGE_SOURCE_NOID"
   assert_true "変異コピー生成: id型検査の行が実際に書き換わっている" \
-    "$(diff -q "$REPO_ROOT/usage/executor/usage-source.sh" "$MUT_USAGE_SOURCE_NOID" >/dev/null 2>&1 && echo 0 || echo 1)"
+    "$(diff -q "$CODEX_FETCH_SH" "$MUT_USAGE_SOURCE_NOID" >/dev/null 2>&1 && echo 0 || echo 1)"
   raw_4d='{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent":55,"resetsAt":1234567890},"secondary":{"windowDurationMins":10080,"usedPercent":22,"resetsAt":1234599999}},"rateLimitResetCredits":{"availableCount":1,"credits":[{"status":"available","grantedAt":1788539594,"expiresAt":1791131594,"title":"t"}]}}'
-  out_4d_mut="$( ( . "$MUT_USAGE_SOURCE_NOID"; transform_codex_usage "$raw_4d" 5000 ) )"
+  out_4d_mut="$( ( . "$REPO_ROOT/usage/executor/usage-source.sh"; . "$MUT_USAGE_SOURCE_NOID"; transform_codex_usage "$raw_4d" 5000 ) )"
   assert_true "陽性fixture(B1-c④d向け): id型検査を外した変異コピーはid欠落creditを残してしまう（fixtureが実際にこの検査を通っている証拠）" \
     "$(printf '%s' "$out_4d_mut" | jq -e '.reset_credits.credits | length == 1' >/dev/null 2>&1 && echo 1 || echo 0)"
   rm -f "$MUT_USAGE_SOURCE_NOID"
@@ -922,6 +925,35 @@ EOF
     "$(printf '%s' "$out" | grep -q "osascript" && echo 1 || echo 0)"
   rm -f "$FAKE_BIN/osascript"; hash -r
   rm -rf "$E"
+}
+
+echo "=== V-08（設計 §5.6）: 接続の列挙（台帳の鍵 usage.fetch）の照会 3 分類＝鍵なし（0 件＝失敗記録「取得口なし」）／台帳異常・実体異常（固定文をログへ・同じ縮退） ==="
+{
+  # fetch_ledger_case <ラベル> <AIENV_LEDGER> <ログに期待する固定文の先頭（空＝LEDGER: 行なし）>
+  fetch_ledger_case() {
+    local label="$1" ledger="$2" want="$3" out rc=0
+    E="$(new_env)"; reset_stubs
+    out="$(HOME="$E/home" XDG_CACHE_HOME="$E/cache" XDG_CONFIG_HOME="$E/config" AIENV_LEDGER="$ledger" \
+      bash "$ENTRY" all 2>&1)" || rc=$?
+    assert_true "$label: 非 0（取得 0 件＝既存の失敗経路）" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+    assert_true "$label: ログに「取得口なし」" "$(printf '%s' "$out" | grep -q '取得口なし' && echo 1 || echo 0)"
+    if [ -z "$want" ]; then
+      assert_eq "$label: ログに LEDGER: 行なし（予定された省略）" "0" "$(printf '%s\n' "$out" | grep -c 'LEDGER: ' || true)"
+    else
+      assert_true "$label: ログに固定文（${want}…）" "$(printf '%s\n' "$out" | grep -q "$want" && echo 1 || echo 0)"
+    fi
+    assert_true "$label: キャッシュは書かれない" \
+      "$([ ! -e "$E/cache/claude-codex-usage/claude-cache.json" ] && [ ! -e "$E/cache/claude-codex-usage/codex-cache.json" ] && echo 1 || echo 0)"
+    rm -rf "$E"
+  }
+  V08_DIR="$(mktemp -d)"
+  awk -F'\t' '$6!="usage.fetch"' "$REPO_ROOT/core/data/ledger.tsv" > "$V08_DIR/ledger-nokey.tsv"
+  fetch_ledger_case "鍵なし" "$V08_DIR/ledger-nokey.tsv" ""
+  fetch_ledger_case "台帳異常（台帳が無い）" "$V08_DIR/no-such-dir/ledger.tsv" "LEDGER: ledger "
+  { cat "$V08_DIR/ledger-nokey.tsv"
+    printf 'part\tusage/connect/zz-missing/fetch.sh\tusage\tconnect\tzz-missing\tusage.fetch\t\n'; } > "$V08_DIR/ledger-badpart.tsv"
+  fetch_ledger_case "実体異常（パス不在）" "$V08_DIR/ledger-badpart.tsv" "LEDGER: part usage.fetch "
+  rm -rf "$V08_DIR"
 }
 
 echo
