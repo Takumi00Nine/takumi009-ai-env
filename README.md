@@ -284,10 +284,10 @@ Arguments, exit codes, and environment variables = `core/connect/claude-code/ses
 ### Tests
 
 ```sh
-for t in tests/test-*.sh; do bash "$t"; done
+bash tests/run-all.sh
 ```
 
-None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). This loop also runs the component-ledger check (`tests/test-ledger.sh`, driven by `core/assembly/ledger-tool.sh check`): every part and suite has exactly one ledger row, there are no cross-function references outside the key-lookup mechanism, every forwarding symlink reaches its successor, and every hook/LaunchAgent target that `install-main.sh` registers actually exists.
+This runs every `tests/test-*.sh` suite one after another and exits non-zero at the end if any of them failed. None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). This run also includes the component-ledger check (`tests/test-ledger.sh`, driven by `core/assembly/ledger-tool.sh check`): every part and suite has exactly one ledger row, there are no cross-function references outside the key-lookup mechanism, every forwarding symlink reaches its successor, and every hook/LaunchAgent target that `install-main.sh` registers actually exists.
 
 ### License
 
@@ -582,10 +582,10 @@ core/connect/claude-code/session-handoff.sh -h | --help
 ### テスト
 
 ```sh
-for t in tests/test-*.sh; do bash "$t"; done
+bash tests/run-all.sh
 ```
 
-いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。この一括実行には台帳の検査（`tests/test-ledger.sh`＝`core/assembly/ledger-tool.sh check` が行う）も含まれます＝全部品・全スイートが台帳にちょうど1行持つこと、鍵の照会以外で機能をまたぐ参照が無いこと、全転送 symlink が主後継へ届くこと、`install-main.sh` が登録する全フック・LaunchAgent の起動対象が実在すること。
+`tests/test-*.sh` の全スイートを続けて実行し、失敗があれば最後に非 0 で終わります。いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。この一括実行には台帳の検査（`tests/test-ledger.sh`＝`core/assembly/ledger-tool.sh check` が行う）も含まれます＝全部品・全スイートが台帳にちょうど1行持つこと、鍵の照会以外で機能をまたぐ参照が無いこと、全転送 symlink が主後継へ届くこと、`install-main.sh` が登録する全フック・LaunchAgent の起動対象が実在すること。
 
 ### ライセンス
 

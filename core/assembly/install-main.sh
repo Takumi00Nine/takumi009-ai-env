@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # メイン環境用インストーラ: このリポジトリの各機能フォルダ配下の Claude Code／Codex
 # 接続部品を、ライブ位置（~/.claude/・~/.codex/）へ symlink する（dotfiles/install.sh
-# と同方式。配置先の集合＝台帳 core/data/ledger.tsv・FR-14 ②）。
+# と同方式）。v1.1 では本スクリプト（このインストーラ）が配置集合の正本であり、
+# 台帳 core/data/ledger.tsv はそれを検査するだけ（ledger-tool.sh check ⑦が、全部入り
+# の組立が実際に生成・配置した結果＝settings.json の全フック command・LaunchAgent
+# の起動対象と突合する＝FR-14 ②）。台帳から配置を駆動する（台帳駆動化）のは v1.2。
 #
 # 冪等（再実行安全）: 既存の「実ファイル」（symlinkでないもの）は初回だけ
 # "<dest>.pre-aienv.bak" へ退避してから symlink に置き換える。バックアップは
