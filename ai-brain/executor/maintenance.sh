@@ -36,14 +36,9 @@ SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 source "$SCRIPT_DIR/../../core/executor/pid-lock.sh"
 # shellcheck source=core/executor/status-file.sh
 source "$SCRIPT_DIR/../../core/executor/status-file.sh"
-# macOS 通知 lib は無ければ飛ばす（通知を送らずログだけ＝AI Brain と Core だけでもメンテは動く・v1.1 設計 §5.4）。
-NOTIFY_LIB="$SCRIPT_DIR/../../notify/connect/macos/macos-notify.sh"
-if [[ -r "$NOTIFY_LIB" ]]; then
-  # shellcheck source=notify/connect/macos/macos-notify.sh
-  source "$NOTIFY_LIB"
-else
-  notify_macos() { echo "[maintenance] 通知 lib が無いため通知を送りません: $1 — $2"; }
-fi
+# 異常の知らせは Core の共通部品だけを使う（口が無ければ自分のログへ 1 行＝v1.2 設計 §2.2）。
+# shellcheck source=core/executor/notice.sh
+source "$SCRIPT_DIR/../../core/executor/notice.sh"
 
 : "${VAULT:=$HOME/Data/obsidian}"
 : "${AIENV_REPO:=$HOME/work/takumi009-ai-env}"
@@ -445,7 +440,7 @@ fi
 if [[ ! "$MAINTENANCE_STALE_LOCK_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "[maintenance] FAIL: MAINTENANCE_STALE_LOCK_SECONDSが正の整数ではありません: '${MAINTENANCE_STALE_LOCK_SECONDS}'" >&2
   write_last_result "fail" "MAINTENANCE_STALE_LOCK_SECONDSの設定が不正です（${MAINTENANCE_STALE_LOCK_SECONDS}）"
-  notify_macos "maintenance.sh 異常終了" "MAINTENANCE_STALE_LOCK_SECONDSの設定が不正なため中断しました: ${MAINTENANCE_STALE_LOCK_SECONDS}"
+  notice_call log alert "maintenance.sh 異常終了" "MAINTENANCE_STALE_LOCK_SECONDSの設定が不正なため中断しました: ${MAINTENANCE_STALE_LOCK_SECONDS}"
   exit 1
 fi
 
@@ -470,7 +465,7 @@ if ! write_run_record running; then
   # それでも書ける環境（started_atの書込みだけがたまたま失敗した等）では
   # 次回起動時のヘルス行に反映させたい。
   write_last_result "fail" "last-run.jsonのstarted_at更新に失敗しました"
-  notify_macos "maintenance.sh 異常終了" "last-run.jsonへの書込みに失敗したため中断しました。詳細: $RUN_DIR"
+  notice_call log alert "maintenance.sh 異常終了" "last-run.jsonへの書込みに失敗したため中断しました。詳細: $RUN_DIR"
   exit 1
 fi
 
@@ -633,12 +628,12 @@ _maintenance_lock_acquire_guard() {
     add_anomaly phase0-lock fail "Phase0: Vault書込ロックの取得に失敗しました（回収ミューテックス競合が解消しませんでした・status=${lock_word}・rc=${rc}。詳細: ${VAULT_WRITER_LOCK_FILE}.reclaim）"
     write_last_result "fail" "Vault書込ロックの取得に失敗しました（回収ミューテックス競合が解消しませんでした。詳細: ${VAULT_WRITER_LOCK_FILE}.reclaim）"
     write_completed_record
-    notify_macos "maintenance.sh 異常終了" "Vault書込ロックの取得に失敗したため中断しました。手動確認: rmdir ${VAULT_WRITER_LOCK_FILE}.reclaim"
+    notice_call log alert "maintenance.sh 異常終了" "Vault書込ロックの取得に失敗したため中断しました。手動確認: rmdir ${VAULT_WRITER_LOCK_FILE}.reclaim"
   else
     add_anomaly phase0-lock fail "Phase0: Vault書込ロックの取得区間で終了しましたがロック状態が不明です（status_file=${MAINTENANCE_LOCK_STATUS_FILE} が読めない・rc=${rc}）"
     write_last_result "fail" "Vault書込ロックの取得区間で終了しましたがロック状態が不明です（${MAINTENANCE_LOCK_STATUS_FILE}）"
     write_completed_record
-    notify_macos "maintenance.sh 異常終了" "Vault書込ロックの取得区間で終了しましたがロック状態が不明です。詳細: $RUN_DIR"
+    notice_call log alert "maintenance.sh 異常終了" "Vault書込ロックの取得区間で終了しましたがロック状態が不明です。詳細: $RUN_DIR"
   fi
 }
 MAINTENANCE_LOCK_ACQUIRE_GUARD_ACTIVE=1
@@ -677,7 +672,7 @@ if [[ "$BACKUP0_RESULT" != "OK 0" ]]; then
   add_anomaly phase0-backup fail "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）" "$RUN_DIR/backup0-stderr.log"
   write_last_result "fail" "Phase0: 直前スナップショット(backup-vault.sh)の起動自体に失敗しました（${BACKUP0_RESULT}）"
   write_completed_record
-  notify_macos "maintenance.sh 異常終了" "Phase0のバックアップ起動に失敗したため中断しました。詳細: $RUN_DIR"
+  notice_call log alert "maintenance.sh 異常終了" "Phase0のバックアップ起動に失敗したため中断しました。詳細: $RUN_DIR"
   exit 1
 fi
 case "$BACKUP0_STATUS_WORD" in
@@ -698,7 +693,7 @@ case "$BACKUP0_STATUS_WORD" in
     add_anomaly phase0-backup fail "Phase0: 直前スナップショット(backup-vault.sh)が異常終了しました（status=${BACKUP0_STATUS_WORD}）" "$RUN_DIR/backup0-stderr.log"
     write_last_result "fail" "Phase0: 直前スナップショット(backup-vault.sh)が異常終了しました（status=${BACKUP0_STATUS_WORD}）"
     write_completed_record
-    notify_macos "maintenance.sh 異常終了" "Phase0のバックアップに失敗したため中断しました。詳細: $RUN_DIR"
+    notice_call log alert "maintenance.sh 異常終了" "Phase0のバックアップに失敗したため中断しました。詳細: $RUN_DIR"
     exit 1
     ;;
 esac
@@ -1088,7 +1083,7 @@ write_completed_record
 # --- 異常時のみmacOS通知（正常時は通知しない＝本人「通知は見ていない」指摘） ---
 if [[ "${#ANOMALIES[@]}" -gt 0 ]]; then
   SUMMARY_FOR_NOTIFY="$(printf '%s; ' "${ANOMALIES[@]}")"
-  notify_macos "maintenance.sh 異常あり" "${SUMMARY_FOR_NOTIFY}詳細: $RUN_DIR"
+  notice_call log alert "maintenance.sh 異常あり" "${SUMMARY_FOR_NOTIFY}詳細: $RUN_DIR"
 fi
 
 # --- 30日超過の実行ディレクトリを削除（日付ディレクトリのmtime判定） ---

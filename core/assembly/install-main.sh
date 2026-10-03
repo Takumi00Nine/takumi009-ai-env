@@ -911,8 +911,8 @@ link team/connect/claude-code/inprocess-gate.sh "$HOME/.claude/hooks/inprocess-g
 link ai-brain/connect/claude-code/vault-write-gate.sh "$HOME/.claude/hooks/vault-write-gate.sh"
 # 使用率の毎発言注入(UserPromptSubmit)。SessionStart側と同じ共有関数を使う。
 link usage/executor/usage-inject.sh "$HOME/.claude/hooks/usage-inject.sh"
-# 📣 通知取次 v1（2026-09-22）: 入力時に code27-call の未応答の呼び出しを全消去する（UserPromptSubmit）。
-link notify/connect/code27/code27-call-clear.sh "$HOME/.claude/hooks/code27-call-clear.sh"
+# 本人の入力の検知（UserPromptSubmit）: 入力時に「応答」を知らせる（v1.2＝届け先は台帳の「知らせ」列・ライブ名は不変）。
+link core/connect/claude-code/prompt-answer.sh "$HOME/.claude/hooks/code27-call-clear.sh"
 
 # 前提修正 P-2（設計§2）: 職種定義の配布結果を必ず報告する。
 # ①新しく配置した定義（初回未配置）②repoから消えた定義へのdangling symlinkの
@@ -974,7 +974,7 @@ if [ "$DRY_RUN" != "1" ]; then
            "$DIR/core/assembly/check-sub-update.sh" "$DIR/core/connect/claude-code/context-size-warn.sh" \
            "$DIR/team/connect/claude-code/agent-model-guard.sh" \
            "$DIR/team/connect/claude-code/inprocess-gate.sh" "$DIR/ai-brain/connect/claude-code/vault-write-gate.sh" \
-           "$DIR/usage/executor/usage-inject.sh" "$DIR/notify/connect/code27/code27-call-clear.sh" \
+           "$DIR/usage/executor/usage-inject.sh" "$DIR/core/connect/claude-code/prompt-answer.sh" \
            "$DIR/dock/executor/cmux-task-model.sh" "$DIR/dock/executor/cmux-next-model.sh" \
            "$DIR/dock/executor/cmux-task-declare.sh"
   # 締めレビュー2巡目 #2対応（2026-09-14）: agent-model-guard.sh専用の

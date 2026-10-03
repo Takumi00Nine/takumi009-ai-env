@@ -22,7 +22,7 @@ claude/hooks/delegation-gate-v2.sh	team/connect/claude-code/delegation-gate-v2.s
 claude/hooks/bash-danger-gate.sh	core/connect/claude-code/bash-danger-gate.sh	分割	転送
 claude/hooks/bash-danger-gate.sh	team/connect/claude-code/codex-direct-call-gate.sh	分割	-
 claude/hooks/usage-inject.sh	usage/executor/usage-inject.sh	移動	転送
-claude/hooks/code27-call-clear.sh	notify/connect/code27/code27-call-clear.sh	移動	転送
+claude/hooks/code27-call-clear.sh	core/connect/claude-code/prompt-answer.sh	移動	転送
 claude/hooks/dock-pane-resolve.sh	dock/executor/dock-pane-resolve.sh	移動	転送
 claude/hooks/bash-policy-gate.sh	core/connect/claude-code/bash-policy-gate.sh	移動	転送
 claude/hooks/context-size-warn.sh	core/connect/claude-code/context-size-warn.sh	移動	転送

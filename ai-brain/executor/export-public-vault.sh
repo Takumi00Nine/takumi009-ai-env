@@ -51,7 +51,11 @@ source "$SCRIPT_DIR/personal-link-check.sh"
 
 : "${VAULT:=$HOME/Data/obsidian}"
 : "${AIENV_REPO:=$HOME/work/takumi009-ai-env}"
-: "${NGWORDS_FILE:=$SCRIPT_DIR/../../scripts/ngwords.txt}"  # 私的な NG 語定義（git 管理外）の置き場は旧来の scripts/ のまま
+# NG 語定義（私的・git 管理外）の既定の置き場は core/executor/ngwords-path.sh が解決する（audit.sh と共有・v1.2 D-7）。
+# 旧既定にだけあるときは「移す 1 コマンド」を標準エラーに出して止まる。
+# shellcheck source=core/executor/ngwords-path.sh
+source "$SCRIPT_DIR/../../core/executor/ngwords-path.sh"
+ngwords_resolve "$SCRIPT_DIR/../.." || exit 1
 
 VAULT_PUBLIC="$AIENV_REPO/ai-brain/data/vault-public"
 
