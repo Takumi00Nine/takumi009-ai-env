@@ -22,6 +22,12 @@ REAL_AGENTS_DIR="$REPO_ROOT/team/rules/agents"
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
+
+# AC-5（1 機能を除いた木＝FX-9）: 他機能の鍵が台帳に無い（lookup が rc 1＝鍵なし）ときだけ、その機能の実体を
+# 使う検査を skip する（`skip - <理由>` を 1 行・PASS/FAIL に数えない）。rc 0／2／3 は今までどおり実行する。
+# 鍵 ai-brain.write-gate なし＝子設定に Vault の柵を載せないのが仕様（設計 §5.6）＝「載る」側の検査だけを skip する。
+key_absent() { bash "$REPO_ROOT/core/assembly/ledger-tool.sh" lookup "$1" >/dev/null 2>&1; [ "$?" -eq 1 ]; }
+skip_case() { echo "  skip - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
 assert_eq() {
@@ -485,7 +491,9 @@ EOF
   new_fixture
   run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g1 --model-def t-sonnet-high
   s_impl="$(stub_settings_json)"
-  assert_contains "child_settings_has_vault_gate_for_non_scribe" "$s_impl" "vault-write-gate.sh"
+  if key_absent ai-brain.write-gate; then skip_case "child_settings_has_vault_gate_for_non_scribe（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_contains "child_settings_has_vault_gate_for_non_scribe" "$s_impl" "vault-write-gate.sh"
+  fi
 
   new_fixture
   run_wrapper --role vault-scribe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g2 --model-def sonnet-noeffort
@@ -979,6 +987,9 @@ echo "=== 設計固有の失敗経路: warnings_go_to_stderr_only ==="
 
 echo "=== 設計固有の失敗経路: vault_gate_denies_ai_folders ==="
 {
+if key_absent ai-brain.write-gate; then
+  skip_case "vault_gate_denies_ai_folders（AI Brain の鍵 ai-brain.write-gate なし）"
+else
   new_fixture
   VAULT_TARGET="$HOME/Data/obsidian/Knowledge/vg-test.md"
   mkdir -p "$(dirname "$VAULT_TARGET")"
@@ -991,6 +1002,7 @@ echo "=== 設計固有の失敗経路: vault_gate_denies_ai_folders ==="
   in2="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"file_path":sys.argv[1]},"cwd":sys.argv[2]}))' "$NONVAULT_TARGET" "$WORK")"
   out2="$(printf '%s' "$in2" | bash "$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh")"
   assert_true "vault_gate_denies_ai_folders: 配下でないパスは素通り" "$([ -z "$out2" ] && echo 1 || echo 0)"
+fi
 }
 
 # ============================================================
@@ -1067,7 +1079,9 @@ echo "=== RC-X1. child-settings 直叩き: 宣言の 4 状態（なし／有効�
 
   run_child_settings decl-none "$RCX_DIR"
   assert_eq "RC-X1 decl-none: exit 0" "0" "$CS_RC"
-  assert_eq "RC-X1 decl-none: vault-write-gate エントリ 1 件" "1" "$(count_vault_gate_entries "$CS_STDOUT")"
+  if key_absent ai-brain.write-gate; then skip_case "RC-X1 decl-none: vault-write-gate エントリ 1 件（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_eq "RC-X1 decl-none: vault-write-gate エントリ 1 件" "1" "$(count_vault_gate_entries "$CS_STDOUT")"
+  fi
 
   for pair in "decl-bad:VAULT_WRITE_DECLARATION_INVALID" \
               "decl-dup:VAULT_WRITE_DECLARATION_DUPLICATE" \
@@ -1110,7 +1124,9 @@ echo "=== RC-X3. ラッパー経由: 実定義の複製＋probe（宣言なし�
   run_wrapper --role zz-probe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-rcx3 --model-def t-sonnet-high
   assert_eq "RC-X3: exit 0" "0" "$RC"
   assert_eq "RC-X3: --agents のトップキー={zz-probe}" "zz-probe" "$(stub_arg_after --agents | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
-  assert_eq "RC-X3: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  if key_absent ai-brain.write-gate; then skip_case "RC-X3: --settings に vault-write-gate ちょうど 1 件（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_eq "RC-X3: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  fi
   assert_eq "RC-X3: --allowedTools=Read" "Read" "$(stub_arg_after --allowedTools)"
 }
 
@@ -1126,7 +1142,9 @@ echo "=== RC-X4. ラッパー経由: probe を zz-probe-b へ改名（削除＋�
   run_wrapper --role zz-probe-b --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-rcx4 --model-def t-sonnet-high
   assert_eq "RC-X4: exit 0" "0" "$RC"
   assert_eq "RC-X4: --agents のトップキー={zz-probe-b}" "zz-probe-b" "$(stub_arg_after --agents | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin).keys())))')"
-  assert_eq "RC-X4: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  if key_absent ai-brain.write-gate; then skip_case "RC-X4: --settings に vault-write-gate ちょうど 1 件（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_eq "RC-X4: --settings に vault-write-gate ちょうど 1 件" "1" "$(count_vault_gate_entries "$(stub_settings_json)")"
+  fi
   assert_eq "RC-X4: --allowedTools=Read" "Read" "$(stub_arg_after --allowedTools)"
 }
 
@@ -1146,7 +1164,9 @@ echo "=== RC-X5. 実定義の全件: vault_declared_writable の真偽と child-
       False) want=1 ;;
       *)     want="(vault_declared_writable failed: $declared)" ;;
     esac
-    assert_eq "RC-X5 $role: 宣言=$declared ↔ vault-write-gate エントリ $want 件" "$want" "$(count_vault_gate_entries "$CS_STDOUT")"
+    if [ "$want" = "1" ] && key_absent ai-brain.write-gate; then skip_case "RC-X5 $role: 宣言と vault-write-gate エントリの件数（AI Brain の鍵 ai-brain.write-gate なし）"; else
+      assert_eq "RC-X5 $role: 宣言=$declared ↔ vault-write-gate エントリ $want 件" "$want" "$(count_vault_gate_entries "$CS_STDOUT")"
+    fi
   done
   assert_true "RC-X5: 実定義が 1 件以上ある（空虚な真の禁止）" "$([ "$rcx5_n" -ge 1 ] && echo 1 || echo 0)"
 }

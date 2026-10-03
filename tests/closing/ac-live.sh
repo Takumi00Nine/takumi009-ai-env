@@ -86,10 +86,9 @@ ac_8() {
   cl_py settings-cmp "$od/base.settings.n.json" "$od/new.settings.n.json" > "$od/settings-cmp.txt" || e3="$e3 settings.json"
   while IFS= read -r c; do
     [ -n "$c" ] || continue
-    p="${c#EXTRA }"; p="${p%% *}"; p="${p//\$HOME/$WORK/home}"
-    # 新 HOME は ac8_side new の後も残っている
-    p="$(cl_realpath "$p")"; p="${p#"$(cl_realpath "$WT1")"/}"
-    cl_py moves-split-new "$moves" "$p" || e3="$e3 登録:${c#EXTRA }"
+    # FX-1 にだけある登録は、許容する追加のライブ名（closing.conf CLOSING_AC8_ALLOWED_EXTRA）だけ ok
+    p="${c#EXTRA }"; p="${p%% *}"; p="${p##*/}"
+    case " $CLOSING_AC8_ALLOWED_EXTRA " in *" $p "*) ;; *) e3="$e3 登録:${c#EXTRA }" ;; esac
   done <<EOF
 $(grep '^EXTRA ' "$od/settings-cmp.txt")
 EOF

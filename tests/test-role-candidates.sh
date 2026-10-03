@@ -33,6 +33,11 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
+# AC-5（1 機能を除いた木＝FX-9）: 他機能の鍵が台帳に無い（lookup が rc 1＝鍵なし）ときだけ、その機能の実体を
+# 使うケースを skip する（`skip - <理由>` を 1 行・PASS/FAIL に数えない）。rc 0／2／3 は今までどおり実行する。
+key_absent() { bash "$REPO_ROOT/core/assembly/ledger-tool.sh" lookup "$1" >/dev/null 2>&1; [ "$?" -eq 1 ]; }
+skip_case() { echo "  skip - $1"; }
+
 assert_eq() {
   local desc="$1" expected="$2" actual="$3"
   if [[ "$expected" == "$actual" ]]; then pass "$desc"; else
@@ -185,6 +190,9 @@ echo "=== AC-7: 未参照の定義を出さない ==="
 
 echo "=== AC-8: okが2条件だけで決まる（枠 fixture／resolver fixture／欠損 fixture） ==="
 {
+  if key_absent usage.snapshot; then
+    skip_case "AC-8(枠): 使用率の実値（h5）で ok／no が決まる（Usage の鍵 usage.snapshot なし）"
+  else
   # --- 枠 fixture: claude-subscriptionのfive_hourを0にする ---
   zero_out="$(RCALL "$ZERO_H5_CACHE")"
   leader_row="$(printf '%s\n' "$zero_out" | awk -F'\t' '$1=="leader"{print}')"
@@ -197,6 +205,7 @@ echo "=== AC-8: okが2条件だけで決まる（枠 fixture／resolver fixture�
   assert_eq "AC-8(枠): implementer/codex-high(external-cli枠)は無関係でok" "ok" "$(printf '%s' "$impl_cli_row" | awk -F'\t' '{print $5}')"
   assert_eq "AC-8(枠): verifier(external-cli枠)は無関係でok" "ok" "$(printf '%s' "$verifier_row" | awk -F'\t' '{print $5}')"
   assert_eq "AC-8(枠): leaderのh5列が0" "0" "$(printf '%s' "$leader_row" | awk -F'\t' '{print $6}')"
+  fi
 
   # --- resolver fixture: 健全キャッシュ下でBedrock候補(system-designer)だけがno ---
   healthy_out="$(RCALL "$HEALTHY_CACHE")"

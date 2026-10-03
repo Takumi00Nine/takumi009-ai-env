@@ -21,6 +21,11 @@ fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 MARKER_DIR="$WORK/markers"
 mkdir -p "$MARKER_DIR"
 
+# AC-5（1 機能を除いた木＝FX-9）: 他機能の鍵が台帳に無い（lookup が rc 1＝鍵なし）ときだけ、その機能の実体を
+# 使うケースを skip する（`skip - <理由>` を 1 行・PASS/FAIL に数えない）。rc 0／2／3 は今までどおり実行する。
+key_absent() { bash "$REPO_ROOT/core/assembly/ledger-tool.sh" lookup "$1" >/dev/null 2>&1; [ "$?" -eq 1 ]; }
+skip_case() { echo "  skip - $1"; }
+
 run_guard() {
   # 締めレビュー1巡目 #1対応: ホスト環境に偶然 CLAUDE_CODE_SUBAGENT_MODEL_FORCE /
   # CLAUDE_CODE_SUBAGENT_MODEL が残っていると、新設したEF検査以外の既存ケース
@@ -264,6 +269,9 @@ echo "=== AC-10②(裁定A): vault_folders_literal_not_in_guard_common（Vault6�
     fail_case "guard_common.sh にVault6フォルダのliteralが無い (hits=${folder_hits:-?})"
   fi
 
+if key_absent ai-brain.write-gate; then
+  skip_case "AC-10②: vault-write-gate.sh の case/esac 複製・共有関数の呼び出し（AI Brain の鍵 ai-brain.write-gate なし）"
+else
   # delegation-gate-v2.sh・vault-write-gate.shは、6フォルダを判定する
   # 独自のcase/esacブロック（判定listの複製）を持たない。判定は
   # guard_is_vault_ai_pathの呼び出しに委ねている（デリー文面のプレーン
@@ -298,6 +306,7 @@ PY
   else
     fail_case "delegation-gate-v2.sh・vault-write-gate.shがguard_is_vault_ai_pathを呼ぶ"
   fi
+fi
 }
 
 echo "=== I1-M3(検証1巡目・I1-B1回帰防止): symlink経由の起動でもagent-model-guard.shの結果がrepoパス直叩きと一致する ==="
@@ -337,6 +346,9 @@ echo "=== I1-M3(検証1巡目・I1-B1回帰防止): symlink経由の起動でも
 
 echo "=== I1-M3(検証1巡目・vault-write-gate.sh・test-claude-exec.shには入れずここに置く): symlink経由の起動でもrepoパス直叩きと結果が一致する ==="
 {
+if key_absent ai-brain.write-gate; then
+  skip_case "I1-M3: vault-write-gate.sh の symlink 経由の一致（AI Brain の鍵 ai-brain.write-gate なし）"
+else
   # vault-write-gate.shは設計§9.1の vault_gate_denies_ai_folders が
   # tests/test-claude-exec.sh の担当だが、同ファイルは担当Cの担当範囲外
   # （tests/test-claude-exec.shは触らない）のため、symlink回帰ケースは
@@ -377,6 +389,7 @@ echo "=== I1-M3(検証1巡目・vault-write-gate.sh・test-claude-exec.shには�
   else
     fail_case "I1-M3: vault-write-gate.sh symlink経由の素通しがrepoパス直叩きと不一致 (direct_rc=$direct_rc2 link_rc=$link_rc2)"
   fi
+fi
 }
 
 echo "=== I2-m5(検証2巡目): source失敗時のfail-close分岐そのものに恒久テストを足す（lib/を持たない実体ディレクトリへフックをコピーして起動） ==="
@@ -402,6 +415,9 @@ echo "=== I2-m5(検証2巡目): source失敗時のfail-close分岐そのもの�
     fail_case "I2-m5: agent-model-guard.shのfail-closeが働かない (rc=$RUN_RC out=[$(cat "$WORK/nolib-guard.out" 2>/dev/null)] err=[$(cat "$WORK/nolib-guard.err" 2>/dev/null)])"
   fi
 
+if key_absent ai-brain.write-gate; then
+  skip_case "I2-m5: vault-write-gate.sh の fail-close（AI Brain の鍵 ai-brain.write-gate なし）"
+else
   # vault-write-gate.sh: lib/無しでコピー起動するとdeny(GUARD_COMMON_UNREADABLE)・exit 0（素通しにならない）
   VAULT_GATE="$REPO_ROOT/ai-brain/connect/claude-code/vault-write-gate.sh"
   NOLIB_VG_DIR="$WORK/nolib-vault-write-gate"
@@ -418,6 +434,7 @@ echo "=== I2-m5(検証2巡目): source失敗時のfail-close分岐そのもの�
   else
     fail_case "I2-m5: vault-write-gate.shのfail-closeが働かない (rc=$RUN_RC out=[$(cat "$WORK/nolib-vg.out" 2>/dev/null)] err=[$(cat "$WORK/nolib-vg.err" 2>/dev/null)])"
   fi
+fi
 }
 
 echo "=== RC-G（職種の追加・削除を設定だけで・roles-config-only 設計 v1.2 §2・§4.2） ==="

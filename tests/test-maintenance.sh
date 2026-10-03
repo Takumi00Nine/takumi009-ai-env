@@ -84,6 +84,11 @@ validate_temp_dir "$WORK_ROOT" "WORK_ROOT"
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
+
+# AC-5（1 機能を除いた木＝FX-9）: 他機能の鍵が台帳に無い（lookup が rc 1＝鍵なし）ときだけ、その機能の実体を
+# 使うケースを skip する（`skip - <理由>` を 1 行・PASS/FAIL に数えない）。rc 0／2／3 は今までどおり実行する。
+key_absent() { bash "$REPO_ROOT/core/assembly/ledger-tool.sh" lookup "$1" >/dev/null 2>&1; [ "$?" -eq 1 ]; }
+skip_case() { echo "  skip - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
 assert_eq() {
@@ -1312,7 +1317,9 @@ echo "=== 39c. AC-104: MAINTENANCE_TASK_PRUNE_CMDを上書きしない既定経�
   # 検証2巡目 MINOR #33: REAL_CMUX_TASK_DECLAREはREPO_ROOT基準（このワーク
   # ツリー自身）なので、SKIPだと将来のリネーム等で本ケースが無言で落ちる
   # （#12と同型の事故）。無ければfail_caseで異常として可視化する。
-  if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
+  if key_absent dock.task-declare; then
+    skip_case "AC-104(39c・既定経路): 実物 cmux-task-declare.sh を使う（Dock の鍵 dock.task-declare なし）"
+  elif [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
     fail_case "AC-104(39c・既定経路): 実物cmux-task-declare.shが見つかりません（${REAL_CMUX_TASK_DECLARE}）"
   else
     # 既定の入口（偽 repo の台帳で鍵 dock.task-declare が指すパス）へ実物をコピーして置く。
@@ -1432,7 +1439,9 @@ echo "=== 40. 系統①(設計書§16.6.2): 実cmux-task-declare.shをmaintenanc
   # 無言で落ちる（#12で起きた事故と同じ形）。REAL_CMUX_TASK_DECLAREは本ファイル
   # 冒頭で必ず解決される前提のパスなので、無ければ検査すべきものが検査でき
   # ていない異常としてfail_caseにする。
-  if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
+  if key_absent dock.task-declare; then
+    skip_case "系統①(40): 実物 cmux-task-declare.sh を使う（Dock の鍵 dock.task-declare なし）"
+  elif [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
     fail_case "系統①(40): 実物cmux-task-declare.shが見つかりません（${REAL_CMUX_TASK_DECLARE}）"
   else
     # --- 隔離cmuxスタブ: window "1" に生存UUIDが1件だけ含まれる ---
@@ -1511,7 +1520,9 @@ echo "=== 41. 系統①(設計書§16.6.2): 実cmux-task-declare.shの接続に�
   setup_test_env "$T"
   LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
   # 検証2巡目 MINOR #33（case 40と同じ理由）: SKIPをやめてfail_caseにする。
-  if [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
+  if key_absent dock.task-declare; then
+    skip_case "系統①(41): 実物 cmux-task-declare.sh を使う（Dock の鍵 dock.task-declare なし）"
+  elif [[ ! -x "$REAL_CMUX_TASK_DECLARE" ]]; then
     fail_case "系統①(41): 実物cmux-task-declare.shが見つかりません（${REAL_CMUX_TASK_DECLARE}）"
   else
     CMUX_STUB_DIR="$T/real-cmux-stub"

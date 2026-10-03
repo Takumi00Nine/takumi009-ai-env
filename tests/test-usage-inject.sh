@@ -106,9 +106,9 @@ out="$(printf '{}' | AIENV_USAGE_CACHE_DIR="$CACHE" AIENV_USAGE_NOW="$NOW" /bin/
 assert_eq "symlink経由でも同一出力" "$expected" "$out"
 
 echo "=== 5. settings登録とinstaller配置を静的突合する ==="
-last_command="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/core/assembly/settings.json')); print([h['command'] for g in d['hooks']['UserPromptSubmit'] for h in g['hooks']][-1])")"
-assert_eq "UserPromptSubmit末尾に登録" '$HOME/.claude/hooks/usage-inject.sh' "$last_command"
-settings_fields="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/core/assembly/settings.json')); h=d['hooks']['UserPromptSubmit'][0]['hooks'][-1]; print(h['timeout'],h['statusMessage'])")"
+usage_count="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/core/assembly/settings.json')); cmds=[h['command'] for g in d['hooks']['UserPromptSubmit'] for h in g['hooks']]; print(cmds.count('\$HOME/.claude/hooks/usage-inject.sh'))")"
+assert_eq "UserPromptSubmitにusage-inject.shが1回登録" "1" "$usage_count"
+settings_fields="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/core/assembly/settings.json')); hs=[h for g in d['hooks']['UserPromptSubmit'] for h in g['hooks'] if h['command']=='\$HOME/.claude/hooks/usage-inject.sh']; print(hs[0]['timeout'],hs[0]['statusMessage'])")"
 assert_eq "timeout/statusMessageが指定値" "5 使用率を注入中" "$settings_fields"
 install_line="$(grep '^[[:space:]]*link usage/executor/usage-inject\.sh[[:space:]]' "$REPO_ROOT/core/assembly/install-main.sh" || true)"
 assert_contains "install-main.shにlink配置あり" "$install_line" 'usage-inject.sh'

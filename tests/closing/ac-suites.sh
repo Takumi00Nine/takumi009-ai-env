@@ -97,7 +97,7 @@ ac_2() {
   if [ "$rc3" = ok ] && [ "$rc4" = ok ]; then cl_result AC-2 ok "$m3 / $m4"; else cl_result AC-2 NG "$m3 / $m4"; fi
 }
 
-# AC-5 ① FX-9a〜d（1 機能のフォルダとそのスイートを除く）で残りの Core 以外のスイート全件 exit 0
+# AC-5 ① FX-9a〜d（1 機能のフォルダ・そのスイート・台帳のその機能の行を除く）で残りの Core 以外のスイート全件 exit 0
 ac_5() {
   local od="$OUT/ac5" fn wt letter=a list bad="" tot=0 failed=0 f p
   mkdir -p "$od"
@@ -109,13 +109,17 @@ ac_5() {
     list=""
     while IFS="$(printf '\t')" read -r f p; do
       [ -n "$p" ] || continue
-      if [ "$f" = "$fn" ]; then rm -f "$wt/$p"; continue; fi
+      if [ "$f" = "$fn" ]; then rm -f "$wt/$p"; continue; fi   # その機能のスイートを除く
       [ "$f" = "$CLOSING_CORE_FN" ] && continue
       list="$list $p"
     done <<EOF
 $(cl_ledger_suites "$wt")
 EOF
     rm -rf "${wt:?}/$fn"
+    # 台帳からその機能の行（部品・スイート・Notify 所在）を除く（移動表は触らない）
+    awk -F'\t' -v fn="$fn" -v k1="$CLOSING_LEDGER_PART_KIND" -v k2="$CLOSING_LEDGER_SUITE_KIND" -v k3="$CLOSING_LEDGER_NOTIFY_KIND" \
+      '!($0 !~ /^#/ && ($1 == k1 || $1 == k2 || $1 == k3) && $3 == fn)' "$wt/$CLOSING_LEDGER_REL" > "$wt/$CLOSING_LEDGER_REL.tmp" \
+      && mv "$wt/$CLOSING_LEDGER_REL.tmp" "$wt/$CLOSING_LEDGER_REL"
     # shellcheck disable=SC2086
     cl_run_suites "$wt" "$od/fx9$letter" $list
     tot=$((tot + $(printf '%s\n' $list | grep -c .)))
