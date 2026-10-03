@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-09-19
+updated: 2026-10-03
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -30,7 +30,7 @@ aliases:
 - **v7 schema**は代替配役の行（`fallback` 接頭辞）と禁止モデル列挙の固定キーを撤去した（2026-09-16）。本命が使えないときの選び直しはリーダーが同じ行の候補から行い、禁止は「候補に書かない」で表す（[[Decisions/2026-09-08-model-definitions-file]] の規則5・6・9 は撤回）。
 - **v4 schema**（基本形＝配役表解凍-設計-2026-09-01.md §3.2 が正本。v3 は P3 段階4 で `no_read_paths` を追加、v4 は 3モード体制で `team_mode` を追加・能力軸 `reviewer` を廃止・`execution` の enum を `external-cli`／`external-api` に改めた＝[[Decisions/2026-09-07-three-team-mode-rollout]]）。schema 6 未満は一律拒否（v1 委譲経路は 2026-09-08 に撤去＝[[Decisions/2026-09-08-model-definitions-file]]）。v5 は能力軸を `team_mode`・`no_read_paths`・`machine_role` の3キーへ整理し、`machine_role` を新設した（[[Decisions/2026-09-07-profile-axes-consolidation]]）。
 - 配役は**職種を第一階層にしたインライン形式**（`role.<職種>: <状態> model=<定義名>[,<定義名>…]`）。代替は同じ行の2件目以降の候補で表す（機構は選ばない）。
-- **正本は repo の設定サンプル**（2026-09-08 本人決定）: `takumi009-ai-env` の `config/profile.md.sample`／`config/models.conf.sample`／`config/bedrock.env.sample`（実ファイル・値はメイン機の実値）が正本。本人が `~/.config/takumi009-ai-env/` へコピーして使う（`mkdir -p ~/.config/takumi009-ai-env && cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md` の要領。models.conf も同様・bedrock.env は Bedrock 機だけ）。サブ機はコピー後に `machine_role`（と必要なら `role.leader`）だけ書き換える。installer は実体が無いときだけ `config/profile.md.sample` を雛形としてコピーする（既存は壊さない）。symlink・同期処理は無い。
+- **正本は repo の設定サンプル**（2026-09-08 本人決定）: `takumi009-ai-env` の `team/data/profile.md.sample`／`team/data/models.conf.sample`／`team/connect/claude-code/bedrock.env.sample`（実ファイル・値はメイン機の実値）が正本。本人が `~/.config/takumi009-ai-env/` へコピーして使う（`mkdir -p ~/.config/takumi009-ai-env && cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md` の要領。models.conf も同様・bedrock.env は Bedrock 機だけ）。サブ機はコピー後に `machine_role`（と必要なら `role.leader`）だけ書き換える。installer は実体が無いときだけ `team/data/profile.md.sample` を雛形としてコピーする（既存は壊さない）。symlink・同期処理は無い。
 - 各キー・各状態のとりうる値は**本ノートの「書式ととりうる値」節に書く**（2026-09-16 本人指示＝サンプルと実体から説明コメントを除去して起動注入を軽量化。deprecated 2026-09-16＝旧「コメントに書く」2026-08-30 方針）。本文中で説明しない値は書かない。
 - `role.leader`はサンプル（メイン機の実値）では確定値のまま配布する。未確定・サブ機で変える場合は**installerの対話（U-1・設計§3.9）が実体側で確定させる**（2026-09-08 本人決定でサンプル＝雛形の unknown 前提は解消）。
 - 能力軸3キー（`team_mode`／`no_read_paths`／`machine_role`）。キー名・書式（`configured value=...`）は A-1 から変更していない（§3.2 の④）。`no_read_paths` は P3 段階4（schema_version 3）で追加。`vault_scope` は 2026-09-07 に撤去（[[Decisions/2026-09-07-retire-vault-scope-axis]]・schema は 4 のまま）。`inventory_source`／`vault_write`／`ui.user_call`／`git_role`／`web_verification` は 2026-09-07 に撤去・`machine_role` を新設（[[Decisions/2026-09-07-profile-axes-consolidation]]・schema 5）。
@@ -45,7 +45,7 @@ aliases:
 
 ## サンプル本文
 
-本文は repo の `config/profile.md.sample` を見る（正本・実ファイル）。
+本文は repo の `team/data/profile.md.sample` を見る（正本・実ファイル）。
 
 ## 確認手順（コピー後、機体ごとに見直す）
 
@@ -66,14 +66,14 @@ aliases:
 実測 2026-09-10（サブ機・schema 4→6）。`scripts/update-sub.sh` は実体プロファイルの `machine_role` を resolver で読み、`sub` と解決できたときだけ動く（解決失敗・行の欠落・旧 schema で unknown 扱い＝すべて拒否＝fail-closed）。プロファイルが旧版のままだと「このマシンはサブ機として登録されていません」「スキーマが旧版です」で止まるので、順序は次のとおり。
 
 1. `git pull --ff-only`（update-sub.sh でなく素の pull。旧プロファイルのままでは update-sub.sh が拒否するため）
-2. sample を実体へコピー: `cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp config/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は `profile.md.bak.v<旧版>-<日付>` に退避してから。権限 0600）
+2. sample を実体へコピー: `cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf`（既存の実体は `profile.md.bak.v<旧版>-<日付>` に退避してから。権限 0600）
 3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-high`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
 4. `scripts/update-sub.sh`（引数なし。pull→`install-sub.sh`→Preferences 再同期を毎回行う）。`AGENTS: dangling` が出たら表示されたファイルを削除。
 5. 確認: `python3 claude/hooks/lib/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
-6. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/work/takumi009-ai-env/cmux/`、描画側（Dock 常駐）は dotfiles の `~/work/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。
+6. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/work/takumi009-ai-env/dock/executor/`、描画側（Dock 常駐）は dotfiles の `~/work/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。
    - `cd ~/work/takumi009-ai-env && git pull --ff-only && scripts/install-main.sh`（供給側の実体を配置。ai-env 未導入機は Dock 側が縮退表示）
    - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は `scripts/install-sub.sh --with-dotfiles`）。install.sh が `~/.config/cmux/dock.json` の symlink・dock-guard LaunchAgent を整える。
    - cmux を再起動 → dock-guard が Usage／Project／Task／System の4枠へ再シードする。
-   - セッション中にリーダーが `~/work/takumi009-ai-env/cmux/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言はフック化しない＝[[Decisions/2026-09-09-cmux-session-todo-operation]]）。
+   - セッション中にリーダーが `~/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言はフック化しない＝[[Decisions/2026-09-09-cmux-session-todo-operation]]）。
 
 ⚠️ update-sub.sh の失敗文面は原因を「配役表の machine_role が sub でない」と示すが、実際の起点は「プロファイルが旧 schema で固定キーが unknown 扱い」でも同じ文面になる（resolver の stderr は捨てられる）。まず resolve を直接叩いて何が読めているかを見る。

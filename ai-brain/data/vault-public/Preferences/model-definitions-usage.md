@@ -1,6 +1,6 @@
 ---
 date: 2026-09-18
-updated: 2026-09-23
+updated: 2026-10-03
 tags: [preference, model, catalog, quick-reference]
 project: meta
 related:
@@ -17,7 +17,7 @@ aliases:
   - "モデル定義 用途"
 ---
 # モデル定義の用途早見表
-定義の正本は repo の `config/models.conf.sample`（コピー先 `~/.config/takumi009-ai-env/models.conf`）。
+定義の正本は repo の `team/data/models.conf.sample`（コピー先 `~/.config/takumi009-ai-env/models.conf`）。
 特性・経路の詳しい比較は [[Preferences/model-catalog]]。
 本ノートは「候補列からどれを選ぶか」を1行で引くための早見表＝機械は読まない（機械可読の属性拡張は 2026-09-18 に不採用）。候補列に優先度は無く、軽い依頼では軽い候補を選び、崩れたら重い候補へ戻す。
 - fable-max は本人の明示指示があるときだけ（[[Decisions/2026-09-21-fable-max-explicit-only]]）。fable-high は上流工程の候補として現状どおり。
@@ -41,6 +41,6 @@ aliases:
 
 legacy／bedrock-*／mantle-* 定義は 2026-09-19 に models.conf から削除（Bedrock・mantle のコードは休眠・将来サブ機で復活＝[[Decisions/2026-09-19-ai-env-optimization-rulings]]）。
 
-候補列の現行値は配役表（`config/profile.md.sample`）が正本。見直しの経緯＝[[Decisions/2026-09-18-cast-candidates-revision]]
+候補列の現行値は配役表（`team/data/profile.md.sample`）が正本。見直しの経緯＝[[Decisions/2026-09-18-cast-candidates-revision]]
 更新の掟＝配役表か models.conf を変えたら本ノートの該当行も同じ案件で直す。
 Codex 定義の effort は `max` まで通る（2026-09-18 実測・gpt-5.6-sol・受理と解決の両方を確認）。

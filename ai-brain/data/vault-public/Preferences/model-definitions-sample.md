@@ -1,6 +1,6 @@
 ---
 date: 2026-09-08
-updated: 2026-09-18
+updated: 2026-10-03
 tags: [preference, core, profile, sample, model]
 project: takumi009-ai-env
 related:
@@ -20,7 +20,7 @@ aliases:
 # モデル定義ファイル サンプル（定義名でモデルを参照する）
 
 ## 要点
-- **正本は repo の設定サンプル**（2026-09-08 本人決定）: `takumi009-ai-env` の `config/profile.md.sample`／`config/models.conf.sample`／`config/bedrock.env.sample`（実ファイル・値はメイン機の実値）が正本。本人が `~/.config/takumi009-ai-env/` へコピーして使う（`mkdir -p ~/.config/takumi009-ai-env && cp config/profile.md.sample ~/.config/takumi009-ai-env/profile.md` の要領。models.conf も同様・bedrock.env は Bedrock 機だけ）。サブ機はコピー後に `machine_role`（と必要なら `role.leader`）だけ書き換える。installer は実体が無いときだけ `config/profile.md.sample` を雛形としてコピーする（既存は壊さない）。symlink・同期処理は無い。
+- **正本は repo の設定サンプル**（2026-09-08 本人決定）: `takumi009-ai-env` の `team/data/profile.md.sample`／`team/data/models.conf.sample`／`team/connect/claude-code/bedrock.env.sample`（実ファイル・値はメイン機の実値）が正本。本人が `~/.config/takumi009-ai-env/` へコピーして使う（`mkdir -p ~/.config/takumi009-ai-env && cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md` の要領。models.conf も同様・bedrock.env は Bedrock 機だけ）。サブ機はコピー後に `machine_role`（と必要なら `role.leader`）だけ書き換える。installer は実体が無いときだけ `team/data/profile.md.sample` を雛形としてコピーする（既存は壊さない）。symlink・同期処理は無い。
 - 置き場＝`~/.config/takumi009-ai-env/models.conf`（コピー後の実体・機ごとに書く）。
 - **配役表の役割の行には属性を書かない**＝`role.<職種>: configured model=<定義名>[,<定義名>…]` だけ。provider・model ID・effort 等の属性はすべてこのファイル側に書く（正本＝[[Preferences/profile-sample]] から移設）。
 - ⚠️ **候補の並び順に優先度の意味は無い**（どれを使うかはリーダーがそのつど1つ選ぶ）。**例外はリーダー行だけで**、`settings.json` が値を1つしか持てないので**先頭の定義**を書き出す。これは1つに畳むための規則であって「先頭が最良」という意味ではない。
@@ -29,7 +29,7 @@ aliases:
 
 ## サンプル本文
 
-本文は repo の `config/models.conf.sample` を見る（正本・実ファイル）。
+本文は repo の `team/data/models.conf.sample` を見る（正本・実ファイル）。
 
 ## 確認手順（コピー後、機体ごとに見直す）
 

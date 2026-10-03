@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-09-23
+updated: 2026-10-03
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -17,7 +17,7 @@ aliases:
 2. ユーザーの呼び名を書かない。「ユーザー」「本人」等の中立表現を使う（ID「takumi009」は可）。
 3. Personal 配下への wiki link・Personal ノート名を書かない（他フォルダへのリンクは可）。
 4. ホーム配下の絶対パスを書かない（`~/` 表記＝Vault 全域の掟）。
-- Preferences 編集セッションの締めに `~/work/takumi009-ai-env/scripts/export-public-vault.sh` を実行（commit 自動・push は別途明示）。⚠️ 編集も export・commit もメイン機だけ（[[Preferences/core-workflow]] §5）。
+- Preferences 編集セッションの締めに `~/work/takumi009-ai-env/ai-brain/executor/export-public-vault.sh` を実行（commit 自動・push は別途明示）。⚠️ 編集も export・commit もメイン機だけ（[[Preferences/core-workflow]] §5）。
 ## SSOT の役割分担（ドリフト防止）
 - **Preferences＝今どう動くか／Decisions＝なぜ／Knowledge＝背景。** 判断は Preferences と Decisions を**ペアで**書く。現行値（設定値・状態）は Projects のみ。
 - 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を**通し読み**して同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録。

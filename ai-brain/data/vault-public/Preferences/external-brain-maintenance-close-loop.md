@@ -1,6 +1,6 @@
 ---
 date: 2026-09-21
-updated: 2026-09-21
+updated: 2026-10-03
 tags: [preference, external-brain, maintenance, health, fragments, procedure]
 project: external-brain
 related:
@@ -27,8 +27,8 @@ aliases:
 ## 2. 現在値を読む（着手時と各周の終わり）
 - 着手時＝直近の【外部脳ヘルス】注入ブロック（stage・items の主体と ok_when・maintenance）。⚠️ 注入は同セッション内では更新されない＝再実行後は下の口を読む。
 - 各周の終わり（次の 4 つを読む）:
-  1. 判定機の最新結果（items の主体 `actor`・`ok_when` を含む）＝SessionStart フックを手で 1 回実行して【外部脳ヘルス】行を読む: `echo '{"hook_event_name":"SessionStart","source":"startup"}' | ~/work/takumi009-ai-env/claude/hooks/bootstrap-vault.sh | grep '【外部脳ヘルス】'`（同セッションの注入は更新されないため、これが読み直しの口。観測記録が 1 件書かれる副作用は本番と同じ）。主体は判定機が種別から決める（棚卸しの種別はすべて `AI`・maintenance の失敗工程は工程ごと）。
-  2. Dock の外部脳行＝`~/work/takumi009-ai-env/cmux/cmux-next-model.sh --frame` の「外部脳」行（3 値 `OK`／`WARNING`／`ERROR`＋末尾「候補N件」）＝終了判定の値。
+  1. 判定機の最新結果（items の主体 `actor`・`ok_when` を含む）＝SessionStart フックを手で 1 回実行して【外部脳ヘルス】行を読む: `echo '{"hook_event_name":"SessionStart","source":"startup"}' | ~/work/takumi009-ai-env/core/connect/claude-code/session-start-compose.sh | grep '【外部脳ヘルス】'`（旧パスにも転送 symlink が置かれ当面は届く＝撤去時期は v1.2。合成器＝旧 bootstrap-vault.sh の主後継・同じ stdin で【外部脳ヘルス】行が出る。同セッションの注入は更新されないため、これが読み直しの口。観測記録が 1 件書かれる副作用は本番と同じ）。主体は判定機が種別から決める（棚卸しの種別はすべて `AI`・maintenance の失敗工程は工程ごと）。
+  2. Dock の外部脳行＝`~/work/takumi009-ai-env/dock/executor/cmux-next-model.sh --frame` の「外部脳」行（3 値 `OK`／`WARNING`／`ERROR`＋末尾「候補N件」）＝終了判定の値。
   3. 棚卸しの内訳＝`~/.claude/logs/vault-inventory/latest.json`（`actionable`・`items`）と同日のレポート `~/.claude/logs/vault-inventory/<日付>.md`（項目ごとの対象・種別・主体）＝次の周の対処対象の特定に使う（主体は上の 1 で読む）。
   4. 週次メンテの結果＝`~/.claude/logs/maintenance/last-run.json`（`run.status`・`completed.fully_ok`・`completed.steps`＝失敗した工程・`fragments_candidates`）。
 
@@ -36,8 +36,8 @@ aliases:
 1. 要対処項目のうち主体 `AI` のものを対処する（Vault 書込は記録職へ）。主体 `本人` の項目は診断と提示まで。
 2. 本人が昇格を明示したときだけ、昇格対応し記録職が元エントリへ `status: promoted → [[昇格先]]` の印を足す（[[Preferences/fragments-workflow]] §4 の手順①。締めコマンドはここでは実行しない）。指示が無ければ候補は触らず §4 の本人待ちへ。
 3. 本番経路を再実行する（この周で 1 回ずつ・順序固定）:
-   - 棚卸し系の対処をしたとき＝週次メンテの手動起動 `~/work/takumi009-ai-env/scripts/maintenance-kick.sh --wait`（`STATUS:completed` かつ `FULLY_OK:true` を確認）。
-   - 昇格対応をしたとき＝その後に締めコマンド `~/work/takumi009-ai-env/scripts/fragments-reviewed.sh` を 1 回（§4 の手順②。週次全体の再実行では候補は消えない＝数え始めが変わらないため、週次の後・最後に実行する）。
+   - 棚卸し系の対処をしたとき＝週次メンテの手動起動 `~/work/takumi009-ai-env/ai-brain/executor/maintenance-kick.sh --wait`（`STATUS:completed` かつ `FULLY_OK:true` を確認）。
+   - 昇格対応をしたとき＝その後に締めコマンド `~/work/takumi009-ai-env/ai-brain/executor/fragments-reviewed.sh` を 1 回（§4 の手順②。週次全体の再実行では候補は消えない＝数え始めが変わらないため、週次の後・最後に実行する）。
 4. §2 の 4 つの口を読み直す（§4 の手順③の Dock 確認を含む）。
 
 ## 4. 終端（3 種・語彙を固定する）
