@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v1.1 締めの実走ハーネス（要件 v1.4 §7 のうち、基準 worktree FX-2 や偽 zz-cli の配置が要り常設の一括実行に乗せないもの）。
+# v1.1 締めの実走ハーネス（要件 v1.5 §7・設計 v1.4 のうち、基準 worktree FX-2 や偽 zz-cli の配置が要り常設の一括実行に乗せないもの）。
 #   AC-2 ③④・AC-5 ①・AC-7・AC-8・AC-9・AC-10・AC-12（設計 §13・実装計画 §8）。
 #
 # 使い方: bash tests/closing/run-closing.sh <基準コミット> [<worktree>]

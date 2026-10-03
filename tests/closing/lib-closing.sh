@@ -15,6 +15,7 @@
 #    メイン機＝mkdir 設定置き場 → cp profile.md.sample・models.conf.sample → install-main → LaunchAgent 系 3 本。
 #    サブ機＝同じ cp（machine_role を sub に書き換え）→ install-sub。
 #    repo は README の clone 先（$HOME/${CLOSING_REPO_HOME_REL}）に置く＝worktree への symlink（FX-15・16 は実 clone）。
+#    定数は README の再実装なので、AC-8・AC-10 の冒頭で README（英日）の印の手順と突合する（cl_readme_check）。
 # 4. 実行環境（FX-6）＝env -i で HOME・PATH・TMPDIR・LANG・git の名乗り・SKIP_LAUNCHCTL=1・LAUNCHCTL_TIMEOUT_SECS=1 だけ渡す。
 #    PATH＝偽 launchctl・osascript・cmux（受けた引数を calls.log へ 1 行ずつ・exit 0）＋${CLOSING_BASE_PATH}。
 
@@ -172,6 +173,42 @@ cl_install_sub() {
   p="$(cl_side_path "$side" "$CLOSING_INSTALL_SUB_OLD")" || return 1
   echo "--- $p" >>"$log"
   cl_run "$h" "$s" "$repo" "$repo/$p" </dev/null >>"$log" 2>&1 || { rc=$?; echo "rc=$rc: $p" >>"$log"; return "$rc"; }
+}
+
+# ---------------------------------------------------------------- README との照合（C-2）
+# cl_proc_cmds <side> <main|sub|import> — ハーネスが実行する手順を README のコマンド行の形で出す（各パスはその側の名前）
+cl_proc_cmds() {
+  local side="$1" x p list=""
+  case "$2" in
+    main)   list="cp:$CLOSING_PROFILE_SAMPLE_OLD cp:$CLOSING_MODELS_SAMPLE_OLD $CLOSING_INSTALL_MAIN_OLD $CLOSING_INSTALL_LA_OLD" ;;
+    sub)    list="cp:$CLOSING_PROFILE_SAMPLE_OLD cp:$CLOSING_MODELS_SAMPLE_OLD $CLOSING_INSTALL_SUB_OLD" ;;
+    import) printf '%s\n' "$CLOSING_IMPORT_PULL"; list="$CLOSING_INSTALL_MAIN_OLD $CLOSING_INSTALL_LA_OLD $CLOSING_CHECK_DRIFT_OLD" ;;
+  esac
+  for x in $list; do
+    p="$(cl_side_path "$side" "${x#cp:}")" || p="<引けない:${x#cp:}>"
+    case "$x" in cp:*) printf 'cp %s\n' "$p" ;; *) printf '%s\n' "$p" ;; esac
+  done
+}
+
+# cl_readme_check <side> <main|sub|import> <README> — 英日の印の手順と定数を突合。一致で 0、不一致は差分 1 行を出して 1
+cl_readme_check() {
+  local side="$1" proc="$2" readme="$3" marks m got exp a x first
+  case "$proc" in main) marks="$CLOSING_README_MARK_MAIN" ;; sub) marks="$CLOSING_README_MARK_SUB" ;; *) marks="$CLOSING_README_MARK_IMPORT" ;; esac
+  a=()
+  for x in $CLOSING_README_SKIP_LINE_ARGS; do a+=(--skip-line-arg "$x"); done
+  for x in $CLOSING_README_DROP_ARGS; do a+=(--drop-arg "$x"); done
+  exp="$(cl_proc_cmds "$side" "$proc")"
+  while [ -n "$marks" ]; do
+    m="${marks%%|*}"; [ "$m" = "$marks" ] && marks="" || marks="${marks#*|}"
+    if ! got="$(cl_py readme-cmds "$readme" "$m" "${a[@]}")"; then
+      echo "印が無い（${m}・$(basename "$readme")）"; return 1
+    fi
+    if [ "$got" != "$exp" ]; then
+      first="$(diff <(printf '%s\n' "$exp") <(printf '%s\n' "$got") | grep '^[<>]' | head -2 | tr '\n' ' ')"
+      echo "${m}: ${first}（< 定数・> README）"; return 1
+    fi
+  done
+  return 0
 }
 
 # HOME を新しく作り、clone 先に worktree への symlink を置いてメイン機手順を実行する

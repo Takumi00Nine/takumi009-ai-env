@@ -9,7 +9,8 @@
 #   渡し、それを超えた呼び出しから非 0 を返す＝インストーラの配置（symlink 張り替え）の途中で止まる（設計 §8.2 F1）。
 #   注入が起きなかった（偽 ln の呼び出しが上限以下）ときは試験として成立しないので NG にする。
 # - メイン機の取込み手順（FX-16 → FX-1）＝設計 §8.1-4: pull → 全部入りインストーラ → LaunchAgent 系 3 本 → 配置の健全性検査。
-#   各パスは移動表で引く（lib-closing.sh 契約 3）。配置の健全性検査の結果は記録だけ（AC-10 の判定は要件の 3 点＋起動対象）。
+#   各パスは移動表で引く（lib-closing.sh 契約 3）。各段の終了コード 0（配置の健全性検査を含む）＋要件の 3 点＋起動対象で判定する。
+# - 手順の定数は、起動時に README（英日）の印の手順と突合し、不一致なら NG（lib-closing.sh cl_readme_check・印は closing.conf）。
 
 # ---------------------------------------------------------------- AC-8
 # ac8_live <home> <wt> > tsv — ライブ位置の各名前: 名前<TAB>種類(L/F/-)<TAB>実体（repo 内は R:<相対>・無ければ MISSING:）
@@ -55,8 +56,11 @@ ac8_side() {
 ac_8() {
   local od="$OUT/ac8" moves="$WT1/$CLOSING_MOVES_REL" n k t nk nt succ e1="" e2="" e3="" e4="" c p f
   mkdir -p "$od"
+  local why
+  why="$(cl_readme_check base main "$WT0/README.md")" || { cl_result AC-8 NG "README の手順と定数が不一致: 基準 ${why}"; return; }
   ac8_side base "$WT0" || { cl_result AC-8 NG "基準側の導入手順が失敗（ac8/base/install.log）"; return; }
   if ! cl_fx1_ready; then cl_result AC-8 NG "${CL_FX1_WHY}（基準側の配置は済み＝ac8/base/）"; return; fi
+  why="$(cl_readme_check new main "$WT1/README.md")" || { cl_result AC-8 NG "README の手順と定数が不一致: FX-1 ${why}"; return; }
   ac8_side new "$WT1" || { cl_result AC-8 NG "FX-1 側の導入手順が失敗（ac8/new/install.log）"; return; }
   # ① 名前の包含と実体の後継
   while IFS="$(printf '\t')" read -r n k t; do
@@ -171,8 +175,10 @@ ac10_three() {
 }
 
 ac_10() {
-  local od="$OUT/ac10" h="$WORK/home" s rc m1 m2 m3a m3b x p lim cnt bad=0
+  local od="$OUT/ac10" h="$WORK/home" s rc m1 m2 m3a m3b x p lim cnt bad=0 why
   mkdir -p "$od"
+  why="$(cl_readme_check base sub "$WT0/README.md" && cl_readme_check base main "$WT0/README.md")" \
+    || { cl_result AC-10 NG "README の手順と定数が不一致: 基準 ${why}"; return; }
   # 基準側だけで動く部分（FX-15・FX-16 の配置）を先に確かめる
   s="$WORK/ac10-s0"; cl_stubs "$s"
   ac10_fx15 "$h" "$s" "$od/fx15-probe.log" || { cl_result AC-10 NG "FX-15（基準のサブ機導入）が失敗（ac10/fx15-probe.log）"; return; }
@@ -180,6 +186,7 @@ ac_10() {
   ac10_clone "$h" "$s" && cl_install_main base "$h" "$h/$CLOSING_REPO_HOME_REL" "$s" "$od/fx16-probe.log" \
     || { cl_result AC-10 NG "FX-16（基準のメイン機導入）が失敗（ac10/fx16-probe.log）"; return; }
   if ! cl_fx1_ready; then cl_result AC-10 NG "${CL_FX1_WHY}（基準側 FX-15・FX-16 の配置は成功）"; return; fi
+  why="$(cl_readme_check new import "$WT1/README.md")" || { cl_result AC-10 NG "README の手順と定数が不一致: FX-1 ${why}"; return; }
   # ① FX-15 → 現行のサブ機更新コマンド 1 回
   s="$WORK/ac10-a"; cl_stubs "$s"
   ac10_fx15 "$h" "$s" "$od/fx15-a.log" && ac10_origin_advance || { cl_result AC-10 NG "① FX-15 を作れない"; return; }
@@ -191,14 +198,14 @@ ac_10() {
   ac10_clone "$h" "$s" && cl_install_main base "$h" "$h/$CLOSING_REPO_HOME_REL" "$s" "$od/fx16.log" && ac10_origin_advance \
     || { cl_result AC-10 NG "② FX-16 を作れない"; return; }
   m2=""
-  { rc=0; cl_run "$h" "$s" "$h/$CLOSING_REPO_HOME_REL" git pull -q --ff-only </dev/null || rc=$?; echo "rc=$rc pull"; } >"$od/2-import.log" 2>&1
+  # shellcheck disable=SC2086
+  { rc=0; cl_run "$h" "$s" "$h/$CLOSING_REPO_HOME_REL" $CLOSING_IMPORT_PULL </dev/null || rc=$?; echo "rc=$rc pull"; } >"$od/2-import.log" 2>&1
   [ "$rc" -eq 0 ] || m2="$m2 pull=$rc"
   for x in $CLOSING_INSTALL_MAIN_OLD $CLOSING_INSTALL_LA_OLD $CLOSING_CHECK_DRIFT_OLD; do
     p="$(cl_side_path new "$x")" || { m2="$m2 引けない:$x"; continue; }
     rc=0; cl_run "$h" "$s" "$h/$CLOSING_REPO_HOME_REL" "$h/$CLOSING_REPO_HOME_REL/$p" </dev/null >>"$od/2-import.log" 2>&1 || rc=$?
     echo "rc=$rc $p" >> "$od/2-import.log"
-    [ "$x" = "$CLOSING_CHECK_DRIFT_OLD" ] && continue   # 配置の健全性検査は記録だけ
-    [ "$rc" -eq 0 ] || m2="$m2 $p=$rc"
+    [ "$rc" -eq 0 ] || m2="$m2 $p=$rc"   # 配置の健全性検査（check-drift）も rc 0 を必須（C-2）
   done
   m2="$m2$(ac10_three "$h" 2)"
   for x in $CLOSING_LA_PLISTS; do

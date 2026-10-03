@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 疎結合の受入（Core）＝受入① AI Brain は Claude Code 抜きで shell から使える・受入② 提供元の追加は
 # 接続フォルダ 1 つと台帳の行で済む・受入③ AI Brain＋Core だけでも 4 入口が働く。
-# 正本＝docs/v1.1-components の要件 v1.4 §7（AC-1 ①〜④・AC-2 ①②⑤・AC-5 ②・FX-3〜8・FX-10・FX-11）・
-# 設計 v1.2 §10.3・§13。AC-2 ③④・AC-5 ① は締めの実走（tests/closing/）が見る。
+# 正本＝docs/v1.1-components の要件 v1.5 §7（AC-1 ①〜④・AC-2 ①②⑤・AC-5 ②・FX-3〜8・FX-10・FX-11）・
+# 設計 v1.4 §10.3・§13。AC-2 ③④・AC-5 ① は締めの実走（tests/closing/）が見る。
 #
 # 実行方法: bash tests/test-decoupling.sh
 #

@@ -13,6 +13,9 @@
   hooks <settings.json> <event> [<tool>]  イベント（とツール名）に当たる登録フックのコマンド（登録順）
   hook-cmds <settings.json>               全登録フックのコマンド（重複なし・登録順）
   canon <file> json|toml|plist            値として読み、キー順を揃えた JSON で出す
+  readme-cmds <README> <見出し行> [--skip-line-arg A ...] [--drop-arg A ...]
+                                          見出し行の直後の最初の ```sh ブロックから repo のコマンド行を正規化して出す
+                                          （`cp <見本>`・`<…>.sh [引数]`・`git pull …`）。見出しかブロックが無ければ exit 3
   settings-cmp <base.json> <new.json>     正規化済み settings.json 2 つ: FX-1 にだけある登録を `EXTRA <command>` で出し、
                                           それを除いて一致しなければ `DIFF` と差分を出す（exit 0＝一致・1＝不一致）
 
@@ -293,6 +296,37 @@ def settings_cmp(base_p, new_p):
     return 1
 
 
+# ---------------------------------------------------------------- README の手順
+def readme_cmds(readme, heading, skip_line_args, drop_args):
+    with open(readme, encoding="utf-8") as f:
+        lines = f.read().split("\n")
+    try:
+        i = lines.index(heading)
+    except ValueError:
+        return None
+    j = i + 1
+    while j < len(lines) and not lines[j].startswith("```"):
+        if lines[j].startswith("#") and not lines[j].startswith("```"):
+            return None          # 次の見出しまでにブロックが無い
+        j += 1
+    if j >= len(lines):
+        return None
+    out = []
+    for line in lines[j + 1:]:
+        if line.startswith("```"):
+            return out
+        cmd = re.sub(r"\s+#.*$", "", line).strip()
+        toks = cmd.split()
+        if not toks or any(t in skip_line_args for t in toks):
+            continue
+        toks = [t for t in toks if t not in drop_args]
+        if toks[0] == "cp" and len(toks) >= 2:
+            out.append("cp " + toks[1])
+        elif toks[:2] == ["git", "pull"] or toks[0].endswith(".sh"):
+            out.append(" ".join(toks))
+    return None
+
+
 # ---------------------------------------------------------------- 入口
 def main(argv):
     if not argv:
@@ -343,6 +377,14 @@ def main(argv):
         print("\n".join(seen))
     elif cmd == "canon":
         print(canon(args[0], args[1]))
+    elif cmd == "readme-cmds":
+        skip, drop, i = [], [], 2
+        while i < len(args):
+            (skip if args[i] == "--skip-line-arg" else drop).append(args[i + 1]); i += 2
+        got = readme_cmds(args[0], args[1], skip, drop)
+        if got is None:
+            return 3
+        print("\n".join(got))
     elif cmd == "settings-cmp":
         return settings_cmp(args[0], args[1])
     else:
