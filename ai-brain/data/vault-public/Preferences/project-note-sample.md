@@ -1,6 +1,6 @@
 ---
 date: 2026-09-23
-updated: 2026-09-23
+updated: 2026-10-04
 tags: [preference, project, sample, template]
 project: external-brain
 related:
@@ -55,6 +55,7 @@ aliases:
 ### <版名＝目的だけ・20 字以内>
 - [ ] <動詞句・25 字以内>
 - [ ] <動詞句>
+- 正本: ~/Claude/<slug>/docs/<版>/（裁定録・要件書・設計書）
 ```
 
 ## 書かないもの（Projects ノートに入れない）

@@ -1,6 +1,6 @@
 ---
 date: 2026-09-21
-updated: 2026-10-03
+updated: 2026-10-04
 tags: [preference, external-brain, maintenance, health, fragments, procedure]
 project: external-brain
 related:
@@ -27,7 +27,7 @@ aliases:
 ## 2. 現在値を読む（着手時と各周の終わり）
 - 着手時＝直近の【外部脳ヘルス】注入ブロック（stage・items の主体と ok_when・maintenance）。⚠️ 注入は同セッション内では更新されない＝再実行後は下の口を読む。
 - 各周の終わり（次の 4 つを読む）:
-  1. 判定機の最新結果（items の主体 `actor`・`ok_when` を含む）＝SessionStart フックを手で 1 回実行して【外部脳ヘルス】行を読む: `echo '{"hook_event_name":"SessionStart","source":"startup"}' | ~/work/takumi009-ai-env/core/connect/claude-code/session-start-compose.sh | grep '【外部脳ヘルス】'`（旧パスにも転送 symlink が置かれ当面は届く＝撤去時期は v1.2。合成器＝旧 bootstrap-vault.sh の主後継・同じ stdin で【外部脳ヘルス】行が出る。同セッションの注入は更新されないため、これが読み直しの口。観測記録が 1 件書かれる副作用は本番と同じ）。主体は判定機が種別から決める（棚卸しの種別はすべて `AI`・maintenance の失敗工程は工程ごと）。
+  1. 判定機の最新結果（items の主体 `actor`・`ok_when` を含む）＝SessionStart フックを手で 1 回実行して【外部脳ヘルス】行を読む: `echo '{"hook_event_name":"SessionStart","source":"startup"}' | ~/work/takumi009-ai-env/core/connect/claude-code/session-start-compose.sh | grep '【外部脳ヘルス】'`（合成器＝旧 bootstrap-vault.sh の主後継・同じ stdin で【外部脳ヘルス】行が出る。同セッションの注入は更新されないため、これが読み直しの口。観測記録が 1 件書かれる副作用は本番と同じ）。主体は判定機が種別から決める（棚卸しの種別はすべて `AI`・maintenance の失敗工程は工程ごと）。
   2. Dock の外部脳行＝`~/work/takumi009-ai-env/dock/executor/cmux-next-model.sh --frame` の「外部脳」行（3 値 `OK`／`WARNING`／`ERROR`＋末尾「候補N件」）＝終了判定の値。
   3. 棚卸しの内訳＝`~/.claude/logs/vault-inventory/latest.json`（`actionable`・`items`）と同日のレポート `~/.claude/logs/vault-inventory/<日付>.md`（項目ごとの対象・種別・主体）＝次の周の対処対象の特定に使う（主体は上の 1 で読む）。
   4. 週次メンテの結果＝`~/.claude/logs/maintenance/last-run.json`（`run.status`・`completed.fully_ok`・`completed.steps`＝失敗した工程・`fragments_candidates`）。
