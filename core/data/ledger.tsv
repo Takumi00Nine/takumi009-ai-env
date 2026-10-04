@@ -6,7 +6,7 @@
 #   知らせ＝Notify の送り手の行だけが受ける知らせを書く（`call`・`call.<区分>`・`answer` のカンマ区切り。区分＝alert・usage・ask）。他は `-`。
 #   パス＝repo 相対（フォルダ単位は末尾 `/`）。notify 行の repo 外は `Vault:<ノート>`・`~/…`。
 #   鍵＝`<機能>.<働き>`（shell 入口・他機能が照会する入口）。同じ鍵が複数行に付くのは同じ機能の接続行だけ。
-# 部品・スイートを足すときは、この台帳に 1 行足す（FR-14）。
+# 部品・スイートを足すときは、この台帳に 1 行足す（v1.1 FR-14）。v1.2 FR-20＝v1.1 の後に足す部品・スイートは台帳の行だけでよい（移動表の行は求めない）。
 
 # ===== AI Brain =====
 part	ai-brain/executor/vault-recall.sh	ai-brain	executor	-	ai-brain.recall	想起（UserPromptSubmit）	-

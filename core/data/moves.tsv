@@ -4,7 +4,7 @@
 #   主後継＝同じ旧パスを持つ行のうち先頭行（分割は主後継を先に書く）。
 #   転送印＝`転送`＝旧パスに主後継への転送 symlink（相対リンク・git 追跡）を置く。無しは `-`。
 #   末尾 `/` の行はフォルダ単位（配下のパスへ前方一致で当てる）。
-#   スイート（tests/）は置き場を変えない。全スイートが行を持つ＝変更の無いものは旧＝新（移動）、
+#   スイート（tests/）は置き場を変えない。v1.1 FR-14＝v1.1 時点の全スイートが行を持つ＝変更の無いものは旧＝新（移動）、
 #   分けた働きを新スイートへ移したものは分割、新設は新規。
 # 検査＝core/assembly/ledger-tool.sh check の moves（3 条件）・forward（転送のリンク先＝主後継）。
 
@@ -93,8 +93,8 @@ scripts/lib/personal-link-check.sh	ai-brain/executor/personal-link-check.sh	移�
 scripts/lib/usage-source.sh	usage/executor/usage-source.sh	分割	-
 scripts/lib/usage-source.sh	usage/connect/claude-code/fetch.sh	分割	-
 scripts/lib/usage-source.sh	usage/connect/codex/fetch.sh	分割	-
-scripts/lib/macos-notify.sh	notify/connect/macos/macos-notify.sh	移動	-
-scripts/lib/usage-notify.sh	notify/connect/macos/usage-notify.sh	移動	-
+scripts/lib/macos-notify.sh	notify/connect/macos/deliver.sh	移動	-
+scripts/lib/usage-notify.sh	usage/executor/usage-notify.sh	移動	-
 scripts/lib/pid-lock.sh	core/executor/pid-lock.sh	移動	-
 scripts/lib/status-file.sh	core/executor/status-file.sh	移動	-
 scripts/lib/managed-symlink.sh	core/assembly/managed-symlink.sh	移動	-
