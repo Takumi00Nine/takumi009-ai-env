@@ -179,10 +179,12 @@ ac_8() {
   cl_new_wt "$wtB" "$FX1_COMMIT" || { cl_result AC-8 NG "②④ worktree(B) を作れない"; return; }
   why="$(clc_strip_features "$wtB" team usage notify dock)"
   [ -f "$wtB/$CLOSING_LEDGER_REL" ] || { cl_result AC-8 NG "② v1.1 FX-8 の木を作れない: $why"; return; }
-  # 組立の道具立て（配役表の解決器）＝取り外した木でも install-main.sh が名指しで使う部品は残す
-  # （リーダー裁定2026-10-05・要件v1.6 AC-8②・設計v1.6 §3.1）。台帳には戻さない（道具立ては台帳照会を通らない）。
+  # 組立の道具立て（配役表の解決器とそれが読む職種定義）＝取り外した木でも install-main.sh が名指しで使う部品は残す
+  # （リーダー裁定2026-10-05・要件v1.7 AC-8②・設計v1.7 §3.1）。台帳には戻さない（道具立ては台帳照会を通らない）。
   mkdir -p "$wtB/team/executor"
   cp "$WT1/team/executor/profile_resolve.py" "$wtB/team/executor/profile_resolve.py"
+  mkdir -p "$wtB/team/rules/agents"
+  cp -R "$WT1/team/rules/agents/." "$wtB/team/rules/agents/"
   cl_stubs "$sA"; mkdir -p "$sA/c27/bin"; cp -R "$CL_DIR/../fixtures/code27-call/bin/." "$sA/c27/bin/"
   clc_home_select "$hA" "$wtA" "$sA" "$od/c2-a-install.log" "$CLOSING_SELECT_AB_CORE" \
     || { cl_result AC-8 NG "② HOME-A（--select ${CLOSING_SELECT_AB_CORE}）の組立が失敗（ac8/c2-a-install.log）"; return; }
