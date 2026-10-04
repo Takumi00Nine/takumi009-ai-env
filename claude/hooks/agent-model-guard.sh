@@ -1,1 +1,0 @@
-../../team/connect/claude-code/agent-model-guard.sh

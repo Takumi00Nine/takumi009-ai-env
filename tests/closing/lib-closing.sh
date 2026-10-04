@@ -62,18 +62,29 @@ cl_wait_lines() {
 }
 
 # ---------------------------------------------------------------- worktree
-cl_new_wt() {  # cl_new_wt <dir> <commit>
-  git -C "$CL_SRC" worktree add -q --detach "$1" "$2" >>"$OUT/detail.log" 2>&1 || return 1
-  CL_WTS="$CL_WTS $1"
+# cl_new_wt <dir> <commit> — $CL_SRC（本 repo）からの worktree（既定の使い方）
+cl_new_wt() { cl_new_wt_at "$CL_SRC" "$1" "$2"; }
+
+# cl_new_wt_at <src> <dir> <commit> — 任意の repo（束 C・AC-11④＝dotfiles）からの worktree。
+#   CL_WTS に "<src>|<dir>" で積む（cl_cleanup がその src で remove する）。
+cl_new_wt_at() {
+  git -C "$1" worktree add -q --detach "$2" "$3" >>"$OUT/detail.log" 2>&1 || return 1
+  CL_WTS="$CL_WTS $1|$2"
 }
 
 cl_cleanup() {
-  local w
+  local w src dir
   for w in $CL_WTS; do
-    chmod -R u+w "$w" 2>/dev/null
-    git -C "$CL_SRC" worktree remove --force "$w" >/dev/null 2>&1 || true
+    case "$w" in
+      *'|'*) src="${w%%|*}"; dir="${w#*|}" ;;
+      *) src="$CL_SRC"; dir="$w" ;;
+    esac
+    chmod -R u+w "$dir" 2>/dev/null
+    git -C "$src" worktree remove --force "$dir" >/dev/null 2>&1 || true
   done
   git -C "$CL_SRC" worktree prune >/dev/null 2>&1 || true
+  [ -n "${CLOSING_DOTFILES_REPO:-}" ] && [ -d "$CLOSING_DOTFILES_REPO" ] \
+    && git -C "$CLOSING_DOTFILES_REPO" worktree prune >/dev/null 2>&1
   [ -n "${WORK:-}" ] && { chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"; }
 }
 
@@ -170,19 +181,51 @@ cl_mk_vault_fx5() {  # FX-4＋git（初期コミット 1・remote 無し・未�
 }
 
 # ---------------------------------------------------------------- 導入手順（契約 3）
-# cl_install_main <side> <home> <repo> <stubdir> <log> — README のメイン機手順。repo＝$HOME/<clone 先>（実体か symlink）
+# cl_install_agents <repo> <home> <stubdir> <log> [<sel:機能名をカンマ区切り>] — README のメイン機手順の
+#   常駐の登録 3 本（旧仕様）を、「その木に存在する分だけ」に置き換える（裁定2026-10-05＝取り外した木に無い
+#   部品を固定一覧で呼んで exit 127 にしない）。鍵（設計 §4「常駐の登録の鍵」＝<機能>.install-*・
+#   CLOSING_LIVE_AGENT_KEY_RE）は repo 自身の台帳（$CLOSING_LEDGER_REL）の行順に拾い、repo 自身の
+#   ledger-tool.sh lookup で解決する＝リネームしても鍵は変わらないので cl_side_path（移動表）を経由しない。
+#   基準（FX-2）側の ledger-tool.sh にも lookup があり、同じ導出が通る（確認ずみ＝分岐は不要）。
+#   <sel> 省略時＝台帳の行から絞らない（取り外した木はそもそも行が無いので結果は変わらない）。<sel> 指定時＝
+#   台帳の機能列（3 列目）がその集合に無い行は呼ばない（裁定2026-10-05＝木を取り外さず --select だけで
+#   絞った HOME にも、選択した機能の常駐だけを登録させる＝選択外の usage 等を呼ばない）。
+cl_install_agents() {
+  local repo="$1" h="$2" s="$3" log="$4" sel="${5:-}" ledger tool key p rc
+  # ledger・tool は $repo 代入後に別文で（同じ local 文の中だと RHS が先に・代入前の値で評価され、
+  # set -u 下で repo 未定義エラーになりうる＝ac-c.sh clc_ac8_entry_run の既知パターンと同じ）。
+  ledger="$repo/$CLOSING_LEDGER_REL"; tool="$repo/$CLOSING_LEDGER_TOOL_REL"
+  [ -f "$ledger" ] && [ -x "$tool" ] || { echo "引けない: $CLOSING_LEDGER_REL か $CLOSING_LEDGER_TOOL_REL" >>"$log"; return 1; }
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    # AIENV_COMPONENTS_FILE を確実に無い場所へ＝実機の選択ファイル（$HOME/…/components.env）を拾わない
+    p="$(AIENV_COMPONENTS_FILE="$s/tmp/no-components.env" "$tool" lookup "$key" 2>>"$log")" \
+      || { echo "引けない(lookup): $key" >>"$log"; return 1; }
+    echo "--- $p" >>"$log"
+    rc=0; cl_run "$h" "$s" "$repo" "$p" </dev/null >>"$log" 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "rc=$rc: $p" >>"$log"; return "$rc"; }
+  done <<EOF
+$(awk -F'\t' -v re="$CLOSING_LIVE_AGENT_KEY_RE" -v sel="$sel" '
+    BEGIN { n = split(sel, a, ","); for (i = 1; i <= n; i++) selset[a[i]] = 1 }
+    !/^#/ && NF && $1 == "part" && $6 ~ re && (sel == "" || $3 in selset) { print $6 }
+  ' "$ledger")
+EOF
+  return 0
+}
+
+# cl_install_main <side> <home> <repo> <stubdir> <log> [<tpl_repo>] — README のメイン機手順。repo＝$HOME/<clone 先>（実体か symlink）
+#   tpl_repo（既定＝repo）＝雛形（profile.md.sample／models.conf.sample）の複写元。AC-8②のように repo が
+#   機能を取り外した木のときは、取り外す前の木（例＝$WT1）を渡して雛形だけそこから引く（C-V-home-b）。
 cl_install_main() {
-  local side="$1" h="$2" repo="$3" s="$4" log="$5" p cfg rc=0 x
+  local side="$1" h="$2" repo="$3" s="$4" log="$5" tpl="${6:-$3}" p cfg rc=0
   cfg="$h/$CLOSING_CONFIG_DIR_REL"
   mkdir -p "$cfg"
-  p="$(cl_side_path "$side" "$CLOSING_PROFILE_SAMPLE_OLD")" && cp "$repo/$p" "$cfg/profile.md" || { echo "引けない: $CLOSING_PROFILE_SAMPLE_OLD" >>"$log"; return 1; }
-  p="$(cl_side_path "$side" "$CLOSING_MODELS_SAMPLE_OLD")" && cp "$repo/$p" "$cfg/models.conf" || { echo "引けない: $CLOSING_MODELS_SAMPLE_OLD" >>"$log"; return 1; }
-  for x in $CLOSING_INSTALL_MAIN_OLD $CLOSING_INSTALL_LA_OLD; do
-    p="$(cl_side_path "$side" "$x")" || { echo "引けない: $x" >>"$log"; return 1; }
-    echo "--- $p" >>"$log"
-    cl_run "$h" "$s" "$repo" "$repo/$p" </dev/null >>"$log" 2>&1 || { rc=$?; echo "rc=$rc: $p" >>"$log"; return "$rc"; }
-  done
-  return 0
+  p="$(cl_side_path "$side" "$CLOSING_PROFILE_SAMPLE_OLD")" && cp "$tpl/$p" "$cfg/profile.md" || { echo "引けない: $CLOSING_PROFILE_SAMPLE_OLD" >>"$log"; return 1; }
+  p="$(cl_side_path "$side" "$CLOSING_MODELS_SAMPLE_OLD")" && cp "$tpl/$p" "$cfg/models.conf" || { echo "引けない: $CLOSING_MODELS_SAMPLE_OLD" >>"$log"; return 1; }
+  p="$(cl_side_path "$side" "$CLOSING_INSTALL_MAIN_OLD")" || { echo "引けない: $CLOSING_INSTALL_MAIN_OLD" >>"$log"; return 1; }
+  echo "--- $p" >>"$log"
+  cl_run "$h" "$s" "$repo" "$repo/$p" </dev/null >>"$log" 2>&1 || { rc=$?; echo "rc=$rc: $p" >>"$log"; return "$rc"; }
+  cl_install_agents "$repo" "$h" "$s" "$log"
 }
 
 # cl_install_sub <side> <home> <repo> <stubdir> <log> — README のサブ機手順（machine_role を sub に）
@@ -214,14 +257,68 @@ cl_proc_cmds() {
   done
 }
 
-# cl_readme_check <side> <main|sub|import> <README> — 英日の印の手順と定数を突合。一致で 0、不一致は差分 1 行を出して 1
+# cl_proc_cmds_import_c <side> — 束 C の取込み節（見出し＝CLOSING_README_MARK_IMPORT_C）で照合・実行する
+#   行（C-V10＝AC-12③専用。v1.1 節の LaunchAgent 固定一覧は実行しない）。dotfiles の pull は README の literal
+#   （~/<既定 dotfiles 置き場>）のまま＝実行時にどこへ向けるかは呼び手（ac_12）の責務。
+cl_proc_cmds_import_c() {
+  local side="$1" p
+  printf 'git -C ~/%s pull --ff-only\n' "$CLOSING_DOTFILES_DIR_DEFAULT"
+  printf '%s\n' "$CLOSING_IMPORT_PULL"
+  p="$(cl_side_path "$side" "$CLOSING_INSTALL_MAIN_OLD")" || p="<引けない:$CLOSING_INSTALL_MAIN_OLD>"
+  printf '%s %s\n' "$p" "$CLOSING_INSTALL_MAIN_DOTFILES_ARG"
+  p="$(cl_side_path "$side" "$CLOSING_CHECK_DRIFT_OLD")" || p="<引けない:$CLOSING_CHECK_DRIFT_OLD>"
+  printf '%s %s\n' "$p" "$CLOSING_CHECK_DRIFT_HEALTH_ARG"
+  printf '%s %s\n' "$p" "$CLOSING_CHECK_DRIFT_FORWARD_ARG"
+}
+
+# cl_readme_block <README> <見出し行> — 見出し行直後の最初の ```sh ブロックの中身を標準出力へ（何も無ければ無出力）
+cl_readme_block() {
+  awk -v want="$2" '
+    $0 == want { hit=1; next }
+    hit && started != 1 && /^```/ { started=1; next }
+    hit && started != 1 && /^#/ { exit }
+    hit && started == 1 { if ($0 ~ /^```/) exit; print }
+  ' "$1"
+}
+
+# cl_readme_notes_present <README> <mark EN|JA> <note EN|JA> ... — 見出し直後のブロックに、各 note の
+#   いずれかの言語表記が含まれるか（実行しない注記の「存在の確認」だけ＝C-V10）。欠けを 1 行ずつ出し、あれば 1。
+cl_readme_notes_present() {
+  local readme="$1" marks="$2" m blk note bad=0
+  shift 2
+  while [ -n "$marks" ]; do
+    m="${marks%%|*}"; [ "$m" = "$marks" ] && marks="" || marks="${marks#*|}"
+    blk="$(cl_readme_block "$readme" "$m")"
+    if [ -z "$blk" ]; then echo "見出し直後にブロックが無い: $m"; bad=1; continue; fi
+    for note in "$@"; do
+      local hit=0 alts="$note" a
+      while [ -n "$alts" ]; do
+        a="${alts%%|*}"; [ "$a" = "$alts" ] && alts="" || alts="${alts#*|}"
+        printf '%s' "$blk" | grep -qF -- "$a" && { hit=1; break; }
+      done
+      [ "$hit" -eq 1 ] || { echo "注記が無い（${m}）: $note"; bad=1; }
+    done
+  done
+  return "$bad"
+}
+
+# cl_readme_check <side> <main|sub|import|import_c> <README> — 英日の印の手順と定数を突合。一致で 0、不一致は差分 1 行を出して 1
 cl_readme_check() {
   local side="$1" proc="$2" readme="$3" marks m got exp a x first
-  case "$proc" in main) marks="$CLOSING_README_MARK_MAIN" ;; sub) marks="$CLOSING_README_MARK_SUB" ;; *) marks="$CLOSING_README_MARK_IMPORT" ;; esac
+  case "$proc" in
+    main) marks="$CLOSING_README_MARK_MAIN" ;;
+    sub) marks="$CLOSING_README_MARK_SUB" ;;
+    import_c) marks="$CLOSING_README_MARK_IMPORT_C" ;;
+    *) marks="$CLOSING_README_MARK_IMPORT" ;;
+  esac
   a=()
   for x in $CLOSING_README_SKIP_LINE_ARGS; do a+=(--skip-line-arg "$x"); done
-  for x in $CLOSING_README_DROP_ARGS; do a+=(--drop-arg "$x"); done
-  exp="$(cl_proc_cmds "$side" "$proc")"
+  # import_c（束 C・AC-12③）は --with-dotfiles を落とさず README のまま突合する（CROSS-01）。
+  # v1.1 節（import）は隔離済み fixture を持たず実行しないため、そちらだけ引き続き落とす。
+  if [ "$proc" != "import_c" ]; then
+    for x in $CLOSING_README_DROP_ARGS; do a+=(--drop-arg "$x"); done
+  fi
+  if [ "$proc" = "import_c" ]; then exp="$(cl_proc_cmds_import_c "$side")"; else exp="$(cl_proc_cmds "$side" "$proc")"; fi
   while [ -n "$marks" ]; do
     m="${marks%%|*}"; [ "$m" = "$marks" ] && marks="" || marks="${marks#*|}"
     if ! got="$(cl_py readme-cmds "$readme" "$m" "${a[@]}")"; then
@@ -236,10 +333,11 @@ cl_readme_check() {
 }
 
 # HOME を新しく作り、clone 先に worktree への symlink を置いてメイン機手順を実行する
-cl_fresh_main_home() {  # <side> <home> <wt> <stubdir> <log>
+cl_fresh_main_home() {  # <side> <home> <wt> <stubdir> <log> [<tpl_wt>]
+  local tpl="${6:-$3}"
   rm -rf "$2"; mkdir -p "$2/$(dirname "$CLOSING_REPO_HOME_REL")"
   ln -s "$3" "$2/$CLOSING_REPO_HOME_REL"
-  cl_install_main "$1" "$2" "$2/$CLOSING_REPO_HOME_REL" "$4" "$5"
+  cl_install_main "$1" "$2" "$2/$CLOSING_REPO_HOME_REL" "$4" "$5" "$tpl"
 }
 
 # ---------------------------------------------------------------- 検査の部品
@@ -271,6 +369,16 @@ $(find "$d" -type l 2>/dev/null)
 EOF
   done
   return "$bad"
+}
+
+# cl_la_targets_missing <home> — 各 LaunchAgent plist の ProgramArguments（絶対パス）のうち実在しないものを
+#   「不在 <plist> <path>」の形で 1 行ずつ出す（ac-live.sh AC-10 ②・ac-c.sh AC-12③ で共有＝C2-V03・複製しない）。
+cl_la_targets_missing() {
+  local h="$1" x p
+  for x in $CLOSING_LA_PLISTS; do
+    plutil -extract ProgramArguments json -o - "$h/$CLOSING_LA_DIR_REL/$x" 2>/dev/null | jq -r '.[] | select(startswith("/"))' |
+      while IFS= read -r p; do [ -e "$p" ] || echo "不在 $x $p"; done
+  done
 }
 
 # 正規化（比較から除く値）。<side> が base のときだけ旧パス→新パスの置換をする。

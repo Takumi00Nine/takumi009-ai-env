@@ -1,1 +1,0 @@
-../../core/assembly/check-sub-update.sh

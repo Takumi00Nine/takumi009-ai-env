@@ -160,7 +160,7 @@ assert_eq "route 該当なし: exit 1" "1" "$rc"
 assert_eq "route 該当なし: 出力なし" "" "$ROUTE_OUT2"
 BADROUTE_LEDGER="$WORK/badroute-ledger.tsv"
 { cat "$LEDGER_REAL"
-  printf 'part\tnotify/connect/zz-missing/deliver.sh\tnotify\tconnect\tzz-missing\t-\t試験\tcall.ask\n'
+  printf 'part\tnotify/connect/zz-missing/deliver.sh\tnotify\tconnect\tzz-missing\t-\t試験\tcall.ask\t-\n'
 } > "$BADROUTE_LEDGER"
 rc=0
 ROUTE_OUT3="$(AIENV_LEDGER="$BADROUTE_LEDGER" "$LEDGER_TOOL" route call.ask 2>"$WORK/route3.err")"; rc=$?
@@ -168,7 +168,7 @@ assert_eq "route 一部実体異常: 実在する cmux の行は残るので exi
 assert_eq "route 一部実体異常: 存在しない送り手は除かれる" "0" "$(printf '%s' "$ROUTE_OUT3" | grep -c 'zz-missing' || true)"
 assert_true "route 一部実体異常: stderr に固定文 LEDGER: part" "$(grep -q 'LEDGER: part' "$WORK/route3.err" 2>/dev/null && echo 1 || echo 0)"
 ALLBAD_LEDGER="$WORK/allbad-ledger.tsv"
-printf 'part\tnotify/connect/zz-missing/deliver.sh\tnotify\tconnect\tzz-missing\t-\t試験\tcall.ask\n' > "$ALLBAD_LEDGER"
+printf 'part\tnotify/connect/zz-missing/deliver.sh\tnotify\tconnect\tzz-missing\t-\t試験\tcall.ask\t-\n' > "$ALLBAD_LEDGER"
 rc=0
 AIENV_LEDGER="$ALLBAD_LEDGER" "$LEDGER_TOOL" route call.ask >/dev/null 2>"$WORK/route4.err" || rc=$?
 assert_eq "route 全件実体異常: exit 3" "3" "$rc"
@@ -333,7 +333,7 @@ WT24III="$WORK/wt-fx24iii"
 lf_copy_repo "$REPO_ROOT" "$WT24III"
 mkdir -p "$WT24III/notify/connect/zz-answer"
 cp "$ZZANSWER_DELIVER" "$WT24III/notify/connect/zz-answer/deliver.sh"
-printf 'part\tnotify/connect/zz-answer/deliver.sh\tnotify\tconnect\tzz-answer\t-\t第2応答先（試験）\tanswer\n' >> "$WT24III/core/data/ledger.tsv"
+printf 'part\tnotify/connect/zz-answer/deliver.sh\tnotify\tconnect\tzz-answer\t-\t第2応答先（試験）\tanswer\t-\n' >> "$WT24III/core/data/ledger.tsv"
 # ⚠️ AIENV_LEDGER の行の相対パスは、呼んだ ledger-tool.sh 自身の repo ルートから解決される
 # （台帳ファイルの置き場からではない）。zz-answer は実体を $REPO_ROOT に持たない新規部品
 # なので、この worktree 自身の prompt-answer.sh／notify.sh／ledger-tool.sh を呼ぶ

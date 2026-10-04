@@ -1,1 +1,0 @@
-../core/assembly/install-sub.sh

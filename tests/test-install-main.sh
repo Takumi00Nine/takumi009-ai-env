@@ -799,6 +799,323 @@ echo "=== 26. 退役フラグ（旧 --print-* 系・対話式リーダー設定�
   rm -rf "$FAKE_HOME"
 }
 
+# =============================================================================
+# v1.2 束 C（台帳駆動の組立・選択）＝要件 v1.4 §7 FR-10〜FR-17・AC-8・AC-10・設計 v1.4 §3.1〜§3.3・
+# 実装計画 §1 束 C（リーダー裁定録 leader-rulings-v1.2.md「束 C 着手ゲート」C4 の訂正を適用した実名）・§5。
+# ここからは TOOL（台帳ツール）の `placement`・`--select`・`~/.config/takumi009-ai-env/components.env`
+# （上書き AIENV_COMPONENTS_FILE）を使う。
+# =============================================================================
+TOOL="$REPO_ROOT/core/assembly/ledger-tool.sh"
+COMPONENTS_REL=".config/takumi009-ai-env/components.env"
+
+# placement_names <home> <--all|--select> [components_file] — 配置一覧（置き場）の basename 集合。
+# （`placement` 未実装のうちは非 0／空出力＝下の全呼び出しが set -e で落ちないよう `|| true` で止める。）
+placement_names() {
+  local home="$1" mode="$2" flag=""
+  local compfile="${3:-$home/$COMPONENTS_REL}"
+  [ "$mode" = "--all" ] && flag="--all"
+  { HOME="$home" AIENV_COMPONENTS_FILE="$compfile" bash "$TOOL" placement $flag 2>/dev/null \
+    | awk -F'\t' '{print $2}' | xargs -n1 basename 2>/dev/null | sort -u; } || true
+}
+# live_names <home> — ライブ位置（hooks／agents／codex 配下）の名前集合。
+live_names() {
+  local home="$1"
+  { { ls -1 "$home/.claude/hooks" 2>/dev/null; ls -1 "$home/.claude/agents" 2>/dev/null; ls -1 "$home/.codex" 2>/dev/null; } \
+    | sort -u; } || true
+}
+# registered_names <home> — settings.json の全フックの command の basename 集合。
+registered_names() {
+  { jq -r '.hooks[][].hooks[].command' "$1/.claude/settings.json" 2>/dev/null | xargs -n1 basename 2>/dev/null | sort -u; } || true
+}
+# run_select <home> [<--select 引数>] — install-main.sh を選択（省略で指定なし）で呼ぶ。終了コードは
+# 落とさず $SELECT_RC へ（set -e 下でも、この関数自身は常に 0 を返す＝失敗ケースの試験でも落ちない）。
+run_select() {
+  local home="$1"; shift
+  SELECT_RC=0
+  SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$home" bash "$SCRIPT" "$@" >"$home/.last-out" 2>&1 || SELECT_RC=$?
+  SELECT_OUT="$(cat "$home/.last-out" 2>/dev/null || true)"
+}
+
+echo "=== 27. v1.2 AC-8 ①③: 選択 {ai-brain,core}（FX-13）＝ライブ位置・登録が選択の導出に一致し、選択外（team/usage/notify/dock）が0 ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  rc=0; run_select "$FAKE_HOME" --select ai-brain,core || rc=$?
+  assert_eq "FX-13: exit 0" "0" "$SELECT_RC"
+  ALL_NAMES="$(placement_names "$FAKE_HOME" --all)"
+  SEL_NAMES="$(placement_names "$FAKE_HOME" --select)"
+  EXCLUDED="$(comm -23 <(printf '%s\n' "$ALL_NAMES") <(printf '%s\n' "$SEL_NAMES"))"
+  assert_eq "FX-13 ①: ライブ位置の名前の集合＝placement（選択）の集合" "$SEL_NAMES" "$(live_names "$FAKE_HOME")"
+  assert_eq "FX-13 ②: 選択外の名前がライブ位置に 0 件" "" "$(comm -12 <(printf '%s\n' "$EXCLUDED") <(live_names "$FAKE_HOME"))"
+  assert_eq "FX-13 ②: 選択外の名前が settings.json 登録に 0 件" "" "$(comm -12 <(printf '%s\n' "$EXCLUDED") <(registered_names "$FAKE_HOME"))"
+  REG_MISSING=0
+  for n in $(registered_names "$FAKE_HOME"); do
+    found=0
+    for d in "$FAKE_HOME/.claude/hooks" "$FAKE_HOME/.claude/agents" "$FAKE_HOME/.codex"; do
+      [ -e "$d/$n" ] && found=1
+    done
+    [ "$found" = "1" ] || REG_MISSING=$((REG_MISSING + 1))
+  done
+  assert_eq "FX-13 ③: 登録フックのコマンドが全て実在" "0" "$REG_MISSING"
+  assert_eq "FX-13 ④: components.env の中身＝AIENV_COMPONENTS=ai-brain,core" \
+    "AIENV_COMPONENTS=ai-brain,core" "$(cat "$FAKE_HOME/$COMPONENTS_REL" 2>/dev/null)"
+  assert_true "FX-13: \$HOME/Library/LaunchAgents/ に本 repo の常駐の定義が無い" \
+    "$([ ! -d "$FAKE_HOME/Library/LaunchAgents" ] && echo 1 || echo 0)"
+  assert_true "FX-13: 出力に AI Brain の常駐の登録手順がある" "$(echo "$SELECT_OUT" | grep -qi 'install-backup\|install-maintenance' && echo 1 || echo 0)"
+  BEFORE_NAMES="$(live_names "$FAKE_HOME")"
+  rc=0; run_select "$FAKE_HOME" || rc=$?
+  assert_eq "FX-13 ⑤: 指定なしの再実行後も exit 0" "0" "$SELECT_RC"
+  assert_eq "FX-13 ⑤: 指定なしの再実行でも選択が保たれる（同じ集合）" "$BEFORE_NAMES" "$(live_names "$FAKE_HOME")"
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 28. v1.2 AC-8 ③: 選択 {Core}（FX-14）＝組立・配置の健全性検査・台帳の検査が全て exit 0・登録フックの実体が実在 ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  rc=0; run_select "$FAKE_HOME" --select core || rc=$?
+  assert_eq "FX-14: 組立 exit 0" "0" "$SELECT_RC"
+  SEL_NAMES="$(placement_names "$FAKE_HOME" --select)"
+  assert_eq "FX-14 ①: ライブ位置の名前の集合＝placement（{Core}）の集合" "$SEL_NAMES" "$(live_names "$FAKE_HOME")"
+  rc=0; HOME="$FAKE_HOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only >/dev/null 2>&1 || rc=$?
+  assert_eq "FX-14: 配置の健全性検査 exit 0" "0" "$rc"
+  rc=0; bash "$TOOL" check >/dev/null 2>"$FAKE_HOME/.ledger-check.err" || rc=$?
+  assert_eq "FX-14: 台帳の検査 exit 0（選択に依らず本番 repo を見る）" "0" "$rc"
+  assert_eq "FX-14 ④: components.env の中身＝AIENV_COMPONENTS=core" \
+    "AIENV_COMPONENTS=core" "$(cat "$FAKE_HOME/$COMPONENTS_REL" 2>/dev/null)"
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 29. v1.2 AC-8: --select all を明示するとファイルが消える（全部入り⇔ファイル無しの単一表現） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  run_select "$FAKE_HOME" --select core
+  assert_true "前提: core だけの選択で components.env ができる" "$([ -e "$FAKE_HOME/$COMPONENTS_REL" ] && echo 1 || echo 0)"
+  rc=0; run_select "$FAKE_HOME" --select all || rc=$?
+  assert_eq "--select all: exit 0" "0" "$SELECT_RC"
+  assert_true "--select all: components.env が消える" "$([ ! -e "$FAKE_HOME/$COMPONENTS_REL" ] && echo 1 || echo 0)"
+  ALL_NAMES="$(placement_names "$FAKE_HOME" --all)"
+  assert_eq "--select all: ライブ位置の名前の集合＝全部入りの配置の集合" "$ALL_NAMES" "$(live_names "$FAKE_HOME")"
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 30. v1.2 AC-8 ⑤: FX-15 RESEL＝全部入りで配置済みの HOME に無関係のファイルを置いてから FX-13 の選択で再実行 ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  run_select "$FAKE_HOME"
+  printf '#!/bin/bash\n:\n' > "$FAKE_HOME/.claude/hooks/zz-unrelated.sh"
+  chmod +x "$FAKE_HOME/.claude/hooks/zz-unrelated.sh"
+  ALL_NAMES="$(placement_names "$FAKE_HOME" --all)"
+  rc=0; run_select "$FAKE_HOME" --select ai-brain,core || rc=$?
+  assert_eq "FX-15: exit 0" "0" "$SELECT_RC"
+  SEL_NAMES="$(placement_names "$FAKE_HOME" --select)"
+  EXCLUDED="$(comm -23 <(printf '%s\n' "$ALL_NAMES") <(printf '%s\n' "$SEL_NAMES"))"
+  assert_eq "FX-15: 外した機能の名前がライブ位置に 0 件" "" "$(comm -12 <(printf '%s\n' "$EXCLUDED") <(live_names "$FAKE_HOME"))"
+  assert_eq "FX-15: 外した機能の登録が 0 件" "" "$(comm -12 <(printf '%s\n' "$EXCLUDED") <(registered_names "$FAKE_HOME"))"
+  assert_true "FX-15: 無関係のファイルは残る" "$([ -e "$FAKE_HOME/.claude/hooks/zz-unrelated.sh" ] && echo 1 || echo 0)"
+  assert_true "FX-15: 出力に外した機能の常駐の解除手順がある" "$(echo "$SELECT_OUT" | grep -qi 'launchctl' && echo 1 || echo 0)"
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 31. v1.2 D-4/Q2: 常駐は手順を示すだけ（launchctl を実行しない） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  LC_LOG="$FAKE_HOME/launchctl-calls.log"
+  LC_STUB="$FAKE_HOME/stub"; mkdir -p "$LC_STUB"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$LC_LOG" > "$LC_STUB/launchctl"
+  chmod +x "$LC_STUB/launchctl"
+  rc=0
+  SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$FAKE_HOME" PATH="$LC_STUB:$PATH" bash "$SCRIPT" --select ai-brain,core >/dev/null 2>&1 || rc=$?
+  assert_eq "exit 0" "0" "$rc"
+  assert_true "偽 launchctl の呼び出し記録が 0 件（組立は launchctl を実行しない）" \
+    "$([ ! -s "$LC_LOG" ] && echo 1 || echo 0)"
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 32. v1.2 AC-8 D-03: 選択の保存先が書込不可＝非0・ライブ位置と保存済みの旧い選択が不変・一時ファイルが残らない→権限を戻して再実行で FX-13 の集合へ収束 ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  run_select "$FAKE_HOME" --select core
+  assert_eq "前提: core だけで保存できている" "AIENV_COMPONENTS=core" "$(cat "$FAKE_HOME/$COMPONENTS_REL" 2>/dev/null)"
+  BEFORE_NAMES="$(live_names "$FAKE_HOME")"
+  BEFORE_SAVED="$(cat "$FAKE_HOME/$COMPONENTS_REL" 2>/dev/null || true)"
+  COMP_DIR="$(dirname "$FAKE_HOME/$COMPONENTS_REL")"
+  BEFORE_LISTING="$(ls -1a "$COMP_DIR" 2>/dev/null | sort || true)"
+  chmod -w "$COMP_DIR"
+  run_select "$FAKE_HOME" --select ai-brain,core
+  assert_true "保存先が書込不可＝非0終了" "$([ "$SELECT_RC" != "0" ] && echo 1 || echo 0)"
+  assert_eq "保存先が書込不可＝ライブ位置は不変" "$BEFORE_NAMES" "$(live_names "$FAKE_HOME")"
+  assert_eq "保存先が書込不可＝保存済みの旧い選択は不変" "$BEFORE_SAVED" "$(cat "$FAKE_HOME/$COMPONENTS_REL" 2>/dev/null)"
+  chmod +w "$COMP_DIR"
+  AFTER_LISTING="$(ls -1a "$COMP_DIR" 2>/dev/null | sort || true)"
+  chmod -w "$COMP_DIR"
+  assert_eq "保存先が書込不可＝一時ファイルが残らない（フォルダの一覧が不変）" "$BEFORE_LISTING" "$AFTER_LISTING"
+  chmod +w "$COMP_DIR"
+  run_select "$FAKE_HOME" --select ai-brain,core
+  assert_eq "権限を戻した同じコマンドの再実行＝exit 0" "0" "$SELECT_RC"
+  SEL_NAMES="$(placement_names "$FAKE_HOME" --select)"
+  assert_eq "権限を戻した再実行＝FX-13 の集合へ収束" "$SEL_NAMES" "$(live_names "$FAKE_HOME")"
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 33. v1.2 §3.1: 語彙外の選択＝何も変えずに非0・理由 1 行（静かに全部入りへ戻らない） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  run_select "$FAKE_HOME" --select core
+  BEFORE_NAMES="$(live_names "$FAKE_HOME")"
+  rc=0; run_select "$FAKE_HOME" --select zz-not-a-function || rc=$?
+  assert_true "語彙外の機能名＝非0" "$([ "$SELECT_RC" != "0" ] && echo 1 || echo 0)"
+  assert_eq "語彙外の機能名＝理由が 1 行" "1" "$(echo "$SELECT_OUT" | grep -ci 'zz-not-a-function' || true)"
+  assert_eq "語彙外の機能名＝ライブ位置は不変（全部入りへ静かに戻らない）" "$BEFORE_NAMES" "$(live_names "$FAKE_HOME")"
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 34. v1.2 §3.2: 掃除の退避＝gen・run の置き場は中身を消さず退避名へ・link は台帳の当該部品を指すときだけ消す ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  run_select "$FAKE_HOME" --select ai-brain,core,team,usage,notify,dock
+  CODEX_TOML="$FAKE_HOME/.codex/config.toml"
+  assert_true "前提: gen の置き場（config.toml）がある" "$([ -e "$CODEX_TOML" ] && echo 1 || echo 0)"
+  CODEX_TOML_SUM_BEFORE="$(cksum "$CODEX_TOML" 2>/dev/null | awk '{print $1, $2}')"
+  rc=0; run_select "$FAKE_HOME" --select ai-brain,core || rc=$?
+  assert_eq "exit 0" "0" "$SELECT_RC"
+  assert_true "gen の置き場は退避名で残る（中身は消えない）" \
+    "$(ls "$CODEX_TOML".aienv-removed.bak* >/dev/null 2>&1 && echo 1 || echo 0)"
+  assert_eq "退避した内容は選択外にする直前と同じ（checksum・サイズの 2 欄だけを比較＝退避名でファイル名欄は変わる）" "$CODEX_TOML_SUM_BEFORE" "$(cksum "$CODEX_TOML".aienv-removed.bak* 2>/dev/null | head -1 | awk '{print $1, $2}')"
+  OTHER_LINK="$FAKE_HOME/.claude/hooks/zz-other-target.sh"
+  ln -s "/bin/echo" "$OTHER_LINK"
+  rc=0; run_select "$FAKE_HOME" || rc=$?
+  assert_true "台帳の部品を指さない別の symlink は触らない（1 行報告のうえ残る）" \
+    "$([ -L "$OTHER_LINK" ] && [ "$(readlink "$OTHER_LINK")" = "/bin/echo" ] && echo 1 || echo 0)"
+  rm -rf "$FAKE_HOME"
+}
+
+echo "=== 35. v1.2 FR-16: 失敗の注入（計画 §5）＝\$HOME/.codex を読取専用にして全部入りの組立→配置を1件以上変えた後・登録の前で非0 ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+  BEFORE_SETTINGS="$FAKE_HOME/.claude/settings.json"
+  run_select "$FAKE_HOME"
+  BEFORE_SUM="$(cksum "$BEFORE_SETTINGS" 2>/dev/null || true)"
+  FAKE_HOME2="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME2"
+  mkdir -p "$FAKE_HOME2/.codex"
+  chmod -w "$FAKE_HOME2/.codex"
+  rc=0; run_select "$FAKE_HOME2" || rc=$?
+  assert_true "\$HOME/.codex 読取専用＝非0終了" "$([ "$SELECT_RC" != "0" ] && echo 1 || echo 0)"
+  assert_true "配置を 1 件以上変えた後で止まる（.claude/hooks の一部は置かれている）" \
+    "$([ -n "$(ls -A "$FAKE_HOME2/.claude/hooks" 2>/dev/null)" ] && echo 1 || echo 0)"
+  REG_MISSING=0
+  for n in $(registered_names "$FAKE_HOME2"); do
+    found=0
+    for d in "$FAKE_HOME2/.claude/hooks" "$FAKE_HOME2/.claude/agents" "$FAKE_HOME2/.codex"; do
+      [ -e "$d/$n" ] && found=1
+    done
+    [ "$found" = "1" ] || REG_MISSING=$((REG_MISSING + 1))
+  done
+  assert_eq "登録フックのコマンドは全て実在（旧 settings のまま。登録は配置の後＝未配置の新規登録は無い）" "0" "$REG_MISSING"
+  assert_true "報告に終わらなかった項目（仕方・置き場）がある" "$(echo "$SELECT_OUT" | grep -qE 'gen:|run:|\.codex' && echo 1 || echo 0)"
+  assert_true "報告に再実行のコマンド（選択を明示した形）がある" "$(echo "$SELECT_OUT" | grep -q -- '--select' && echo 1 || echo 0)"
+  chmod +w "$FAKE_HOME2/.codex"
+  rc=0; run_select "$FAKE_HOME2" || rc=$?
+  assert_eq "権限を戻した同じコマンドの再実行で完了＝exit 0" "0" "$SELECT_RC"
+  ALL_NAMES="$(placement_names "$FAKE_HOME2" --all)"
+  assert_eq "再実行後＝集合が全部入りの導出に等しい（FR-16）" "$ALL_NAMES" "$(live_names "$FAKE_HOME2")"
+  rm -rf "$FAKE_HOME" "$FAKE_HOME2"
+}
+
+echo "=== 36. v1.2 束 C 着手ゲート C4: dotfiles の既定は DOTFILES_DIR 1 か所（新しい環境変数名を増やさない） ==="
+{
+  assert_eq "install-main.sh・check-drift.sh のどちらにも AIENV_DOTFILES_DIR という名前が無い" "0" \
+    "$(grep -l 'AIENV_DOTFILES_DIR' "$SCRIPT" "$REPO_ROOT/core/assembly/check-drift.sh" 2>/dev/null | grep -c . || true)"
+}
+
+echo "=== 37. v1.2 §3.1 C-V04: 選択ファイルが不正（KEY=VALUE 1キー・1行でない）＝組立は何も変えず非0（ライブ位置・settings.json・選択ファイルが不変） ==="
+{
+  for VARIANT in extra-line other-key dup-key no-key; do
+    FAKE_HOME="$(mktemp -d)"
+    make_fake_home "$FAKE_HOME"
+    run_select "$FAKE_HOME" --select core
+    COMPFILE="$FAKE_HOME/$COMPONENTS_REL"
+    case "$VARIANT" in
+      extra-line) { printf 'AIENV_COMPONENTS=core\n'; printf 'extra garbage line\n'; } > "$COMPFILE" ;;
+      other-key)  { printf 'AIENV_COMPONENTS=core\n'; printf 'AIENV_OTHER=x\n'; } > "$COMPFILE" ;;
+      dup-key)    { printf 'AIENV_COMPONENTS=core\n'; printf 'AIENV_COMPONENTS=ai-brain\n'; } > "$COMPFILE" ;;
+      no-key)     printf 'core\n' > "$COMPFILE" ;;
+    esac
+    BEFORE_NAMES="$(live_names "$FAKE_HOME")"
+    BEFORE_SETTINGS_SUM="$(cksum "$FAKE_HOME/.claude/settings.json" 2>/dev/null | awk '{print $1, $2}')"
+    BEFORE_COMPFILE="$(cat "$COMPFILE")"
+    rc=0; run_select "$FAKE_HOME" || rc=$?
+    assert_true "C-V04（${VARIANT}）: 非0終了" "$([ "$SELECT_RC" != "0" ] && echo 1 || echo 0)"
+    assert_eq "C-V04（${VARIANT}）: ライブ位置は不変" "$BEFORE_NAMES" "$(live_names "$FAKE_HOME")"
+    assert_eq "C-V04（${VARIANT}）: settings.json は不変" "$BEFORE_SETTINGS_SUM" \
+      "$(cksum "$FAKE_HOME/.claude/settings.json" 2>/dev/null | awk '{print $1, $2}')"
+    assert_eq "C-V04（${VARIANT}）: 選択ファイルは不変（組立が書き換えない）" "$BEFORE_COMPFILE" "$(cat "$COMPFILE")"
+    rm -rf "$FAKE_HOME"
+  done
+}
+
+echo "=== 38. v1.2 設計§3.3 A0/F0・FR-10・FR-14・検証C2-V04: settings.json雛形が壊れている（①不正JSON／②必須placeholder欠落）＝--selectしても何も変えずに非0・理由1行（選択ファイル未作成・ライブ位置不変・既存settings.jsonがbyte不変）。--dry-runでも同じ非0 ==="
+{
+  for VARIANT in invalid-json missing-placeholder; do
+    TMP_REPO="$(mktemp -d)"
+    cp -R "$REPO_ROOT/." "$TMP_REPO/"
+    TPL="$TMP_REPO/core/assembly/settings.json"
+
+    FAKE_HOME="$(mktemp -d)"
+    make_fake_home "$FAKE_HOME"
+    # 事前に全部入りで組立てる（まだ雛形を壊していない状態＝「既存のsettings.jsonを事前に全部入りで作っておく」）。
+    rc=0
+    SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" >/dev/null 2>&1 || rc=$?
+    assert_eq "C2-V04（${VARIANT}）前提: 正しい雛形での全部入り組立はexit 0" "0" "$rc"
+    assert_true "C2-V04（${VARIANT}）前提: 事前の全部入り組立は選択ファイルを作らない" \
+      "$([ ! -e "$FAKE_HOME/$COMPONENTS_REL" ] && echo 1 || echo 0)"
+    BEFORE_NAMES="$(live_names "$FAKE_HOME")"
+
+    # ここで雛形を壊す（既に完了した事前の正常な組立には影響しない）。
+    case "$VARIANT" in
+      invalid-json)
+        printf '{ "model": "__AIENV_MODEL__", BROKEN' > "$TPL"
+        ;;
+      missing-placeholder)
+        python3 -c "
+import json
+with open('$TPL') as f:
+    d = json.load(f)
+d['model'] = 'claude-hardcoded-not-a-placeholder'
+with open('$TPL', 'w') as f:
+    json.dump(d, f, indent=2)
+"
+        ;;
+    esac
+    BEFORE_SETTINGS_SUM="$(cksum "$FAKE_HOME/.claude/settings.json" 2>/dev/null | awk '{print $1, $2}')"
+
+    rc=0
+    OUT="$(SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" --select ai-brain,core 2>&1)" || rc=$?
+    assert_true "C2-V04（${VARIANT}）: 非0終了" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+    assert_eq "C2-V04（${VARIANT}）: 理由が1行（[install-main] FAIL: が1回）" "1" \
+      "$(printf '%s\n' "$OUT" | grep -c '\[install-main\] FAIL:' || true)"
+    assert_true "C2-V04（${VARIANT}）: 選択ファイルが作られない" \
+      "$([ ! -e "$FAKE_HOME/$COMPONENTS_REL" ] && echo 1 || echo 0)"
+    assert_eq "C2-V04（${VARIANT}）: ライブ位置に名前が1つも増えない（不変）" "$BEFORE_NAMES" "$(live_names "$FAKE_HOME")"
+    assert_eq "C2-V04（${VARIANT}）: 既存のsettings.jsonがbyte不変" "$BEFORE_SETTINGS_SUM" \
+      "$(cksum "$FAKE_HOME/.claude/settings.json" 2>/dev/null | awk '{print $1, $2}')"
+
+    rc=0
+    SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" --select ai-brain,core --dry-run >/dev/null 2>&1 || rc=$?
+    assert_true "C2-V04（${VARIANT}）: --dry-run でも非0終了" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+
+    rm -rf "$FAKE_HOME" "$TMP_REPO"
+  done
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

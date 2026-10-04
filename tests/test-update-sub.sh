@@ -24,6 +24,8 @@ _TMPBASE="${_TMPBASE%/}"
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
+# shellcheck source=./lib-ledger-fixtures.sh
+. "$TESTS_DIR/lib-ledger-fixtures.sh"
 
 PASS=0
 FAIL=0
@@ -382,6 +384,65 @@ echo "=== 12. 冪等: 同じ状態で 2 回続けて実行しても exit 0・毎
   assert_eq "install-sub.sh は 2 回（HEAD 不変でも毎回）" "2" "$(calls_count)"
   assert_true "Fragments/mine.md は 2 回目も残る" "$([[ -f "$VAULT_DIR/Fragments/mine.md" ]] && echo 1 || echo 0)"
   rm -rf "$WORK"
+}
+
+echo "=== 13. v1.2 FR-10/FR-14: Core を選んだサブ機の更新コマンドは引数なしで保存された選択（Core だけ）で組み立て exit 0・登録フックの実体が実在（実物の install-sub.sh／install-main.sh 経由） ==="
+{
+  # 偽物の install-sub.sh でなく、実物の repo（bare origin へ push 済みの複製）を使う
+  # ＝update-sub.sh → 実物 install-sub.sh → install-main.sh の委譲の鎖を実際に通す。
+  T="$_TMPBASE/aienv-test-update-sub13.$$"; mkdir -p "$T"
+  BARE="$T/origin.git"
+  git init -q --bare "$BARE"
+  SRC="$T/src"
+  lf_copy_repo "$REPO_ROOT" "$SRC"
+  lf_git -C "$SRC" remote add origin "$BARE"
+  lf_git -C "$SRC" push -q origin HEAD:main
+  lf_git -C "$SRC" branch -q --set-upstream-to=origin/main
+
+  SUBHOME="$T/subhome"
+  mkdir -p "$SUBHOME/.claude/hooks" "$SUBHOME/.claude/agents" "$SUBHOME/.codex" "$SUBHOME/.config/takumi009-ai-env"
+  cat > "$SUBHOME/.config/takumi009-ai-env/models.conf" <<'EOF'
+[t-sonnet-high]
+provider=anthropic-api
+model=claude-sonnet-5
+EOF
+  cat > "$SUBHOME/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 7
+profile_slug: test-update-sub-13
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=sub
+role.leader: configured model=t-sonnet-high
+---
+EOF
+  SUBVAULT="$SUBHOME/Data/obsidian"
+
+  rc=0
+  SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$SUBHOME" VAULT="$SUBVAULT" \
+    bash "$SRC/core/assembly/install-sub.sh" --select core >"$SUBHOME/.first-select.log" 2>&1 || rc=$?
+  assert_eq "前提: install-sub.sh --select core（初回の保存＋組立）は exit 0" "0" "$rc"
+
+  rc=0
+  UPDATE_OUT="$(DIR="$SRC" SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$SUBHOME" VAULT="$SUBVAULT" \
+    bash "$SRC/core/assembly/update-sub.sh" 2>&1)" || rc=$?
+  assert_eq "update-sub.sh（引数なし）は exit 0" "0" "$rc"
+
+  REG_MISSING=0
+  for n in $(jq -r '.hooks[][].hooks[].command' "$SUBHOME/.claude/settings.json" 2>/dev/null | xargs -n1 basename 2>/dev/null); do
+    found=0
+    for d in "$SUBHOME/.claude/hooks" "$SUBHOME/.claude/agents" "$SUBHOME/.codex"; do
+      [ -e "$d/$n" ] && found=1
+    done
+    [ "$found" = "1" ] || REG_MISSING=$((REG_MISSING + 1))
+  done
+  assert_eq "登録フックのコマンドが全て実在（FR-14）" "0" "$REG_MISSING"
+  assert_true "選択は保存済みのまま（components.env が Core だけ）＝指定なしの再実行で再び収束" \
+    "$([ "$(cat "$SUBHOME/.config/takumi009-ai-env/components.env" 2>/dev/null || true)" = "AIENV_COMPONENTS=core" ] && echo 1 || echo 0)"
+  assert_true "選択外（ai-brain）の vault-recall.sh はライブ位置に無い（Core だけの選択が保たれる）" \
+    "$([ ! -e "$SUBHOME/.claude/hooks/vault-recall.sh" ] && echo 1 || echo 0)"
+
+  rm -rf "$T"
 }
 
 echo "=== summary: $PASS passed, $FAIL failed ==="

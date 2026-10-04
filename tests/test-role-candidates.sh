@@ -330,7 +330,7 @@ echo "=== V-08（設計 §5.6）: Usage 提示の照会 3 分類＝鍵なし／�
   rc_ledger_case "鍵なし" "$WORK/ledger-nokey.tsv" ""
   rc_ledger_case "台帳異常（台帳が無い）" "$WORK/no-such-dir/ledger.tsv" "LEDGER: ledger "
   { cat "$WORK/ledger-nokey.tsv"
-    printf 'part\tusage/executor/zz-missing-snapshot.py\tusage\texecutor\t-\tusage.snapshot\t-\t-\n'; } > "$WORK/ledger-badpart.tsv"
+    printf 'part\tusage/executor/zz-missing-snapshot.py\tusage\texecutor\t-\tusage.snapshot\t-\t-\t-\n'; } > "$WORK/ledger-badpart.tsv"
   rc_ledger_case "実体異常（パス不在）" "$WORK/ledger-badpart.tsv" "LEDGER: part usage.snapshot "
 }
 

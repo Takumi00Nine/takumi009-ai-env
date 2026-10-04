@@ -1,1 +1,0 @@
-../ai-brain/executor/maintenance.sh

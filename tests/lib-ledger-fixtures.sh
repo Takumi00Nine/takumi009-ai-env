@@ -86,7 +86,7 @@ lf_mk_fx11() {
   fi
   mkdir -p "$wt/notify/connect/zz-dest"
   cp "$fixture" "$wt/notify/connect/zz-dest/deliver.sh"
-  printf 'part\t%s\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\n' "$rel" >> "$ledger"
+  printf 'part\t%s\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\t-\n' "$rel" >> "$ledger"
 }
 
 lf_path_without() {

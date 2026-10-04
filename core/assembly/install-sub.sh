@@ -41,6 +41,7 @@
 #   core/assembly/install-sub.sh --dry-run         # 計画だけ表示（何もしない）
 #   core/assembly/install-sub.sh --with-dotfiles   # 上記に加え、dotfiles（部品・下請け）も導入する
 #   core/assembly/install-sub.sh --check-profile   # 副作用ゼロの検査（実行せずプロファイル状態だけ見る）
+#   core/assembly/install-sub.sh --select ai-brain,core   # 置く機能を選ぶ（install-main.sh へ委譲・保存される・all＝全部入り）
 #
 # --with-dotfiles は install-main.sh へそのまま委譲する（実装の二重管理を避ける。
 # install-main.sh側の挙動＝相談資料§3-5「dotfilesは独立のまま部品として下請け」）。
@@ -58,13 +59,13 @@
 # Local config files on a sub machine (moved from README "Sub environment" 2026-09-19):
 # The sub environment is self-contained with just the base package and does not install the private patch (it also has no edit permission = pull only). As with the main environment, `models.conf` and `bedrock.env` have no auto-copy — copy `team/data/models.conf.sample` yourself before running `install-sub.sh` (and `team/connect/claude-code/bedrock.env.sample` too, if this machine uses Bedrock).
 # `profile.md` is auto-copied from `team/data/profile.md.sample` on first run if it doesn't exist yet (same mechanism as the main environment, since `install-sub.sh` calls `install-main.sh` internally) — but for a sub machine you should copy it yourself first anyway, so you can edit `machine_role` to `value=sub` (and `role.leader` if this machine plays a different leader) before the installer runs.
-# The role-update flow after install (SessionStart notice → manual `core/assembly/update-sub.sh`) is described at the top of core/assembly/check-sub-update.sh and scripts/update-sub.sh.
+# The role-update flow after install (SessionStart notice → manual `core/assembly/update-sub.sh`) is described at the top of core/assembly/check-sub-update.sh and core/assembly/update-sub.sh.
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 
 set -euo pipefail
 
-# repo ルートは実体の位置から導く＝旧更新コマンドが固定で呼ぶ旧パスの転送 symlink から起動されてもリンクを辿る。
+# repo ルートは実体の位置から導く＝本スクリプトが symlink 経由で起動されてもリンクを辿って repo の中を指す。
 _self="${BASH_SOURCE[0]}"
 while [ -L "$_self" ]; do
   _dir="$(cd "$(dirname "$_self")" && pwd)"
@@ -88,15 +89,26 @@ DIR="$(cd "$(dirname "$_self")/../.." && pwd)"
 DRY_RUN=0
 WITH_DOTFILES=0
 CHECK_PROFILE=0
-for arg in "$@"; do
-  case "$arg" in
+SELECT_ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --with-dotfiles) WITH_DOTFILES=1 ;;
     # 2026-09-02追加: install-main.sh の検査口（副作用ゼロ）をサブ機からも
     # 直接叩けるようにする転送（check-drift.sh ⑧・README の検査手順が使う）。
     --check-profile) CHECK_PROFILE=1 ;;
-    *) echo "unknown option: $arg" >&2; exit 1 ;;
+    # v1.2 選択（置く機能）＝そのまま install-main.sh へ渡す（検査・保存は委譲先と台帳ツール）。
+    --select)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then
+        echo "--select には機能名のカンマ区切りか all が必要です" >&2
+        exit 1
+      fi
+      SELECT_ARG="$2"
+      shift
+      ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
+  shift
 done
 
 log() { echo "[install-sub] $*"; }
@@ -105,6 +117,14 @@ fail() { echo "[install-sub] FAIL: $*" >&2; exit 1; }
 
 [ -d "$DIR/ai-brain/data/vault-public" ] || fail "リポジトリに ai-brain/data/vault-public/ が見つかりません（checkout破損の可能性）: $DIR/ai-brain/data/vault-public"
 [ -x "$DIR/core/assembly/install-main.sh" ] || fail "install-main.sh が見つかりません（checkout破損の可能性）: $DIR/core/assembly/install-main.sh"
+
+# --- 0. 選択の検査（v1.2 設計 §3.1＝不正な選択は何も変えずに止まる）。Vault骨格の配置より前に、
+#        台帳ツールの保存しない検証口で値だけを見る（保存と配置は委譲先の install-main.sh）。 ---
+if [ -n "$SELECT_ARG" ]; then
+  if ! _select_err="$(bash "$DIR/core/assembly/ledger-tool.sh" select --check "$SELECT_ARG" 2>&1 >/dev/null)"; then
+    fail "選択を受け付けられません。何も変えていません（${_select_err:-台帳ツールの検証口が失敗}）"
+  fi
+fi
 
 # --- 1. Vault骨格の配置（$VAULT が無い時だけ。既存Vaultは上書きしない） ---
 # ⚠️ --check-profile 検査モードでは一切進まない（2026-09-02追加）。検査は
@@ -137,6 +157,7 @@ main_args=(--sub-delegate)
 [ "$DRY_RUN" = "1" ] && main_args+=(--dry-run)
 [ "$WITH_DOTFILES" = "1" ] && main_args+=(--with-dotfiles)
 [ "$CHECK_PROFILE" = "1" ] && main_args+=(--check-profile)
+[ -n "$SELECT_ARG" ] && main_args+=(--select "$SELECT_ARG")
 # ⚠️ 裸の呼び出しで`set -e`に任せると、install-main.sh側が設計書S4等の
 # 「他の処理は完走させたうえで最終的に非0」を意図した終了コードを返した
 # 場合でも、install-sub.shはここで即座に終了してしまい、後続のstep3〜5

@@ -53,42 +53,38 @@ ac8_side() {
   done
 }
 
-ac_8() {
-  local od="$OUT/ac8" moves="$WT1/$CLOSING_MOVES_REL" n k t nk nt succ e1="" e2="" e3="" e4="" c p f
-  mkdir -p "$od"
-  local why
-  why="$(cl_readme_check base main "$WT0/README.md")" || { cl_result AC-8 NG "README の手順と定数が不一致: 基準 ${why}"; return; }
-  ac8_side base "$WT0" || { cl_result AC-8 NG "基準側の導入手順が失敗（ac8/base/install.log）"; return; }
-  if ! cl_fx1_ready; then cl_result AC-8 NG "${CL_FX1_WHY}（基準側の配置は済み＝ac8/base/）"; return; fi
-  why="$(cl_readme_check new main "$WT1/README.md")" || { cl_result AC-8 NG "README の手順と定数が不一致: FX-1 ${why}"; return; }
-  ac8_side new "$WT1" || { cl_result AC-8 NG "FX-1 側の導入手順が失敗（ac8/new/install.log）"; return; }
+# cl_ac8_cmp <od> — v1.1 AC-8 ①〜④ の比較本体（<od>/base/・<od>/new/ が ac8_side で用意済みの前提）。
+#   結果は CL_AC8_E1..E4 に入れる（空＝そのeは合格）。束 B・束 C のどちらの ac_8 も同じ比較を使う（重複を 1 本に）。
+cl_ac8_cmp() {
+  local od="$1" moves="$WT1/$CLOSING_MOVES_REL" n k t nk nt succ c p f
+  CL_AC8_E1=""; CL_AC8_E2=""; CL_AC8_E3=""; CL_AC8_E4=""
   # ① 名前の包含と実体の後継
   while IFS="$(printf '\t')" read -r n k t; do
     [ -n "$n" ] && [ "$k" != "-" ] || continue
     nk="$(awk -F'\t' -v n="$n" '$1==n{print $2}' "$od/new/live.tsv")"
     nt="$(awk -F'\t' -v n="$n" '$1==n{print $3}' "$od/new/live.tsv")"
-    if [ -z "$nk" ] || [ "$nk" = "-" ]; then e1="$e1 欠:$n"; continue; fi
+    if [ -z "$nk" ] || [ "$nk" = "-" ]; then CL_AC8_E1="$CL_AC8_E1 欠:$n"; continue; fi
     if [ "$k" = L ] && [ "${t#R:}" != "$t" ]; then
       succ="$(cl_py moves-succ "$moves" "${t#R:}")" || succ="${t#R:}"
-      printf '%s\n' "$succ" | grep -qxF "${nt#R:}" || e1="$e1 実体:$n(${t#R:}→${nt#R:})"
+      printf '%s\n' "$succ" | grep -qxF "${nt#R:}" || CL_AC8_E1="$CL_AC8_E1 実体:$n(${t#R:}→${nt#R:})"
     fi
   done < "$od/base/live.tsv"
   while IFS="$(printf '\t')" read -r n k t; do
     [ -n "$n" ] && [ "$k" != "-" ] || continue
     awk -F'\t' -v n="$n" '$1==n && $2!="-"{f=1} END{exit !f}' "$od/base/live.tsv" && continue
-    if [ "${t#R:}" != "$t" ] && cl_py moves-split-new "$moves" "${t#R:}"; then :; else e1="$e1 新のみ:$n"; fi
+    if [ "${t#R:}" != "$t" ] && cl_py moves-split-new "$moves" "${t#R:}"; then :; else CL_AC8_E1="$CL_AC8_E1 新のみ:$n"; fi
   done < "$od/new/live.tsv"
   # ②
-  e2="$(grep -c 'MISSING:' "$od/new/live.tsv")"
+  CL_AC8_E2="$(grep -c 'MISSING:' "$od/new/live.tsv")"
   # ③ 生成ファイル
   cl_py canon "$od/base/settings.json" json | cl_norm base "$od" > "$od/base.settings.n.json"
   cl_py canon "$od/new/settings.json" json | cl_norm new "$od" > "$od/new.settings.n.json"
-  cl_py settings-cmp "$od/base.settings.n.json" "$od/new.settings.n.json" > "$od/settings-cmp.txt" || e3="$e3 settings.json"
+  cl_py settings-cmp "$od/base.settings.n.json" "$od/new.settings.n.json" > "$od/settings-cmp.txt" || CL_AC8_E3="$CL_AC8_E3 settings.json"
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     # FX-1 にだけある登録は、許容する追加のライブ名（closing.conf CLOSING_AC8_ALLOWED_EXTRA）だけ ok
     p="${c#EXTRA }"; p="${p%% *}"; p="${p##*/}"
-    case " $CLOSING_AC8_ALLOWED_EXTRA " in *" $p "*) ;; *) e3="$e3 登録:${c#EXTRA }" ;; esac
+    case " $CLOSING_AC8_ALLOWED_EXTRA " in *" $p "*) ;; *) CL_AC8_E3="$CL_AC8_E3 登録:${c#EXTRA }" ;; esac
   done <<EOF
 $(grep '^EXTRA ' "$od/settings-cmp.txt")
 EOF
@@ -96,15 +92,26 @@ EOF
     case "$f" in *.toml) k=toml ;; *) k=plist ;; esac
     cl_py canon "$od/base/$f" "$k" 2>/dev/null | cl_norm base "$od" > "$od/base.$f.n"
     cl_py canon "$od/new/$f" "$k" 2>/dev/null | cl_norm new "$od" > "$od/new.$f.n"
-    diff -u "$od/base.$f.n" "$od/new.$f.n" > "$od/$f.diff" || e3="$e3 $f"
+    diff -u "$od/base.$f.n" "$od/new.$f.n" > "$od/$f.diff" || CL_AC8_E3="$CL_AC8_E3 $f"
   done
   # ④
-  e4="$(grep -c '^MISSING' "$od/new/la-targets.txt")"
+  CL_AC8_E4="$(grep -c '^MISSING' "$od/new/la-targets.txt")"
+}
+
+ac_8() {
+  local od="$OUT/ac8" why
+  mkdir -p "$od"
+  why="$(cl_readme_check base main "$WT0/README.md")" || { cl_result AC-8 NG "README の手順と定数が不一致: 基準 ${why}"; return; }
+  ac8_side base "$WT0" || { cl_result AC-8 NG "基準側の導入手順が失敗（ac8/base/install.log）"; return; }
+  if ! cl_fx1_ready; then cl_result AC-8 NG "${CL_FX1_WHY}（基準側の配置は済み＝ac8/base/）"; return; fi
+  why="$(cl_readme_check new main "$WT1/README.md")" || { cl_result AC-8 NG "README の手順と定数が不一致: FX-1 ${why}"; return; }
+  ac8_side new "$WT1" || { cl_result AC-8 NG "FX-1 側の導入手順が失敗（ac8/new/install.log）"; return; }
+  cl_ac8_cmp "$od"
   local tg; tg="$(grep -c . "$od/new/la-targets.txt")"
-  if [ -z "$e1" ] && [ "$e2" = 0 ] && [ -z "$e3" ] && [ "$e4" = 0 ] && [ "$tg" -gt 0 ]; then
+  if [ -z "$CL_AC8_E1" ] && [ "$CL_AC8_E2" = 0 ] && [ -z "$CL_AC8_E3" ] && [ "$CL_AC8_E4" = 0 ] && [ "$tg" -gt 0 ]; then
     cl_result AC-8 ok "①名前・実体 一致 ②リンク切れ 0 ③生成ファイル 一致 ④起動対象 $tg 件 実在"
   else
-    cl_result AC-8 NG "①${e1:- ok} ②リンク切れ $e2 ③${e3:- ok} ④不在 $e4/${tg}（ac8/）"
+    cl_result AC-8 NG "①${CL_AC8_E1:- ok} ②リンク切れ $CL_AC8_E2 ③${CL_AC8_E3:- ok} ④不在 $CL_AC8_E4/${tg}（ac8/）"
   fi
 }
 
@@ -207,10 +214,7 @@ ac_10() {
     [ "$rc" -eq 0 ] || m2="$m2 $p=$rc"   # 配置の健全性検査（check-drift）も rc 0 を必須（C-2）
   done
   m2="$m2$(ac10_three "$h" 2)"
-  for x in $CLOSING_LA_PLISTS; do
-    plutil -extract ProgramArguments json -o - "$h/$CLOSING_LA_DIR_REL/$x" 2>/dev/null | jq -r '.[] | select(startswith("/"))' |
-      while IFS= read -r p; do [ -e "$p" ] || echo "不在 $x $p"; done
-  done > "$od/2-la-targets.txt"
+  cl_la_targets_missing "$h" > "$od/2-la-targets.txt"   # 共有＝lib-closing.sh cl_la_targets_missing（C2-V03）
   [ -s "$od/2-la-targets.txt" ] && m2="$m2 起動対象欠$(grep -c . "$od/2-la-targets.txt")"
   [ -z "$m2" ] || bad=1
   # ③ FX-22（pull だけ）

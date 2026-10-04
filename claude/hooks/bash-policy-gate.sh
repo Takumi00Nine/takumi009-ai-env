@@ -1,1 +1,0 @@
-../../core/connect/claude-code/bash-policy-gate.sh

@@ -110,8 +110,9 @@ usage_count="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/core/assemb
 assert_eq "UserPromptSubmitにusage-inject.shが1回登録" "1" "$usage_count"
 settings_fields="$(python3 -c "import json; d=json.load(open('$REPO_ROOT/core/assembly/settings.json')); hs=[h for g in d['hooks']['UserPromptSubmit'] for h in g['hooks'] if h['command']=='\$HOME/.claude/hooks/usage-inject.sh']; print(hs[0]['timeout'],hs[0]['statusMessage'])")"
 assert_eq "timeout/statusMessageが指定値" "5 使用率を注入中" "$settings_fields"
-install_line="$(grep '^[[:space:]]*link usage/executor/usage-inject\.sh[[:space:]]' "$REPO_ROOT/core/assembly/install-main.sh" || true)"
-assert_contains "install-main.shにlink配置あり" "$install_line" 'usage-inject.sh'
+# 配置の正本は台帳（core/data/ledger.tsv）の「配置」列（v1.2束C＝組立に手書きの配置行は無い）。
+ledger_placement="$(awk -F'\t' '$1=="part" && $2=="usage/executor/usage-inject.sh" {print $9}' "$REPO_ROOT/core/data/ledger.tsv")"
+assert_eq "台帳にusage-inject.shのlink配置あり" 'link:$HOME/.claude/hooks/usage-inject.sh' "$ledger_placement"
 if grep -q 'install-main\.sh' "$REPO_ROOT/core/assembly/install-sub.sh"; then
   pass "install-sub.shはinstall-main.shへ配置を委譲"
 else

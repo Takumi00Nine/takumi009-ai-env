@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# メイン環境用インストーラ: このリポジトリの各機能フォルダ配下の Claude Code／Codex
-# 接続部品を、ライブ位置（~/.claude/・~/.codex/）へ symlink する（dotfiles/install.sh
-# と同方式）。v1.1 では本スクリプト（このインストーラ）が配置集合の正本であり、
-# 台帳 core/data/ledger.tsv はそれを検査するだけ（ledger-tool.sh check ⑦が、全部入り
-# の組立が実際に生成・配置した結果＝settings.json の全フック command・LaunchAgent
-# の起動対象と突合する＝FR-14 ②）。台帳から配置を駆動する（台帳駆動化）のは v1.2。
+# メイン環境用インストーラ（全部入りの組立）: このリポジトリの各機能フォルダ配下の部品を、
+# ライブ位置（~/.claude/・~/.codex/ 等）へ置く（dotfiles/install.sh と同方式の symlink ほか）。
+# v1.2（台帳駆動化・docs/v1.2-notify-install 設計 §3.1〜§3.3）: 置く集合の正本は台帳
+# core/data/ledger.tsv の 9 列目「配置」だけ。本スクリプトは手書きの一覧を持たず、
+# 台帳ツールの導出（core/assembly/ledger-tool.sh placement）の一覧を台帳の行順に置く:
+#   link＝置き場に部品への symlink（下記の退避規則）／gen＝雛形の __AIENV_HOME__ を置き換えた実ファイル
+#   （config.toml の生成）／run＝その行の部品（接続フォルダの配置手順）を引数なしで実行。
+# 選択（置く機能）＝--select <機能名,…|all>。Core は常に含む。指定は保存され（~/.config/takumi009-ai-env/
+# components.env・全部入り＝ファイル無し）、指定なしの次の実行も同じ選択で組み立てる。
+# 順序＝A0 台帳・選択の検査 → A1 選択の保存 → A2 配置 → A4 登録（settings.json の雛形のフックのうち、
+# 命令の先頭語が選択の導出の置き場に当たるものだけ）→ A5 掃除（全部入りの導出 − 選択の導出）→
+# A6 常駐の案内（launchctl は実行しない）。どの時点でも settings.json が名指す命令は実在する
+# （登録は配置の後・掃除は登録の後）。配置の途中で失敗したら、終わらなかった項目と再実行のコマンドを出して止まる。
 #
 # 冪等（再実行安全）: 既存の「実ファイル」（symlinkでないもの）は初回だけ
 # "<dest>.pre-aienv.bak" へ退避してから symlink に置き換える。バックアップは
@@ -29,6 +36,7 @@
 #
 # 使い方:
 #   core/assembly/install-main.sh                          # 実行（symlink化 / config.toml・settings.json生成）
+#   core/assembly/install-main.sh --select ai-brain,core   # 置く機能を選んで実行（保存される。all＝全部入りへ戻す）
 #   core/assembly/install-main.sh --dry-run                # 置換計画だけ表示（何もしない）
 #   core/assembly/install-main.sh --with-dotfiles          # 上記に加え、dotfiles（部品・下請け）も導入する
 #   core/assembly/install-main.sh --check-profile          # ローカル実体プロファイルの resolve 結果を1行返す（副作用ゼロ）
@@ -78,7 +86,10 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-: "${DOTFILES_DIR:=$HOME/work/dotfiles}"
+# dotfiles の既定の置き場は check-drift.sh と共有する 1 か所（core/executor/vault-paths.sh の DOTFILES_DIR_DEFAULT）。
+# shellcheck source=core/executor/vault-paths.sh
+. "$DIR/core/executor/vault-paths.sh" || { echo "[install-main] FAIL: 共有ライブラリを読めません（checkout破損の可能性）: $DIR/core/executor/vault-paths.sh" >&2; exit 1; }
+: "${DOTFILES_DIR:=$DOTFILES_DIR_DEFAULT}"
 : "${DOTFILES_REPO_URL:=https://github.com/Takumi00Nine/dotfiles}"
 # テスト専用: "1" にすると launchctl への実操作だけを skip する（scripts/install-sub.sh
 # と同じ考え方・同じ変数名。実launchd＝gui/$(id -u) はHOMEを差し替えても隔離
@@ -399,9 +410,18 @@ WITH_DOTFILES=0
 IS_SUB_DELEGATE=0
 CHECK_PROFILE=0
 RENDER_SETTINGS_JSON=""
+SELECT_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
+    --select)
+      if [ $# -lt 2 ] || [ -z "$2" ]; then
+        echo "--select には機能名のカンマ区切りか all が必要です" >&2
+        exit 1
+      fi
+      SELECT_ARG="$2"
+      shift
+      ;;
     --with-dotfiles) WITH_DOTFILES=1 ;;
     --sub-delegate) IS_SUB_DELEGATE=1 ;;
     --check-profile) CHECK_PROFILE=1 ;;
@@ -426,10 +446,8 @@ fi
 # python3依存の早期チェック: generate_settings_json()がclaude/settings.json生成に
 # python3のjson moduleを必須で使う。マーカー書込・symlink化等の実処理が始まって
 # から中途半端な状態でpython3不在に気付くより、着手前に明確な指示を出す。
-# --dry-run は実際には何も生成しない＝python3を必要としないため対象外。
-if [ "$DRY_RUN" != "1" ]; then
-  command -v python3 >/dev/null 2>&1 || fail_settings_generation "python3 が見つかりません（core/assembly/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
-fi
+# --dry-run も対象（A0 の雛形の検証＝check_settings_template() が python3 を使う＝v1.2 設計 §3.3 A0）。
+command -v python3 >/dev/null 2>&1 || fail_settings_generation "python3 が見つかりません（core/assembly/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
 # バックアップは「.pre-aienv.bak がまだ無いときだけ」作る（何度実行しても
 # 常にインストール前オリジナルを保持する。symlink化後は dest が symlink に
 # なるため自然と対象外になるが、generate_config_toml() のように毎回実ファイルを
@@ -472,7 +490,7 @@ would_backup() {
   [ "$mode" = "--additional-on-diff" ] && ! cmp -s "$dest" "$dest.pre-aienv.bak"
 }
 
-# link <repo-relative-source> <destination>
+# link <source（実体の絶対パス＝台帳ツールの導出の 3 列目）> <destination>
 # dotfiles/install.sh の link() と同方式。実際の退避＋symlink化は
 # scripts/lib/managed-symlink.sh の sync_managed_symlink() へ委譲する
 # （install-main.sh の link() が使う＝update-sub は install-sub 経由。
@@ -481,7 +499,7 @@ would_backup() {
 # skip扱いにせず fail する（Codexレビュー指摘・Minor：黙って進むと壊れた
 # checkoutでも "done" と表示されてしまう）。
 link() {
-  local src="$DIR/$1" dest="$2"
+  local src="$1" dest="$2"
   [ -e "$src" ] || fail "リポジトリのファイルが見つかりません（checkout破損の可能性）: $src"
   if [ "$DRY_RUN" = "1" ]; then
     if would_backup "$dest" --additional-on-diff; then
@@ -497,14 +515,14 @@ link() {
   sync_managed_symlink "$src" "$dest" "install-main"
 }
 
-# generate_config_toml <repo-relative-source> <destination>
+# generate_config_toml <source（実体の絶対パス）> <destination>
 # symlink ではなく「プレースホルダ置換した実ファイル」を配置する
 # （config.toml は plain TOML でシェル変数展開されないため）。
 # 置換は sed のメタ文字（& \ その他区切り文字）を $HOME 側でエスケープしてから行い、
 # 生成は mktemp への書き込み→mv で原子的に行う（Codexレビュー指摘・Minor：
 # $HOME に & や \ が含まれる環境での置換破損、書き込み中断時の破損を防ぐ）。
 generate_config_toml() {
-  local src="$DIR/$1" dest="$2" escaped_home tmp
+  local src="$1" dest="$2" escaped_home tmp
   [ -e "$src" ] || fail "リポジトリのファイルが見つかりません（checkout破損の可能性）: $src"
   if [ "$DRY_RUN" = "1" ]; then
     would_backup "$dest" && log "[dry-run] would back up: $dest -> $dest.pre-aienv.bak"
@@ -517,15 +535,16 @@ generate_config_toml() {
   # dest と同じディレクトリに一時ファイルを作る（mv が同一ファイルシステム内の
   # atomic rename になることを保証するため。$TMPDIR が別ボリュームだと
   # atomicにならない可能性があるとのCodexレビュー指摘・Nit）。異常終了時は
-  # trap で後始末する。
+  # trap で後始末する（RETURN の trap は呼び出し元の関数＝place_item の戻りでも走るので、
+  # そのときに tmp が見えなくても set -u で落ちない形にする）。
   tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").aienv-tmp.XXXXXX")"
-  trap 'rm -f "$tmp"' RETURN
+  trap 'rm -f "${tmp:-}"' RETURN
   sed "s#__AIENV_HOME__#${escaped_home}#g" "$src" > "$tmp"
   mv "$tmp" "$dest"
   log "generated: $dest <- $src （__AIENV_HOME__ を $HOME へ置換）"
 }
 
-# generate_settings_json <repo-relative-source> <destination> <model-value> [bedrock-env-file]
+# generate_settings_json <repo-relative-source> <destination> <model-value> [bedrock-env-file] [effort] [places]
 # claude/settings.json も config.toml と同じ理由（JSONはシェル変数展開されない・
 # symlinkだとClaude Code自身の `/model` 書込がリポジトリ側ファイルへ直接及んでしまう）
 # で symlink ではなく実ファイルとして生成する。ただし置換方式は config.toml の
@@ -554,13 +573,44 @@ generate_config_toml() {
 # しない（未指定＝セッション/アカウント既定に従う。既定値を発明しない・§3.8）。
 # テンプレの"effortLevel"値（__AIENV_EFFORT__）が目印のままであることも
 # "model"と同じ理由で検証してから置換/削除する。
+# 6番目の引数（places）は v1.2 登録の絞り込み（設計 §3.2）: 選択の導出の置き場（1 行 1 つ・$HOME 展開済み）。
+# 雛形の各フックのうち、命令の先頭語（$HOME/ は展開して比べる）がこの集合に当たるものだけを残し、
+# 当たらないフックは 1 件 1 行で報告する（hooks が空になったイベントは消す）。他の生成規則は変えない。
+# 生成物を置けたら AIENV_SETTINGS_WRITTEN=1（掃除＝登録の後、の判定に使う）。
+AIENV_SETTINGS_WRITTEN=0
+# SETTINGS_TPL_CHECK_PY — settings.json の雛形の検証（読める・JSON のオブジェクト・"model"／"effortLevel" が
+# 目印 __AIENV_MODEL__／__AIENV_EFFORT__ のまま）を行い、雛形を data に読む python の断片。A0 の
+# check_settings_template() と generate_settings_json() の生成の python が同じこの断片から始まる＝検証は
+# ここ 1 か所（テンプレへのモデル値のハードコードの回帰を fail で早期に気付く＝Codex二次レビュー指摘・Minor）。
+# 不正なら理由を stderr へ 1 行出して exit 1。
+SETTINGS_TPL_CHECK_PY='
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (OSError, ValueError) as e:
+    sys.exit("template is not readable JSON: %s" % e)
+if not isinstance(data, dict):
+    sys.exit("template is not a JSON object (got: %s)" % type(data).__name__)
+for key, mark in (("model", "__AIENV_MODEL__"), ("effortLevel", "__AIENV_EFFORT__")):
+    if data.get(key) != mark:
+        sys.exit("template %s field is not the %s placeholder (got: %r)" % (key, mark, data.get(key)))
+'
+
+# check_settings_template <雛形の repo 相対パス> — A0（何も変える前）に雛形を検証する。不正なら理由 1 行で非0終了
+# （選択の保存・配置・既存 settings.json はどれも変えていない＝v1.2 設計 §3.3 F0）。
+check_settings_template() {
+  local err
+  if ! err="$(python3 -c "$SETTINGS_TPL_CHECK_PY" "$DIR/$1" 2>&1)"; then
+    fail_settings_generation "settings.json の雛形が不正です。何も変えていません: $DIR/$1（${err##*$'\n'}）"
+  fi
+}
+
 generate_settings_json() {
-  local src="$DIR/$1" dest="$2" model="$3" bedrock_env_file="${4:-}" effort="${5:-}" tmp PY_ERR PY_OUT
+  local src="$DIR/$1" dest="$2" model="$3" bedrock_env_file="${4:-}" effort="${5:-}" places="${6:-}" tmp PY_ERR PY_OUT
   local bedrock_status bedrock_env_perm bedrock_payload bedrock_kind
-  # ⚠️ テンプレ欠落（設計書S5）。fail_settings_generation()を使う（他の
-  # link()・generate_config_toml()内の同文言はsettings.json以外のファイル
-  # 用なので対象外＝そちらは変更しない）。
-  [ -e "$src" ] || fail_settings_generation "リポジトリのファイルが見つかりません（checkout破損の可能性）: $src"
+  # テンプレの欠落・不正（設計書S5）は A0 の check_settings_template() が先に止める。下の生成の python も
+  # 同じ検証の断片（SETTINGS_TPL_CHECK_PY）から始まる。
   # Bedrock envファイルの状態を3分類する（bedrock_env_file_kind()参照）:
   # ABSENT(未導入・正常)／EXISTS_BUT_UNAVAILABLE(存在するのに読めない・解析
   # できない)／OK。EXISTS_BUT_UNAVAILABLEの場合は「生成失敗時は旧ファイルを
@@ -662,23 +712,8 @@ generate_settings_json() {
   if [ "$bedrock_status" != "OK" ]; then
     bedrock_payload='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
   fi
-  # テンプレの"model"値が __AIENV_MODEL__ の目印のままであることを検証してから
-  # 上書きする（Codex二次レビュー指摘・Minor対応: 検証無しに常時上書きすると、
-  # 誰かがテンプレへ再び特定モデルをハードコードしてしまう回帰＝今回のタスクの
-  # 発端そのもの＝が起きても、installは何も気付かず成功してしまう。fail()で
-  # 早期に気付けるようにする）。
-  if ! PY_OUT="$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-if not isinstance(data, dict) or data.get('model') != '__AIENV_MODEL__':
-    got = data.get('model') if isinstance(data, dict) else type(data).__name__
-    print('template \"model\" field is not the __AIENV_MODEL__ placeholder (got: ' + repr(got) + ')', file=sys.stderr)
-    sys.exit(1)
-if data.get('effortLevel') != '__AIENV_EFFORT__':
-    got = data.get('effortLevel')
-    print('template \"effortLevel\" field is not the __AIENV_EFFORT__ placeholder (got: ' + repr(got) + ')', file=sys.stderr)
-    sys.exit(1)
+  # 雛形の検証（SETTINGS_TPL_CHECK_PY＝A0 と同じ断片）を通ったものだけを上書きする。
+  if ! PY_OUT="$(python3 -c "$SETTINGS_TPL_CHECK_PY
 data['model'] = sys.argv[3]
 effort = sys.argv[5]
 if effort:
@@ -697,6 +732,31 @@ if payload.get('env'):
             continue
         data['env'][k] = v
 
+import os
+places = set(p for p in sys.argv[6].split('\n') if p)
+home = os.environ.get('HOME', '')
+hooks = data.get('hooks') or {}
+for event in list(hooks):
+    groups = []
+    for g in hooks[event]:
+        kept = []
+        for h in g.get('hooks', []):
+            words = (h.get('command') or '').split()
+            first = words[0] if words else ''
+            if first.startswith('\$HOME/'):
+                first = home + first[len('\$HOME'):]
+            if first in places:
+                kept.append(h)
+            else:
+                print('DROPPED_HOOK:' + h.get('command', ''))
+        if kept:
+            g['hooks'] = kept
+            groups.append(g)
+    if groups:
+        hooks[event] = groups
+    else:
+        del hooks[event]
+
 with open(sys.argv[2], 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
@@ -706,10 +766,11 @@ if payload.get('rejected_keys'):
     print('REJECTED_ENV_KEYS:' + ','.join(payload['rejected_keys']))
 if payload.get('malformed_lines'):
     print('MALFORMED_ENV_LINES:' + ','.join(payload['malformed_lines']))
-" "$src" "$tmp" "$model" "$bedrock_payload" "$effort" 2>&1)"; then
+" "$src" "$tmp" "$model" "$bedrock_payload" "$effort" "$places" 2>&1)"; then
     fail_settings_generation "settings.json の生成に失敗しました（テンプレの検証またはpython3 json処理エラー。checkout破損・テンプレへの誤ったmodel値ハードコード・python3不在等の可能性）: $src${PY_OUT:+ (詳細: $PY_OUT)}"
   fi
   mv "$tmp" "$dest" || fail_settings_generation "settings.jsonの原子的な配置(mv)に失敗しました: $tmp -> $dest"
+  AIENV_SETTINGS_WRITTEN=1
   # ⚠️ 値（model/effort）はログへ再掲しない（設計§6.2-B S1「ログは
   # `model updated`〈値を出さない〉」・値出力口の一本化。2026-09-01 Codex
   # 二次レビュー指摘・MAJOR対応）。値を確認したい場合は
@@ -725,6 +786,9 @@ if payload.get('malformed_lines'):
         ;;
       MALFORMED_ENV_LINES:*)
         warn "Bedrock envファイルに解析できない行がありました（行番号: ${py_out_line#MALFORMED_ENV_LINES:}）: $bedrock_env_file"
+        ;;
+      DROPPED_HOOK:*)
+        log "登録しないフック（命令が選択の導出の置き場に無い）: ${py_out_line#DROPPED_HOOK:}"
         ;;
     esac
   done <<EOF
@@ -793,6 +857,52 @@ print(d.get("effort", ""))
   rm -f "$keys_tmp"
 }
 
+# ============================================================
+# A0 開始（雛形・台帳・選択の検査と配置の導出）・A1 選択の保存（v1.2 設計 §3.1〜§3.3）
+# ============================================================
+# 置く集合は台帳ツールの導出だけから得る（手書きの一覧を持たない＝FR-13・FR-15）。
+# 選択の読み書き（ファイルの場所・形式・語彙）も台帳ツールだけが知る。
+LEDGER_TOOL="$DIR/core/assembly/ledger-tool.sh"
+[ -r "$LEDGER_TOOL" ] || fail "台帳ツールが見つかりません（checkout破損の可能性）: $LEDGER_TOOL"
+
+# ledger_tool_or_fail <失敗の説明> <台帳ツールの引数…> — 台帳ツールの標準出力をそのまま出す。
+# 非0なら台帳ツールの理由 1 行を添えて fail（$(...) の中で呼んだときは代入の失敗で set -e が止める）。
+ledger_tool_or_fail() {
+  local what="$1" err rc=0
+  shift
+  err="$(mktemp)" || fail "一時ファイルを作成できません"
+  bash "$LEDGER_TOOL" "$@" 2>"$err" || rc=$?
+  if [ "$rc" != "0" ]; then
+    what="${what}（$(head -1 "$err")）"
+    rm -f "$err"
+    fail "$what"
+  fi
+  rm -f "$err"
+}
+
+if [ -n "$RENDER_SETTINGS_JSON" ] && [ -n "$SELECT_ARG" ]; then
+  fail "--render-settings-json と --select は併用できません（生成物は保存された選択で作ります）"
+fi
+check_settings_template core/assembly/settings.json
+ALL_LIST="$(ledger_tool_or_fail "台帳から配置を導けません。何も変えていません" placement --all)"
+if [ -n "$SELECT_ARG" ]; then
+  if [ "$DRY_RUN" = "1" ]; then
+    # dry-run は保存しない＝一時の置き場へ保存したことにして導出だけ見る。
+    SELECT_DRY_DIR="$(mktemp -d)" || fail "一時ディレクトリを作成できません"
+    trap 'rm -rf "$SELECT_DRY_DIR"' EXIT
+    export AIENV_COMPONENTS_FILE="$SELECT_DRY_DIR/components.env"
+    log "[dry-run] would save selection: $SELECT_ARG"
+  fi
+  ledger_tool_or_fail "選択を受け付けられません。何も変えていません" select "$SELECT_ARG" >/dev/null
+fi
+SELECT_VALUE="$(ledger_tool_or_fail "保存された選択を読めません。--select で指定し直してください" select)"
+SEL_LIST="$(ledger_tool_or_fail "選択から配置を導けません。何も変えていません" placement)"
+SEL_PLACES="$(printf '%s\n' "$SEL_LIST" | cut -f2)"
+# 失敗の報告に出す再実行のコマンド（選択を明示した形＝FR-16 (ii)）。
+if [ "$IS_SUB_DELEGATE" = "1" ]; then RERUN_CMD="$DIR/core/assembly/install-sub.sh"; else RERUN_CMD="$DIR/core/assembly/install-main.sh"; fi
+RERUN_CMD="$RERUN_CMD --select $SELECT_VALUE"
+[ "$WITH_DOTFILES" = "1" ] && RERUN_CMD="$RERUN_CMD --with-dotfiles"
+
 # --- --render-settings-json <path>: 生成物だけを書いて終了する（check-drift ①-2 の入力口）---
 # 雛形配置・symlink化・config.toml・dotfiles には進まない。<path> は呼び出し側が
 # 用意した一時ディレクトリ内を想定（backup_once は dest 不在で no-op・mktemp/mv
@@ -804,7 +914,7 @@ if [ -n "$RENDER_SETTINGS_JSON" ]; then
   if [ "$AIENV_SKIP_SETTINGS_GENERATION" = "1" ]; then
     fail "動的Bedrock許可キーを算出できないため settings.json を生成できません: $RENDER_SETTINGS_JSON"
   fi
-  generate_settings_json core/assembly/settings.json "$RENDER_SETTINGS_JSON" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
+  generate_settings_json core/assembly/settings.json "$RENDER_SETTINGS_JSON" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT" "$SEL_PLACES"
   if [ "$AIENV_DEFERRED_EXIT_CODE" != "0" ] || [ ! -f "$RENDER_SETTINGS_JSON" ]; then
     fail "settings.json を生成できませんでした（Bedrock envファイルが実在するのに読めない等。詳細は上記のWARN）: $RENDER_SETTINGS_JSON"
   fi
@@ -863,83 +973,74 @@ else
   fi
 fi
 
-# bootstrap-vault.sh（旧ライブ名）は Core の SessionStart 合成器へ張る（v1.1
-# 機能の部品化・設計 §5.5 D-9＝主後継。settings.json の SessionStart 登録名は不変）。
-link core/connect/claude-code/session-start-compose.sh "$HOME/.claude/hooks/bootstrap-vault.sh"
-link team/connect/claude-code/delegation-gate-v2.sh "$HOME/.claude/hooks/delegation-gate-v2.sh"
-# 危険コマンド deny ゲート(PreToolUse Bash)。2026-08-06 追加: 2026-07-19 の
-# フック導入時にリポジトリ収録が漏れており、サブ機で settings.json が
-# 存在しないパスを参照して起動時警告が出ていた。
-link core/connect/claude-code/bash-danger-gate.sh "$HOME/.claude/hooks/bash-danger-gate.sh"
-# 方針ガード(PreToolUse Bash・公開ガード/pip仮想環境/brewランタイムの3規則)。
-# 2026-09-19 追加: settings.json の inline 3 本をファイル化（段3-5 τ）。
-link core/connect/claude-code/bash-policy-gate.sh "$HOME/.claude/hooks/bash-policy-gate.sh"
-# Codex 直叩き柵(PreToolUse Bash)。v1.1 機能の部品化＝旧 bash-danger-gate.sh の
-# ③ を分割した新ライブ名（設計 §4.3）。settings.json 側にも新規登録する。
-link team/connect/claude-code/codex-direct-call-gate.sh "$HOME/.claude/hooks/codex-direct-call-gate.sh"
-# 外部脳 想起支援(UserPromptSubmit)・利用ログ(PostToolUse Read) の2フック
-# （2026-07-10 追加。settings.json への hooks 登録はリーダーが別途行う＝
-# このスクリプトはsymlink配置のみを担当）。
-link ai-brain/executor/vault-recall.sh    "$HOME/.claude/hooks/vault-recall.sh"
-link ai-brain/executor/vault-read-log.sh  "$HOME/.claude/hooks/vault-read-log.sh"
-# Dock（Project／Task）ペイン番号参照の自動解決(UserPromptSubmit)。cmux の
-# --list 対応表を注入する（2026-08-06 追加・2026-09-19 Project/Task の2本を
-# 1本に統合・表示ツール本体は dock/executor/ 側）。
-link dock/executor/dock-pane-resolve.sh "$HOME/.claude/hooks/dock-pane-resolve.sh"
-# サブ機更新チェック(SessionStart)。settings.json は main/sub 共通でこのフックを
-# 登録するため、リンクも main/sub 共通で配置する（スクリプト側が配役表の
-# `machine_role`で判定し、メイン機では無出力で即 exit 0＝fail-closed）。
-# 2026-07-28 追加: 2026-07-23 実装時にリンク配置が漏れており、両機で
-# SessionStart に「No such file or directory」の非ブロッキングエラーが出ていた。
-link core/assembly/check-sub-update.sh "$HOME/.claude/hooks/check-sub-update.sh"
-# セッション肥大化警告(UserPromptSubmit)。settings.json には2026-08-10導入時から
-# 登録されていたが、本スクリプトへのlink配置が漏れていた（2026-08-30発覚・
-# context-size-warn.sh/bash-danger-gate.sh/Project対応表フック/check-sub-update.sh
-# に続く同型4回目。settings.json登録とinstaller配置の2点セット突合を
-# core/assembly/check-drift.sh側にも追加している＝§9.0 A-0-2）。
-link core/connect/claude-code/context-size-warn.sh "$HOME/.claude/hooks/context-size-warn.sh"
-# `team/rules/agents/` 直下の定義集合（管理職種）のAgent呼出しへmodel明示を強制するPreToolUseガード。
-link team/connect/claude-code/agent-model-guard.sh "$HOME/.claude/hooks/agent-model-guard.sh"
-# 配役表に職種行がある職種のin-process起動（Agentツール）境界(PreToolUse
-# ^Agent$。ラッパー起動-設計-v1.1.1.md §4・D-3)。agent-model-guard.shと
-# 同じeventに並ぶ。
-link team/connect/claude-code/inprocess-gate.sh "$HOME/.claude/hooks/inprocess-gate.sh"
-# 子（team/connect/claude-code/claude-exec.sh経由の名前無しworker）専用のVault保護柵。親の
-# settings.jsonのPreToolUseには登録しない（子の--settingsインライン
-# JSONが$HOME/.claude/hooks/vault-write-gate.shを直接参照する＝設計§2.5・
-# 裁定A）。配置だけはここで行う。
-link ai-brain/connect/claude-code/vault-write-gate.sh "$HOME/.claude/hooks/vault-write-gate.sh"
-# 使用率の毎発言注入(UserPromptSubmit)。SessionStart側と同じ共有関数を使う。
-link usage/executor/usage-inject.sh "$HOME/.claude/hooks/usage-inject.sh"
-# 本人の入力の検知（UserPromptSubmit）: 入力時に「応答」を知らせる（v1.2＝届け先は台帳の「知らせ」列・ライブ名は不変）。
-link core/connect/claude-code/prompt-answer.sh "$HOME/.claude/hooks/code27-call-clear.sh"
-
-# 前提修正 P-2（設計§2）: 職種定義の配布結果を必ず報告する。
-# ①新しく配置した定義（初回未配置）②repoから消えた定義へのdangling symlinkの
-# 2つを固定文（§2.1）で報告し、②が1件でもあれば非0終了する（①は終了コードに
-# 影響しない）。⚠️ dangling は削除しない（削除は本人判断という既存方針を
-# 変えない）。
-# 案件③ B-1 D-4（設計-v1.1.3.md §5 手順1）: effort-per-role v2が入れた
-# 「素材＋配役表由来のeffort行」を持つ生成実ファイル方式を退役し、配置先
-# 職種定義は再び symlink 化する（link()＝sync_managed_symlink() 経由。他の
-# 管理symlinkと同じ退避規則）。B-1のラッパーがeffortの実行値を--effortで
-# 子へ渡すため、職種定義ファイル側にeffort:行を持たせる必要が無くなった。
+# ============================================================
+# A2 配置（選択の導出の一覧を台帳の行順に link／gen／run）
+# ============================================================
+log "選択: ${SELECT_VALUE}（Core は常に含む）"
+# 職種定義（フォルダ単位の行の展開）は配布結果を必ず報告する（前提修正 P-2・設計§2.1）:
+# ①新しく配置した定義（初回未配置）②repoから消えた定義へのdangling symlinkの2つを固定文で報告し、
+# ②が1件でもあれば非0終了する（①は終了コードに影響しない）。⚠️ dangling は削除しない（本人判断）。
+# 職種定義は symlink（link()＝sync_managed_symlink() 経由。他の管理symlinkと同じ退避規則・案件③ B-1 D-4）。
 AGENTS_SRC_DIR="$DIR/team/rules/agents"
-AGENTS_DEST_DIR="$HOME/.claude/agents"
-[ -d "$AGENTS_SRC_DIR" ] || fail "リポジトリのディレクトリが見つかりません（checkout破損の可能性）: $AGENTS_SRC_DIR"
+AGENTS_DEST_DIR=""
 AGENTS_NEWLY_PLACED=()
-for f in "$AGENTS_SRC_DIR"/*.md; do
-  [ -e "$f" ] || fail "team/rules/agents/ 配下に .md が1つもありません（checkout破損の可能性）"
-  name="$(basename "$f")"
-  dest="$AGENTS_DEST_DIR/$name"
-  # symlink・実ファイルいずれの形でも一切存在しなかったものだけを「初回未配置」
-  # として数える（既存の名前を張り替えたケースは対象外＝設計§2.1「新しい定義を
-  # 配置した」）。
-  if [ "$DRY_RUN" != "1" ] && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
-    AGENTS_NEWLY_PLACED+=("${name%.md}")
+
+# run_part <実体> <置き場> — 接続フォルダの配置手順を引数なしで実行する（置き場はその手順が置くもの）。
+run_part() {
+  if [ "$DRY_RUN" = "1" ]; then
+    log "[dry-run] would run: $1 （置き場 $2）"
+    return
   fi
-  link "team/rules/agents/$name" "$dest"
-done
+  "$1" </dev/null
+  log "ran: $1 （置き場 $2）"
+}
+
+# place_item <仕方> <置き場> <実体> — 導出の 1 行を置く。
+place_item() {
+  case "$1" in
+    link) link "$3" "$2" ;;
+    gen) generate_config_toml "$3" "$2" ;;
+    run) run_part "$3" "$2" ;;
+    *) fail "配置の仕方 $1 を知らない（台帳ツールと組立の版の食い違い）: $2" ;;
+  esac
+}
+
+# 各行は set -e の効くサブシェルで置く（関数を if／|| の中で呼ぶと set -e が無効になり、途中の失敗を
+# 見落とすため）。1 件でも失敗したら、その行と残りの行を「終わらなかった項目」にして登録へ進まない（F1）。
+PLACE_PENDING=""
+while IFS=$'\t' read -r how place src fn; do
+  [ -n "$how" ] || continue
+  if [ -n "$PLACE_PENDING" ]; then
+    PLACE_PENDING="$PLACE_PENDING$how:$place"$'\n'
+    continue
+  fi
+  new_agent=""
+  case "$src" in
+    "$AGENTS_SRC_DIR"/*)
+      AGENTS_DEST_DIR="$(dirname "$place")"
+      if [ "$DRY_RUN" != "1" ] && [ ! -e "$place" ] && [ ! -L "$place" ]; then
+        new_agent="$(basename "$place" .md)"
+      fi
+      ;;
+  esac
+  set +e
+  ( set -e; place_item "$how" "$place" "$src" )
+  rc=$?
+  set -e
+  if [ "$rc" != "0" ]; then
+    PLACE_PENDING="$how:$place"$'\n'
+  elif [ -n "$new_agent" ]; then
+    AGENTS_NEWLY_PLACED+=("$new_agent")
+  fi
+done <<EOF
+$SEL_LIST
+EOF
+if [ -n "$PLACE_PENDING" ]; then
+  warn "配置の途中で失敗しました。登録と掃除へは進みません（settings.json は前のまま＝登録フックの命令は全て実在）。終わらなかった項目:"
+  printf '%s' "$PLACE_PENDING" | while IFS= read -r item; do warn "  未完了: $item"; done
+  warn "原因（権限・ディスク等）を直して、同じ選択で再実行してください: $RERUN_CMD"
+  exit 1
+fi
 
 if [ "$DRY_RUN" != "1" ]; then
   if [ "${#AGENTS_NEWLY_PLACED[@]}" -gt 0 ]; then
@@ -947,10 +1048,9 @@ if [ "$DRY_RUN" != "1" ]; then
   fi
 
   # dangling 検出: aienv管理下（$AGENTS_SRC_DIR配下を指す）symlinkに限定して
-  # 検査する（本スクリプトが関与しない他アプリ由来のsymlinkを誤検知しないため。
-  # install-main.sh の link() が使う経路＝update-sub は install-sub 経由）。削除はしない。
+  # 検査する（本スクリプトが関与しない他アプリ由来のsymlinkを誤検知しないため）。削除はしない。
   AGENTS_DANGLING=()
-  for existing in "$AGENTS_DEST_DIR"/*.md; do
+  for existing in ${AGENTS_DEST_DIR:+"$AGENTS_DEST_DIR"/*.md}; do
     [ -L "$existing" ] || continue
     target="$(readlink "$existing")"
     case "$target" in
@@ -965,34 +1065,6 @@ if [ "$DRY_RUN" != "1" ]; then
   fi
 fi
 
-if [ "$DRY_RUN" != "1" ]; then
-  chmod +x "$DIR/core/connect/claude-code/session-start-compose.sh" "$DIR/team/connect/claude-code/delegation-gate-v2.sh" \
-           "$DIR/core/connect/claude-code/bash-danger-gate.sh" "$DIR/core/connect/claude-code/bash-policy-gate.sh" \
-           "$DIR/team/connect/claude-code/codex-direct-call-gate.sh" \
-           "$DIR/dock/executor/dock-pane-resolve.sh" \
-           "$DIR/ai-brain/executor/vault-recall.sh" "$DIR/ai-brain/executor/vault-read-log.sh" \
-           "$DIR/core/assembly/check-sub-update.sh" "$DIR/core/connect/claude-code/context-size-warn.sh" \
-           "$DIR/team/connect/claude-code/agent-model-guard.sh" \
-           "$DIR/team/connect/claude-code/inprocess-gate.sh" "$DIR/ai-brain/connect/claude-code/vault-write-gate.sh" \
-           "$DIR/usage/executor/usage-inject.sh" "$DIR/core/connect/claude-code/prompt-answer.sh" \
-           "$DIR/dock/executor/cmux-task-model.sh" "$DIR/dock/executor/cmux-next-model.sh" \
-           "$DIR/dock/executor/cmux-task-declare.sh"
-  # 締めレビュー2巡目 #2対応（2026-09-14）: agent-model-guard.sh専用の
-  # 固有理由コード付き実行可能性チェックはここで削除した。
-  # 上のlink()がsync_managed_symlink()経由で既にsrc欠落を汎用の「リポジトリ
-  # のファイルが見つかりません（checkout破損の可能性）」でfail済みであり、
-  # このchmod自体もsrc欠落なら`set -euo pipefail`により非0で停止するため、
-  # この専用ガードは実際には発火しえない残骸だった（他のどのフックにも
-  # 同種の専用チェックは無く、汎用経路だけで担保されている）。実行可能性の
-  # 継続的な監視はcore/assembly/check-drift.shの汎用`[NOT-EXECUTABLE]`検査
-  # （$HOME/.claude/hooks/*.sh全体対象）が担う。
-fi
-
-# --- codex/ ---
-link team/connect/codex/AGENTS.md   "$HOME/.codex/AGENTS.md"
-link team/connect/codex/hooks.json  "$HOME/.codex/hooks.json"
-generate_config_toml team/connect/codex/config.toml "$HOME/.codex/config.toml"
-
 # Codex呼び出し経路のMCPサーバー登録ステップは2026-09-06 codex exec一本化に
 # 伴い廃止した（Claude Code側からのMCP経由呼び出しをやめ、Bash経由の
 # team/connect/codex/codex-exec.sh に一本化。詳細は
@@ -1000,15 +1072,15 @@ generate_config_toml team/connect/codex/config.toml "$HOME/.codex/config.toml"
 # 各ワーカーが team/connect/codex/codex-exec.sh を直接叩く方式になったため、インストーラ側の
 # 自動登録ステップは不要になった。
 
-# --- リーダー実行値と動的Bedrock許可キーの決定・settings.json 生成（全 link・chmod・codex/ の配置の後）---
+# --- リーダー実行値と動的Bedrock許可キーの決定・settings.json 生成（A4 登録＝全配置の完了後）---
 # 検証 V-04（3 巡目 BLOCKING）対応・2026-10-03: 以前はこの決定・生成をフック／
 # 職種定義の link・chmod・codex/ の link より前に置いていたため、途中で ln が
 # 失敗すると「新しい settings.json だけが公開され、まだ配置されていない新フック
 # （例＝Codex 直叩き柵）を参照する」状態になり得た（設計 §8.1 S2「登録は配置の
 # 後」・F1「配置中失敗＝同じコマンドの再実行で前へ進む」の前提に反する・NFR-4・
-# AC-10 ③）。全 link・chmod・codex/ の配置が終わったこの位置で初めて決定・生成
-# する＝途中失敗時は旧 settings.json が残ったまま `set -euo pipefail` でここへ
-# 到達せず止まる。
+# AC-10 ③）。v1.2 では A2（導出の一覧の全配置）が終わったこの位置で初めて決定・生成
+# する＝配置の途中で失敗したら旧 settings.json が残ったまま A2 の末尾で止まり、ここへ到達しない。
+# 部品の実行ビットは組立が付け直さない（git が記録する mode・台帳の検査 ⑦ の live と run の実体の検査で担保）。
 # --dry-run では resolver を呼ばない（「--dry-run は python3 を要求しない」保証を
 # 崩さない。計画表示は generate_settings_json() の dry-run 分岐が行う）。
 AIENV_SETTINGS_MODEL=""
@@ -1024,8 +1096,8 @@ fi
 # generate_settings_json()はWARNを出しsettings.json本体の生成を中止・既存
 # ファイルを保持したまま**AIENV_DEFERRED_EXIT_CODEを立てて戻る**（設計書
 # §6.2-B S4「bedrock.envが実在するのに読めない/解析できない場合は非0終了」。
-# 詳細は同関数のコメント参照）。hooks・職種定義のsymlink化・chmod・codex/の
-# 配置はここより前で既に完走しているため、残る処理（--with-dotfiles時の
+# 詳細は同関数のコメント参照）。導出の一覧の全配置（A2）は
+# ここより前で既に完走しているため、残る処理（--with-dotfiles時の
 # dotfiles導入＝独立したsoft-fail経路）はそのまま続行させ、最終的な終了コード
 # だけスクリプト末尾で非0へ反映する。これは意図した安全側の分岐であり、
 # `|| true`のような一律の抑制は付けない（2026-08-30 Codex四次レビュー指摘・
@@ -1038,8 +1110,58 @@ fi
 # 対応。判定・WARN・AIENV_DEFERRED_EXIT_CODEの計上は上のブロックで既に
 # 済ませている）。
 if [ "$AIENV_SKIP_SETTINGS_GENERATION" != "1" ]; then
-  generate_settings_json core/assembly/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT"
+  generate_settings_json core/assembly/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT" "$SEL_PLACES"
 fi
+
+# ============================================================
+# A5 掃除（全部入りの導出 − 選択の導出＝外した機能の置き場。登録の後にだけ行う）
+# ============================================================
+# link＝symlink が台帳の当該部品を指すときだけ消す。gen・run＝中身を消さず退避名へ改名（製品が書き足した
+# 内容を失わない）。それ以外（実ファイル・別の場所を指す symlink）は触らず 1 行報告。導出に現れない名前は対象外。
+REMOVED_SUFFIX=".aienv-removed.bak"
+cleanup_deselected() {
+  local how place src fn p bak
+  while IFS=$'\t' read -r how place src fn; do
+    [ -n "$how" ] || continue
+    case "$NL$SEL_PLACES$NL" in *"$NL$place$NL"*) continue ;; esac
+    if [ "$how" = "link" ]; then
+      if [ -L "$place" ] && [ "$(readlink "$place")" = "$src" ]; then
+        if [ "$DRY_RUN" = "1" ]; then
+          log "[dry-run] would remove（選択外）: $place"
+        elif rm -f "$place"; then
+          log "removed（選択外）: $place"
+        else
+          warn "選択外の置き場を消せませんでした（再実行で消えます）: $place"
+          AIENV_DEFERRED_EXIT_CODE=1
+        fi
+      elif [ -e "$place" ] || [ -L "$place" ]; then
+        log "触らない（選択外だが組立が置いたものでない）: $place"
+      fi
+      continue
+    fi
+    p="${place%/}"
+    { [ -e "$p" ] || [ -L "$p" ]; } || continue
+    bak="$p$REMOVED_SUFFIX"
+    if [ -e "$bak" ] || [ -L "$bak" ]; then bak="$bak.$(TZ=UTC date -u +%Y%m%dT%H%M%SZ)"; fi
+    if [ "$DRY_RUN" = "1" ]; then
+      log "[dry-run] would move aside（選択外）: $p -> $bak"
+    elif mv "$p" "$bak"; then
+      log "moved aside（選択外・中身は残す）: $p -> $bak"
+    else
+      warn "選択外の置き場を退避できませんでした（再実行で退避します）: $p"
+      AIENV_DEFERRED_EXIT_CODE=1
+    fi
+  done <<EOF
+$ALL_LIST
+EOF
+}
+NL=$'\n'
+if [ "$DRY_RUN" = "1" ] || [ "$AIENV_SETTINGS_WRITTEN" = "1" ]; then
+  cleanup_deselected
+else
+  warn "settings.json を作り直せなかったため、外した機能の置き場の掃除は行いません（原因を直して再実行すると掃除します）。"
+fi
+
 
 # 週次drift通知LaunchAgent（com.takumi009.drift-check.plist・drift-notify.sh）は
 # 2026-07-16簡素化（[[Decisions/2026-07-16-nightly-batch-direct-write]]）で撤去した。
@@ -1095,6 +1217,23 @@ if [ "$WITH_DOTFILES" = "1" ]; then
     fi
   fi
 fi
+
+# ============================================================
+# A6 常駐の案内（組立は launchctl を実行しない＝本人が実行する。毎回示す）
+# ============================================================
+show_residents() {
+  local io kind val
+  log "常駐（LaunchAgent）の手順（組立は launchctl を実行しません。登録・解除が済んでいれば不要です）:"
+  while IFS=$'\t' read -r io kind val; do
+    case "$io:$kind" in
+      in:install) log "  登録: $val" ;;
+      out:label) log "  解除: launchctl bootout gui/\$(id -u)/$val; rm -f \"\$HOME/Library/LaunchAgents/$val.plist\"" ;;
+    esac
+  done <<EOF
+$(ledger_tool_or_fail "常駐の手順を台帳から導けません" residents)
+EOF
+}
+show_residents
 
 if [ "$DRY_RUN" = "1" ]; then
   log "[dry-run] 完了。実際の変更は一切行っていません。"

@@ -59,6 +59,16 @@ assert_eq_num() {
   fi
 }
 
+# v1.2 束 C の追加分が使う汎用の等値・真偽（1/0）判定（既存の assert_eq_num・assert_contains とは別名）。
+assert_eq() {
+  local desc="$1" expected="$2" actual="$3"
+  if [[ "$expected" == "$actual" ]]; then pass "$desc"; else fail_case "$desc (expected=[$expected] actual=[$actual])"; fi
+}
+assert_true() {
+  local desc="$1" cond="$2"
+  if [ "$cond" = "1" ]; then pass "$desc"; else fail_case "$desc"; fi
+}
+
 # N日前/後のYYYY-MM-DD・ISO8601時刻（BSD date。⑥のfixture用。
 # tests/test-vault-inventory.sh と同じ考え方＝ハードコード日付を使わない）。
 d_date() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%F; }
@@ -77,9 +87,17 @@ d_mtime_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%Y%m%d
 # claude/・codex/・ai-brain/data/vault-public/・scripts/check-drift.sh本体だけをコピーする）。
 make_fake_repo() {
   local repo="$1"
-  mkdir -p "$repo/core/assembly" "$repo/core/connect/claude-code" "$repo/team/rules/agents" "$repo/team/connect/claude-code" "$repo/team/connect/codex" "$repo/team/executor" "$repo/ai-brain/executor" "$repo/ai-brain/connect/claude-code" "$repo/dock/executor" "$repo/usage/executor" "$repo/ai-brain/data/vault-public/Preferences"
+  mkdir -p "$repo/core/assembly" "$repo/core/connect/claude-code" "$repo/core/data" "$repo/core/executor" "$repo/team/rules/agents" "$repo/team/connect/claude-code" "$repo/team/connect/codex" "$repo/team/executor" "$repo/ai-brain/executor" "$repo/ai-brain/connect/claude-code" "$repo/dock/executor" "$repo/usage/executor" "$repo/ai-brain/data/vault-public/Preferences"
   cp "$REPO_ROOT/$SCRIPT_REL" "$repo/core/assembly/check-drift.sh"
   chmod +x "$repo/core/assembly/check-drift.sh"
+  # T-C2: check-drift.sh ①（配置の健全性）は core/assembly/ledger-tool.sh placement
+  # から配置一覧を導出し、--forward-refs は core/data/moves.tsv・core/executor/vault-paths.sh
+  # を読む＝正本は台帳1か所なので実物を複製する（stubは書かない）。
+  cp "$REPO_ROOT/core/data/ledger.tsv" "$repo/core/data/ledger.tsv"
+  cp "$REPO_ROOT/core/data/moves.tsv" "$repo/core/data/moves.tsv"
+  cp "$REPO_ROOT/core/assembly/ledger-tool.sh" "$repo/core/assembly/ledger-tool.sh"
+  chmod +x "$repo/core/assembly/ledger-tool.sh"
+  cp "$REPO_ROOT/core/executor/vault-paths.sh" "$repo/core/executor/vault-paths.sh"
   # check-drift.sh ①-2 は model/effort値を自前で持たず、fixture内の
   # core/assembly/install-main.sh --render-settings-json（生成関数そのもの）に
   # 一時ファイルへ再生成させて比べる（2026-09-19 着手順3・設計 §4.2）。
@@ -116,6 +134,10 @@ EOF
   echo '#!/bin/bash' > "$repo/team/connect/claude-code/inprocess-gate.sh"
   echo '#!/bin/bash' > "$repo/ai-brain/connect/claude-code/vault-write-gate.sh"
   echo '#!/bin/bash' > "$repo/usage/executor/usage-inject.sh"
+  # 実台帳の配置行（9列目）にある残り2本＝real ledger.tsv に合わせて追加
+  # （本体は実装と無関係のstub。正本はコピーした台帳側）。
+  echo '#!/bin/bash' > "$repo/team/connect/claude-code/codex-direct-call-gate.sh"
+  echo '#!/bin/bash' > "$repo/core/connect/claude-code/prompt-answer.sh"
   chmod +x "$repo"/*/executor/*.sh "$repo"/*/connect/*/*.sh "$repo"/core/assembly/check-sub-update.sh
   echo '# agent' > "$repo/team/rules/agents/sample-agent.md"
   echo '# AGENTS' > "$repo/team/connect/codex/AGENTS.md"
@@ -155,6 +177,8 @@ install_fake_home() {
   ln -s "$repo/team/connect/claude-code/inprocess-gate.sh" "$home/.claude/hooks/inprocess-gate.sh"
   ln -s "$repo/ai-brain/connect/claude-code/vault-write-gate.sh" "$home/.claude/hooks/vault-write-gate.sh"
   ln -s "$repo/usage/executor/usage-inject.sh" "$home/.claude/hooks/usage-inject.sh"
+  ln -s "$repo/team/connect/claude-code/codex-direct-call-gate.sh" "$home/.claude/hooks/codex-direct-call-gate.sh"
+  ln -s "$repo/core/connect/claude-code/prompt-answer.sh" "$home/.claude/hooks/code27-call-clear.sh"
   ln -s "$repo/team/rules/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/team/connect/codex/AGENTS.md" "$home/.codex/AGENTS.md"
   ln -s "$repo/team/connect/codex/hooks.json" "$home/.codex/hooks.json"
@@ -2989,6 +3013,325 @@ echo "=== 84. ⑨[USAGE-LOCK-STUCK]: ロックが固着している ==="
   out="$(run_check "$REPO" "$HOME_DIR")"
   assert_contains "固着したロックを検知する" "$out" "[USAGE-LOCK-STUCK]"
   rm -rf "$REPO" "$HOME_DIR"
+}
+
+# ===========================================================================
+# v1.2 束 C（配置の健全性検査の導出化・撤去の前提検査）＝要件 v1.4 §7 FR-15・FR-18・FR-19・AC-9・AC-11・
+# 設計 v1.4 §3.2・§3.4・実装計画 §1 束 C・リーダー裁定録「束 C 着手ゲート」C4。
+# ここからは make_fake_repo の手書き fixture でなく REPO_ROOT の実物を使う（台帳からの導出を見るため）。
+# ===========================================================================
+write_real_profile() {  # write_real_profile <home> — install-main.sh が要る最小の実体プロファイル。
+  local home="$1"
+  mkdir -p "$home/.claude/hooks" "$home/.claude/agents" "$home/.codex" "$home/.config/takumi009-ai-env"
+  cat > "$home/.config/takumi009-ai-env/models.conf" <<'EOF'
+[t-sonnet-high]
+provider=anthropic-api
+model=claude-sonnet-5
+EOF
+  cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
+---
+schema_version: 7
+profile_slug: test-check-drift-c
+team_mode: configured value=full
+no_read_paths: unavailable
+machine_role: configured value=main
+role.leader: configured model=t-sonnet-high
+---
+EOF
+}
+# mk_takumi_repo <dest の親> — REPO_ROOT の git 追跡ファイルを「<親>/takumi009-ai-env」へ複製して
+# そのパスを返す（§3.4 の照合規則＝旧パスの直前が「repo のフォルダ名＋/」であることを満たすため、
+# 複製先のフォルダ名を固定する）。
+mk_takumi_repo() {
+  local parent="$1" dest="$1/takumi009-ai-env"
+  mkdir -p "$dest"
+  ( cd "$REPO_ROOT" && git ls-files -co --exclude-standard -z | while IFS= read -r -d '' f; do
+      { [ -e "$f" ] || [ -L "$f" ]; } && printf '%s\0' "$f"
+    done | tar -cf - --null -T - ) | ( cd "$dest" && tar -xf - ) || true
+  printf '%s' "$dest"
+}
+# mark_retired <repo> <旧パス> — 移動表のその旧パスの行の印を「撤去」に書き換える（最初の1行）。
+mark_retired() {
+  local repo="$1" old="$2" ln
+  ln="$(awk -F'\t' -v o="$old" '$1==o{print NR; exit}' "$repo/core/data/moves.tsv" 2>/dev/null || true)"
+  [ -n "$ln" ] || return 1
+  awk -F'\t' -v OFS='\t' -v l="$ln" 'NR==l{$4="撤去"} {print}' "$repo/core/data/moves.tsv" > "$repo/core/data/moves.tsv.new"
+  mv "$repo/core/data/moves.tsv.new" "$repo/core/data/moves.tsv"
+}
+
+echo "=== 85. v1.2 FR-15: --managed-symlinks-only は台帳の導出（選択）＋配置済み settings.json の全フックの実在を見る ==="
+{
+  RHOME="$(mktemp -d)"
+  write_real_profile "$RHOME"
+  rc=0
+  SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$RHOME" bash "$REPO_ROOT/core/assembly/install-main.sh" >/dev/null 2>&1 || rc=$?
+  assert_eq_num "前提: 全部入りの組立は exit 0" "$rc" "0"
+
+  rc=0
+  HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only >/dev/null 2>&1 || rc=$?
+  assert_eq_num "選択で組み立てた HOME は exit 0" "$rc" "0"
+
+  rm -f "$RHOME/.claude/hooks/vault-recall.sh"
+  rc=0
+  HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only >/dev/null 2>&1 || rc=$?
+  assert_eq_num "導出の1本が欠けると非0" "$rc" "1"
+
+  ln -sfn "$REPO_ROOT/ai-brain/executor/vault-read-log.sh" "$RHOME/.claude/hooks/vault-recall.sh"
+  rc=0
+  HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only >/dev/null 2>&1 || rc=$?
+  assert_eq_num "導出の1本が別の先を向くと非0" "$rc" "1"
+  ln -sfn "$REPO_ROOT/ai-brain/executor/vault-recall.sh" "$RHOME/.claude/hooks/vault-recall.sh"
+
+  python3 - "$RHOME/.claude/settings.json" <<'PY' || true
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+d["hooks"].setdefault("SessionStart", []).append(
+    {"hooks": [{"type": "command", "command": "$HOME/.claude/hooks/zz-not-registered.sh"}]})
+json.dump(d, open(p, "w", encoding="utf-8"))
+PY
+  rc=0
+  HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only >/dev/null 2>&1 || rc=$?
+  assert_eq_num "settings に実在しないフックの命令を足すと非0" "$rc" "1"
+
+  rc=0
+  HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" >/dev/null 2>&1 || rc=$?
+  assert_eq_num "通常モードの終了コードの契約は不変（常に0）" "$rc" "0"
+
+  rm -rf "$RHOME"
+}
+
+echo "=== 86. v1.2 FR-15: 選択外の名前は見ない（Core だけの HOME は exit 0） ==="
+{
+  RHOME="$(mktemp -d)"
+  write_real_profile "$RHOME"
+  rc=0
+  SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$RHOME" bash "$REPO_ROOT/core/assembly/install-main.sh" --select core >/dev/null 2>&1 || rc=$?
+  assert_eq_num "Core だけの組立は exit 0" "$rc" "0"
+  rc=0
+  HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only >/dev/null 2>&1 || rc=$?
+  assert_eq_num "選択外（ai-brain 等）が置かれていなくても exit 0（選択に追従）" "$rc" "0"
+  rm -rf "$RHOME"
+}
+
+echo "=== 87. v1.2 FR-18/AC-11 ②: 撤去の前提検査（--forward-refs）＝FX-23・5 件を 1 件 1 行で報告 ==="
+{
+  FX23_ROOT="$(mktemp -d)"
+  FREPO="$(mk_takumi_repo "$FX23_ROOT")"
+  OLD_REL="claude/hooks/vault-recall.sh"
+  OLD_ABS="$FREPO/$OLD_REL"
+  assert_true "前提: 移動表に旧パス $OLD_REL の行があり撤去の印へ書き換えられる" \
+    "$(mark_retired "$FREPO" "$OLD_REL" && echo 1 || echo 0)"
+
+  FX3="$(mktemp -d)"
+  mkdir -p "$FX3/.claude/hooks" "$FX3/Library/LaunchAgents"
+  ln -s "$OLD_ABS" "$FX3/.claude/hooks/zz-oldlink.sh"
+  printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$OLD_ABS" \
+    > "$FX3/.claude/settings.json"
+  cat > "$FX3/Library/LaunchAgents/com.takumi009.zz-old.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>ProgramArguments</key><array><string>$OLD_ABS</string></array></dict></plist>
+PLIST
+
+  DOTFILES_FX="$(mktemp -d)"
+  lf_git() { git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false "$@"; }
+  lf_git -C "$DOTFILES_FX" init -q >/dev/null 2>&1
+  printf '#!/bin/bash\n# old reference\n%s\n' "$OLD_ABS" > "$DOTFILES_FX/cmux-next-watch.sh"
+  lf_git -C "$DOTFILES_FX" add -A >/dev/null 2>&1
+  lf_git -C "$DOTFILES_FX" commit -q -m init >/dev/null 2>&1 || true
+
+  VAULT_FX_PARENT="$(mktemp -d)"; VAULT_FX="$VAULT_FX_PARENT/obsidian"
+  mkdir -p "$VAULT_FX/Preferences"
+  printf '旧パスの名残: %s\n' "$OLD_ABS" > "$VAULT_FX/Preferences/zz-stale-note.md"
+
+  rc=0
+  FWD_OUT="$(HOME="$FX3" VAULT="$VAULT_FX" bash "$FREPO/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles "$DOTFILES_FX" 2>&1)" || rc=$?
+  assert_true "FX-23: 非0" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+  assert_eq "FX-23: 5 件を 1 件 1 行で報告" "5" "$(printf '%s\n' "$FWD_OUT" | grep -c . || true)"
+  assert_eq "FX-23: 形式は <種類><TAB><場所><TAB><旧パス>（3 列）" "0" \
+    "$(printf '%s\n' "$FWD_OUT" | awk -F'\t' 'NF!=3' | grep -c . || true)"
+
+  rm -rf "$FX23_ROOT" "$FX3" "$DOTFILES_FX" "$VAULT_FX_PARENT"
+}
+
+echo "=== 88. v1.2 FR-18: 何も無い FX-3 は exit 0・stdout 空・stderr に「対象なし」1 行（裁定＝T-C3） ==="
+{
+  FX3B_ROOT="$(mktemp -d)"
+  FREPO2="$(mk_takumi_repo "$FX3B_ROOT")"
+  FX3B="$(mktemp -d)"
+  mkdir -p "$FX3B/.claude" "$FX3B/Library/LaunchAgents"
+  VAULT_FX2_PARENT="$(mktemp -d)"; VAULT_FX2="$VAULT_FX2_PARENT/obsidian"; mkdir -p "$VAULT_FX2/Preferences"
+  FWD_ERR2="$(mktemp)"
+  rc=0
+  FWD_OUT2="$(HOME="$FX3B" VAULT="$VAULT_FX2" bash "$FREPO2/core/assembly/check-drift.sh" --forward-refs --dotfiles none 2>"$FWD_ERR2")" || rc=$?
+  assert_eq_num "参照側が無ければ exit 0" "$rc" "0"
+  assert_eq "stdout は空（該当行のみの契約＝設計 §3.4）" "" "$FWD_OUT2"
+  assert_eq "stderr は「対象なし」1 行（--dotfiles none＝設計 §3.4 (b)）" "1" "$(grep -ci '対象なし' "$FWD_ERR2" || true)"
+  rm -rf "$FX3B_ROOT" "$FX3B" "$VAULT_FX2_PARENT"; rm -f "$FWD_ERR2"
+}
+
+echo "=== 89. v1.2 FR-18/§3.4: dotfiles の 3 区別（読める→照合／none→対象なし／無い→非0）・VAULT が読めない→非0 ==="
+{
+  FX3C_ROOT="$(mktemp -d)"
+  FREPO3="$(mk_takumi_repo "$FX3C_ROOT")"
+  FX3C="$(mktemp -d)"; mkdir -p "$FX3C/.claude" "$FX3C/Library/LaunchAgents"
+  VAULT_FX3_PARENT="$(mktemp -d)"; VAULT_FX3="$VAULT_FX3_PARENT/obsidian"; mkdir -p "$VAULT_FX3/Preferences"
+
+  rc=0
+  out_none="$(HOME="$FX3C" VAULT="$VAULT_FX3" bash "$FREPO3/core/assembly/check-drift.sh" --forward-refs --dotfiles none 2>&1)" || rc=$?
+  assert_true "dotfiles none: 「対象なし」の1行が出る" "$(printf '%s' "$out_none" | grep -qi '対象なし' && echo 1 || echo 0)"
+
+  rc=0
+  HOME="$FX3C" VAULT="$VAULT_FX3" bash "$FREPO3/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles "$(mktemp -d)/no-such-dotfiles" >/dev/null 2>&1 || rc=$?
+  assert_true "dotfiles の指定パスが無い: 非0" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+
+  rc=0
+  HOME="$FX3C" VAULT="$VAULT_FX3" DOTFILES_DIR="$(mktemp -d)/no-such-dotfiles-env" \
+    bash "$FREPO3/core/assembly/check-drift.sh" --forward-refs >/dev/null 2>&1 || rc=$?
+  assert_true "dotfiles の既定パス（DOTFILES_DIR）が無い: 非0" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+
+  rc=0
+  HOME="$FX3C" VAULT="$(mktemp -d)/no-such-vault" bash "$FREPO3/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles none >/dev/null 2>&1 || rc=$?
+  assert_true "VAULT が読めない: 非0" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+
+  rm -rf "$FX3C_ROOT" "$FX3C" "$VAULT_FX3_PARENT"
+}
+
+echo "=== 90. v1.2 §3.4: 旧パスの照合境界＝ライブ名・新パスの部分一致を拾わない（陰性・裁定＝T-C3） ==="
+{
+  FX3D_ROOT="$(mktemp -d)"
+  FREPO4="$(mk_takumi_repo "$FX3D_ROOT")"
+  OLD_REL4="claude/hooks/vault-recall.sh"
+  mark_retired "$FREPO4" "$OLD_REL4" >/dev/null 2>&1 || true
+
+  FX3D="$(mktemp -d)"
+  mkdir -p "$FX3D/.claude/hooks" "$FX3D/Library/LaunchAgents"
+  ln -s "$FREPO4/ai-brain/executor/vault-recall.sh" "$FX3D/.claude/hooks/vault-recall.sh"
+  VAULT_FX4_PARENT="$(mktemp -d)"; VAULT_FX4="$VAULT_FX4_PARENT/obsidian"; mkdir -p "$VAULT_FX4/Preferences"
+  printf '新パスの言及: %s/ai-brain/executor/vault-recall.sh\n' "$FREPO4" > "$VAULT_FX4/Preferences/zz-new-path-note.md"
+
+  FX4_ERR="$(mktemp)"
+  rc=0
+  out4="$(HOME="$FX3D" VAULT="$VAULT_FX4" bash "$FREPO4/core/assembly/check-drift.sh" --forward-refs --dotfiles none 2>"$FX4_ERR")" || rc=$?
+  assert_eq_num "ライブ名・新パスの部分一致だけなら exit 0" "$rc" "0"
+  assert_eq "stdout は空（該当なし＝設計 §3.4）" "" "$out4"
+  assert_eq "stderr は「対象なし」1 行（--dotfiles none＝設計 §3.4 (b)）" "1" "$(grep -ci '対象なし' "$FX4_ERR" || true)"
+
+  rm -rf "$FX3D_ROOT" "$FX3D" "$VAULT_FX4_PARENT"; rm -f "$FX4_ERR"
+}
+
+echo "=== 91. v1.2 FR-14/FR-15 C-V01: settings.json の消失・不正JSON＝--managed-symlinks-only は exit 1（理由1行）・通常モードは drift に数えつつ exit 0 不変 ==="
+{
+  RHOME="$(mktemp -d)"
+  write_real_profile "$RHOME"
+  rc=0
+  SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$RHOME" bash "$REPO_ROOT/core/assembly/install-main.sh" --select core >/dev/null 2>&1 || rc=$?
+  assert_eq_num "前提: Core だけの組立は exit 0" "$rc" "0"
+  SETTINGS="$RHOME/.claude/settings.json"
+  SETTINGS_BAK="$(mktemp)"; cp "$SETTINGS" "$SETTINGS_BAK"
+
+  # ① settings.json の消失。
+  rm -f "$SETTINGS"
+  rc=0
+  MANAGED_OUT="$(HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only 2>&1)" || rc=$?
+  assert_eq_num "C-V01 消失: --managed-symlinks-only は exit 1" "$rc" "1"
+  assert_eq "C-V01 消失: 理由1行" "1" "$(printf '%s\n' "$MANAGED_OUT" | grep -c '^  - ' || true)"
+  rc=0
+  NORMAL_OUT="$(HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" 2>&1)" || rc=$?
+  assert_eq_num "C-V01 消失: 通常モードは exit 0（契約不変）" "$rc" "0"
+  assert_true "C-V01 消失: 通常モードも drift に数える（総drift件数が0でない）" \
+    "$(echo "$NORMAL_OUT" | grep -q '総drift件数: 0' && echo 0 || echo 1)"
+
+  # ② settings.json が不正JSON。
+  cp "$SETTINGS_BAK" "$SETTINGS"
+  printf '{not valid json' > "$SETTINGS"
+  rc=0
+  MANAGED_OUT2="$(HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only 2>&1)" || rc=$?
+  assert_eq_num "C-V01 不正JSON: --managed-symlinks-only は exit 1" "$rc" "1"
+  assert_eq "C-V01 不正JSON: 理由1行" "1" "$(printf '%s\n' "$MANAGED_OUT2" | grep -c '^  - ' || true)"
+  rc=0
+  NORMAL_OUT2="$(HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" 2>&1)" || rc=$?
+  assert_eq_num "C-V01 不正JSON: 通常モードは exit 0（契約不変）" "$rc" "0"
+  assert_true "C-V01 不正JSON: 通常モードも drift に数える（総drift件数が0でない）" \
+    "$(echo "$NORMAL_OUT2" | grep -q '総drift件数: 0' && echo 0 || echo 1)"
+
+  rm -rf "$RHOME"; rm -f "$SETTINGS_BAK"
+}
+
+echo "=== 92. v1.2 FR-18 C-V02: 読めない dotfiles 追跡ファイル・Vault Preferences 配下のサブディレクトリ＝--forward-refs は exit 2・対象パスを stderr へ（壊れたsymlinkは対象外でexit 0） ==="
+{
+  # ① 読めない dotfiles の追跡ファイル。
+  HOME92A="$(mktemp -d)"; mkdir -p "$HOME92A/.claude" "$HOME92A/Library/LaunchAgents"
+  DOTFILES92A="$(mktemp -d)"
+  lf_git -C "$DOTFILES92A" init -q >/dev/null 2>&1
+  printf '#!/bin/bash\necho hi\n' > "$DOTFILES92A/unreadable.sh"
+  lf_git -C "$DOTFILES92A" add -A >/dev/null 2>&1
+  lf_git -C "$DOTFILES92A" commit -q -m init >/dev/null 2>&1 || true
+  chmod 000 "$DOTFILES92A/unreadable.sh"
+  VAULT92A_PARENT="$(mktemp -d)"; VAULT92A="$VAULT92A_PARENT/obsidian"; mkdir -p "$VAULT92A/Preferences"
+
+  ERR92A="$(mktemp)"
+  rc=0
+  HOME="$HOME92A" VAULT="$VAULT92A" bash "$REPO_ROOT/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles "$DOTFILES92A" >/dev/null 2>"$ERR92A" || rc=$?
+  assert_eq_num "C-V02 ①: 読めない dotfiles 追跡ファイルは exit 2" "$rc" "2"
+  assert_true "C-V02 ①: stderr に対象パス" "$(grep -qF "$DOTFILES92A/unreadable.sh" "$ERR92A" && echo 1 || echo 0)"
+
+  chmod 644 "$DOTFILES92A/unreadable.sh"
+  rm -rf "$HOME92A" "$DOTFILES92A" "$VAULT92A_PARENT"; rm -f "$ERR92A"
+}
+{
+  # ② Vault Preferences 配下の読めないサブディレクトリ。
+  HOME92B="$(mktemp -d)"; mkdir -p "$HOME92B/.claude" "$HOME92B/Library/LaunchAgents"
+  VAULT92B_PARENT="$(mktemp -d)"; VAULT92B="$VAULT92B_PARENT/obsidian"
+  mkdir -p "$VAULT92B/Preferences/unreadable-sub"
+  printf 'dummy\n' > "$VAULT92B/Preferences/unreadable-sub/note.md"
+  chmod 000 "$VAULT92B/Preferences/unreadable-sub"
+
+  ERR92B="$(mktemp)"
+  rc=0
+  HOME="$HOME92B" VAULT="$VAULT92B" bash "$REPO_ROOT/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles none >/dev/null 2>"$ERR92B" || rc=$?
+  assert_eq_num "C-V02 ②: 読めない Vault Preferences 配下のサブディレクトリは exit 2" "$rc" "2"
+  assert_true "C-V02 ②: stderr に対象パス" "$(grep -qF "$VAULT92B/Preferences/unreadable-sub" "$ERR92B" && echo 1 || echo 0)"
+
+  chmod 755 "$VAULT92B/Preferences/unreadable-sub"
+  rm -rf "$HOME92B" "$VAULT92B_PARENT"; rm -f "$ERR92B"
+}
+{
+  # ③ 壊れた symlink（リンク先なし）は対象外＝陽性のない FX-3。
+  HOME92C="$(mktemp -d)"; mkdir -p "$HOME92C/.claude" "$HOME92C/Library/LaunchAgents"
+  VAULT92C_PARENT="$(mktemp -d)"; VAULT92C="$VAULT92C_PARENT/obsidian"
+  mkdir -p "$VAULT92C/Preferences"
+  ln -s "$VAULT92C/Preferences/no-such-target" "$VAULT92C/Preferences/zz-broken-link.md"
+
+  rc=0
+  HOME="$HOME92C" VAULT="$VAULT92C" bash "$REPO_ROOT/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles none >/dev/null 2>&1 || rc=$?
+  assert_eq_num "C-V02 ③: 壊れたsymlinkは対象外＝exit 0" "$rc" "0"
+
+  rm -rf "$HOME92C" "$VAULT92C_PARENT"
+}
+
+echo "=== 93. v1.2 FR-18 検証C2-V06: 列挙不能な \$HOME/Library/LaunchAgents（os.listdir失敗・C-V02の読取失敗とは独立の分岐）＝--forward-refs は exit 2・対象パスを stderr へ ==="
+{
+  HOME93="$(mktemp -d)"; mkdir -p "$HOME93/.claude" "$HOME93/Library/LaunchAgents"
+  VAULT93_PARENT="$(mktemp -d)"; VAULT93="$VAULT93_PARENT/obsidian"; mkdir -p "$VAULT93/Preferences"
+  chmod 000 "$HOME93/Library/LaunchAgents"
+
+  ERR93="$(mktemp)"
+  rc=0
+  HOME="$HOME93" VAULT="$VAULT93" bash "$REPO_ROOT/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles none >/dev/null 2>"$ERR93" || rc=$?
+  assert_eq_num "C2-V06: 列挙不能な LaunchAgents は exit 2" "$rc" "2"
+  assert_true "C2-V06: stderr に対象パス（LaunchAgents）" "$(grep -qF "$HOME93/Library/LaunchAgents" "$ERR93" && echo 1 || echo 0)"
+
+  chmod 755 "$HOME93/Library/LaunchAgents"
+  rm -rf "$HOME93" "$VAULT93_PARENT"; rm -f "$ERR93"
 }
 
 echo
