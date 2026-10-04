@@ -182,6 +182,10 @@ ac_3() {
 }
 
 # ---------------------------------------------------------------- AC-4 無いとき（① だけ＝②③④ は常設）
+# VB-04-R2＝状態（メンテの last-run.json 等）・取得結果（Usage のキャッシュ・通知状態 JSON）は
+# 個別フィールドでなく $HOME 全体の前後スナップショット差分（AC-2/ac12_run と同じ snap＋snapdiff＋cl_norm）
+# で比較する（取りこぼしの温床にしない）。FX-1・FX-10 とも $HOME は同名（$WORK/home-ac4）を使い回すことで、
+# home 名そのものの違いが差分に紛れ込まないようにする（repo の実パスは cl_norm の CL_SIDE_WT で正規化）。
 ac_4() {
   local od="$OUT/ac4" wt10="$WORK/wt-fx10-ac4" bad=""
   mkdir -p "$od"
@@ -191,64 +195,72 @@ ac_4() {
 
   local h s e rc
   # --- FX-1（Notify あり）側の基準出力
-  h="$WORK/home-ac4-fx1"; s="$WORK/s-ac4-fx1"; rm -rf "$h" "$s"; mkdir -p "$h"; cl_stubs "$s"
+  h="$WORK/home-ac4"; s="$WORK/s-ac4-fx1"; rm -rf "$h" "$s"; mkdir -p "$h"; cl_stubs "$s"
   cl_fresh_main_home new "$h" "$WT1" "$s" "$od/fx1-install.log" || { cl_result AC-4 NG "① FX-1 の導入が失敗（ac4/fx1-install.log）"; return; }
   cl_mk_vault_fx5 "$h/$CLOSING_VAULT_REL"; git -C "$h/$CLOSING_VAULT_REL" checkout -q -b other-branch
   e="$(cl_side_path new "$CLOSING_MAINT_OLD")" || e=""
+  cl_py snap "$h" "$od/fx1-maint-before.json" --exclude Library/Caches/
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$WT1" AIENV_REPO="$WT1" "$WT1/$e" </dev/null >"$od/fx1-maint.stdout" 2>"$od/fx1-maint.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx1-maint.rc"
+  cl_py snap "$h" "$od/fx1-maint-after.json" --exclude Library/Caches/
+  cl_py snapdiff "$od/fx1-maint-before.json" "$od/fx1-maint-after.json" "$h" > "$od/fx1-maint.state"
+  CL_SIDE_WT="$WT1" cl_norm new "$s" < "$od/fx1-maint.state" > "$od/fx1-maint.state.n"
   local fx1_osascript_maint; fx1_osascript_maint="$(grep -c '異常終了' "$s/calls.log" 2>/dev/null || true)"
   e="$(cl_side_path new "$CLOSING_USAGE_FETCH_OLD")" || e=""
   : > "$s/calls.log"
+  cl_py snap "$h" "$od/fx1-usage-before.json" --exclude Library/Caches/
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$WT1" "$(cl_path "$s" "$CL_FIX/usage-bin")" \
     STUB_CURL_STATUS=200 STUB_CURL_BODY="$CLOSING_USAGE_WARN_BODY" \
     STUB_SECURITY_JSON='{"claudeAiOauth":{"accessToken":"tok-abc","expiresAt":99999999999999}}' \
     STUB_CODEX_RESULT_LINE="$(cat "$CL_FIX/usage-bin/codex_success_result_line.json")" \
     "$WT1/$e" </dev/null >"$od/fx1-usage.stdout" 2>"$od/fx1-usage.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx1-usage.rc"
+  cl_py snap "$h" "$od/fx1-usage-after.json" --exclude Library/Caches/
+  cl_py snapdiff "$od/fx1-usage-before.json" "$od/fx1-usage-after.json" "$h" > "$od/fx1-usage.state"
+  CL_SIDE_WT="$WT1" cl_norm new "$s" < "$od/fx1-usage.state" > "$od/fx1-usage.state.n"
   local fx1_osascript_usage; fx1_osascript_usage="$(grep -c '警告' "$s/calls.log" 2>/dev/null || true)"
-  local fx1_maint_result fx1_claude_pct fx1_notify_state
-  fx1_maint_result="$(jq -r '.last_result // empty' "$h/.claude/logs/maintenance/last-run.json" 2>/dev/null)"
-  fx1_claude_pct="$(jq -Sc '{fh:.five_hour.used_percent, sd:.seven_day.used_percent}' "$h/.cache/claude-codex-usage/claude-cache.json" 2>/dev/null)"
-  fx1_notify_state="$(jq -Sc 'walk(if type=="object" then with_entries(if (.key|test("_at$")) then .value=0 else . end) else . end)' "$h/.cache/claude-codex-usage/notify-state.json" 2>/dev/null)"
 
-  # --- FX-10（Notify を除いた）側
-  h="$WORK/home-ac4-fx10"; s="$WORK/s-ac4-fx10"; rm -rf "$h" "$s"; mkdir -p "$h"; cl_stubs "$s"
+  # --- FX-10（Notify を除いた）側（$h は FX-1 側と同名を使い回す＝上で rm -rf 済みの前提）
+  h="$WORK/home-ac4"; s="$WORK/s-ac4-fx10"; rm -rf "$h" "$s"; mkdir -p "$h"; cl_stubs "$s"
   cl_fresh_main_home new "$h" "$wt10" "$s" "$od/fx10-install.log" || { cl_result AC-4 NG "① FX-10 の導入が失敗（ac4/fx10-install.log）"; return; }
   cl_mk_vault_fx5 "$h/$CLOSING_VAULT_REL"; git -C "$h/$CLOSING_VAULT_REL" checkout -q -b other-branch
   e="$(cl_side_path new "$CLOSING_MAINT_OLD")" || e=""
+  cl_py snap "$h" "$od/fx10-maint-before.json" --exclude Library/Caches/
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$wt10" AIENV_REPO="$wt10" "$wt10/$e" </dev/null >"$od/fx10-maint.stdout" 2>"$od/fx10-maint.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx10-maint.rc"
+  cl_py snap "$h" "$od/fx10-maint-after.json" --exclude Library/Caches/
+  cl_py snapdiff "$od/fx10-maint-before.json" "$od/fx10-maint-after.json" "$h" > "$od/fx10-maint.state"
+  CL_SIDE_WT="$wt10" cl_norm new "$s" < "$od/fx10-maint.state" > "$od/fx10-maint.state.n"
   local fx10_osascript_maint; fx10_osascript_maint="$({ [ -f "$s/calls.log" ] && grep -c . "$s/calls.log" 2>/dev/null; } || true)"
   # VB-04＝各自のログに「送らなかった」旨が題を含むちょうど1行（core/executor/notice.sh:97 の固定文言）。
   local maint_log_n; maint_log_n="$(grep -cF '口が無いため知らせを送りません: maintenance.sh 異常終了' "$od/fx10-maint.stdout" "$od/fx10-maint.stderr" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')"
-  local fx10_maint_result; fx10_maint_result="$(jq -r '.last_result // empty' "$h/.claude/logs/maintenance/last-run.json" 2>/dev/null)"
   e="$(cl_side_path new "$CLOSING_USAGE_FETCH_OLD")" || e=""
   : > "$s/calls.log"
+  cl_py snap "$h" "$od/fx10-usage-before.json" --exclude Library/Caches/
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$wt10" "$(cl_path "$s" "$CL_FIX/usage-bin")" \
     STUB_CURL_STATUS=200 STUB_CURL_BODY="$CLOSING_USAGE_WARN_BODY" \
     STUB_SECURITY_JSON='{"claudeAiOauth":{"accessToken":"tok-abc","expiresAt":99999999999999}}' \
     STUB_CODEX_RESULT_LINE="$(cat "$CL_FIX/usage-bin/codex_success_result_line.json")" \
     "$wt10/$e" </dev/null >"$od/fx10-usage.stdout" 2>"$od/fx10-usage.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx10-usage.rc"
+  cl_py snap "$h" "$od/fx10-usage-after.json" --exclude Library/Caches/
+  cl_py snapdiff "$od/fx10-usage-before.json" "$od/fx10-usage-after.json" "$h" > "$od/fx10-usage.state"
+  CL_SIDE_WT="$wt10" cl_norm new "$s" < "$od/fx10-usage.state" > "$od/fx10-usage.state.n"
   local fx10_osascript_usage; fx10_osascript_usage="$({ [ -f "$s/calls.log" ] && grep -c . "$s/calls.log" 2>/dev/null; } || true)"
   local usage_log_n; usage_log_n="$(grep -cF '口が無いため知らせを送りません: claude-codex-usage' "$od/fx10-usage.stdout" "$od/fx10-usage.stderr" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')"
-  local fx10_claude_pct; fx10_claude_pct="$(jq -Sc '{fh:.five_hour.used_percent, sd:.seven_day.used_percent}' "$h/.cache/claude-codex-usage/claude-cache.json" 2>/dev/null)"
-  local fx10_notify_state; fx10_notify_state="$(jq -Sc 'walk(if type=="object" then with_entries(if (.key|test("_at$")) then .value=0 else . end) else . end)' "$h/.cache/claude-codex-usage/notify-state.json" 2>/dev/null)"
 
   [ "$(cat "$od/fx1-maint.rc")" = "$(cat "$od/fx10-maint.rc")" ] || bad="$bad maint:rc不一致"
   [ "$fx1_osascript_maint" -ge 1 ] || bad="$bad maint:FX-1側でosascript記録が無い"
   [ "$fx10_osascript_maint" = 0 ] || bad="$bad maint:FX-10側でosascript記録が${fx10_osascript_maint}件（0のはず）"
   [ "$maint_log_n" = 1 ] || bad="$bad maint:口が無い旨の記録が${maint_log_n}件（ちょうど1件のはず）"
-  [ -n "$fx1_maint_result" ] && [ "$fx1_maint_result" = "$fx10_maint_result" ] || bad="$bad maint:状態記録(last_result)不一致(FX-1=$fx1_maint_result,FX-10=$fx10_maint_result)"
+  diff -u "$od/fx1-maint.state.n" "$od/fx10-maint.state.n" > "$od/maint-state.diff" 2>&1 || bad="$bad maint:状態記録(全体)不一致（ac4/maint-state.diff）"
   [ "$(cat "$od/fx1-usage.rc")" = "$(cat "$od/fx10-usage.rc")" ] || bad="$bad usage:rc不一致"
   [ "$fx1_osascript_usage" -ge 1 ] || bad="$bad usage:FX-1側でosascript記録が無い"
   [ "$fx10_osascript_usage" = 0 ] || bad="$bad usage:FX-10側でosascript記録が${fx10_osascript_usage}件（0のはず）"
   [ "$usage_log_n" = 1 ] || bad="$bad usage:口が無い旨の記録が${usage_log_n}件（ちょうど1件のはず）"
-  [ -n "$fx1_claude_pct" ] && [ "$fx1_claude_pct" = "$fx10_claude_pct" ] || bad="$bad usage:取得結果・キャッシュ不一致"
-  [ -n "$fx1_notify_state" ] && [ "$fx1_notify_state" = "$fx10_notify_state" ] || bad="$bad usage:通知状態JSON不一致"
+  diff -u "$od/fx1-usage.state.n" "$od/fx10-usage.state.n" > "$od/usage-state.diff" 2>&1 || bad="$bad usage:取得結果(全体)不一致（ac4/usage-state.diff）"
 
-  if [ -z "$bad" ]; then cl_result AC-4 ok "① メンテ・Usage とも rc・状態記録・取得結果一致・FX-10 は osascript 0 件＋口なしの記録1行ずつ"
+  if [ -z "$bad" ]; then cl_result AC-4 ok "① メンテ・Usage とも rc・状態記録・取得結果（全体スナップショット比較）一致・FX-10 は osascript 0 件＋口なしの記録1行ずつ"
   else cl_result AC-4 NG "①${bad}（ac4/）"; fi
 }
 
