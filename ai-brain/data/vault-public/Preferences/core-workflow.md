@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-10-04
+updated: 2026-10-05
 tags: [preference, core, workflow, roles, quality-gate]
 project: takumi009-ai-env
 aliases:
@@ -56,7 +56,7 @@ aliases:
 > 文書成果物（要件書・設計書級）の既定の置き場＝メイン機ローカル `~/Claude/<案件slug>/docs/`（他機へ配布しない）。案件を独立 private repo で管理するときはその repo の `docs/` でよい（ai-env の repo には入れない）。
 ## 4. 記録（外部脳）
 - フォルダの意味論＝[[Preferences/vault-operation]]。どの機でも6フォルダを持つ（中身は機ごとに独立・Preferences だけメイン機から配布）。
-- 書き込みの決定者はリーダー職。執筆は記録職（空席時は §7）。単独モードだけはリーダーが案件の締めに直筆する（[[Preferences/vault-operation]]）。
+- 書き込みの決定者はリーダー職。軽い書込（追記・状態記号・frontmatter の数行・置換 1〜2 箇所）はリーダーが直筆し、重い編集（新規ノート・Preferences・本文の書き換え・複数ノートの整合）は記録職へ（空席時は §7）。単独モードは全部リーダーが直筆する（[[Preferences/vault-operation]]）。
 - 執筆規約＝[[Preferences/vault-operation]]「書き方の鉄則」。Knowledge はカタログ名で作る。
 - 読んだノートの綻び（鮮度・リンク切れ・alias 不足）は、直せるなら読み時に直し、直せないなら「Vault記録候補:」で応答に明示する。⚠️ **サブ機で Preferences 発の wiki link の参照先が無いのは常態でリンク切れではない**＝作成・修正・提案・記録候補・綻び報告のいずれもしない（メイン機では直す）。他フォルダ発のリンク切れはどの機でも直す。
 - 他の記録規約＝[[Preferences/vault-operation]]

@@ -2,7 +2,7 @@
 date: 2026-06-14
 tags: [preference, git, github, security]
 project: meta
-updated: 2026-10-04
+updated: 2026-10-05
 related:
   - "[[Preferences/readme-bilingual]]"
   - "[[Decisions/2026-09-19-commit-free-push-by-visibility]]"
@@ -81,7 +81,7 @@ commit/push/private作成/force-push・`visibility=private`・visibilityの読�
 
 ## 🚩 ルール：commit は意味の区切りで切る・push は repo の可視性で分岐（push済みは書き換えない）
 
-**commit は都度確認なしで行い、意味の区切り（スライス完了・工程の締め・案件の締め・export）で切る。push は repo の可視性で分岐＝private は AI が自由に push・public は本人が判断（AI は push せず「push 待ち」を報告）。可視性は直前に `gh repo view <owner>/<repo> --json visibility` で実測する。**
+**commit は都度確認なしで行い、意味の区切り（スライス完了・工程の締め・案件の締め・export）で切る。push は repo の可視性で分岐＝private は AI が自由に push・public は本人が判断（AI は push せず「push 待ち」を報告）。可視性は直前に `gh repo view <owner>/<repo> --json visibility` で実測する。実測は**結果（`private`／`public` の値）を読んでから**押す＝コマンドを表示・実行しただけで結果を見ずに押さない。**
 
 - **書き換えてよいのは未push 分だけ。push 済みコミット（特に `origin/main`）は書き換えない＝force-push しない。**
   - **Why**: サブ機はセッション開始のたびに（SessionStartフック`core/assembly/check-sub-update.sh`が）このリポジトリ（takumi009-ai-env）への未反映コミットを確認し、あれば `core/assembly/update-sub.sh`（`git pull --ff-only`）の手動実行を案内する運用（2026-07-23〜。それ以前は1日2回の無人自動pullだった）。push済み履歴を rewrite すると ff 不可で pull が失敗し、**サブ機の追従が止まる**（復旧に各クローンで手動 `git fetch && git reset --hard origin/main` が必要）。公開履歴の書き換えは取り消しにくい。※自分専用の未共有ブランチの整理に force-push を使うのは可。禁止対象は「他が既に追従している push済み履歴」。

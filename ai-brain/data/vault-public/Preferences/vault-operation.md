@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-10-03
+updated: 2026-10-05
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -25,8 +25,8 @@ aliases:
 - **部品追加の掟**: 実行部品（スクリプト・フック・LaunchAgent）を追加するときは、対応する Decision に**分類（A=常時/B=定期/C=手動）・テスト増分・廃止条件**を書く。
 - **Projects の frontmatter と Tasks 節**: `status:` 4 値（active/paused/completed/closed）・状態が動いたら `next:`（15 文字以内）も更新・Tasks 節と待ち（wait_until）の書式＝[[Preferences/project-tasks-format]]（Dock の表示元）。
 ## 書き方の鉄則
-- 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**執筆は必ず Vault 書込を宣言した記録職（定義の frontmatter `aienv-vault-write: allowed`・既定＝`vault-scribe`）へ委任**＝リーダーが内容を確定して渡す。**リーダー直筆は禁止**。⚠️ **単独モードだけは例外**＝リーダーが案件の締めに直筆する（Vault 専用の直接作業宣言マーカーで gate を通す）。**記録職専任の対象は AI向け6フォルダのみ**＝人間向け領域（Blogs/・Explorations/ ほか）は直接書き込み可。他ワーカーは6フォルダへの記録候補を「Vault記録候補:」で申告。
-- **記録職の選び方**: 既定＝`vault-scribe-light`（既存ノートへの数行追記・状態記号・frontmatter の数行・文字列置換 1〜2 箇所）。標準 `vault-scribe` は新規ノート・Preferences の編集・本文の書き換え・複数ノートの整合のときだけ。正本＝各定義ファイルの「担当範囲」。
+- 該当が出たら**その場で書く**。書き込みの**決定者**はリーダーの Claude のみ。**軽い書込はリーダーが直筆する**＝既存ノートへの数行追記・状態記号（`[ ]`→`[/]`→`[x]`）・frontmatter の数行（`next`・`updated` 等）・置換 1〜2 箇所（[[Decisions/2026-10-04-leader-vault-light-writes-no-gate]]）。**重い編集は Vault 書込を宣言した記録職（定義の frontmatter `aienv-vault-write: allowed`＝`vault-scribe`）へ委任**＝新規ノート・Preferences の編集・本文の書き換え・複数ノートの整合＝リーダーが内容を確定して渡す。軽重の判定はリーダーの規則と判断で行う（フックで判定しない）。単独モードは全部リーダーが直筆する。**この掟の対象は AI向け6フォルダのみ**＝人間向け領域（Blogs/・Explorations/ ほか）は直接書き込み可。他ワーカーは6フォルダへの記録候補を「Vault記録候補:」で申告。
+- **記録職の選び方**: 標準 `vault-scribe` が既定（重い編集）。`vault-scribe-light` は予備＝リーダーが直筆できない事情があるときだけ（既存ノートへの数行追記・状態記号・frontmatter の数行・置換 1〜2 箇所）。正本＝各定義ファイルの「担当範囲」。
 - 長くなったら分割（目安8,000字・Decisions は対象外）＝詳細を別ノートへ分離し相互リンク。
 - フロントマター必須（date/tags/project）・本文編集で `updated` 更新。wiki link はフォルダ付き `[[Folder/note]]`・関連ノートは**相互に**リンク。
 - aliases 必須（README 除く）＝想起フックの検索キー。実際に打ちそうな語（目安5個・他ノートと重ならない固有語・汎用語禁止・迷ったら付けない）で、**うち1個以上は「その知識を使う場面で口にする語」**（技法名・カタログ名だけにしない＝[[Decisions/2026-09-23-situational-aliases-and-milestone-recall]]）。外部情報系は `review_by:`（任意）。

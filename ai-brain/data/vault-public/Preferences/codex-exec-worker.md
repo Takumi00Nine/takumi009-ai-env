@@ -1,6 +1,6 @@
 ---
 date: 2026-09-03
-updated: 2026-10-04
+updated: 2026-10-05
 tags: [preference, codex, delegation, worker, exec]
 project: meta
 related:
@@ -39,7 +39,7 @@ codex exec --skip-git-repo-check -s workspace-write -C /abs/path/to/target \
 - **依頼文は argv でなく stdin 経由で渡し、positional は `-` 固定にする**（先頭がハイフンの依頼文の誤解釈と ARG_MAX を避ける。ラッパー `team/connect/codex/codex-exec.sh` はこの型を実装済み）。
 - **`-c key=value` は codex がまず TOML として解析し、失敗したときだけ文字列にフォールバックする**。`developer_instructions` のように本文を渡す値は JSON 文字列としてエンコードして渡す（ラッパーが `jq -Rs`／python3 で処理。生で渡すと TOML 型に誤解釈される実バグを 2026-09-06 に実測）。
 - ワークスペース外の Vault ノート（例 `absolute-rules.md`）は**exec 経路では読める**（実測）。absolute-rules は貼らずにパス指定で読ませればよい。
-- **職種定義の注入＝`-c developer_instructions="..."`**（公式設定キー。実測で報告形式の指示が守られた）。`agents/implementer.md` の本文（frontmatter を除く）をそのまま渡す。
+- **職種定義の注入＝`-c developer_instructions="..."`**（公式設定キー。実測で報告形式の指示が守られた）。`agents/implementer.md` の本文（frontmatter を除く）をそのまま渡す。開発指示は**毎回、現行の職種定義から生成する**（`tail -n +7 ~/.claude/agents/<職種>.md`＝frontmatter を除いた本文）＝過去案件の `verifier-dev.md` 等の複写を使わない（職種定義の改訂が届かない）。
 - **`--json` の1行目 `{"type":"thread.started","thread_id":"..."}` に thread_id が出る**。継続は次の形（共通オプションは `resume` より前に置く。`--skip-git-repo-check` も再指定が必要＝無いと "Not inside a trusted directory" で失敗）:
 ```bash
 codex exec --skip-git-repo-check -s workspace-write -C /abs/path -o report2.md \
