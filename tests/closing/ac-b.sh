@@ -317,12 +317,16 @@ ac_7() {
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     /bin/bash -n "$wt/$f" 2>>"$od/syntax.log" || syntax_bad="$syntax_bad $f"
-  done < <(git -C "$CL_SRC" diff --name-only --diff-filter=AM "$BASE_COMMIT".."$FX1_COMMIT" -- '*.sh')
+  done < <(git -C "$CL_SRC" diff --name-only --diff-filter=AM "$BASE_COMMIT".."$FX1_COMMIT" -- '*.sh' ':!tests/closing')
   [ -z "$syntax_bad" ] || e4="$e4 bash構文:$syntax_bad"
-  local incompat
-  incompat="$(git -C "$CL_SRC" diff -U0 "$BASE_COMMIT".."$FX1_COMMIT" -- '*.sh' 2>/dev/null | grep -E '^\+' \
-    | grep -E 'wait -n|declare -[a-zA-Z]*[gnA]|local -[a-zA-Z]*[nA]|mapfile|readarray|coproc|\$\{[A-Za-z_]+(,,|\^\^)\}|&>>|\|&' | wc -l | tr -d ' ')"
-  [ "$incompat" = 0 ] || e4="$e4 bash3.2非互換${incompat}件"
+  # リーダー実査＝tests/closing/（検査する側・メイン機でしか動かない）は実装対象から除く。
+  # |&・&>> は演算子としての出現だけに当てる（[[:space:]] 境界）＝test-ledger.sh のブラケット式
+  # リテラル（FORMULA_C='…|&…'）を偽陽性にしない。
+  git -C "$CL_SRC" diff -U0 "$BASE_COMMIT".."$FX1_COMMIT" -- '*.sh' ':!tests/closing' 2>/dev/null | grep -E '^\+' \
+    | grep -E 'wait -n|declare -[a-zA-Z]*[gnA]|local -[a-zA-Z]*[nA]|mapfile|readarray|coproc|\$\{[A-Za-z_]+(,,|\^\^)\}|(^|[[:space:]])&>>([[:space:]]|$)|(^|[[:space:]])\|&([[:space:]]|$)' \
+    > "$od/bash32-incompat.txt"
+  local incompat; incompat="$(grep -c . "$od/bash32-incompat.txt" 2>/dev/null || true)"
+  [ "${incompat:-0}" = 0 ] || e4="$e4 bash3.2非互換${incompat}件（ac7/bash32-incompat.txt）"
 
   # ④ (c) python の import が標準ライブラリだけ
   local nonstd
