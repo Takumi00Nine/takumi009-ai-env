@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-21
+updated: 2026-10-04
 tags: [preference, codex, review, delegation, protocol]
 project: meta
 related:
@@ -29,7 +29,7 @@ aliases:
 ## 呼び出し方（リーダーが起動する）
 **2026-09-06 MCP 経由は廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]。呼び出しは exec ラッパー**（[[Preferences/codex-exec-worker]]）。
 - **呼び出すのはリーダー**（適用工程の成果物が完成した時点で1回起動する。実装工程は全実装者の完了を確認してから）。
-- 呼び出し口は配役表 `role.verifier` の `execution` に従う（`external-cli`＝`scripts/codex-exec.sh` を背景実行／`subagent`＝`subagent_type: verifier`）。
+- 呼び出し口は配役表 `role.verifier` の `execution` に従う（`external-cli`＝`team/connect/codex/codex-exec.sh` を背景実行／`subagent`＝`subagent_type: verifier`）。
 - `--sandbox` と `--cwd` は**成果物の種別で2経路**＝**文書成果物＝`read-only`**（`--cwd` は成果物の置き場か `$HOME`）／**コード成果物＝`workspace-write`**（`--cwd` は repo の使い捨て worktree へ最小化）。⚠️ **`$HOME` 全体を `--cwd` に渡すときは職種を問わず `read-only`**（権限表の共通則②）。
 - プロンプト＝レビュー対象（**ファイルパスで読ませる**。検索させない）＋レビュー観点＋出力形式。**`--out` は worktree の外に置き、最終メッセージの先頭3行を「件数／打ち切り可否／`---`」に固定する。リーダーは先頭3行だけを読む**（リーダーの文脈を守る）。
 - **[[Preferences/absolute-rules]] を必ず読ませる**（依頼文に参照を含める。ラッパーが検査し、無ければ起動を拒否する＝呼び出し元を問わず適用）。⚠️ **パス指定で読ませ、本文は貼らない**（`codex exec` は `--cwd` の外の Vault ノートを読める＝実測。ラッパーの文字列検査もパスで満たされる）。

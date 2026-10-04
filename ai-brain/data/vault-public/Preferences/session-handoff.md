@@ -1,6 +1,6 @@
 ---
 date: 2026-09-16
-updated: 2026-10-03
+updated: 2026-10-04
 tags: [preference, session, handoff, cmux, leader]
 project: takumi009-ai-env
 related:
@@ -20,7 +20,7 @@ aliases:
 ---
 # セッション引き継ぎ（リーダーが新セッションを起動して続きを渡す）
 
-セッションを区切るとき、本人に再開の一言を貼らせない。リーダーが再開メモを残し、新セッションを自分で起動して続きの依頼を投入する。実装＝ai-env `scripts/session-handoff.sh`（使い方の正本＝同 repo README「Session handoff」節）。理由＝[[Decisions/2026-09-16-leader-spawns-next-session]]。
+セッションを区切るとき、本人に再開の一言を貼らせない。リーダーが再開メモを残し、新セッションを自分で起動して続きの依頼を投入する。実装＝ai-env `core/connect/claude-code/session-handoff.sh`（使い方の正本＝同 repo README「Session handoff」節）。理由＝[[Decisions/2026-09-16-leader-spawns-next-session]]。
 
 ## 区切る条件
 - **切れ目の3条件が全部そろった時だけ切る**（[[Decisions/2026-10-03-strict-session-split-criteria]]）＝

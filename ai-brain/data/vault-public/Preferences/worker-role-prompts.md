@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-09-21
+updated: 2026-10-04
 tags: [preference, delegation, agent-teams, subagent, roles]
 project: meta
 related:
@@ -106,9 +106,9 @@ aliases:
 **途中投入の仕様変更は最終レビューで反映確認必須（2026-07-23 本人指摘）**: 作業中のワーカーへ SendMessage で仕様変更を送っても、反映が最後回しになる・取りこぼされる傾向がある。リーダーは最終レビュー時に**変更点が成果物に実際に反映されているかを個別に実査**する（変更で「不要」にした実装・テストの残存も含めて grep で確認）。実例2件（2026-07-23 同一タスク）: ①削除指示した移行コードが残存 ②**差し戻し2点中1点のみ対応し、裁定済みの残り1点を「要リーダー判断」と報告**。対策＝差し戻しは可能なら1メッセージ1論点に絞り、報告には**各点の実装箇所（ファイル:行）の明記を義務付け**て突合する。
 
 ## 起動形態の既定（2026-09-17 B-1）
-起動形態は2段に分かれる。(1) **配役表に職種行がある職種**＝ラッパー `scripts/claude-exec.sh`（別プロセス・1回の呼び出し＝1依頼・報告は `result`）。(2) **配役表外の組み込み subagent**＝名前無し subagent（`subagent_type`＝職種名・`model`＝`resolve-candidate` が返す `AGENT_MODEL`）。理由＝名前を付けるとチームメイト経路になり、職種定義 frontmatter の `effort:` が無視される（公式・実測 2026-09-17＝[[Knowledge/claude-effort-delivery-paths]]）。本人はペインを見ないため、名前無し化に伴うペイン消滅は許容する。同ロールを並行させるときの識別は名前でなく委任文の担当名（例: 担当A／担当B）で行う。
+起動形態は2段に分かれる。(1) **配役表に職種行がある職種**＝ラッパー `team/connect/claude-code/claude-exec.sh`（別プロセス・1回の呼び出し＝1依頼・報告は `result`）。(2) **配役表外の組み込み subagent**＝名前無し subagent（`subagent_type`＝職種名・`model`＝`resolve-candidate` が返す `AGENT_MODEL`）。理由＝名前を付けるとチームメイト経路になり、職種定義 frontmatter の `effort:` が無視される（公式・実測 2026-09-17＝[[Knowledge/claude-effort-delivery-paths]]）。本人はペインを見ないため、名前無し化に伴うペイン消滅は許容する。同ロールを並行させるときの識別は名前でなく委任文の担当名（例: 担当A／担当B）で行う。
 
-**ラッパーの呼び出しは必ずバックグラウンドで起動する（本人指示 2026-09-18）**: `scripts/claude-exec.sh` は Bash ツールの `run_in_background: true` で呼び、完了は通知で受けて `--out` の `result` を読む。前面（同期待ち）で呼ばない＝子が終わるまでリーダーの応答が塞がり本人が話しかけられなくなる上、Bash の上限（10分）で子ごと強制終了され成果物が失われる。記録職の短い依頼も例外にしない（[[Decisions/2026-09-18-wrapper-launch-background-only]]）。
+**ラッパーの呼び出しは必ずバックグラウンドで起動する（本人指示 2026-09-18）**: `team/connect/claude-code/claude-exec.sh` は Bash ツールの `run_in_background: true` で呼び、完了は通知で受けて `--out` の `result` を読む。前面（同期待ち）で呼ばない＝子が終わるまでリーダーの応答が塞がり本人が話しかけられなくなる上、Bash の上限（10分）で子ごと強制終了され成果物が失われる。記録職の短い依頼も例外にしない（[[Decisions/2026-09-18-wrapper-launch-background-only]]）。
 
 **例外（名前付きチームメイト）**: 本人指示があるとき・delegation-gate-v2 rule 4 の例外運用に限り、名前付きチームメイトを使ってよい。そのときの**命名規則（2026-07-20 本人指示・2026-09-16 定義名へ統一）＝`<職種名>-<配役（定義名）>[-識別子]`**：名前の先頭に職種名、ハイフンの後に配役表の定義名（9ロール: requirements-analyst/system-designer/implementer/test-writer/test-runner/verifier/researcher/operator/adoption-critic）。例: `implementer-sonnet-high`・`researcher-sonnet-high`・`system-designer-opus-high`・並行時 `implementer-sonnet-high-op-keyframes`。一覧・通知・ペインで「どの配役がどの職種か」を一目で判別するため。名前の配役部分は、明示して起動した配役に合わせる。末尾に**タスク識別子を任意で付けてよい（リーダー裁量・2026-07-20 本人確認）**: 例 `sonnet-implementer-op-keyframes`。同ロール並行時は衝突回避のため必須。cmux では名前付きだけが分割ペインに表示され、本人が進行を目視できる。
 

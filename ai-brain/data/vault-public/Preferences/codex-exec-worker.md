@@ -1,6 +1,6 @@
 ---
 date: 2026-09-03
-updated: 2026-10-03
+updated: 2026-10-04
 tags: [preference, codex, delegation, worker, exec]
 project: meta
 related:
@@ -36,7 +36,7 @@ codex exec --skip-git-repo-check -s workspace-write -C /abs/path/to/target \
 - **`</dev/null` は必須**。無いと Codex が stdin の追加入力を待ち続けて止まる（実測＝5分タイムアウト。Bash ツールは stdin が開いたままのため）。
 - **`run_in_background: true`** で起動し、完了通知で受け取る。結果は `-o` のファイルだけ読む（events.jsonl は読まない＝リーダーの文脈を小さく保つ）。
 - **`-C` は変更対象ディレクトリの絶対パスに最小化**。ホーム全体は渡さない。`--skip-git-repo-check` は git 外の cwd で必須。
-- **依頼文は argv でなく stdin 経由で渡し、positional は `-` 固定にする**（先頭がハイフンの依頼文の誤解釈と ARG_MAX を避ける。ラッパー `scripts/codex-exec.sh` はこの型を実装済み）。
+- **依頼文は argv でなく stdin 経由で渡し、positional は `-` 固定にする**（先頭がハイフンの依頼文の誤解釈と ARG_MAX を避ける。ラッパー `team/connect/codex/codex-exec.sh` はこの型を実装済み）。
 - **`-c key=value` は codex がまず TOML として解析し、失敗したときだけ文字列にフォールバックする**。`developer_instructions` のように本文を渡す値は JSON 文字列としてエンコードして渡す（ラッパーが `jq -Rs`／python3 で処理。生で渡すと TOML 型に誤解釈される実バグを 2026-09-06 に実測）。
 - ワークスペース外の Vault ノート（例 `absolute-rules.md`）は**exec 経路では読める**（実測）。absolute-rules は貼らずにパス指定で読ませればよい。
 - **職種定義の注入＝`-c developer_instructions="..."`**（公式設定キー。実測で報告形式の指示が守られた）。`agents/implementer.md` の本文（frontmatter を除く）をそのまま渡す。
