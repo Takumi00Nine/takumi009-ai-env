@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # team/connect/claude-code/delegation-gate-v2.sh のユニットテスト（前提修正 P-4・設計§4）。
 #
-# ⚠️ team/connect/claude-code/delegation-gate-v2.sh の判定ロジックは変えない（deny 文面は 2026-09-19 に短縮）。
-# 本ファイルは「変えていないこと」を守るための回帰ガードとして新設する
+# ⚠️ team/connect/claude-code/delegation-gate-v2.sh の判定ロジックは、
+# 2026-10-04 決定（リーダーのVault軽書込は直筆可）で rule 2.5 が「Vault の
+# AI向け6フォルダ＝通過」に変わる以外は変えない（deny 文面は 2026-09-19 に短縮）。
+# 本ファイルは、rule 2.5 以外の判定が「変えていないこと」を守る回帰ガードである
 # （フックにテストが1本も無かった＝要件§15-2）。
 #
 # 隔離: HOME（許可パスと Vault 接頭辞の両方が追随する）・GATE_TEAMS_DIR・
@@ -14,6 +16,8 @@
 # を含めば deny（フックは deny の場合も含め常に exit 0 を返す契約）。
 #
 # 判定順序（現物）＝1→2→2.5→3→4→4m→5（設計v1.2 §3.3・FR-38で旧4bは撤去）。
+# 2.5＝Vault の AI 向け6フォルダ（guard_is_vault_ai_path）なら通過
+# （2026-10-04決定・リーダー直筆可。Vault専用マーカーの分岐は撤去済み）。
 # 各 fixture は「狙った判定より前の条件がすべて偽」であることを保証する
 # （設計§4）。PA-19〜PA-22 に共通の前提 a〜g（PA-18 は対象外＝a〜e＋「対象が
 # 許可パスの中」＋g）を、フィクスチャ自身の構成から実際に確認するヘルパーを
@@ -197,7 +201,7 @@ echo "=== 3. PA-15: 判定2（他チームのconfigに自session_id）→ 通過
   rm -rf "$WORK"
 }
 
-echo "=== 4. PA-16: 判定2.5（Vault AI向け6フォルダ・専用マーカーなし）→ deny（理由文にvault-scribe） ==="
+echo "=== 4. PA-16: 判定2.5（Vault AI向け6フォルダ）→ 通過（2026-10-04決定・リーダー直筆可） ==="
 {
   WORK="$(mktemp -d)"
   HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
@@ -206,21 +210,7 @@ echo "=== 4. PA-16: 判定2.5（Vault AI向け6フォルダ・専用マーカー
   fpath="$HOME_D/Data/obsidian/Knowledge/note.md"
   json="$(make_input "$SID" "" "" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
-  assert_deny "PA-16: Vault AI向けフォルダ・マーカー無しでdeny" "vault-scribe"
-  rm -rf "$WORK"
-}
-
-echo "=== 5. PA-17: 判定2.5（同・Vault専用マーカーあり）→ 通過 ==="
-{
-  WORK="$(mktemp -d)"
-  HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
-  mkdir -p "$HOME_D" "$TEAMS_D" "$MARK_D"
-  SID="sess-pa17-00000000"
-  fpath="$HOME_D/Data/obsidian/Knowledge/note.md"
-  touch "$MARK_D/claude-vault-direct-ok-$SID"
-  json="$(make_input "$SID" "" "" "$fpath" "$WORK")"
-  run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
-  assert_pass "PA-17: Vault専用マーカーありで通過"
+  assert_pass "PA-16: Vault AI向けフォルダ（マーカー無し）で通過"
   rm -rf "$WORK"
 }
 
@@ -369,7 +359,7 @@ echo "=== 8c. D2-M2(AC-9後半・FR-38・FM-7): 他セッションのconfigに�
   rm -rf "$WORK"
 }
 
-echo "=== 8d. D2-M3(AC-9・FR-27・FM-5): 4mマーカー・他セッションconfigのいずれでもVault6フォルダはdenyのまま（委任実績では絶対に開かない） ==="
+echo "=== 8d. D2-M3(AC-9・FR-27・FM-5): 4mマーカー・他セッションconfigのいずれでもVault6フォルダは通過（2026-10-04決定でrule2.5がリーダー直筆可になったため、委任実績の有無を問わず通過） ==="
 {
   for variant in delegated_marker other_session_config; do
     WORK="$(mktemp -d)"
@@ -383,7 +373,7 @@ echo "=== 8d. D2-M3(AC-9・FR-27・FM-5): 4mマーカー・他セッションcon
     esac
     json="$(make_input "$SID" "" "" "$fpath" "$WORK")"
     run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
-    assert_deny "D2-M3(${variant}): 委任実績があってもVault6フォルダはdeny（vault-scribeへ）" "vault-scribe"
+    assert_pass "D2-M3(${variant}): Vault6フォルダは通過（rule 2.5・委任実績は無関係）"
     rm -rf "$WORK"
   done
 }
@@ -406,9 +396,7 @@ echo "=== 9. PA-21: 判定5（汎用マーカーあり）→ 通過（共通前�
   assert_precond_d "$SID" "$TEAMS_D"
   assert_precond_e "$fpath" "$HOME_D/Data/obsidian"
   assert_precond_f "$fpath" "$HOME_D"
-  # 前提g: 今回の判定（5）に必要な汎用マーカーだけを置く（Vault専用マーカーは置かない）
-  assert_true "前提g: Vault専用マーカーは置かない" \
-    "$([[ ! -f "$MARK_D/claude-vault-direct-ok-$SID" ]] && echo 1 || echo 0)"
+  # 前提g: 今回の判定（5）に必要な汎用マーカーだけを置く
 
   json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
@@ -433,7 +421,7 @@ echo "=== 10. PA-22: マーカーも委任実績も無い → deny（共通前�
   assert_precond_e "$fpath" "$HOME_D/Data/obsidian"
   assert_precond_f "$fpath" "$HOME_D"
   assert_true "前提g: マーカーは一切置かない" \
-    "$([[ ! -f "$MARK_D/claude-direct-edit-ok-$SID" && ! -f "$MARK_D/claude-vault-direct-ok-$SID" ]] && echo 1 || echo 0)"
+    "$([[ ! -f "$MARK_D/claude-direct-edit-ok-$SID" ]] && echo 1 || echo 0)"
 
   json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
@@ -484,7 +472,7 @@ echo "=== 12. FX-G2（既存の挙動が変わっていないこと＝回帰ガ�
   assert_precond_e "$fpath" "$HOME_D/Data/obsidian"
   assert_precond_f "$fpath" "$HOME_D"
   assert_true "前提g: マーカーは一切置かない" \
-    "$([[ ! -f "$MARK_D/claude-direct-edit-ok-$SID" && ! -f "$MARK_D/claude-vault-direct-ok-$SID" ]] && echo 1 || echo 0)"
+    "$([[ ! -f "$MARK_D/claude-direct-edit-ok-$SID" ]] && echo 1 || echo 0)"
 
   json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
@@ -492,16 +480,15 @@ echo "=== 12. FX-G2（既存の挙動が変わっていないこと＝回帰ガ�
   rm -rf "$WORK"
 }
 
-echo "=== 13. FX-G9（FR-31）: 実効モードsolo相当・汎用マーカーあり・対象がVaultのPreferences/配下 → deny・理由文にvault-scribe（判定2.5は汎用マーカーでは開かない） ==="
+echo "=== 13. FX-G9（FR-31・2026-10-04決定で期待値更新）: 実効モードsolo相当・汎用マーカーあり・対象がVaultのPreferences/配下 → 通過（判定2.5はVault6フォルダなら通過・マーカーの有無は無関係） ==="
 {
   WORK="$(mktemp -d)"
   HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
   mkdir -p "$HOME_D" "$TEAMS_D" "$MARK_D"
   SID="sess-fxg9-0000000"
   fpath="$HOME_D/Data/obsidian/Preferences/core-worker.md"
-  # ⚠️ FX-G1と同じ「汎用」マーカー（claude-direct-edit-ok-）だけを置く。
-  # Vault専用マーカー（claude-vault-direct-ok-）は意図的に置かない＝
-  # 判定2.5が汎用マーカーでは通らないことを見る（FR-31）。
+  # ⚠️ FX-G1と同じ「汎用」マーカー（claude-direct-edit-ok-）を置くが、
+  # rule 2.5 の通過条件には無関係（Vault専用マーカーの分岐自体が撤去済み）。
   touch "$MARK_D/claude-direct-edit-ok-$SID"
 
   assert_precond_a "$SID"
@@ -514,16 +501,14 @@ echo "=== 13. FX-G9（FR-31）: 実効モードsolo相当・汎用マーカー�
   fxg9_precond=0
   case "$fpath" in "$HOME_D/Data/obsidian"/Preferences/*) fxg9_precond=1 ;; esac
   assert_true "前提(FX-G9固有): 対象はVaultのAI向け6フォルダの中（Preferences/）" "$fxg9_precond"
-  assert_true "前提g: Vault専用マーカーは置かない" \
-    "$([[ ! -f "$MARK_D/claude-vault-direct-ok-$SID" ]] && echo 1 || echo 0)"
 
   json="$(make_input "$SID" "" "" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
-  assert_deny "FX-G9: solo相当・汎用マーカーのみではVault対象はdenyのまま" "vault-scribe"
+  assert_pass "FX-G9: solo相当・汎用マーカーの有無に関わらずVault対象は通過"
   rm -rf "$WORK"
 }
 
-echo "=== 14. I1-M3(検証1巡目・I1-B1回帰防止): symlink経由の起動でもrule 2.5(Vault AI向け6フォルダ)がrepoパス直叩きと同じ結果でdenyされる（既存ケースは1行も変えず追加のみ） ==="
+echo "=== 14. I1-M3(I1-B1回帰防止): symlink経由の起動でもrule 2.5(Vault AI向け6フォルダ)がrepoパス直叩きと同じ結果（通過）になる ==="
 {
   WORK="$(mktemp -d)"
   HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
@@ -547,12 +532,10 @@ echo "=== 14. I1-M3(検証1巡目・I1-B1回帰防止): symlink経由の起動�
   LINK_RC=$?
 
   if [[ "$DIRECT_RC" -eq 0 ]] && [[ "$LINK_RC" -eq 0 ]] \
-     && printf '%s' "$DIRECT_OUT" | grep -q '"permissionDecision": "deny"' \
-     && printf '%s' "$LINK_OUT" | grep -q '"permissionDecision": "deny"' \
-     && printf '%s' "$LINK_OUT" | grep -qF "vault-scribe"; then
-    pass "I1-M3: symlink経由でもVault AI向け6フォルダのdenyがrepoパス直叩きと一致（guard_common.sh解決の回帰防止）"
+     && [[ -z "$DIRECT_OUT" ]] && [[ -z "$LINK_OUT" ]]; then
+    pass "I1-M3: symlink経由でもVault AI向け6フォルダの通過がrepoパス直叩きと一致（guard_common.sh解決の回帰防止）"
   else
-    fail_case "I1-M3: symlink経由のVault denyがrepoパス直叩きと不一致 (direct_rc=$DIRECT_RC direct_out=[$DIRECT_OUT] link_rc=$LINK_RC link_out=[$LINK_OUT])"
+    fail_case "I1-M3: symlink経由のVault通過がrepoパス直叩きと不一致 (direct_rc=$DIRECT_RC direct_out=[$DIRECT_OUT] link_rc=$LINK_RC link_out=[$LINK_OUT])"
   fi
   rm -rf "$WORK"
 }
@@ -583,6 +566,30 @@ echo "=== 15. I2-m5(検証2巡目): source失敗時のfail-close分岐そのも�
   else
     fail_case "I2-m5: delegation-gate-v2.shのfail-closeが働かない (rc=$NOLIB_RC out=[$NOLIB_OUT])"
   fi
+  rm -rf "$WORK"
+}
+
+echo "=== 16. FX-G10(新設・2026-10-04決定の境界確認): Vault配下でも6フォルダ外（Blogs/）はrule2.5の対象外・委任実績もマーカーも無ければ従来通り3〜5でdeny ==="
+{
+  WORK="$(mktemp -d)"
+  HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
+  mkdir -p "$HOME_D" "$TEAMS_D" "$MARK_D"
+  SID="sess-fxg10-000000"
+  AID=""; ATYPE=""
+  fpath="$HOME_D/Data/obsidian/Blogs/post.md"
+
+  assert_precond_a "$SID"
+  assert_precond_b "$fpath"
+  assert_precond_c "$AID" "$ATYPE"
+  assert_precond_d "$SID" "$TEAMS_D"
+  assert_precond_e "$fpath" "$HOME_D/Data/obsidian"
+  assert_precond_f "$fpath" "$HOME_D"
+  assert_true "前提g: マーカーは一切置かない" \
+    "$([[ ! -f "$MARK_D/claude-direct-edit-ok-$SID" ]] && echo 1 || echo 0)"
+
+  json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
+  run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
+  assert_deny "FX-G10: Blogs/（6フォルダ外）は2.5の対象外・委任実績もマーカーも無ければdeny" "委任実績がありません"
   rm -rf "$WORK"
 }
 
