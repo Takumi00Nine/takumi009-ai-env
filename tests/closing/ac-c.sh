@@ -193,10 +193,14 @@ ac_8() {
     || { cl_result AC-8 NG "② HOME-B（取り外した木・全部入り組立）の組立が失敗（ac8/c2-b-install.log）"; return; }
 
   # 入口の全数（確定直前に台帳・repo で取り直した＝ファイル冒頭コメント）＝3 件
+  # HOME-B の入口は「組立に使った木」（cl_fresh_main_home が置いた $hB/$CLOSING_REPO_HOME_REL の
+  # symlink）から起動する＝HOME-A（組立も入口も $wtA のまま＝symlink を介さない）と同じ作りに揃える
+  # （リーダー裁定2026-10-05）。組立（clc_strip_features・cl_fresh_main_home 等）は $wtB のまま。
+  local wtB_entry="$hB/$CLOSING_REPO_HOME_REL"
   for id in ab-maint ab-bootstrap hk-ups-pos; do
     n=$((n + 1))
     clc_ac8_entry_run A "$wtA" "$hA" "$sA" "$od/$id" "$id"
-    clc_ac8_entry_run B "$wtB" "$hB" "$sB" "$od/$id" "$id"
+    clc_ac8_entry_run B "$wtB_entry" "$hB" "$sB" "$od/$id" "$id"
     if clc_ac8_entry_same "$od/$id"; then same=$((same + 1)); else bad2="$bad2 $id"; fi
   done
 
