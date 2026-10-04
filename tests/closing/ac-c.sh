@@ -86,7 +86,9 @@ clc_names_match() {
 
 # clc_ac8_entry_run <lbl:A|B> <wt> <home> <stub> <od> <id:ab-maint|ab-bootstrap|hk-ups-pos>
 clc_ac8_entry_run() {
-  local lbl="$1" wt="$2" h="$3" s="$4" od="$5" id="$6" rc=0 st="$od/$lbl.stdin" e f
+  local lbl="$1" wt="$2" h="$3" s="$4" od="$5" id="$6" rc=0 e f st
+  # 同じ local 文の中では RHS が先に（代入前の値で）評価される（set -u 下で lbl 未定義エラー）ので次行に分ける。
+  st="$od/$lbl.stdin"
   mkdir -p "$od"; : > "$st"
   case "$id" in
     ab-maint) cl_mk_vault_fx5 "$h/$CLOSING_VAULT_REL" ;;

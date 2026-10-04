@@ -181,21 +181,42 @@ cl_mk_vault_fx5() {  # FX-4＋git（初期コミット 1・remote 無し・未�
 }
 
 # ---------------------------------------------------------------- 導入手順（契約 3）
+# cl_install_agents <repo> <home> <stubdir> <log> — README のメイン機手順の常駐の登録 3 本（旧仕様）を、
+#   「その木に存在する分だけ」に置き換える（裁定2026-10-05＝取り外した木に無い部品を固定一覧で呼んで exit 127
+#   にしない）。鍵（設計 §4「常駐の登録の鍵」＝<機能>.install-*・CLOSING_LIVE_AGENT_KEY_RE）は repo 自身の台帳
+#   （$CLOSING_LEDGER_REL）の行順に拾い、repo 自身の ledger-tool.sh lookup で解決する＝リネームしても鍵は
+#   変わらないので cl_side_path（移動表）を経由しない。基準（FX-2）側の ledger-tool.sh にも lookup があり、
+#   同じ導出が通る（確認ずみ＝分岐は不要）。
+cl_install_agents() {
+  local repo="$1" h="$2" s="$3" log="$4" ledger="$repo/$CLOSING_LEDGER_REL" tool="$repo/$CLOSING_LEDGER_TOOL_REL" key p rc
+  [ -f "$ledger" ] && [ -x "$tool" ] || { echo "引けない: $CLOSING_LEDGER_REL か $CLOSING_LEDGER_TOOL_REL" >>"$log"; return 1; }
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    # AIENV_COMPONENTS_FILE を確実に無い場所へ＝実機の選択ファイル（$HOME/…/components.env）を拾わない
+    p="$(AIENV_COMPONENTS_FILE="$s/tmp/no-components.env" "$tool" lookup "$key" 2>>"$log")" \
+      || { echo "引けない(lookup): $key" >>"$log"; return 1; }
+    echo "--- $p" >>"$log"
+    rc=0; cl_run "$h" "$s" "$repo" "$p" </dev/null >>"$log" 2>&1 || rc=$?
+    [ "$rc" = 0 ] || { echo "rc=$rc: $p" >>"$log"; return "$rc"; }
+  done <<EOF
+$(awk -F'\t' -v re="$CLOSING_LIVE_AGENT_KEY_RE" '!/^#/ && NF && $1 == "part" && $6 ~ re { print $6 }' "$ledger")
+EOF
+  return 0
+}
+
 # cl_install_main <side> <home> <repo> <stubdir> <log> [<tpl_repo>] — README のメイン機手順。repo＝$HOME/<clone 先>（実体か symlink）
 #   tpl_repo（既定＝repo）＝雛形（profile.md.sample／models.conf.sample）の複写元。AC-8②のように repo が
 #   機能を取り外した木のときは、取り外す前の木（例＝$WT1）を渡して雛形だけそこから引く（C-V-home-b）。
 cl_install_main() {
-  local side="$1" h="$2" repo="$3" s="$4" log="$5" tpl="${6:-$3}" p cfg rc=0 x
+  local side="$1" h="$2" repo="$3" s="$4" log="$5" tpl="${6:-$3}" p cfg rc=0
   cfg="$h/$CLOSING_CONFIG_DIR_REL"
   mkdir -p "$cfg"
   p="$(cl_side_path "$side" "$CLOSING_PROFILE_SAMPLE_OLD")" && cp "$tpl/$p" "$cfg/profile.md" || { echo "引けない: $CLOSING_PROFILE_SAMPLE_OLD" >>"$log"; return 1; }
   p="$(cl_side_path "$side" "$CLOSING_MODELS_SAMPLE_OLD")" && cp "$tpl/$p" "$cfg/models.conf" || { echo "引けない: $CLOSING_MODELS_SAMPLE_OLD" >>"$log"; return 1; }
-  for x in $CLOSING_INSTALL_MAIN_OLD $CLOSING_INSTALL_LA_OLD; do
-    p="$(cl_side_path "$side" "$x")" || { echo "引けない: $x" >>"$log"; return 1; }
-    echo "--- $p" >>"$log"
-    cl_run "$h" "$s" "$repo" "$repo/$p" </dev/null >>"$log" 2>&1 || { rc=$?; echo "rc=$rc: $p" >>"$log"; return "$rc"; }
-  done
-  return 0
+  p="$(cl_side_path "$side" "$CLOSING_INSTALL_MAIN_OLD")" || { echo "引けない: $CLOSING_INSTALL_MAIN_OLD" >>"$log"; return 1; }
+  echo "--- $p" >>"$log"
+  cl_run "$h" "$s" "$repo" "$repo/$p" </dev/null >>"$log" 2>&1 || { rc=$?; echo "rc=$rc: $p" >>"$log"; return "$rc"; }
+  cl_install_agents "$repo" "$h" "$s" "$log"
 }
 
 # cl_install_sub <side> <home> <repo> <stubdir> <log> — README のサブ機手順（machine_role を sub に）
