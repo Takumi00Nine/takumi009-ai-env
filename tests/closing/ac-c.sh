@@ -181,7 +181,9 @@ ac_8() {
   clc_home_select "$hA" "$wtA" "$sA" "$od/c2-a-install.log" "$CLOSING_SELECT_AB_CORE" \
     || { cl_result AC-8 NG "② HOME-A（--select ${CLOSING_SELECT_AB_CORE}）の組立が失敗（ac8/c2-a-install.log）"; return; }
   cl_stubs "$sB"; mkdir -p "$sB/c27/bin"; cp -R "$CL_DIR/../fixtures/code27-call/bin/." "$sB/c27/bin/"
-  cl_fresh_main_home new "$hB" "$wtB" "$sB" "$od/c2-b-install.log" \
+  # 雛形（profile.md.sample／models.conf.sample）は機の設定であって木の一部ではないので、取り外す前の木
+  # （FX-1＝$WT1）から複写し、組立本体（install-main.sh／install-la.sh）だけを取り外した木 $wtB で走らせる。
+  cl_fresh_main_home new "$hB" "$wtB" "$sB" "$od/c2-b-install.log" "$WT1" \
     || { cl_result AC-8 NG "② HOME-B（取り外した木・全部入り組立）の組立が失敗（ac8/c2-b-install.log）"; return; }
 
   # 入口の全数（確定直前に台帳・repo で取り直した＝ファイル冒頭コメント）＝3 件

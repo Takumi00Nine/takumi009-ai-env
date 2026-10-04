@@ -181,13 +181,15 @@ cl_mk_vault_fx5() {  # FX-4＋git（初期コミット 1・remote 無し・未�
 }
 
 # ---------------------------------------------------------------- 導入手順（契約 3）
-# cl_install_main <side> <home> <repo> <stubdir> <log> — README のメイン機手順。repo＝$HOME/<clone 先>（実体か symlink）
+# cl_install_main <side> <home> <repo> <stubdir> <log> [<tpl_repo>] — README のメイン機手順。repo＝$HOME/<clone 先>（実体か symlink）
+#   tpl_repo（既定＝repo）＝雛形（profile.md.sample／models.conf.sample）の複写元。AC-8②のように repo が
+#   機能を取り外した木のときは、取り外す前の木（例＝$WT1）を渡して雛形だけそこから引く（C-V-home-b）。
 cl_install_main() {
-  local side="$1" h="$2" repo="$3" s="$4" log="$5" p cfg rc=0 x
+  local side="$1" h="$2" repo="$3" s="$4" log="$5" tpl="${6:-$3}" p cfg rc=0 x
   cfg="$h/$CLOSING_CONFIG_DIR_REL"
   mkdir -p "$cfg"
-  p="$(cl_side_path "$side" "$CLOSING_PROFILE_SAMPLE_OLD")" && cp "$repo/$p" "$cfg/profile.md" || { echo "引けない: $CLOSING_PROFILE_SAMPLE_OLD" >>"$log"; return 1; }
-  p="$(cl_side_path "$side" "$CLOSING_MODELS_SAMPLE_OLD")" && cp "$repo/$p" "$cfg/models.conf" || { echo "引けない: $CLOSING_MODELS_SAMPLE_OLD" >>"$log"; return 1; }
+  p="$(cl_side_path "$side" "$CLOSING_PROFILE_SAMPLE_OLD")" && cp "$tpl/$p" "$cfg/profile.md" || { echo "引けない: $CLOSING_PROFILE_SAMPLE_OLD" >>"$log"; return 1; }
+  p="$(cl_side_path "$side" "$CLOSING_MODELS_SAMPLE_OLD")" && cp "$tpl/$p" "$cfg/models.conf" || { echo "引けない: $CLOSING_MODELS_SAMPLE_OLD" >>"$log"; return 1; }
   for x in $CLOSING_INSTALL_MAIN_OLD $CLOSING_INSTALL_LA_OLD; do
     p="$(cl_side_path "$side" "$x")" || { echo "引けない: $x" >>"$log"; return 1; }
     echo "--- $p" >>"$log"
@@ -301,10 +303,11 @@ cl_readme_check() {
 }
 
 # HOME を新しく作り、clone 先に worktree への symlink を置いてメイン機手順を実行する
-cl_fresh_main_home() {  # <side> <home> <wt> <stubdir> <log>
+cl_fresh_main_home() {  # <side> <home> <wt> <stubdir> <log> [<tpl_wt>]
+  local tpl="${6:-$3}"
   rm -rf "$2"; mkdir -p "$2/$(dirname "$CLOSING_REPO_HOME_REL")"
   ln -s "$3" "$2/$CLOSING_REPO_HOME_REL"
-  cl_install_main "$1" "$2" "$2/$CLOSING_REPO_HOME_REL" "$4" "$5"
+  cl_install_main "$1" "$2" "$2/$CLOSING_REPO_HOME_REL" "$4" "$5" "$tpl"
 }
 
 # ---------------------------------------------------------------- 検査の部品
