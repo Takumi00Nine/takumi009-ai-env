@@ -988,7 +988,7 @@ echo "=== V-08（設計 §5.6）: 接続の列挙（台帳の鍵 usage.fetch）�
   snap_ledger_case "鍵なし" "$WORK/ledger-nokey.tsv" ""
   snap_ledger_case "台帳異常（台帳が無い）" "$WORK/no-such-dir/ledger.tsv" "LEDGER: ledger "
   { cat "$WORK/ledger-nokey.tsv"
-    printf 'part\tusage/connect/zz-missing/fetch.sh\tusage\tconnect\tzz-missing\tusage.fetch\t\n'; } > "$WORK/ledger-badpart.tsv"
+    printf 'part\tusage/connect/zz-missing/fetch.sh\tusage\tconnect\tzz-missing\tusage.fetch\t-\t-\n'; } > "$WORK/ledger-badpart.tsv"
   snap_ledger_case "実体異常（パス不在）" "$WORK/ledger-badpart.tsv" "LEDGER: part usage.fetch "
 }
 

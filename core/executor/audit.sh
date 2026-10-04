@@ -4,10 +4,11 @@
 # チェック項目（1つでも❌があれば最終的にexit 1。ただし1項目失敗しても残りの項目を
 # 続行し、最後にまとめてサマリ表示する＝export-public-vault.sh の fail-fast 方針とは
 # 役割が違う。全項目の結果を1回の実行で把握したいための判断＝check-drift.sh と同方針）:
-#   1. NGワード（git 履歴全体。scripts/ngwords.txt の全語を固定文字列検索）
+#   1. NGワード（git 履歴全体。NG 語ファイルの全語を固定文字列検索。既定の置き場は
+#      core/executor/ngwords-path.sh が解決＝旧既定にだけあるときは❌と「移す 1 コマンド」）
 #   2. 実ユーザー名パス（git 履歴全体。/Users/$(whoami) を動的に検索。ハードコード禁止）
 #   3. シークレット（gitleaks detect --source、git 履歴モード）
-#   4. 追跡ファイルの逸脱（git ls-files に docs/・ngwords.txt・.DS_Store が
+#   4. 追跡ファイルの逸脱（git ls-files に docs/・NG 語ファイル（新旧両方の既定）・.DS_Store が
 #      含まれていないこと＝ .gitignore の破れ検知）
 #   5. Personal リンク（現在の ai-brain/data/vault-public。export-public-vault.sh の 3-a/3-b と
 #      同等の検出。検出ロジックは ai-brain/executor/personal-link-check.sh へ抽出し
@@ -27,7 +28,7 @@
 #
 # パスは環境変数で上書き可（ユニットテスト用。本番は既定値のままでよい）:
 #   REPO         監査対象repo（既定: このスクリプトの1つ上の階層）
-#   NGWORDS_FILE NGワード定義ファイル（既定: $REPO/scripts/ngwords.txt）
+#   NGWORDS_FILE NGワード定義ファイル（既定: $REPO/core/data/ngwords.txt＝core/executor/ngwords-path.sh）
 #   VAULT        Personalリンクのbasename形式チェック用の実Vault
 #                （既定: $HOME/Data/obsidian。$VAULT/Personal が無ければ
 #                 basename形式チェックはスキップ＝サブ機等で私的パッチが無い場合の想定内動作）
@@ -41,9 +42,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 参照）。
 # shellcheck source=ai-brain/executor/personal-link-check.sh
 source "$SCRIPT_DIR/../../ai-brain/executor/personal-link-check.sh"
+# NG 語ファイルの既定の解決は export-public-vault.sh と共有する（v1.2 D-7）。
+# shellcheck source=core/executor/ngwords-path.sh
+source "$SCRIPT_DIR/ngwords-path.sh"
 
 : "${REPO:=$(cd "$SCRIPT_DIR/../.." && pwd)}"
-: "${NGWORDS_FILE:=$REPO/scripts/ngwords.txt}"
 : "${VAULT:=$HOME/Data/obsidian}"
 
 QUICK=0
@@ -74,6 +77,11 @@ fi
 [[ -d "$REPO" ]] || fail_setup "REPO が見つかりません: $REPO"
 [[ -d "$REPO/.git" ]] || fail_setup "REPO が git リポジトリではありません: $REPO"
 
+# NG 語ファイルの既定（NGWORDS_FILE を与えないとき）。旧既定にだけあれば項目 1 を❌にする
+# （移す 1 コマンドは解決時に標準エラーへ出る）。
+NGWORDS_MIGRATE=0
+ngwords_resolve "$REPO" || NGWORDS_MIGRATE=1
+
 FAIL_COUNT=0
 RESULT_LINES=()
 
@@ -99,7 +107,9 @@ fi
 echo "======================================================================"
 echo "1. NGワード（git 履歴全体）"
 echo "======================================================================"
-if [[ "$QUICK" -eq 1 ]]; then
+if [[ "$NGWORDS_MIGRATE" -eq 1 ]]; then
+  ng_item "NGワード: NG 語ファイルが旧既定 ${NGWORDS_OLD_REL} にだけあります（移す 1 コマンド＝標準エラーの出力）"
+elif [[ "$QUICK" -eq 1 ]]; then
   log "skip（--quick指定のため履歴スキャンなし）"
 elif [[ "$hist_rc" -ne 0 ]]; then
   ng_item "NGワード（履歴）: git log -p --all の取得に失敗しました (exit $hist_rc)"
@@ -193,7 +203,7 @@ else
   while IFS= read -r f; do
     case "$f" in
       docs|docs/*) echo "$f" >> "$DEVIANT_HITS" ;;
-      scripts/ngwords.txt) echo "$f" >> "$DEVIANT_HITS" ;;
+      "${NGWORDS_OLD_REL}"|"${NGWORDS_NEW_REL}") echo "$f" >> "$DEVIANT_HITS" ;;
       .DS_Store|*/.DS_Store) echo "$f" >> "$DEVIANT_HITS" ;;
     esac
   done < "$TRACKED"

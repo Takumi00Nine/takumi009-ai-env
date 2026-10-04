@@ -905,6 +905,98 @@ mk_maintenance_state() {
 # T群: タイミング（v2 design §11.2 の足跡方式と同型・ハング検査用）
 # ==========================================================================
 
+# v1.2 NFR-5（設計 v1.3 §2.6・実装計画 §1）＝所要時間の上限を持つ判定は、単調時計で
+# 同じ固定入力を既存の回数だけ連続して測り、中央値 ≤ 上限 L だけで判定する（最大値は
+# 使わない）。1 回の実行に実行タイムアウト（既定 30 秒・AIENV_TIMING_RUN_TIMEOUT_SECS
+# で上書き）を掛け、超えたら打ち切り、その回を不合格にする（終わらない停止を拾う）。
+# 対象＝AC-117（本ファイル・test-cmux-task-model.sh）・v5_ac146（本ファイル）の3箇所
+# （着手ゲート B3 で grep して確定・AC-78 は裁定どおり据え置き＝別の timeout 実装の試験）。
+#
+# verifier 1巡目 VM-01（判定関数を1つへ集約）・VM-02／VM-02-R2（独立プロセスグループへ
+# TERM→KILL）の反映＝連続測定・中央値判定・実行タイムアウトを下の1関数 timing_judge だけで
+# 行う（3箇所ともこれを呼ぶ）。子孫 PID を一度だけ列挙して個別 kill する旧実装は、その後
+# fork した子や PID 再利用を扱えない（verifier 2巡目 VM-02-R2）ため、サブシェル内
+# `set -m` で <実行する関数名> を背景起動し、その job 自身を独立プロセスグループにする
+# （bash 3.2 で可能な最も単純な形・macOS に setsid は無い）。打ち切りはそのグループ
+# （負の PID）へ TERM→1 秒後 KILL。
+
+# _timing_run_with_timeout <実行タイムアウト秒> <実行する関数名> — <実行する関数名> を
+# 独立プロセスグループで背景起動し、<実行タイムアウト秒> を超えたらそのグループ（起動した
+# 関数が待つ外部子プロセスを含む＝VM-02-R2）へ TERM→1 秒後に KILL を送る。
+# 戻り値＝関数の終了コード（打ち切られたら非 0）。
+_timing_run_with_timeout() {
+  local run_timeout="$1" fn="$2" pid watcher rc marker pidfile cpid
+  marker="$(mktemp -u)"
+  pidfile="$(mktemp -u)"
+  ( set -m
+    "$fn" &
+    echo "$!" >"$pidfile"
+    wait "$!"
+  ) &
+  pid=$!
+  ( sleep "$run_timeout"
+    cpid="$(cat "$pidfile" 2>/dev/null)"
+    if [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; then
+      # 打ち切りに入った印（marker）を先に置く＝呼び出し元は $pid が死んだ後、この印が
+      # あれば KILL まで watcher の完了を待つ（無ければ即 kill して良い＝通常完了）。
+      : > "$marker"
+      kill -TERM -- "-$cpid" 2>/dev/null
+      sleep 1
+      kill -KILL -- "-$cpid" 2>/dev/null
+    fi
+  ) 2>/dev/null &
+  watcher=$!
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  cpid="$(cat "$pidfile" 2>/dev/null)"
+  [ -n "$cpid" ] && kill -KILL -- "-$cpid" 2>/dev/null   # 通常完了後の生き残りの掃除（安全側）
+  if [ -e "$marker" ]; then
+    wait "$watcher" 2>/dev/null   # 打ち切り中＝KILL を送り終わるまで watcher の完了を待つ
+  else
+    kill "$watcher" 2>/dev/null
+    wait "$watcher" 2>/dev/null
+  fi
+  rm -f "$marker" "$pidfile"
+  return "$rc"
+}
+
+# timing_judge <回数> <上限L秒> <実行する関数名> [<結果を書く時間ファイル>]
+#   NFR-5 の唯一の判定入口。<実行する関数名> を <回数> 回、単調時計（python3
+#   time.monotonic）で計測する（固定入力は呼び出し側がその関数の中で・または export 済みの
+#   環境変数で用意し、リダイレクトも関数の中で行う）。各回は _timing_run_with_timeout で
+#   独立したプロセスグループとして起動し、実行タイムアウト（既定 30 秒・
+#   AIENV_TIMING_RUN_TIMEOUT_SECS で上書き）を超えたら不合格にする。
+#   標準出力へ "<pass=0/1> <中央値 or nan> <all_ok=0/1>" を 1 行返す（pass＝all_ok=1 かつ
+#   中央値 ≤ L。all_ok=0 のとき中央値は "nan"）。
+timing_judge() {
+  local n="$1" limit="$2" fn="$3" timesfile="${4:-$(mktemp)}"
+  local run_timeout="${AIENV_TIMING_RUN_TIMEOUT_SECS:-30}"
+  : > "$timesfile"
+  local i=0 all_ok=1 rc t0 t1
+  while [ "$i" -lt "$n" ]; do
+    t0="$(python3 -c 'import time; print(time.monotonic())')"
+    rc=0
+    _timing_run_with_timeout "$run_timeout" "$fn" || rc=$?
+    t1="$(python3 -c 'import time; print(time.monotonic())')"
+    [ "$rc" = "0" ] || all_ok=0
+    python3 -c "print($t1 - $t0)" >> "$timesfile"
+    i=$((i + 1))
+  done
+  local median pass
+  median="$(python3 -c "
+import statistics
+vals = [float(x) for x in open('$timesfile')]
+print(statistics.median(vals))
+" 2>/dev/null)"
+  [ -n "$median" ] || median="nan"
+  if [ "$all_ok" = "1" ]; then
+    pass="$(python3 -c "print(1 if $median <= $limit else 0)" 2>/dev/null)"
+  else
+    pass=0
+  fi
+  printf '%s %s %s\n' "${pass:-0}" "$median" "$all_ok"
+}
+
 # $1 のファイルにパターン($2)が現れるまで$3秒ポーリングする（0.1秒間隔）。
 wait_for_pattern() {
   local file="$1" pattern="$2" timeout="$3" i

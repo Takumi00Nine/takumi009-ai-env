@@ -6,7 +6,7 @@
 # 実行方法: bash tests/test-ledger.sh
 #
 # 契約（テストが決めた口。実装計画 §3 の名前・固定文・終了コードをそのまま使い、足りない分だけ決めた）:
-#   台帳        core/data/ledger.tsv＝TSV・`#` 始まりはコメント。列＝種類 パス 機能 層 提供元 鍵 備考。
+#   台帳        core/data/ledger.tsv＝TSV・`#` 始まりはコメント。列＝種類 パス 機能 層 提供元 鍵 備考 知らせ。
 #               種類＝part／suite／notify。層＝data／rules／executor／connect／assembly。値なし＝`-`。
 #               パス＝repo 相対（フォルダ単位は末尾 `/`）。notify のパスは repo 外なら `Vault:<ノート>`・`~/…`。
 #   移動表      core/data/moves.tsv＝TSV・`#` 始まりはコメント。1 列目＝旧パス・2 列目＝新パス・3 列目＝種別。
@@ -85,7 +85,7 @@ assert_eq "FX-12: part 行がそのパスを 1 件報告" "1" "$(lines_of part |
 
 echo "=== 3. AC-3 ② FX-13（実在しないパスの行 1 行）＝① が不合格・そのパスを報告 ==="
 fresh_copy
-printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\t-\t\n' >> "$FX/$LF_LEDGER_REL"
+printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\t-\t-\t-\n' >> "$FX/$LF_LEDGER_REL"
 lf_commit_all "$FX"
 run_check "$FX"
 assert_true "FX-13: 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
@@ -109,6 +109,45 @@ run_check "$FX"
 assert_eq "FX-14: coupling 行ちょうど 1 行" "1" "$(lines_of coupling | grep -c . || true)"
 assert_eq "FX-14: その組＝足した行の組" "coupling $RECALL_REL -> $TEAM_Q" "$(lines_of coupling)"
 
+echo "=== v1.2 AC-1 ①② FX-18 CPLN（AI Brain の実行器に Notify の接続の部品名を名指す非コメント行）＝ちょうど 1 組（Notify 所在の例外を外す＝FR-2） ==="
+fresh_copy
+NOTIFY_CONN_Q="$(lf_ledger_paths "$LEDGER" '$1=="part" && $3=="notify" && $4=="connect" && $2 !~ /\/$/' 2>/dev/null | head -1)"
+assert_true "FX-18: Notify の接続の部品が台帳にある（名指す先）" "$([ -n "$NOTIFY_CONN_Q" ] && echo 1 || echo 0)"
+printf ': %s\n' "${NOTIFY_CONN_Q##*/}" >> "$FX/$RECALL_REL"
+lf_commit_all "$FX"
+run_check "$FX"
+assert_eq "FX-18: coupling 行ちょうど 1 行（v1.1 では Notify 所在の例外で 0 行だった組が、v1.2 では検出される）" \
+  "1" "$(lines_of coupling | grep -c . || true)"
+assert_eq "FX-18: その組＝足した行の組" "coupling $RECALL_REL -> $NOTIFY_CONN_Q" "$(lines_of coupling)"
+
+echo "=== v1.2 AC-1 ③④: 式 B・式 C に当たる部品の置き場（Notify 所在の例外なし・設計 §2.4） ==="
+{
+  # 式B（要件 v1.1 §7＝本人を呼ぶ呼出構文の目印）。届け先の部品を登録・配置する行は当たらない。
+  scan_targets() {
+    git -C "$REPO_ROOT" ls-files | grep -vE '^(tests/|README\.md$|LICENSE$|\.gitignore$|Brewfile$)' \
+      | while IFS= read -r f; do
+          [ -L "$REPO_ROOT/$f" ] && continue; [ -f "$REPO_ROOT/$f" ] || continue
+          case "$f" in *.sh|*.py) echo "$f"; continue ;; esac
+          head -1 "$REPO_ROOT/$f" | grep -qE '^#!.*(/|env )(sh|bash|python[0-9.]*)([[:space:]]|$)' && echo "$f"
+        done
+  }
+  FORMULA_B='cmux[[:space:]]+notify|display notification|code27-call/bin/'
+  hit_b="$(scan_targets | while IFS= read -r f; do
+    grep -vE '^[[:space:]]*(#|//)' "$REPO_ROOT/$f" | grep -qE "$FORMULA_B" && echo "$f"; done | sort -u)"
+  assert_true "AC-1 ③: 式 B に当たる部品が 1 件以上（観測が空でない・未実装のうちは 0 で赤）" "$([ -n "$hit_b" ] && echo 1 || echo 0)"
+  notify_connect_rows="$(awk -F'\t' '!/^#/ && $1=="part" && $3=="notify" && $4=="connect" {print $2}' "$LEDGER" 2>/dev/null | sort -u)"
+  not_in_connect="$(comm -23 <(printf '%s\n' "$hit_b") <(printf '%s\n' "$notify_connect_rows") 2>/dev/null)"
+  assert_eq "AC-1 ③: 式 B に当たる部品が全て Notify の接続にある（Notify 所在の例外なし）" "" "$not_in_connect"
+
+  # 式C（要件 v1.1 §7＝提供元の識別子。既定の除外＝.claude/logs）。
+  FORMULA_C='\.(claude|codex)([^[:alnum:]_-]|$)|(^|[[:space:];|&(=])(claude|codex)([[:space:];|&)]|$)|[=\[(][[:space:]]*["'"'"'](claude|codex)["'"'"']'
+  hit_c="$(scan_targets | while IFS= read -r f; do
+    grep -vE '^[[:space:]]*(#|//)' "$REPO_ROOT/$f" | grep -vE '\.claude.{1,5}logs' | grep -qE "$FORMULA_C" && echo "$f"; done | sort -u)"
+  leak_ok_rows="$(awk -F'\t' '!/^#/ && $1=="part" && (($4=="connect")||($4=="assembly")) {print $2}' "$LEDGER" 2>/dev/null | sort -u)"
+  not_in_ok="$(comm -23 <(printf '%s\n' "$hit_c") <(printf '%s\n' "$leak_ok_rows") 2>/dev/null)"
+  assert_eq "AC-1 ④: 式 C に当たる部品が全て接続・組立にある（Notify 所在の例外なし）" "" "$not_in_ok"
+}
+
 echo "=== 6. AC-3 ③ 式 C（FX-19・FX-20・FX-21）＝④ が不合格・足した行の部品を報告 ==="
 leak_case() {  # $1=fixture ID $2=足す 1 行（要件 §7 の字面そのまま）
   fresh_copy
@@ -123,6 +162,9 @@ leak_case FX-20 'c=claude; "$c" --version >/dev/null 2>&1 || :'
 leak_case FX-21 '[ -d "$HOME/.codex/sessions" ] || :'
 
 echo "=== 7. AC-3 ④ 移動表（FX-24・FX-25）＝⑤ が不合格・該当の行を報告 ==="
+# ⚠️ ここで言う「FX-24」「FX-25」は本ファイルが元々使っていた v1.1 §7 の識別子（この
+# echo 直下のローカルな仮の名）で、要件 v1.2 requirements-v1.md §7 の FX-24 PART・
+# FX-25a〜c LBAD（tests/test-notify.sh・test-code27-call-clear.sh が見る）とは別物。
 # 旧も新も 1 行にしか現れない行（＝移動）を 2 つ選ぶ。
 pick_moves() {
   awk -F'\t' '!/^#/ && NF>=2 && $1!="" && $2!="" {o[$1]++; n[$2]++; row[NR]=$1"\t"$2}
@@ -145,18 +187,13 @@ lf_commit_all "$FX"
 run_check "$FX"
 assert_true "FX-25: 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
 assert_true "FX-25: moves 行が由来の空いた新パスを報告" "$(lines_of moves | grep -qF "$NEW_A" && echo 1 || echo 0)"
-# FX-25b（FR-13＝新構成のスイートにも由来が 1 件）: 変更の無いスイートの行（旧＝新の tests/ 行・種別 移動）を
-# 1 本消すと、そのスイートの由来が無くなる＝⑤ が不合格・そのスイートを報告。
-SUITE_ROW="$(awk -F'\t' '!/^#/ && $1==$2 && $1 ~ /^tests\// && $3=="移動" {print NR"\t"$1; exit}' "$BASE/$LF_MOVES_REL" 2>/dev/null)"
-SUITE_LNO="$(printf '%s' "$SUITE_ROW" | cut -f1)"; SUITE_PATH="$(printf '%s' "$SUITE_ROW" | cut -f2)"
-assert_true "FX-25b: 移動表に変更の無いスイートの行（旧＝新・移動）がある" "$([ -n "$SUITE_PATH" ] && echo 1 || echo 0)"
-fresh_copy
-awk -v l="${SUITE_LNO:-0}" 'NR!=l' "$BASE/$LF_MOVES_REL" > "$FX/$LF_MOVES_REL"
-lf_commit_all "$FX"
-run_check "$FX"
-assert_true "FX-25b: 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
-assert_true "FX-25b: moves 行が由来の無いスイートを報告" \
-  "$([ -n "$SUITE_PATH" ] && lines_of moves | grep -qF "$SUITE_PATH" && echo 1 || echo 0)"
+# v1.2 T5（リーダー裁定）＝旧 FX-25b「変更の無いスイートの移動表の行を消すと非 0・由来の
+# 無いスイートを報告」は v1.2 FR-20（台帳の検査は移動表に行の無い部品・スイートを
+# 不合格にしない）と矛盾するため撤去した。FR-20 の正の側（移動表に行の無い新規部品・
+# スイートを不合格にしないこと）は tests/test-ledger.sh の
+# 「v1.2 FR-20: 移動表に行の無い新規部品・スイートを不合格にしない（FX-11 ZZD）」節で見る。
+# 移動表に行の「ある」部品・スイートに v1.1 FR-13 の 3 条件を保つことは、直前の FX-24・
+# FX-25（行はあるが新パスが重なる／空いている＝不合格）がそのまま見ている。
 
 echo "=== 8. 検査 ⑥（AC-3 ④ 後段）: 転送のリンク先が主後継と違う＝forward 行で報告 ==="
 fresh_copy
@@ -192,37 +229,60 @@ assert_eq "LaunchAgent の雛形は 3 本" "3" "$(git -C "$REPO_ROOT" ls-files '
 assert_true "期待集合が空でない" "$([ -n "$expected_live" ] && echo 1 || echo 0)"
 assert_eq "live-set＝雛形の全フック＋plist 3 本の起動対象" "$expected_live" "$actual_live"
 
-echo "=== 12. AC-6 Notify 所在: 式 B に当たる部品の集合＝台帳の Notify 所在（repo 内） ==="
-# 走査対象＝部品（追跡ファイル－tests/・部品外・symlink）のうち .sh/.py または shebang が sh/bash/python。
-scan_targets() {
-  git -C "$REPO_ROOT" ls-files | grep -vE '^(tests/|README\.md$|LICENSE$|\.gitignore$|Brewfile$)' \
-    | while IFS= read -r f; do
-        [ -L "$REPO_ROOT/$f" ] && continue; [ -f "$REPO_ROOT/$f" ] || continue
-        case "$f" in *.sh|*.py) echo "$f"; continue ;; esac
-        head -1 "$REPO_ROOT/$f" | grep -qE '^#!.*(/|env )(sh|bash|python[0-9.]*)([[:space:]]|$)' && echo "$f"
-      done
+echo "=== v1.2 FR-7/§2.4: notify 行（repo 外の所在）の役割の検査＝発する側は提供元 '-'・下流の取次は届け先名 ==="
+{
+  # v1.1 の「Notify 所在（repo 内の3行）」は v1.2 で部品行へ置き換わる（FR-7）＝
+  # notify 種類の行は repo 外（Vault の規則ノート・別 repo の取次）の 4 行だけになる。
+  notify_rows_count="$(awk -F'\t' '!/^#/ && $1=="notify" {c++} END{print c+0}' "$LEDGER" 2>/dev/null)"
+  assert_eq "v1.2: notify 種類の行はちょうど 4 行（repo 外の所在だけ）" "4" "$notify_rows_count"
+  vault_rows="$(awk -F'\t' '!/^#/ && $1=="notify" && $2 ~ /^Vault:/ {print}' "$LEDGER" 2>/dev/null)"
+  assert_eq "v1.2: Vault の規則ノートの行はちょうど 3（cmux-notifications・core-conduct・coding-delegation・確定直前の grep 一覧）" \
+    "3" "$(printf '%s\n' "$vault_rows" | grep -c . || true)"
+  bad_src_provider="$(printf '%s\n' "$vault_rows" | awk -F'\t' '$5!="-" {print}')"
+  assert_eq "v1.2: 発する側（Vault の規則ノート）の提供元は '-'（口を呼ぶ側・届け先を持たない）" "" "$bad_src_provider"
+  downstream_rows="$(awk -F'\t' '!/^#/ && $1=="notify" && $2 !~ /^Vault:/ {print}' "$LEDGER" 2>/dev/null)"
+  assert_eq "v1.2: 下流の取次（別 repo）の行はちょうど 1" "1" "$(printf '%s\n' "$downstream_rows" | grep -c . || true)"
+  bad_dst_provider="$(printf '%s\n' "$downstream_rows" | awk -F'\t' '$5!="code27" {print}')"
+  assert_eq "v1.2: 下流の取次の提供元は届け先名 code27" "" "$bad_dst_provider"
 }
-FORMULA_B='cmux[[:space:]]+notify|display notification|code27-call/bin/'
-hit_b="$(scan_targets | while IFS= read -r f; do
-  grep -vE '^[[:space:]]*(#|//)' "$REPO_ROOT/$f" | grep -qE "$FORMULA_B" && echo "$f"; done | sort -u)"
-notify_repo="$(lf_ledger_paths "$LEDGER" '$1=="notify"' 2>/dev/null | while IFS= read -r p; do
-  [ -e "$REPO_ROOT/$p" ] && echo "$p"; done | sort -u)"
-assert_true "式 B に当たる部品が 1 件以上（観測が空でない）" "$([ -n "$hit_b" ] && echo 1 || echo 0)"
-assert_eq "式 B の集合＝台帳の Notify 所在（repo 内）" "$hit_b" "$notify_repo"
-fx27="$( { grep -h 'code27-call-clear' "$REPO_ROOT/core/assembly/install-main.sh" "$REPO_ROOT/core/assembly/settings.json"; } 2>/dev/null)"
-assert_true "FX-27: 組立の配置行・settings の登録行が実在" "$([ "$(printf '%s\n' "$fx27" | grep -c . || true)" -ge 2 ] && echo 1 || echo 0)"
-assert_eq "FX-27: その行は式 B に当たらない" "0" "$(printf '%s\n' "$fx27" | grep -cE "$FORMULA_B" || true)"
-for prov in cmux macos code27; do
-  assert_true "届け先 $prov の所在が 1 行以上" \
-    "$([ -n "$(lf_ledger_paths "$LEDGER" '$1=="notify" && $5=="'"$prov"'"' 2>/dev/null)" ] && echo 1 || echo 0)"
-done
-assert_true "cmux 通知の所在に Vault の規則ノート（Vault:…）が載る" \
-  "$(lf_ledger_paths "$LEDGER" '$1=="notify" && $5=="cmux"' 2>/dev/null | grep -q '^Vault:' && echo 1 || echo 0)"
-# Dock の部品行（ファイル、またはフォルダ単位＝末尾 /）に当たる Notify 所在の行を数える。
-dock_in_notify="$(awk -F'\t' '!/^#/ && $1=="part" && $3=="dock" {d[$2]=1}
-  !/^#/ && $1=="notify" {n[$2]=1}
-  END {c=0; for (p in n) for (q in d) if (p==q || (q ~ /\/$/ && index(p, q)==1)) c++; print c}' "$LEDGER" 2>/dev/null)"
-assert_eq "台帳で Dock に属する部品が Notify 所在に 0 件" "0" "${dock_in_notify:-ledger-missing}"
+
+echo "=== v1.2 FR-20: 移動表に行の無い新規部品・スイートを不合格にしない（FX-11 ZZD） ==="
+{
+  WT11="$WORK/wt-fx11"
+  lf_copy_repo "$REPO_ROOT" "$WT11"
+  lf_mk_fx11 "$WT11" "$TESTS_DIR/fixtures/zz-dest/connect/deliver.sh"
+  chmod +x "$WT11/notify/connect/zz-dest/deliver.sh" 2>/dev/null
+  lf_commit_all "$WT11"
+  run_check "$WT11"
+  assert_eq "FX-11: 台帳の検査 exit 0（移動表に行の無い zz-dest の部品を不合格にしない）" "0" "$CHECK_RC"
+  assert_eq "FX-11: moves 行の不合格が無い" "0" "$(lines_of moves | grep -c . || true)"
+}
+
+echo "=== v1.2 §2.4 ⑧README: 提供元のフォルダは README に載っていなくてよい（載っているものは実在すること） ==="
+{
+  fresh_copy
+  mkdir -p "$FX/notify/connect/zz-readme-optional"
+  printf '#!/bin/bash\n:\n' > "$FX/notify/connect/zz-readme-optional/deliver.sh"
+  chmod +x "$FX/notify/connect/zz-readme-optional/deliver.sh"
+  printf 'part\tnotify/connect/zz-readme-optional/deliver.sh\tnotify\tconnect\tzz-readme-optional\t-\t試験（README 未記載でも合格）\t-\n' >> "$FX/$LF_LEDGER_REL"
+  lf_commit_all "$FX"
+  run_check "$FX"
+  assert_eq "README に載らない提供元フォルダがあっても ⑧ readme は不合格にしない" "0" "$(lines_of readme | grep -c 'zz-readme-optional' || true)"
+}
+
+echo "=== v1.2 §2.4 ①: 台帳の「知らせ」列の形式（値を持つのは Notify の接続の実行可能な部品だけ） ==="
+{
+  bad_knows="$(awk -F'\t' '!/^#/ && $1=="part" && NF>=8 && $8!="-" && $8!="" && !($3=="notify" && $4=="connect") {print $2}' "$LEDGER" 2>/dev/null)"
+  assert_eq "Notify の接続以外に「知らせ」列の値を持つ部品が無い" "" "$bad_knows"
+}
+
+echo "=== v1.2 実装計画: 旧 test-code27-call-clear.sh のスイート行は機能列が core（入力検知の試験として Core へ） ==="
+{
+  row="$(awk -F'\t' '!/^#/ && $1=="suite" && $2=="tests/test-code27-call-clear.sh" {print}' "$LEDGER" 2>/dev/null)"
+  assert_true "台帳にそのスイート行がある" "$([ -n "$row" ] && echo 1 || echo 0)"
+  func="$(printf '%s' "$row" | cut -f3)"
+  assert_eq "その機能列は core" "core" "$func"
+}
 
 echo "=== 13. 照会 3 種（設計 §5.6・§11）: あり 0／鍵なし 1／台帳異常 2／実体異常 3＋固定文 ==="
 run_lookup() {  # $1=鍵 [AIENV_LEDGER]
@@ -248,16 +308,16 @@ run_lookup "ai-brain.recall" "$WORK/short.tsv"
 assert_eq "台帳異常（列数不足）: 終了 2" "2" "$LOOKUP_RC"
 assert_true "台帳異常（列数不足）: LEDGER: ledger …" "$(grep -q '^LEDGER: ledger ' "$WORK/lk.err" && echo 1 || echo 0)"
 # V-06: 照会も check と同じ語彙検査をする＝suite 行の機能が語彙外の台帳は台帳異常（設計 §5.6）。
-{ cat "$LEDGER"; printf 'suite\ttests/test-ledger.sh\tzz-not-a-function\t-\t-\t-\t\n'; } > "$WORK/bad-vocab.tsv" 2>/dev/null
+{ cat "$LEDGER"; printf 'suite\ttests/test-ledger.sh\tzz-not-a-function\t-\t-\t-\t-\t-\n'; } > "$WORK/bad-vocab.tsv" 2>/dev/null
 run_lookup "ai-brain.recall" "$WORK/bad-vocab.tsv"
 assert_eq "台帳異常（suite 行の機能が語彙外）: 終了 2" "2" "$LOOKUP_RC"
 assert_true "台帳異常（suite 行の機能が語彙外）: LEDGER: ledger …" "$(grep -q '^LEDGER: ledger ' "$WORK/lk.err" && echo 1 || echo 0)"
-{ cat "$LEDGER"; printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\tzz.missing\t\n'; } > "$WORK/bad-part.tsv" 2>/dev/null
+{ cat "$LEDGER"; printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\tzz.missing\t-\t-\n'; } > "$WORK/bad-part.tsv" 2>/dev/null
 run_lookup "zz.missing" "$WORK/bad-part.tsv"
 assert_eq "実体異常（パス不在）: 終了 3" "3" "$LOOKUP_RC"
 assert_true "実体異常: stderr 1 行＝LEDGER: part zz.missing <パス> …" \
   "$([ "$(grep -c . "$WORK/lk.err")" = "1" ] && grep -q '^LEDGER: part zz\.missing .*ai-brain/executor/zz-missing\.sh' "$WORK/lk.err" && echo 1 || echo 0)"
-{ cat "$LEDGER"; printf 'part\t%s\tcore\tdata\t-\tzz.noexec\t\n' "$LF_LEDGER_REL"; } > "$WORK/noexec.tsv" 2>/dev/null
+{ cat "$LEDGER"; printf 'part\t%s\tcore\tdata\t-\tzz.noexec\t-\t-\n' "$LF_LEDGER_REL"; } > "$WORK/noexec.tsv" 2>/dev/null
 run_lookup "zz.noexec" "$WORK/noexec.tsv"
 assert_eq "実体異常（実行不可）: 終了 3" "3" "$LOOKUP_RC"
 

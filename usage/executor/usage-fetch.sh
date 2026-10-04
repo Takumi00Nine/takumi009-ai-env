@@ -33,7 +33,7 @@
 # テスト用の差し替え口＝AIENV_USAGE_FETCH_TEST_LIB=1（source されたときは
 # main を呼ばない）・AIENV_USAGE_CONFIG_FILE（config.sh の読み元を差し替え）・
 # XDG_CACHE_HOME/XDG_CONFIG_HOME/HOME（キャッシュ・キーチェーンの読み元を
-# 差し替え）・AIENV_USAGE_TEST_NOTIFY_LOG（notify/connect/macos/usage-notify.sh 側）。
+# 差し替え）・AIENV_USAGE_TEST_NOTIFY_LOG（usage/executor/usage-notify.sh 側）。
 #
 # (README "Usage fetcher" 2026-09-19) `usage/executor/usage-fetch.sh` fetches Claude's OAuth usage percentages, Codex's `rateLimits`, and (since 2026-09-09) Codex's banked rate-limit reset credits (`reset_credits`, see "Codex tickets" in usage/executor/usage_snapshot.py) once a minute (LaunchAgent `com.takumi009.usage-fetch`) and writes them atomically to `~/.cache/claude-codex-usage/{claude,codex}-cache.json` — the same paths and `schema_version` (1) that the Dock-rendering display script `cmux-usage-watch.sh` reads (bundled in the separate `dotfiles` repo).
 # A rate-limited (429) response is a complete no-op (not a byte of the cache changes); any other failure (timeout, network error, malformed response, missing `codex` command) is recorded as `last_error` without touching `fetched_at`, so a display reading a stale-but-`ok` cache and a display reading a freshly-recorded failure are always distinguishable.
@@ -47,10 +47,12 @@ while [ -L "$_self" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$_self")" && pwd)"
 
+# shellcheck source=core/executor/notice.sh
+. "$SCRIPT_DIR/../../core/executor/notice.sh"
 # shellcheck source=usage/executor/usage-source.sh
 . "$SCRIPT_DIR/usage-source.sh"
-# shellcheck source=notify/connect/macos/usage-notify.sh
-. "$SCRIPT_DIR/../../notify/connect/macos/usage-notify.sh"
+# shellcheck source=usage/executor/usage-notify.sh
+. "$SCRIPT_DIR/usage-notify.sh"
 
 load_config() {
   CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-codex-usage"
@@ -334,7 +336,7 @@ refresh_service() {
     # notify-state書き込み失敗）を観測可能にする。取得自体は成功している
     # ため戻り値は0のまま（通知は付随機能・取得の成否とは別軸）。
     if ! with_lock notify process_notifications "$service" "$cache"; then
-      log "$service: notification processing failed (osascript failure or notify-state write failure); usage data was still recorded successfully"
+      log "$service: notification processing failed (notify-state write failure); usage data was still recorded successfully"
     fi
     return 0
   fi
@@ -352,8 +354,8 @@ refresh_service() {
       log "$service: failed to write failure cache (auth_expired)"
       return 1
     fi
-    if ! with_lock notify claude_auth_expired_notify_once; then
-      log "$service: auth-expired notification failed (osascript failure or notify-state write failure)"
+    if ! with_lock notify auth_expired_notify_once "$service"; then
+      log "$service: auth-expired notification failed (notify-state write failure)"
     fi
     return 0
   fi

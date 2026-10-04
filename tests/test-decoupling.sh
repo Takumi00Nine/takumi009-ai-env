@@ -121,7 +121,7 @@ echo "=== 3. AC-2 受入② ①②: FX-10（AI Brain の zz-cli 接続フォル�
 # mk_zz_connect <repo> — 共有の雛形を接続フォルダへ写し、台帳の行を足す（コミットはしない＝式 A が見る差分）。
 ZZ_TEMPLATE="$TESTS_DIR/fixtures/zz-cli/connect"
 ZZ_PATH="ai-brain/connect/zz-cli/"
-ZZ_LEDGER_LINE=$'part\tai-brain/connect/zz-cli/\tai-brain\tconnect\tzz-cli\t-\t偽 zz-cli 接続（試験）'
+ZZ_LEDGER_LINE=$'part\tai-brain/connect/zz-cli/\tai-brain\tconnect\tzz-cli\t-\t偽 zz-cli 接続（試験）\t-'
 ZZ_MOVES_LINE=$'-\tai-brain/connect/zz-cli/\t新規\t-'
 # mk_zz_connect <repo> — 共有の雛形を接続フォルダへ写し、台帳（2 列目のパス）・移動表（2 列目の新パス）に
 # その行が無ければ足す（FR-13＝新規の部品にも由来が要る）。鍵はパス列だけ＝備考など他列が違う行

@@ -1,1 +1,1 @@
-../../notify/connect/code27/code27-call-clear.sh
+../../core/connect/claude-code/prompt-answer.sh

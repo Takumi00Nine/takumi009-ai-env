@@ -46,6 +46,21 @@ cl_result() {
 
 cl_note() { printf '%s\n' "$*" >> "$OUT/detail.log"; }
 
+# cl_wait_lines <file> <min行数> [<上限秒=$CLOSING_NOTIFY_OBSERVE_SECS>] — v1.2 の口は応答を切り離して起動する
+#   （設計 R2-01）ので、入口の終了直後に記録を写すと配送前の値を見てしまう。ファイルの行数が <min行数> 以上に
+#   なるまで 0.1 秒刻みで待ち、達したら即戻る（基準側＝同期なのでほぼ即戻る）。上限に達したら 1 を返す
+#   （「増えない」ことを確かめたい側＝呼び手は上限まで待ってから写せば「打ち切り後の値」を見られる）。
+cl_wait_lines() {
+  local f="$1" min="$2" limit="${3:-$CLOSING_NOTIFY_OBSERVE_SECS}" n t0
+  t0=$(date +%s)
+  while :; do
+    n="$([ -f "$f" ] && grep -c . "$f" 2>/dev/null)"; n="${n:-0}"
+    [ "$n" -ge "$min" ] && return 0
+    [ $(( $(date +%s) - t0 )) -ge "$limit" ] && return 1
+    sleep 0.1
+  done
+}
+
 # ---------------------------------------------------------------- worktree
 cl_new_wt() {  # cl_new_wt <dir> <commit>
   git -C "$CL_SRC" worktree add -q --detach "$1" "$2" >>"$OUT/detail.log" 2>&1 || return 1
@@ -76,10 +91,17 @@ cl_fx1_ready() {
   return 0
 }
 
-# cl_side_path <base|new> <基準での repo 相対パス> → その側の repo 相対パス
+# cl_side_path <base|new> <基準（FX-2）での repo 相対パス> → その側の repo 相対パス
+#   new＝移動表の主後継。移動表に行が無ければ「束 B・C で動かしていない」＝基準と同じ名前のまま
+#   （FX-1 に実在するときだけ・実在しなければ失敗＝呼び手が「引けない」と報告）。
 cl_side_path() {
   if [ "$1" = "base" ]; then printf '%s\n' "$2"; return 0; fi
-  cl_py moves-main "$WT1/$CLOSING_MOVES_REL" "$2"
+  local p
+  if p="$(cl_py moves-main "$WT1/$CLOSING_MOVES_REL" "$2")"; then
+    printf '%s\n' "$p"; return 0
+  fi
+  [ -e "$WT1/$2" ] && { printf '%s\n' "$2"; return 0; }
+  return 1
 }
 
 # ---------------------------------------------------------------- FX-6・実行環境
@@ -127,7 +149,9 @@ cl_check_env() {
 # ---------------------------------------------------------------- Vault（FX-4・FX-5）
 cl_mk_vault_fx4() {  # cl_mk_vault_fx4 <dest>（中身は基準の vault-public＝両側で同じ入力）
   mkdir -p "$(dirname "$1")"
-  cp -R "$WT0/vault-public" "$1"
+  # -L＝vault-public がシンボリックリンク（v1.1 以降の既定＝ai-brain/data/vault-public を指す）でも
+  # 実体を辿って複製する（束 B の着手ゲート B1 の実測＝素の -R だと壊れたリンクが複製されるだけ）。
+  cp -RL "$WT0/vault-public" "$1"
   cat > "$1/Knowledge/zz-probe.md" <<'EOF'
 ---
 aliases: ["想起プローブ甲"]

@@ -261,7 +261,7 @@ assert_eq "鍵なし: E＝P 行数" "$p_n" "$(awk -F '\t' '$1=="E"{print $2}' "$
 assert_eq "鍵なし: stderr に LEDGER: 行なし（予定された省略）" "0" "$(grep -c '^LEDGER: ' "$WORKDIR/frame_stderr")"
 # 実体異常（V-08・設計 §5.6）＝判定機の鍵の行はあるがパスが無い＝B 行を省き・stderr に照会の固定文・exit 0。
 { cat "$WORKDIR/ledger-nojudge.tsv"
-  printf 'part\tai-brain/executor/zz-missing-judge.py\tai-brain\texecutor\t-\tai-brain.health-judge\t\n'; } > "$WORKDIR/ledger-badjudge.tsv"
+  printf 'part\tai-brain/executor/zz-missing-judge.py\tai-brain\texecutor\t-\tai-brain.health-judge\t-\t-\n'; } > "$WORKDIR/ledger-badjudge.tsv"
 AIENV_LEDGER="$WORKDIR/ledger-badjudge.tsv" run_frame_fixture S-2
 assert_eq "実体異常: rc=0" "0" "$(cat "$WORKDIR/frame_rc")"
 assert_eq "実体異常: B 行 0 行" "0" "$(b_rows | wc -l | tr -d ' ')"
@@ -377,40 +377,26 @@ run_frame_raw
 after="$(vault_snapshot "$VAULT")"
 assert_true "AC-33: 実行前後でVaultが不変" "$([ "$before" = "$after" ] && echo 1 || echo 0)"
 
-echo "=== AC-117: 実際の供給側（スタブでない）をNext Project基底（N-0〜N-8全件）で20回連続実行し、中央値・最大値ともに0.4秒以下（単調時計） ==="
+echo "=== v1.2 NFR-5: AC-117 を Next Project基底（N-0〜N-8全件）で20回連続実行し、中央値のみ0.4秒以下で判定（最大値は使わない・1回の実行タイムアウトは AIENV_TIMING_RUN_TIMEOUT_SECS 既定30秒） ==="
 if command -v python3 >/dev/null 2>&1; then
   reset_vault
   mk_notes_N_all "$VAULT"
   mk_inventory_report "$INV_DIR" "2026-09-08" 3
   mk_maintenance_state "$MAINT_FILE" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   AC117_TIMES="$WORKDIR/ac117_times.txt"
-  : > "$AC117_TIMES"
-  ac117_ok=1
-  i=1
-  while [ "$i" -le 20 ]; do
-    t0="$(python3 -c 'import time; print(time.monotonic())')"
+  ac117_run_once() {
     CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" CMUX_NEXT_MAINT_STATE="$MAINT_FILE" \
       CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
       CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
       CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
       CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
-      bash "$TARGET" --list >/dev/null 2>"$WORKDIR/ac117_err" || ac117_ok=0
-    t1="$(python3 -c 'import time; print(time.monotonic())')"
-    python3 -c "print($t1 - $t0)" >> "$AC117_TIMES"
-    i=$((i + 1))
-  done
-  assert_true "AC-117(Project): 20回とも正常終了" "$ac117_ok"
-  AC117_STATS="$(python3 -c "
-import statistics
-vals = [float(x) for x in open('$AC117_TIMES')]
-print(statistics.median(vals), max(vals))
-")"
-  AC117_MEDIAN="${AC117_STATS% *}"
-  AC117_MAX="${AC117_STATS#* }"
-  assert_true "AC-117(Project): 中央値が0.4秒以下（実測 ${AC117_MEDIAN}秒）" \
-    "$(python3 -c "print(1 if $AC117_MEDIAN <= 0.4 else 0)")"
-  assert_true "AC-117(Project): 最大値が0.4秒以下（実測 ${AC117_MAX}秒）" \
-    "$(python3 -c "print(1 if $AC117_MAX <= 0.4 else 0)")"
+      bash "$TARGET" --list >/dev/null 2>"$WORKDIR/ac117_err"
+  }
+  AC117_RESULT="$(timing_judge 20 0.4 ac117_run_once "$AC117_TIMES")"
+  set -- $AC117_RESULT
+  AC117_PASS="$1"; AC117_MEDIAN="$2"; AC117_ALL_OK="$3"
+  assert_true "AC-117(Project): 20回とも実行タイムアウト内に正常終了（プロセスグループごと打ち切り＝VM-02）" "$AC117_ALL_OK"
+  assert_true "AC-117(Project): 中央値が0.4秒以下（最大値は使わない・実測 ${AC117_MEDIAN}秒）" "$AC117_PASS"
 else
   echo "SKIP: python3が無いためAC-117(Project)の単調時計計測を省略します"
 fi
@@ -583,33 +569,69 @@ assert_eq "v5_ac146_no_cmux_call: cmux の呼び出し 0 件" "0" "$(wc -l < "$C
 assert_true "v5_ac146_vault_bytes: 実行前後で Vault がバイト不変" "$([ "$before_v5" = "$after_v5" ] && echo 1 || echo 0)"
 assert_eq "v5_ac146: --list の行数＝基底 8＋WU-B 16" "24" "$(wc -l < "$WORKDIR/list_stdout" | tr -d ' ')"
 if command -v python3 >/dev/null 2>&1; then
-  # NFR-15 v5.8＝29 ノート入力で中央値 0.8 秒以下・最大値 1.2 秒以下（20 回・単調時計）。計時は python 1 プロセスの
-  # 中で供給側を 20 回起動して行う＝python 自身の起動時間（1 回 30〜40 ms）を供給側の
-  # 所要に混ぜない（AC-117 の「python3 -c を前後で起こす」形はそれを含んでいた）。
-  V5_STATS="$(CMUX_NEXT_JUDGE_NOW="$T0" CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" \
-    CMUX_NEXT_MAINT_STATE="$MAINT_FILE" CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
-    CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
-    CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
-    CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
-    python3 - "$TARGET" <<'PY'
-import statistics, subprocess, sys, time
-vals, ok = [], 1
-for _ in range(20):
-    t0 = time.monotonic()
-    r = subprocess.run(["bash", sys.argv[1], "--list"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    vals.append(time.monotonic() - t0)
-    if r.returncode != 0:
-        ok = 0
-print(ok, statistics.median(vals), max(vals))
-PY
-)"
-  set -- $V5_STATS
-  echo "v5_ac146_perf_20runs: 実測 中央値=${2}秒 最大値=${3}秒"
-  assert_true "v5_ac146_perf_20runs: 20 回とも rc=0" "$1"
-  assert_true "v5_ac146_perf_20runs: 中央値 0.8 秒以下（実測 ${2}秒）" "$(python3 -c "print(1 if $2 <= 0.8 else 0)")"
-  assert_true "v5_ac146_perf_20runs: 最大値 1.2 秒以下（実測 ${3}秒）" "$(python3 -c "print(1 if $3 <= 1.2 else 0)")"
+  # v1.2 NFR-5＝29 ノート入力で中央値 0.8 秒以下だけで判定（最大値は使わない）。verifier
+  # 1巡目 VM-01 の反映＝独自の Python 計測を廃止し、AC-117 と同じ唯一の判定入口
+  # tests/lib-cmux-fixtures.sh の timing_judge を使う（判定関数は 1 つ）。
+  V5_TIMES="$WORKDIR/v5_ac146_times.txt"
+  v5_ac146_run_once() {
+    CMUX_NEXT_JUDGE_NOW="$T0" CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_INVENTORY_DIR="$INV_DIR" \
+      CMUX_NEXT_MAINT_STATE="$MAINT_FILE" CMUX_NEXT_INVENTORY_LATEST="$INV_DIR/latest.json" \
+      CMUX_NEXT_HEALTH_OBSERVATION="/nonexistent-dir/session-observation.json" \
+      CMUX_NEXT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+      CMUX_NEXT_MAINT_PLIST="/nonexistent-dir/com.takumi009.maintenance.plist" \
+      bash "$TARGET" --list >/dev/null 2>/dev/null
+  }
+  V5_RESULT="$(timing_judge 20 0.8 v5_ac146_run_once "$V5_TIMES")"
+  set -- $V5_RESULT
+  V5_PASS="$1"; V5_MEDIAN="$2"; V5_ALL_OK="$3"
+  echo "v5_ac146_perf_20runs: 実測 中央値=${V5_MEDIAN}秒"
+  assert_true "v5_ac146_perf_20runs: 20 回とも実行タイムアウト内に rc=0（プロセスグループごと打ち切り＝VM-02）" "$V5_ALL_OK"
+  assert_true "v5_ac146_perf_20runs: 中央値 0.8 秒以下（最大値は使わない・実測 ${V5_MEDIAN}秒）" "$V5_PASS"
 else
   echo "SKIP: python3 が無いため v5_ac146_perf_20runs を省略します"
+fi
+
+echo "=== verifier 2巡目 VM-02-R2 回帰: tests/lib-cmux-fixtures.sh の timing_judge 自身にハングを注入する（独立プロセスグループへ TERM→KILL） ==="
+if command -v python3 >/dev/null 2>&1; then
+  # TERM を無視する子を持つ関数（design-v1.md の CODE27 偽物と同じ形＝§2.3 failure mode）。
+  # プロセスグループごと打ち切らないと、この子だけ生き残ってしまう（VM-02 の指摘そのもの）。
+  VM02_PIDFILE="$WORKDIR/vm02_hang_child.pid"
+  VM02_PGIDFILE="$WORKDIR/vm02_hang_child.pgid"
+  rm -f "$VM02_PIDFILE" "$VM02_PGIDFILE"
+  vm02_hang_fn() {
+    # bash 3.2 に $BASHPID は無く、$$ は（関数の中でもサブシェルの中でも）起動した
+    # 最上位シェルの PID のまま変わらない（POSIX の既定どおり・実測）。子の実際の PID は
+    # バックグラウンド化した直後の $! でしか正しく取れない。プロセスグループ番号は
+    # 生きている間に ps で読んで残す（死んだ後は読めない＝VM-02-R2 の pgrep -g 検査用）。
+    ( trap '' TERM; sleep 30 ) &
+    echo "$!" > "$VM02_PIDFILE"
+    ps -o pgid= -p "$!" 2>/dev/null | tr -d ' ' > "$VM02_PGIDFILE"
+    wait
+  }
+  VM02_TIMES="$WORKDIR/vm02_times.txt"
+  t0_vm02="$(python3 -c 'import time; print(time.monotonic())')"
+  VM02_RESULT="$(AIENV_TIMING_RUN_TIMEOUT_SECS=2 timing_judge 1 0.1 vm02_hang_fn "$VM02_TIMES")"
+  t1_vm02="$(python3 -c 'import time; print(time.monotonic())')"
+  dur_vm02="$(python3 -c "print($t1_vm02 - $t0_vm02)")"
+  set -- $VM02_RESULT
+  VM02_PASS="$1"; VM02_ALL_OK="$3"
+  assert_eq "VM-02: ハングは不合格になる（all_ok=0）" "0" "$VM02_ALL_OK"
+  assert_eq "VM-02: 判定も不合格（pass=0）" "0" "$VM02_PASS"
+  assert_true "VM-02: 実行タイムアウト（2秒）程度で終わる（実測 ${dur_vm02}秒・sleep 30 を待たない）" \
+    "$(python3 -c "print(1 if $dur_vm02 < 10 else 0)")"
+  # timing_judge は KILL を送り終わるまで戻らない契約だが、重負荷下でのシグナル配送・
+  # プロセス回収の遅延に余裕を見る（CPU が重いと数百 ms 伸びうる・verifier 指摘の
+  # 「別ワーカーが締めハーネスを実走中」の実測で揺れを確認）。
+  sleep 2
+  VM02_CHILD_PID="$(cat "$VM02_PIDFILE" 2>/dev/null)"
+  VM02_GROUP="$(cat "$VM02_PGIDFILE" 2>/dev/null)"
+  assert_true "VM-02: 記録された子の PID が実在する（計測できた前提の確認）" "$([ -n "$VM02_CHILD_PID" ] && echo 1 || echo 0)"
+  assert_true "VM-02: TERM を無視する子孫もプロセスグループごと打ち切られ生存しない" \
+    "$([ -n "$VM02_CHILD_PID" ] && ! kill -0 "$VM02_CHILD_PID" 2>/dev/null && echo 1 || echo 0)"
+  assert_true "VM-02-R2: 独立プロセスグループに生存者なし（pgrep -g）" \
+    "$([ -n "$VM02_GROUP" ] && [ -z "$(pgrep -g "$VM02_GROUP" 2>/dev/null)" ] && echo 1 || echo 0)"
+else
+  echo "SKIP: python3 が無いため VM-02 回帰を省略します"
 fi
 
 echo "=== v5_dt17_judge_now_invalid: 固定口の不正 5 値は --list/--frame とも rc=1・stdout 0 バイト・stderr 1 行（理由フレームにしない）。境界 :59 は可 ==="

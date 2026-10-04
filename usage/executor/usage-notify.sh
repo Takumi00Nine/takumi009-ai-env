@@ -1,33 +1,31 @@
 #!/usr/bin/env bash
-# 使用率取得器の通知部分（B1-b・使用率取得器移設）。
+# 使用率取得器の通知部分（閾値の判定・通知状態の記録・送る段）。
 #
-# `claude-codex-usage/refresh.sh` から移設。usage/executor/usage-fetch.sh からのみ
-# source される（`usage/executor/usage-source.sh` の atomic_write・now_epoch・
-# json_string・run_with_timeout・log に依存＝先に source されている前提）。
-# ⚠️ `notify/connect/macos/macos-notify.sh` は使わない（sound name を持たず、テスト用の
-# 通知ログ差し替え口も無いので、現行の通知が静かに変わるため＝設計書 D-11）。
+# `claude-codex-usage/refresh.sh` から移設（B1-b）。v1.2 束 B で notify/connect/macos/ から
+# Usage の実行器へ移し、送る段の先を知らせの共通部品（呼出・区分 usage）にした（設計 D-2）。
+# usage/executor/usage-fetch.sh からのみ source される（`usage/executor/usage-source.sh` の
+# atomic_write・now_epoch・json_string・run_with_timeout・log と `core/executor/notice.sh` の
+# notice_call に依存＝先に source されている前提）。
 
+USAGE_NOTIFY_TITLE="claude-codex-usage"   # 知らせの題（移設元のまま＝設計書§8 Q-3）
+
+# 通知状態の services は宣言された短名（USAGE_FETCH_SERVICES・台帳の行順）ごとに 1 つ
+# （提供元の名前をここに書かない＝FR-6。全部入りでは従来と同じ JSON になる）。
 ensure_notify_state_json() {
-  jq -cn '{
-    schema_version:1,
-    updated_at:0,
-    services:{
-      claude:{
-        five_hour:{previous_used_percent:null,last_seen_used_percent:null,reset_notified:false,reset_notified_at:null,warn_notified:false,warn_notified_at:null},
-        seven_day:{previous_used_percent:null,last_seen_used_percent:null,reset_notified:false,reset_notified_at:null,warn_notified:false,warn_notified_at:null},
-        auth_expired_notified:false
-      },
-      codex:{
-        five_hour:{previous_used_percent:null,last_seen_used_percent:null,reset_notified:false,reset_notified_at:null,warn_notified:false,warn_notified_at:null},
-        seven_day:{previous_used_percent:null,last_seen_used_percent:null,reset_notified:false,reset_notified_at:null,warn_notified:false,warn_notified_at:null},
-        auth_expired_notified:false
-      }
-    }
-  }'
+  jq -cn --arg svcs "$USAGE_FETCH_SERVICES" '
+    def empty_window: {previous_used_percent:null,last_seen_used_percent:null,reset_notified:false,reset_notified_at:null,warn_notified:false,warn_notified_at:null};
+    {
+      schema_version:1,
+      updated_at:0,
+      services:(reduce ($svcs | split(" ") | map(select(. != "")))[] as $s ({};
+        .[$s] = {five_hour:empty_window, seven_day:empty_window, auth_expired_notified:false}))
+    }'
 }
 
 read_notify_state() {
-  if [ -f "$NOTIFY_STATE" ] && jq -e '.schema_version == 1 and .services.claude and .services.codex' "$NOTIFY_STATE" >/dev/null 2>&1; then
+  if [ -f "$NOTIFY_STATE" ] && jq -e --arg svcs "$USAGE_FETCH_SERVICES" '
+      . as $st | .schema_version == 1 and ($svcs | split(" ") | map(select(. != "")) | all($st.services[.] != null))
+    ' "$NOTIFY_STATE" >/dev/null 2>&1; then
     jq -c . "$NOTIFY_STATE"
   else
     ensure_notify_state_json
@@ -35,28 +33,17 @@ read_notify_state() {
 }
 
 # テスト用の差し替え口＝AIENV_USAGE_TEST_NOTIFY_LOG（設定されていれば
-# osascript を呼ばずログへ追記。現物の CLAUDE_CODEX_USAGE_TEST_NOTIFY_LOG の
-# 後継）。
-# ⚠️ 検証職1巡目MINOR-7対応: 通知タイトルは移設元（claude-codex-usage）から
-# 変えていない（設計書§8 Q-3「通知は現行挙動のまま」・本人裁定）。
-# ⚠️ 検証職1巡目MINOR-8対応: osascriptの失敗を観測可能にする（取得成功
-# 自体は損なわない＝戻り値は常に0のまま。失敗はログへ1行残すだけ）。
+# 共通部品を呼ばずログへ追記。現物の CLAUDE_CODEX_USAGE_TEST_NOTIFY_LOG の後継）。
+# 送る段は常に 0 を返す＝通知状態の更新は送信の成否に依らない（届かなかったことは
+# 口が知らせの記録へ・口が無いことは共通部品が自分のログへ 1 行残す）。
 send_notification() {
-  local message rc
+  local message
   message="$1"
   if [ -n "${AIENV_USAGE_TEST_NOTIFY_LOG:-}" ]; then
     printf '%s\n' "$message" >>"$AIENV_USAGE_TEST_NOTIFY_LOG"
     return 0
   fi
-  run_with_timeout "$REQUEST_TIMEOUT" osascript \
-    -e 'on run argv' \
-    -e 'display notification (item 1 of argv) with title "claude-codex-usage" sound name (item 2 of argv)' \
-    -e 'end run' \
-    "$message" "$NOTIFY_SOUND"
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    log "notification: osascriptが失敗しました（exit=${rc}）。取得結果自体は正常に記録済みです。"
-  fi
+  notice_call log usage "$USAGE_NOTIFY_TITLE" "$message" "$NOTIFY_SOUND"
   return 0
 }
 
@@ -72,19 +59,21 @@ run_reset_hook() {
   return 0
 }
 
-# Claude トークン失効の通知は1アウテージにつき最大1回。with_lock notify の
+# トークン失効の通知は1アウテージにつき最大1回。with_lock notify の
 # 下で呼ぶこと（process_notifications だけがフラグを解除する＝次回成功時）。
-claude_auth_expired_notify_once() {
-  local state already updated now
+# $1＝短名（トークン失効を返すのは現状 Claude の取得器だけ＝文言もそれに合わせる）。
+auth_expired_notify_once() {
+  local service state already updated now
+  service="$1"
   state="$(read_notify_state)" || return 1
-  already="$(printf '%s' "$state" | jq -r '.services.claude.auth_expired_notified // false' 2>/dev/null)"
+  already="$(printf '%s' "$state" | jq -r --arg s "$service" '.services[$s].auth_expired_notified // false' 2>/dev/null)"
   [ "$already" = "true" ] && return 0
   send_notification "Claude のアクセストークンが期限切れです。Claude Code を起動すると自動更新されます。"
   now="$(now_epoch)"
-  updated="$(printf '%s' "$state" | jq -c --argjson now "$now" '
+  updated="$(printf '%s' "$state" | jq -c --argjson now "$now" --arg s "$service" '
     .schema_version=1
     | .updated_at=$now
-    | .services.claude.auth_expired_notified=true
+    | .services[$s].auth_expired_notified=true
   ' 2>/dev/null)" || return 1
   mkdir -p "$CACHE_DIR" 2>/dev/null || return 1
   atomic_write "$NOTIFY_STATE" "$updated"
@@ -137,6 +126,7 @@ process_notifications() {
     fi
   done
   updated="$(jq -cn \
+    --arg svcs "$USAGE_FETCH_SERVICES" \
     --argjson state "$state" \
     --argjson cache "$cache_json" \
     --arg service "$service" \
@@ -148,10 +138,9 @@ process_notifications() {
       reduce ["five_hour","seven_day"][] as $w ($state;
         .schema_version=1
         | .updated_at=$now
-        | .services.claude.five_hour=(.services.claude.five_hour // empty_window)
-        | .services.claude.seven_day=(.services.claude.seven_day // empty_window)
-        | .services.codex.five_hour=(.services.codex.five_hour // empty_window)
-        | .services.codex.seven_day=(.services.codex.seven_day // empty_window)
+        | reduce ($svcs | split(" ") | map(select(. != "")))[] as $s (.;
+            .services[$s].five_hour=(.services[$s].five_hour // empty_window)
+            | .services[$s].seven_day=(.services[$s].seven_day // empty_window))
         | .services[$service].auth_expired_notified=false
         | ($cache[$w].used_percent) as $current
         | if $current == null then .

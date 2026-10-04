@@ -30,7 +30,7 @@ If a case arises on a sub machine where a rule needs fixing, don't fix it there 
 
 v1.1 component split:
 
-The repository is split into 6 **functions** (what a human would choose to take or leave), each with up to 5 **layers** inside it (`data` / `rules` / `executor` / `connect` / `assembly`; `connect` has one subfolder per external provider — Claude Code, Codex, macOS, CODE27). The **ledger** (`core/data/ledger.tsv`) is the single place that can look up every component's function/layer/provider, every suite's function, and every "calling the human" site; the **move map** (`core/data/moves.tsv`) is the single old-path → new-path record. Both are checked against the real tree on every test run by `core/assembly/ledger-tool.sh check` (see "Component ledger" below).
+The repository is split into 6 **functions** (what a human would choose to take or leave), each with up to 5 **layers** inside it (`data` / `rules` / `executor` / `connect` / `assembly`; `connect` has one subfolder per external provider — Claude Code, Codex, macOS, cmux, CODE27). The **ledger** (`core/data/ledger.tsv`) is the single place that can look up every component's function/layer/provider, every suite's function, and every "calling the human" site; the **move map** (`core/data/moves.tsv`) is the single old-path → new-path record. Both are checked against the real tree on every test run by `core/assembly/ledger-tool.sh check` (see "Component ledger" below).
 
 ```
 takumi009-ai-env/
@@ -54,27 +54,33 @@ takumi009-ai-env/
 │       │                         # codex-direct-call-gate.sh, role_candidates.py, guard_common.sh, bedrock.env.sample
 │       └── codex/                # codex-exec.sh, AGENTS.md, hooks.json, config.toml template (generated)
 ├── usage/                        # Usage fetch, cache, injection into prompts
-│   ├── executor/                 # usage-fetch.sh, usage-source.sh, usage-inject.sh, usage-block.sh, usage_snapshot.py
+│   ├── executor/                 # usage-fetch.sh, usage-source.sh, usage-inject.sh, usage-block.sh, usage_snapshot.py,
+│   │                             # usage-notify.sh (threshold judgement and notification state; sending goes through the mouth)
 │   ├── connect/
 │   │   ├── claude-code/          # fetch.sh + usage.env (provider declaration)
 │   │   └── codex/                # fetch.sh + usage.env (provider declaration)
 │   └── assembly/                  # install-usage-fetch.sh, the usage-fetch LaunchAgent plist
 ├── notify/                        # Calling the human (display is out of scope — see Dock below)
-│   └── connect/
-│       ├── macos/                 # macos-notify.sh, usage-notify.sh
-│       └── code27/                # code27-call-clear.sh
+│   ├── executor/                  # notify.sh (the mouth: takes every call/answer and hands it to the senders the ledger routes it to)
+│   └── connect/                   # one sender (deliver.sh) per destination; which notices it takes = the ledger's "notices" column
+│       ├── macos/                 # deliver.sh (macOS notification)
+│       ├── cmux/                  # deliver.sh (cmux notification; CODE27 speaks via the cmux settings' own hook chain)
+│       └── code27/                # deliver.sh (clears the CODE27 call — answers only)
 ├── dock/                          # Supply side for the cmux Dock (drawing lives in the separate dotfiles repo)
 │   └── executor/                   # cmux-next-model.sh, cmux-task-model.sh, cmux-task-declare.sh, dock-pane-resolve.sh, shared libs
 ├── core/                           # Full install, ledger, drift check, sub-machine update, and provider-independent generic parts
-│   ├── executor/                   # pid-lock.sh, status-file.sh, vault-paths.sh, audit.sh
+│   ├── executor/                   # pid-lock.sh, status-file.sh, vault-paths.sh, audit.sh, notice.sh (shared lib every notice goes through),
+│   │                                # ngwords-path.sh (resolves the NG-word file default for audit.sh / export-public-vault.sh)
 │   ├── connect/
 │   │   └── claude-code/            # session-start-compose.sh (the SessionStart composer; this is the hook registered as `bootstrap-vault.sh`),
-│   │                                # bash-danger-gate.sh, bash-policy-gate.sh, context-size-warn.sh, session-handoff.sh
+│   │                                # bash-danger-gate.sh, bash-policy-gate.sh, context-size-warn.sh, session-handoff.sh,
+│   │                                # prompt-answer.sh (detects the human's input and sends the answer; registered as `code27-call-clear.sh`)
 │   ├── assembly/                    # install-main.sh, install-sub.sh, update-sub.sh, check-drift.sh, check-sub-update.sh,
 │   │                                # managed-symlink.sh, settings.json template (generated), ledger-tool.sh
 │   └── data/
 │       ├── ledger.tsv                # Component ledger (function/layer/provider/key for every part and suite — see below)
-│       └── moves.tsv                 # Old path → new path map (v1.1 component split)
+│       ├── moves.tsv                 # Old path → new path map (v1.1 component split)
+│       └── ngwords.txt               # NG-word list (private, git-ignored; linked in by the private patch)
 ├── Brewfile                          # `brew bundle` dependencies
 └── tests/                            # Unit tests
 ```
@@ -99,7 +105,7 @@ Generation/updating is done by `ai-brain/executor/export-public-vault.sh` (detai
 
 ### Component ledger (`core/data/ledger.tsv`)
 
-Every tracked component (file or folder), every test suite, and every "calling the human" site is looked up through this one TSV file (columns: kind, path, function, layer, provider, key, note). `core/assembly/ledger-tool.sh check` re-derives the real tree (via `git ls-files`), the old→new move map (`core/data/moves.tsv`), and this README's own Structure section, and reports any mismatch as a single line each. The same tool's `lookup <key>` is how one component calls into another function without naming it directly (e.g. "the AI Brain health judge", "the Dock declaration CLI") — a missing key is a planned no-op, a broken ledger or a missing/non-executable target is reported with a fixed `LEDGER: …` line. Adding a part or a suite always means adding one row here (FR-14).
+Every tracked component (file or folder), every test suite, and every "calling the human" site is looked up through this one TSV file (columns: kind, path, function, layer, provider, key, note, notices). `core/assembly/ledger-tool.sh check` re-derives the real tree (via `git ls-files`), the old→new move map (`core/data/moves.tsv`), and this README's own Structure section, and reports any mismatch as a single line each. The move map records the v1.1 split: parts and suites that existed at v1.1 have a row there, while parts and suites added after v1.1 (e.g. `tests/test-notify.sh`) need only their ledger row and are not added to the move map. The same tool's `lookup <key>` is how one component calls into another function without naming it directly (e.g. "the AI Brain health judge", "the Dock declaration CLI") — a missing key is a planned no-op, a broken ledger or a missing/non-executable target is reported with a fixed `LEDGER: …` line. The 8th column, **notices**, is filled only on Notify's senders (`call.alert`, `call.usage`, `call.ask`, `answer`, comma-separated; a bare `call` takes every call), and `route <notice>` returns the senders for one notice (`<destination><TAB><path>`, in ledger order) — that is how the mouth finds where to deliver without naming any destination. Adding a part or a suite always means adding one row here (FR-14).
 
 ### Setup
 
@@ -111,7 +117,7 @@ brew bundle          # Reads the Brewfile and installs ripgrep, gitleaks, jq, gh
 
 Claude Code / Codex themselves are outside brew's management, so install them separately from their official sites. `install-main.sh` requires `python3` (details = the comment at the top of `core/assembly/install-main.sh`).
 
-`scripts/ngwords.txt` (NG-word definitions used by `export-public-vault.sh` and `audit.sh`) is **not included in this repository** because it's private data. To run `export-public-vault.sh`/`audit.sh` as-is, either set `NGWORDS_FILE=/path/to/your/ngwords.txt` to point at your own file, or write your own NG-word list.
+`core/data/ngwords.txt` (NG-word definitions used by `export-public-vault.sh` and `audit.sh`) is **not included in this repository** because it's private data. If the file is still only at the old default `scripts/ngwords.txt`, both tools stop and print the one command that moves it. To run `export-public-vault.sh`/`audit.sh` as-is, either set `NGWORDS_FILE=/path/to/your/ngwords.txt` to point at your own file, or write your own NG-word list.
 
 #### Main environment
 
@@ -147,6 +153,18 @@ core/assembly/check-drift.sh                    # confirm 0 drift: every registe
 ```
 
 The old paths (`claude/hooks/*.sh`, `cmux/cmux-next-model.sh` / `cmux-task-model.sh`, `scripts/backup-vault.sh` / `maintenance.sh` / `usage-fetch.sh` / `install-sub.sh`, `vault-public`) are kept only as compatibility symlinks to the files above, so every already-registered hook and LaunchAgent keeps working at each point of this sequence — right after `git pull`, and even if `install-main.sh` fails partway through (see "Component ledger" above and `core/data/moves.tsv` for the full map).
+
+##### Taking in v1.2 (bundle B: the notification mouth) on an existing main machine
+
+```sh
+cd ~/work/takumi009-ai-env
+git pull --ff-only
+core/assembly/install-main.sh --with-dotfiles   # re-run the full installer (the `code27-call-clear.sh` hook now points at core/connect/claude-code/prompt-answer.sh)
+core/executor/audit.sh --quick                  # if the NG-word file is still at the old scripts/ngwords.txt, this fails and prints one command — run it, then re-run this line
+core/assembly/check-drift.sh                    # confirm 0 drift
+```
+
+The forwarding symlinks described above stay in place for now.
 
 #### Sub environment
 
@@ -320,7 +338,7 @@ This runs every `tests/test-*.sh` suite one after another and exits non-zero at 
 
 v1.1 機能の部品化:
 
-repo は人が取る単位＝**機能** 6 つに分かれ、各機能の内側は**層**（`data`／`rules`／`executor`／`connect`／`assembly`。`connect` は提供元（Claude Code・Codex・macOS・CODE27）ごとに 1 フォルダ）で分かれています。**台帳**（`core/data/ledger.tsv`）が、全部品の機能・層・提供元、全スイートの機能、本人を呼ぶ箇所を引ける唯一の場所で、**移動表**（`core/data/moves.tsv`）が旧パス→新パスの唯一の記録です。両方とも `core/assembly/ledger-tool.sh check` がテスト実行のたびに実フォルダ・この README の構成節と突合します（詳細＝後述「台帳」節）。
+repo は人が取る単位＝**機能** 6 つに分かれ、各機能の内側は**層**（`data`／`rules`／`executor`／`connect`／`assembly`。`connect` は提供元（Claude Code・Codex・macOS・cmux・CODE27）ごとに 1 フォルダ）で分かれています。**台帳**（`core/data/ledger.tsv`）が、全部品の機能・層・提供元、全スイートの機能、本人を呼ぶ箇所を引ける唯一の場所で、**移動表**（`core/data/moves.tsv`）が旧パス→新パスの唯一の記録です。両方とも `core/assembly/ledger-tool.sh check` がテスト実行のたびに実フォルダ・この README の構成節と突合します（詳細＝後述「台帳」節）。
 
 ```
 takumi009-ai-env/
@@ -345,27 +363,33 @@ takumi009-ai-env/
 │       │                         # codex-direct-call-gate.sh・role_candidates.py・guard_common.sh・bedrock.env.sample
 │       └── codex/                # codex-exec.sh・AGENTS.md・hooks.json・config.toml テンプレ（生成）
 ├── usage/                        # 使用率の取得・保存・発言への注入
-│   ├── executor/                 # usage-fetch.sh・usage-source.sh・usage-inject.sh・usage-block.sh・usage_snapshot.py
+│   ├── executor/                 # usage-fetch.sh・usage-source.sh・usage-inject.sh・usage-block.sh・usage_snapshot.py・
+│   │                             # usage-notify.sh（閾値の判定と通知状態の記録。送る段は口へ）
 │   ├── connect/
 │   │   ├── claude-code/          # fetch.sh＋usage.env（提供元の宣言）
 │   │   └── codex/                # fetch.sh＋usage.env（提供元の宣言）
 │   └── assembly/                  # install-usage-fetch.sh・使用率取得 LaunchAgent plist
 ├── notify/                        # 本人を呼ぶ（表示＝Dock は含まない）
-│   └── connect/
-│       ├── macos/                 # macos-notify.sh・usage-notify.sh
-│       └── code27/                # code27-call-clear.sh
+│   ├── executor/                  # notify.sh（口＝呼出・応答を受け、台帳が引く送り手へ渡す）
+│   └── connect/                   # 届け先ごとの送り手（deliver.sh）。受ける知らせ＝台帳の「知らせ」列
+│       ├── macos/                 # deliver.sh（macOS 通知）
+│       ├── cmux/                  # deliver.sh（cmux 通知。CODE27 の発話は cmux 設定のフックの連鎖）
+│       └── code27/                # deliver.sh（CODE27 の呼出の消去＝応答だけ）
 ├── dock/                          # cmux Dock への供給側（描画は別リポジトリ dotfiles）
 │   └── executor/                   # cmux-next-model.sh・cmux-task-model.sh・cmux-task-declare.sh・dock-pane-resolve.sh・共有 lib
 ├── core/                           # 全部入りの組立・台帳・ズレ検知・サブ機更新・特定機能に属さない汎用部品
-│   ├── executor/                   # pid-lock.sh・status-file.sh・vault-paths.sh・audit.sh
+│   ├── executor/                   # pid-lock.sh・status-file.sh・vault-paths.sh・audit.sh・notice.sh（知らせの共通部品）・
+│   │                                # ngwords-path.sh（audit.sh・export-public-vault.sh の NG 語ファイルの既定の解決）
 │   ├── connect/
 │   │   └── claude-code/            # session-start-compose.sh（SessionStart 合成器。`bootstrap-vault.sh` の登録名で動く）・
-│   │                                # bash-danger-gate.sh・bash-policy-gate.sh・context-size-warn.sh・session-handoff.sh
+│   │                                # bash-danger-gate.sh・bash-policy-gate.sh・context-size-warn.sh・session-handoff.sh・
+│   │                                # prompt-answer.sh（本人の入力の検知→応答。`code27-call-clear.sh` の登録名で動く）
 │   ├── assembly/                    # install-main.sh・install-sub.sh・update-sub.sh・check-drift.sh・check-sub-update.sh・
 │   │                                # managed-symlink.sh・settings.json テンプレ（生成）・ledger-tool.sh
 │   └── data/
 │       ├── ledger.tsv                # 台帳（全部品・全スイートの機能・層・提供元・鍵。後述）
-│       └── moves.tsv                 # 旧パス→新パスの対応表（v1.1 機能の部品化）
+│       ├── moves.tsv                 # 旧パス→新パスの対応表（v1.1 機能の部品化）
+│       └── ngwords.txt               # NG 語定義（私的・git 管理外。私的パッチが張る）
 ├── Brewfile                          # `brew bundle` の依存
 └── tests/                            # ユニットテスト
 ```
@@ -397,7 +421,7 @@ takumi009-ai-env/
 
 ### 台帳（`core/data/ledger.tsv`）
 
-全部品（ファイル・フォルダ）・全スイート・本人を呼ぶ全箇所は、この TSV 1 本（列＝種類・パス・機能・層・提供元・鍵・備考）から引けます。`core/assembly/ledger-tool.sh check` が、実フォルダ（`git ls-files` から導出）・移動表（`core/data/moves.tsv`）・この README の構成節それぞれと突合し、食い違いを 1 件 1 行で報告します。同じツールの `lookup <鍵>` が、他機能の部品名を書かずに呼ぶ経路です（例＝「AI Brain のヘルス判定機」「Dock の宣言 CLI」）。鍵が無ければ予定された省略、台帳異常・実体異常は固定文 `LEDGER: …` で報告します。部品・スイートを足すときは、この台帳に 1 行を足します（FR-14）。
+全部品（ファイル・フォルダ）・全スイート・本人を呼ぶ全箇所は、この TSV 1 本（列＝種類・パス・機能・層・提供元・鍵・備考・知らせ）から引けます。`core/assembly/ledger-tool.sh check` が、実フォルダ（`git ls-files` から導出）・移動表（`core/data/moves.tsv`）・この README の構成節それぞれと突合し、食い違いを 1 件 1 行で報告します。移動表は v1.1 の分割の記録で、v1.1 時点の部品・スイートには行がありますが、v1.1 より後に足した部品・スイート（例＝`tests/test-notify.sh`）は台帳の行だけで、移動表には足しません。同じツールの `lookup <鍵>` が、他機能の部品名を書かずに呼ぶ経路です（例＝「AI Brain のヘルス判定機」「Dock の宣言 CLI」）。鍵が無ければ予定された省略、台帳異常・実体異常は固定文 `LEDGER: …` で報告します。8 列目「知らせ」は Notify の送り手の行だけが持ち（`call.alert`・`call.usage`・`call.ask`・`answer` のカンマ区切り。`call` だけなら全ての呼出）、`route <知らせ>` がその知らせの送り手を台帳の行順に返します（`<届け先><TAB><パス>`）＝口は届け先の名前を持たずにこれで引きます。部品・スイートを足すときは、この台帳に 1 行を足します（FR-14）。
 
 ### 導入手順
 
@@ -409,7 +433,7 @@ brew bundle          # Brewfile を見て ripgrep・gitleaks・jq・gh・macmon 
 
 Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイトから別途インストールしてください。`install-main.sh` は `python3` を必要とします（詳細＝`core/assembly/install-main.sh` 冒頭のコメント）。
 
-`scripts/ngwords.txt`（`export-public-vault.sh`・`audit.sh` が使うNGワード定義）は私的データのため**このリポジトリには含まれません**。`export-public-vault.sh`/`audit.sh` をそのまま実行するには、`NGWORDS_FILE=/path/to/your/ngwords.txt` で自分のファイルを指定するか、自分のNGワード定義を作成してください。
+`core/data/ngwords.txt`（`export-public-vault.sh`・`audit.sh` が使うNGワード定義）は私的データのため**このリポジトリには含まれません**。旧既定 `scripts/ngwords.txt` にだけある場合、両ツールは止まって移す 1 コマンドを表示します。`export-public-vault.sh`/`audit.sh` をそのまま実行するには、`NGWORDS_FILE=/path/to/your/ngwords.txt` で自分のファイルを指定するか、自分のNGワード定義を作成してください。
 
 #### メイン環境
 
@@ -445,6 +469,18 @@ core/assembly/check-drift.sh                    # drift 0 件を確認（登録�
 ```
 
 旧パス（`claude/hooks/*.sh`・`cmux/cmux-next-model.sh`／`cmux-task-model.sh`・`scripts/backup-vault.sh`／`maintenance.sh`／`usage-fetch.sh`／`install-sub.sh`・`vault-public`）は上記の実体への転送 symlink として残るだけなので、`git pull` 直後や `install-main.sh` が途中で失敗した場合を含め、この手順のどの時点でも既存の登録フック・LaunchAgent は動作し続けます（一覧＝前述「台帳」節・`core/data/moves.tsv`）。
+
+##### 既存メイン機の v1.2 取込み手順（束 B＝通知の口）
+
+```sh
+cd ~/work/takumi009-ai-env
+git pull --ff-only
+core/assembly/install-main.sh --with-dotfiles   # 全部入りインストーラを再実行（登録フック code27-call-clear.sh の実体が core/connect/claude-code/prompt-answer.sh へ）
+core/executor/audit.sh --quick                  # NG 語ファイルが旧 scripts/ngwords.txt のままなら失敗して 1 コマンドを表示する＝それを実行してから、この行をもう一度
+core/assembly/check-drift.sh                    # drift 0 件を確認
+```
+
+前述の転送 symlink は当面そのまま残ります。
 
 #### サブ環境
 

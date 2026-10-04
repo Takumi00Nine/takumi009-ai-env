@@ -50,13 +50,17 @@ ac12_usage() {
     "$3/$e" </dev/null
 }
 
-# ac12_hooks <home> <stubdir> <wt> <event> <tool> <stdin> — 当たる全フックへ同じ stdin（stdout 連結・rc＝最大）
+# ac12_hooks <home> <stubdir> <wt> <event> <tool> <stdin> [<追加 VAR=val>] — 当たる全フックへ同じ stdin（stdout 連結・rc＝最大）
 ac12_hooks() {
-  local h="$1" s="$2" wt="$3" c rc=0 r n=0
+  local h="$1" s="$2" wt="$3" c rc=0 r n=0 extra="${7:-}"
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     n=$((n + 1)); r=0
-    cl_run "$h" "$s" "$wt" bash -c "$c" < "$6" || r=$?
+    if [ -n "$extra" ]; then
+      cl_run "$h" "$s" "$wt" "$extra" bash -c "$c" < "$6" || r=$?
+    else
+      cl_run "$h" "$s" "$wt" bash -c "$c" < "$6" || r=$?
+    fi
     [ "$r" -gt "$rc" ] && rc="$r"
   done <<EOF
 $(cl_py hooks "$h/.claude/settings.json" "$4" ${5:+"$5"})
@@ -76,12 +80,20 @@ ac12_run() {
   repo="$h/$CLOSING_REPO_HOME_REL"; V="$h/$CLOSING_VAULT_REL"
   st="$rd/stdin"; : > "$st"
   case "$id" in
-    ab-backup|ab-maint) cl_mk_vault_fx5 "$V" ;;
-    team-dry|usage-fetch) : ;;
+    ab-backup|ab-maint|fx9-maint) cl_mk_vault_fx5 "$V" ;;
+    team-dry|usage-fetch|fx9-usage) : ;;
     *) cl_mk_vault_fx4 "$V" ;;
   esac
+  # v1.2 FX-9 (a)＝メンテが異常ありで終わる入力（Vault の branch を main 以外にして backup-vault.sh を失敗させる＝Phase0 中断）
   case "$id" in
-    hk-ups-*) ac12_usage "$h" "$rd/s" "$repo" "$side" "$mode" >/dev/null 2>&1; : > "$rd/s/calls.log" ;;
+    fx9-maint) git -C "$V" checkout -q -b other-branch ;;
+  esac
+  case "$id" in
+    hk-ups-*) ac12_usage "$h" "$rd/s" "$repo" "$side" "$mode" >/dev/null 2>&1; : > "$rd/s/calls.log"
+      # リーダー裁定＝hk-ups-* は両側に偽 CODE27（tests/fixtures/code27-call/）を渡す（基準の
+      # code27-call-clear.sh も新側の deliver.sh も同じ CODE27_CALL_BIN を読む＝実測済み）。
+      # これで両側とも「届く」経路になり notify.tsv に差が出ない（v1.1 には無かった no-exe 記録を避ける）。
+      mkdir -p "$rd/s/c27/bin"; cp -R "$CL_DIR/../fixtures/code27-call/bin/." "$rd/s/c27/bin/" ;;
     dock-*)
       ( . "$WT0/tests/lib-cmux-fixtures.sh"
         mk_note_V1 "$V"; mk_notes_N_all "$V"
@@ -110,7 +122,8 @@ ac12_run() {
     ab-recall-*) old="$CLOSING_RECALL_OLD" ;;
     ab-bootstrap) old="$CLOSING_BOOTSTRAP_OLD" ;;
     ab-backup) old="$CLOSING_BACKUP_OLD" ;;
-    ab-maint) old="$CLOSING_MAINT_OLD" ;;
+    ab-maint|fx9-maint) old="$CLOSING_MAINT_OLD" ;;
+    fx9-usage) old="$CLOSING_USAGE_FETCH_OLD" ;;
     team-dry) old="$CLOSING_CLAUDE_EXEC_OLD" ;;
     dock-next-*) old="$(printf '%s\n' $CLOSING_DOCK_OLD | sed -n 1p)" ;;
     dock-task-*) old="$(printf '%s\n' $CLOSING_DOCK_OLD | sed -n 2p)" ;;
@@ -124,15 +137,21 @@ ac12_run() {
     case "$id" in
       ab-recall-*|ab-bootstrap) cl_run "$h" "$rd/s" "$wt" "$repo/$e" < "$st" ;;
       ab-backup) cl_run "$h" "$rd/s" "$wt" "$repo/$e" </dev/null ;;
-      ab-maint) cl_run "$h" "$rd/s" "$wt" AIENV_REPO="$wt" "$repo/$e" </dev/null ;;
+      ab-maint|fx9-maint) cl_run "$h" "$rd/s" "$wt" AIENV_REPO="$wt" "$repo/$e" </dev/null ;;
       team-dry) cl_run "$h" "$rd/s" "$wt" "$(cl_path "$rd/s" "$WT0/tests/fake-claude")" \
           AIENV_LOCAL_PROFILE_PATH="$rd/profile.md" AIENV_MODEL_DEFS_FILE="$rd/models.conf" \
           "$repo/$e" --role implementer --prompt-file "$rd/prompt.txt" --out "$rd/out.json" \
           --task-id t-closing --model-def t-sonnet-high --dry-run </dev/null ;;
       usage-fetch) ac12_usage "$h" "$rd/s" "$repo" "$side" "$mode" ;;
+      # v1.2 FX-9 (b)＝Usage の取得で警告の閾値（既定 80）を超える固定の取得結果（v1.1 FX-26 の Usage 入力を使用率だけ変えたもの）
+      fx9-usage) cl_run "$h" "$rd/s" "$wt" "$(cl_path "$rd/s" "$CL_FIX/usage-bin")" \
+          STUB_CURL_STATUS=200 STUB_CURL_BODY="$CLOSING_USAGE_WARN_BODY" \
+          STUB_SECURITY_JSON='{"claudeAiOauth":{"accessToken":"tok-abc","expiresAt":99999999999999}}' \
+          STUB_CODEX_RESULT_LINE="$(cat "$CL_FIX/usage-bin/codex_success_result_line.json")" \
+          "$repo/$e" </dev/null ;;
       dock-*) cl_run "$h" "$rd/s" "$wt" STUB_STATE="$rd/cmux-state" "$repo/$e" "$opt" </dev/null ;;
       hk-sessionstart) ac12_hooks "$h" "$rd/s" "$wt" SessionStart "" "$st" ;;
-      hk-ups-*) ac12_hooks "$h" "$rd/s" "$wt" UserPromptSubmit "" "$st" ;;
+      hk-ups-*) ac12_hooks "$h" "$rd/s" "$wt" UserPromptSubmit "" "$st" "CODE27_CALL_BIN=$rd/s/c27/bin/code27-call-clear" ;;
       hk-read) ac12_hooks "$h" "$rd/s" "$wt" PostToolUse Read "$st" ;;
       hk-bash-*) ac12_hooks "$h" "$rd/s" "$wt" PreToolUse Bash "$st" ;;
       hk-edit) ac12_hooks "$h" "$rd/s" "$wt" PreToolUse Edit "$st" ;;
@@ -141,6 +160,10 @@ ac12_run() {
   } >"$od/$side.stdout" 2>"$od/$side.stderr" || rc=$?
   fi
   printf '%s\n' "$rc" > "$od/$side.rc"
+  # v1.2 の口は応答を切り離して起動する（設計 R2-01）＝入口の終了は配送・記録の完了を意味しない。
+  # hk-ups-* は UserPromptSubmit（応答）を通すので、state のスナップショット前に T+1 秒待つ
+  # （基準側は同期なので実質即終わる・両側に同じだけ待たせるので比較は公平）。
+  case "$id" in hk-ups-*) sleep "$CLOSING_NOTIFY_OBSERVE_SECS" ;; esac
   python3 "$CL_PY" snap "$h" "$rd/after.json" --exclude Library/Caches/
   python3 "$CL_PY" snapdiff "$rd/before.json" "$rd/after.json" "$h" > "$od/$side.state"
   { cat "$rd/s/calls.log"; [ -f "$rd/cmux-state/calls.log" ] && cat "$rd/cmux-state/calls.log"; } > "$od/$side.calls"

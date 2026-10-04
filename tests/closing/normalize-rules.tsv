@@ -9,10 +9,11 @@
 \b\d{2}:\d{2}:\d{2}\b	<TIME>
 \b1[6-9]\d{8}(\d{3})?(\.\d+)?\b	<EPOCH>
 (?i)\bpid[=: ]+\d+	pid=<PID>
-\[\d{2,7}\]	[<PID>]
+\[\d+\]	[<PID>]
 \b\d+(\.\d+)?(ms\b|s\b|秒)	<DUR>
 (<TMP>/)[^\s"'/]+	\1<T>
 \b\d{6}-\d{2,7}\b	<TIME>-<PID>
 "invocation_id": "[0-9a-f]{32}"	"invocation_id": "<RANDID>"
-(?<=\s)\[\d+\](?=\s)	[<PID>]
 \d+分前	<MIN>分前
+A \.claude/logs/notify\.tsv\n(?=[\s\S]*?=== \.claude/logs/notify\.tsv\n\n)
+=== \.claude/logs/notify\.tsv\n\n
