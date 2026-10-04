@@ -181,6 +181,12 @@ ac_8() {
   # HOME-A・HOME-B のパスを比較前に同じ印へ（リーダー裁定2026-10-05）＝closing_util.py normalize は
   # 長い文字列から当てる（subs を -len でソート）ので、この行を先に積めば既存の汎用規則「$WORK/home=<HOME>」
   # の前方一致（末尾 -ac8c-a／-ac8c-b が残る）より先にこちらが丸ごと当たる。新しい正規化方式は作らない。
+  # 私的パッチ repo（check-drift.sh の既定 AIENV_PRIVATE_REPO）の行は、CL_SIDE_WT の前方一致
+  # （<WT>-private に化ける）より先に当たるよう、長い文字列として先に積む（リーダー裁定2026-10-05）。
+  # 値は CLOSING_REPO_HOME_REL（例 work/takumi009-ai-env）に "-private" を足して組む＝
+  # check-drift.sh の AIENV_PRIVATE_REPO の既定（$HOME/work/takumi009-ai-env-private）と同じ組み方。
+  local priv_rel="$(dirname "$CLOSING_REPO_HOME_REL")/$(basename "$CLOSING_REPO_HOME_REL")-private"
+  CL_SUBS+=("$hA/$priv_rel=<HOME>/$priv_rel" "$hB/$priv_rel=<HOME>/$priv_rel")
   CL_SUBS+=("$hA=<HOME>" "$hB=<HOME>")
   cl_new_wt "$wtA" "$FX1_COMMIT" || { cl_result AC-8 NG "②④ worktree(A) を作れない"; return; }
   cl_new_wt "$wtB" "$FX1_COMMIT" || { cl_result AC-8 NG "②④ worktree(B) を作れない"; return; }
