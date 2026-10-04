@@ -540,7 +540,7 @@ EOF
   assert_eq "reject_when_local_settings_present: stub 0行" "0" "$(stub_lines)"
 }
 
-echo "=== AC-9: marker_uses_parent_sid / child_sid_marker_does_not_pass / vault_still_denied ==="
+echo "=== AC-9: marker_uses_parent_sid / child_sid_marker_does_not_pass / vault_passes ==="
 {
   new_fixture
   export CLAUDE_CODE_SESSION_ID="parent-sid-ac9"
@@ -563,7 +563,7 @@ echo "=== AC-9: marker_uses_parent_sid / child_sid_marker_does_not_pass / vault_
   VAULT_PATH="$HOME/Data/obsidian/Knowledge/test-ac9.md"
   gate_input_vault="$(python3 -c 'import json,sys; print(json.dumps({"session_id":sys.argv[1],"tool_input":{"file_path":sys.argv[2]}}))' "parent-sid-ac9" "$VAULT_PATH")"
   gate_out3="$(printf '%s' "$gate_input_vault" | GATE_MARKER_DIR="$MARKER_DIR" bash "$DELEGATION_GATE_SH")"
-  assert_true "vault_still_denied: 委任マーカーがあってもVaultはdeny" "$(is_gate_denied "$gate_out3")"
+  assert_true "vault_passes: Vault 6 フォルダは委任マーカーの有無に関わらず通過（rule 2.5・2026-10-04 決定）" "$([ -z "$gate_out3" ] && echo 1 || echo 0)"
 }
 
 echo "=== AC-10(1): reject_unsupported_alias_no_stub_record(5) ==="

@@ -7,11 +7,10 @@
 # Knowledge/mistakes の一般則「テキストで効かない再発はツール境界でフック化する」を適用。
 # 経緯: Decisions/2026-07-05-delegation-gate-v2 / 運用: Preferences/coding-delegation
 #
-# 判定順序（1→2→2.5→3→4→4m→5。2.5 のみ通過条件ではなく専用の deny 分岐）:
+# 判定順序（1→2→2.5→3→4→4m→5）:
 #   1) サブエージェント/ワーカー内の編集（agent_id/agent_type あり）＝ワーカーの仕事は正当 → 通過
 #   2) チームメイトセッション（他チームの config.json に自 session_id が載る） → 通過
-#   2.5) 外部脳（Vault）は 1)/2) を通過しなかった場合（＝リーダー）、専用マーカーが無い限り常に deny
-#        （2026-08-12〜。汎用マーカー 5)・委任実績 4)/4m) では開かない）
+#   2.5) 外部脳（Vault）の AI 向け6フォルダ＝通過（リーダー直筆可・2026-10-04 本人決定）
 #   3) 許可パス（~/.claude / tmp / 例外プロジェクト） → 通過
 #   4) 自チームにリーダー以外のメンバーが存在（＝委任実績あり。名前付きチームメイトの例外運用のため残す） → 通過
 #   4m) このセッションの委任マーカーが存在する（agent-model-guard.shがAgent起動のPASS時にtouch。
@@ -25,9 +24,7 @@
 
 # D-2（設計-v1.1.1.md §3・裁定A）: rule 2.5 の「対象がVaultのAI向け6フォルダ
 # 配下か」の判定だけを Core の core/executor/vault-paths.sh の guard_is_vault_ai_path へ委ねる
-# （6フォルダの literal はそこにしか書かない＝NFR-7・AC-10②）。⚠️
-# 振る舞い（マーカーの逃げ道・deny文面・rule 4mを含む他の判定順序）は
-# 一切変えない（設計の絶対条件＝本ファイルは判定式の移設のみ）。
+# （6フォルダの literal はそこにしか書かない＝NFR-7・AC-10②）。
 #
 # 検証1巡目 I1-B1 対応: installer はこの3フックを1本ずつ
 # `$HOME/.claude/hooks/<名前>.sh`（repoへのsymlink）として配置する
@@ -35,7 +32,7 @@
 # 実運用経路で共有部品を解決できない。自身のsymlinkを解決した実体ディレクトリ
 # から repo 内の相対位置（core/executor/）を見る。source失敗時は fail-close＝
 # rule 2.5 の対象かどうかを判定できないまま素通しにはせず、即denyしてexit 0
-# （このゲート唯一のVault保護柵が無言で無効化される再発を防ぐ）。
+# （rule 2.5 の対象判定ができないまま 3〜5 へ進む誤判定を防ぐ）。
 resolve_delegation_gate_self_dir() {
   local src="${BASH_SOURCE[0]}"
   while [ -L "$src" ]; do
@@ -50,7 +47,7 @@ resolve_delegation_gate_self_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 guard_common_load_error() {
-  reason="delegation-gate: 共有部品（vault-paths.sh・cause=$1）を読み込めず、Vault保護（rule 2.5）を判定できません。フックの配置を確認してください。"
+  reason="delegation-gate: 共有部品（vault-paths.sh・cause=$1）を読み込めず、rule 2.5 の判定ができません。フックの配置を確認してください。"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}' 2>/dev/null \
     || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
   exit 0
@@ -66,8 +63,7 @@ source "$SELF_DIR/../../../core/executor/vault-paths.sh" 2>/dev/null || guard_co
 TEAMS_DIR="${GATE_TEAMS_DIR:-$HOME/.claude/teams}"
 MARKER_DIR="${GATE_MARKER_DIR:-/tmp}"
 ALLOW_PREFIXES=(
-  # 外部脳($HOME/Data/obsidian)は 2026-08-12 本人指示で許可パスから除外
-  # （執筆は Vault 書込を宣言した記録職（例: vault-scribe）へ委任＝下の 2.5 で専用 deny）
+  # Vault はここへ足さない（AI 向け6フォルダは 2.5 で通過・それ以外は 3〜5 で判定）。
   "$HOME/.claude"             # 自環境の設定・フック
   "$HOME/.claude.json"        # Claude Code 本体設定（~/.claude/ の外にあるが同じ設定ドメイン。2026-07-05 追加）
   "/tmp"                      # scratchpad・一時ファイル
@@ -105,18 +101,12 @@ if [ -d "$TEAMS_DIR" ]; then
   done
 fi
 
-# 2.5) 外部脳（Vault）の AI向け6フォルダはリーダー直筆禁止（2026-08-12 本人指示＝「scribe不在時・
-# 軽い1件は直筆可」の例外を撤廃／2026-08-13 本人指示＝適用範囲を AI向け6フォルダに限定。
-# 人間向け領域＝Blogs/・Explorations/・機械生成物フォルダ等の6フォルダ以外は直接編集可）。
-# 執筆は常駐チームメイト vault-scribe へ委任する
-# （Decisions/2026-08-10-vault-scribe / Decisions/2026-08-12-vault-scribe-mandatory）。
-# ワーカー/チームメイトは上の 1)/2) で既に通過済み＝ここに到達するのはリーダーのみ。
-# 逃げ道は Vault 専用マーカーのみ（汎用マーカー 5)・委任実績 4)/4m) では開かない）。
+# 2.5) 外部脳（Vault）の AI 向け6フォルダ＝リーダー直筆可（2026-10-04 本人決定＝
+# Decisions/2026-10-04-leader-vault-light-writes-no-gate）。軽い書込は直筆・重い編集は
+# 記録職へ＝規則で守る（フックで軽重は判定しない）。判定式は vault-paths.sh の
+# guard_is_vault_ai_path（6フォルダの literal はそこだけ）。子の柵
+# ai-brain/connect/claude-code/vault-write-gate.sh は別物（子は今も deny）。
 if guard_is_vault_ai_path "$fpath"; then
-  vault_marker="$MARKER_DIR/claude-vault-direct-ok-$sid"
-  [ -f "$vault_marker" ] && exit 0
-  reason="delegation-gate: Vault の AI 向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への書き込みは Vault 書込を宣言した記録職（例: subagent_type vault-scribe）へ委任してください。緊急時のみ理由を応答に明示して: touch $vault_marker"
-  jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
   exit 0
 fi
 

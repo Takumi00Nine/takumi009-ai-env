@@ -32,10 +32,10 @@ compose_team_mode_line() {   # $1 = solo|lean|full|unknown
 
 # DIRECTIVE ⑤（オーケストレーター行動則）をモード別に組み立てる（先頭に「⑤ 」を含む）。
 compose_team_mode_directive5() {   # $1 = solo|lean|full|unknown
-  local base5='⑤ オーケストレーター行動則（詳細＝Preferences/core-workflow.md §1・§2）: 「作る工程」は自分でやらず委任し、成果物の修正はリーダーが直接行わず作成元ロールへ差し戻す。⚠️ リーダー自身の Edit/Write が正当なのは、~/.claude・scratchpad・リーダー自身の成果物への軽微な修正・ユーザーの直接作業指示のみ（Vault は含まない）。許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。'
+  local base5='⑤ オーケストレーター行動則（詳細＝Preferences/core-workflow.md §1・§2）: 「作る工程」は自分でやらず委任し、成果物の修正はリーダーが直接行わず作成元ロールへ差し戻す。⚠️ リーダー自身の Edit/Write が正当なのは、~/.claude・scratchpad・リーダー自身の成果物への軽微な修正・ユーザーの直接作業指示・Vault の AI 向け6フォルダへの軽い書込（追記・状態記号・frontmatter・置換 1〜2 箇所）のみ。重い編集は記録職へ＝ゲートは6フォルダを通すので軽重の線引きは規則で守る。6フォルダ以外の許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。'
   case "$1" in
     solo)
-      TEAM_MODE_DIRECTIVE5='⑤ ⚠️ 単独モードでは全工程をリーダー自身が行い、他の職種を1つも立てない（検証職も立てない）。工程は飛ばさず『専任なし』を明記する。許可パス外の直接編集は、単独モードであることを理由として本人への応答で明示してから touch $MARKER_DIR/claude-direct-edit-ok-<session_id> して再試行する。⚠️ Vault の AI 向け6フォルダも同じ扱い——solo ではリーダーが案件の締めにまとめて直筆する（理由を応答で明示してから touch $MARKER_DIR/claude-vault-direct-ok-<session_id>）。'
+      TEAM_MODE_DIRECTIVE5='⑤ ⚠️ 単独モードでは全工程をリーダー自身が行い、他の職種を1つも立てない（検証職も立てない）。工程は飛ばさず『専任なし』を明記する。許可パス外の直接編集は、単独モードであることを理由として本人への応答で明示してから touch $MARKER_DIR/claude-direct-edit-ok-<session_id> して再試行する。Vault の AI 向け6フォルダはマーカー無しで直筆できる（軽い書込は直筆・重い編集は記録職へ）。'
       ;;
     lean)
       TEAM_MODE_DIRECTIVE5="${base5} ⚠️ 軽量モードでは要件定義と設計はリーダー自身が行う。実装は implementer へ委任し、適用工程ごとに検証職を1巡だけ回す。requirements-analyst・system-designer・researcher・adoption-critic・operator は立てず『専任なし』を明記する。"
