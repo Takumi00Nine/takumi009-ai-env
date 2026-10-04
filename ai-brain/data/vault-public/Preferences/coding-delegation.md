@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-10-03
+updated: 2026-10-04
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 related:
@@ -19,6 +19,7 @@ aliases:
   - "モデル割り当て"
   - "Fable除外"
   - "cmux notify"
+  - "notify.sh call ask"
   - "delegation-gate-v2 許可パス"
 ---
 # 開発の役割分担（Claude中心＋Codex検証職）
@@ -34,7 +35,7 @@ aliases:
 - テストは厳密にやりすぎない＝不変条件だけを恒久テストに残し、案件の受入条件は締めで1回確認して退役する。repo のテストは repo の中で完結（実体・Vault・private repo を読まない）。値でなく形・全件でなく経路ごとに代表1件（[[Decisions/2026-09-17-tests-rough-not-strict]]）。
 ## 運用ルール
 - **着手時のループ適用判定（2026-07-21 本人指示）**: まとまったタスクの着手前に「ループ型（自動検証で回す）か・人間チェック挟み込み型か」を判定し**本人に確認してから進める**。基準＝**ゴールが機械的に計測・数値化できるか**（テスト/リント/型/バイト一致＝向く⇔主観のみ＝向かない）。詳細・聞き方の例文＝[[Knowledge/loop-engineering]]。
-- **本人を呼ぶときは `cmux notify --title "📣 <用件>"` を明示発行**（📣なしは届かない。正本＝[[Preferences/cmux-notifications]]）。見せる成果物は cmux ペイン表示してから依頼（`~/work/dotfiles/cmux/show-review.sh`。例外＝Vault ノート・Explorations/ HTML＝Obsidian で見る＝テキスト報告のみ）。
+- **本人を呼ぶときは口を呼ぶ＝`~/work/takumi009-ai-env/notify/executor/notify.sh call ask "📣 <用件>" "<補足>"` を明示発行**（📣なしは届かない。正本＝[[Preferences/cmux-notifications]]）。見せる成果物は cmux ペイン表示してから依頼（`~/work/dotfiles/cmux/show-review.sh`。例外＝Vault ノート・Explorations/ HTML＝Obsidian で見る＝テキスト報告のみ）。
 - **Fable 節約＝セッション分割の徹底（2026-08-10 本人決定）**: 切るのは切れ目の3条件がそろった時だけ（正本＝[[Preferences/session-handoff]]・2026-10-03 本人決定＝[[Decisions/2026-10-03-strict-session-split-criteria]]）。警告しきい値と1時間超の休憩は合図であって引き金ではない。区切りはリーダーが再開メモを残し新セッションを起動＝[[Preferences/session-handoff]]。リーダーは大物（成果物全文・長ログ）を読まずワーカーに要約させる。300k 超で `context-size-warn.sh` フックが警告→3条件を満たす最寄りの切れ目でリーダーが自分の判断で区切る（本人に確認しない＝[[Decisions/2026-09-22-leader-decides-session-split]]。しきい値の経緯＝[[Decisions/2026-08-10-fable-session-split]]）。**Vault の AI向け6フォルダ（Fragments/Knowledge/Decisions/Projects/Preferences/Personal）への書き込みは常駐 `vault-scribe` へ委任（必須・リーダー直筆は禁止＝[[Decisions/2026-08-12-vault-scribe-mandatory]]）**（[[Decisions/2026-08-10-vault-scribe]]）。人間向け領域（Blogs/・Explorations/ ほか6フォルダ以外）は直接編集可（[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]）。
 - リーダーの直接編集は delegation-gate v2 が制限: 許可パス＝`~/.claude`・tmp のみ（**Vault の AI向け6フォルダは許可パスから除外＝執筆は vault-scribe 必須・人間向け領域は直接編集可**＝[[Decisions/2026-08-13-vault-scribe-scope-ai-folders]]）。他は委任するか理由を明示してマーカー touch（[[Decisions/2026-07-05-delegation-gate-v2]]）。**許可パス内でも、テスト・デバッグの反復（書く→動かす→直す）が見込まれる実装は委任する**（リーダー直接は**自身の成果物**で1〜2編集で完結する変更まで＝ワーカー成果物は対象外・作成元へ差し戻し。判定目安＝「動かして確認する必要があるか」＝[[Decisions/2026-08-10-delegate-iterative-work]]）。
 - **成果物の修正は作成元ロールへ差し戻す（2026-08-14 本人指示）**: ワーカー/チームメイトが作成した成果物（要件定義書・設計書・コード等）へのレビュー指摘・修正要望は、リーダーが直接編集せず**作成元ロールへ差し戻して修正させる**。作成個体が停止済み・別セッションでも、**同じロールのチームメイトを再起動して委任**する（[[Decisions/2026-08-14-deliverable-revision-by-creator]]）。
