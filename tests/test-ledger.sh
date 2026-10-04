@@ -250,10 +250,8 @@ echo "=== v1.2 FR-20: 移動表に行の無い新規部品・スイートを不�
 {
   WT11="$WORK/wt-fx11"
   lf_copy_repo "$REPO_ROOT" "$WT11"
-  mkdir -p "$WT11/notify/connect/zz-dest"
-  cp "$TESTS_DIR/fixtures/zz-dest/connect/deliver.sh" "$WT11/notify/connect/zz-dest/deliver.sh" 2>/dev/null
+  lf_mk_fx11 "$WT11" "$TESTS_DIR/fixtures/zz-dest/connect/deliver.sh"
   chmod +x "$WT11/notify/connect/zz-dest/deliver.sh" 2>/dev/null
-  printf 'part\tnotify/connect/zz-dest/deliver.sh\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\n' >> "$WT11/$LF_LEDGER_REL"
   lf_commit_all "$WT11"
   run_check "$WT11"
   assert_eq "FX-11: 台帳の検査 exit 0（移動表に行の無い zz-dest の部品を不合格にしない）" "0" "$CHECK_RC"

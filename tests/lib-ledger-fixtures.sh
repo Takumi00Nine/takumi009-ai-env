@@ -1,7 +1,7 @@
 # v1.1（機能の部品化）の Core スイートが共有する fixture 部品。
 # `test-*.sh` に一致しない名前＝一括実行の対象にならない（source して使う）。
 #
-# 使う側: tests/test-ledger.sh・test-decoupling.sh・test-session-start-compose.sh
+# 使う側: tests/test-ledger.sh・test-decoupling.sh・test-session-start-compose.sh・test-notify.sh
 #
 # 提供するもの（要件 requirements-v1.md §7 の fixture 名で呼ぶ）:
 #   LF_LEDGER_REL・LF_MOVES_REL・LF_LEDGER_TOOL_REL … 台帳・移動表・台帳ツールの repo 相対パス（実装計画 §2）
@@ -12,6 +12,9 @@
 #   lf_mk_fx4 <ai-brain/data/vault-public> <dest> … FX-4（ai-brain/data/vault-public の複製＋Knowledge/zz-probe.md）
 #   lf_mk_fx5 <ai-brain/data/vault-public> <dest> … FX-5（FX-4 を git 管理・初期コミット 1・remote なし・未コミット変更 1）
 #   lf_mk_fx6 <dir>                … FX-6（偽 launchctl・osascript・cmux＝引数を <dir>/calls.log へ 1 行ずつ記録し exit 0）
+#   lf_mk_fx11 <wt> <zz-dest deliver.sh> … FX-11（zz-dest・第4の届け先）を <wt> へ冪等に足す。
+#                                    先に <wt>/notify/connect/zz-dest/ と台帳（$LF_LEDGER_REL）の zz-dest 行を
+#                                    消してから 1 回だけ足す（<wt> が既に zz-dest を持つ木の複製でも二重にしない）。
 #   lf_path_without <cmd>...       … PATH から指定コマンドを除いた PATH（含むディレクトリを影のディレクトリへ置き換える）
 #
 # ⚠️ 実 HOME・実 Vault・実 launchd・実 cmux には触れない（呼び出し側が HOME を一時ディレクトリにする）。
@@ -71,6 +74,19 @@ lf_mk_fx6() {
     printf '#!/bin/bash\nprintf "%%s\\n" "%s $*" >> "%s/calls.log"\nexit 0\n' "$c" "$d" > "$d/$c"
     chmod +x "$d/$c"
   done
+}
+
+lf_mk_fx11() {
+  local wt="$1" fixture="$2" rel="notify/connect/zz-dest/deliver.sh" ledger tmp
+  ledger="$wt/$LF_LEDGER_REL"
+  rm -rf "$wt/notify/connect/zz-dest"
+  if [ -f "$ledger" ]; then
+    tmp="$(mktemp)"
+    awk -F'\t' -v OFS='\t' -v rel="$rel" '$2 != rel' "$ledger" > "$tmp" && mv "$tmp" "$ledger"
+  fi
+  mkdir -p "$wt/notify/connect/zz-dest"
+  cp "$fixture" "$wt/notify/connect/zz-dest/deliver.sh"
+  printf 'part\t%s\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\n' "$rel" >> "$ledger"
 }
 
 lf_path_without() {

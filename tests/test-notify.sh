@@ -71,7 +71,9 @@ MOUTH_KEY="$(printf '%s' "$MOUTH_ROWS" | cut -f6)"
 assert_eq "その鍵は notify.send" "notify.send" "$MOUTH_KEY"
 rc=0
 rm -f "$NOTIFY_LOG"
-"$NOTIFY" call ask "📣 テスト呼出" "本文" >/dev/null 2>&1 || rc=$?
+# ZZ_DEST_LOG＝実木に zz-dest が既にあっても既定の記録先（connect の親＝notify/connect/calls.log）へ
+# 書かせず捨てる（このテストは3届け先の組立だけを見る・FX-11 の zz-dest 検証ではない）。
+ZZ_DEST_LOG="$WORK/unused-ambient.log" "$NOTIFY" call ask "📣 テスト呼出" "本文" >/dev/null 2>&1 || rc=$?
 assert_eq "口を shell から呼ぶと exit 0（3 届け先が全部入りで揃っている前提）" "0" "$rc"
 
 echo "=== 3 届け先の充足（送り手の行で数える）・CODE27 は応答だけを受ける（対応表の誤り検査） ==="
@@ -95,7 +97,7 @@ assert_eq "Notify の接続以外に「知らせ」列の値を持つ行が無�
 
 echo "=== 口の呼び方と終了コード（0／1／64） ==="
 rc=0; rm -f "$NOTIFY_LOG"
-"$NOTIFY" call ask "呼出タイトル" "呼出本文" >/dev/null 2>&1 || rc=$?
+ZZ_DEST_LOG="$WORK/unused-ambient.log" "$NOTIFY" call ask "呼出タイトル" "呼出本文" >/dev/null 2>&1 || rc=$?
 assert_eq "正常な呼出で exit 0" "0" "$rc"
 rc=0
 "$NOTIFY" >/dev/null 2>"$WORK/usage.err" || rc=$?
@@ -174,10 +176,8 @@ assert_eq "route 全件実体異常: exit 3" "3" "$rc"
 echo "=== FX-11 ZZD（第 4 の届け先・移動表なし）: 式 A・zz-dest への到達・台帳検査 ==="
 WT="$WORK/wt-fx11"
 lf_copy_repo "$REPO_ROOT" "$WT"
-mkdir -p "$WT/notify/connect/zz-dest"
-cp "$ZZDEST_FIXTURE" "$WT/notify/connect/zz-dest/deliver.sh"
+lf_mk_fx11 "$WT" "$ZZDEST_FIXTURE"
 chmod +x "$WT/notify/connect/zz-dest/deliver.sh"
-printf 'part\tnotify/connect/zz-dest/deliver.sh\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\n' >> "$WT/core/data/ledger.tsv"
 
 formula_a() {  # formula_a <WT> <足した接続フォルダ相対パス>
   git -C "$1" status --porcelain --untracked-files=all \
@@ -202,9 +202,7 @@ assert_eq "FX-11: 台帳の検査 exit 0（移動表に行の無い zz-dest を�
 echo "=== FX-17 ZZDN（陰性）: 接続フォルダの外の追跡ファイルに 1 行の変更＝式 A が 1 行 ==="
 WT17="$WORK/wt-fx17"
 lf_copy_repo "$REPO_ROOT" "$WT17"
-mkdir -p "$WT17/notify/connect/zz-dest"
-cp "$ZZDEST_FIXTURE" "$WT17/notify/connect/zz-dest/deliver.sh"
-printf 'part\tnotify/connect/zz-dest/deliver.sh\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\n' >> "$WT17/core/data/ledger.tsv"
+lf_mk_fx11 "$WT17" "$ZZDEST_FIXTURE"
 printf '# FX-17: 接続外の1行変更\n' >> "$WT17/README.md"
 assert_eq "FX-17: 式A が 1 行（変更した接続外のパス）" "1" "$(formula_a "$WT17" 'notify/connect/zz-dest' | grep -c . || true)"
 assert_contains "FX-17: その1行は README.md" "$(formula_a "$WT17" 'notify/connect/zz-dest')" "README.md"
@@ -222,10 +220,8 @@ echo "=== FX-24 PART（陰性・複合）: 1 届け先の実行体欠落・1 届
 PROMPT_ANSWER="$REPO_ROOT/core/connect/claude-code/prompt-answer.sh"
 WT24="$WORK/wt-fx24"
 lf_copy_repo "$REPO_ROOT" "$WT24"
-mkdir -p "$WT24/notify/connect/zz-dest"
-cp "$ZZDEST_FIXTURE" "$WT24/notify/connect/zz-dest/deliver.sh"
+lf_mk_fx11 "$WT24" "$ZZDEST_FIXTURE"
 chmod +x "$WT24/notify/connect/zz-dest/deliver.sh"
-printf 'part\tnotify/connect/zz-dest/deliver.sh\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\n' >> "$WT24/core/data/ledger.tsv"
 
 HANG_STUB="$WORK/hang-stub"
 mkdir -p "$HANG_STUB"
@@ -275,10 +271,8 @@ fi
 echo "--- FX-24 (i): 実在する送り手が非0で終わる＝記録 failed・他は届く ---"
 WT24I="$WORK/wt-fx24i"
 lf_copy_repo "$REPO_ROOT" "$WT24I"
-mkdir -p "$WT24I/notify/connect/zz-dest"
-cp "$ZZDEST_FIXTURE" "$WT24I/notify/connect/zz-dest/deliver.sh"
+lf_mk_fx11 "$WT24I" "$ZZDEST_FIXTURE"
 chmod +x "$WT24I/notify/connect/zz-dest/deliver.sh"
-printf 'part\tnotify/connect/zz-dest/deliver.sh\tnotify\tconnect\tzz-dest\t-\t第4の届け先（試験）\tcall\n' >> "$WT24I/core/data/ledger.tsv"
 FAILING_STUB="$WORK/failing-stub"; mkdir -p "$FAILING_STUB"
 printf '#!/bin/bash\nexit 7\n' > "$FAILING_STUB/cmux"; chmod +x "$FAILING_STUB/cmux"   # 実在するが非0で終わる
 printf '#!/bin/bash\nexit 0\n' > "$FAILING_STUB/osascript"; chmod +x "$FAILING_STUB/osascript"
