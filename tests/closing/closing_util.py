@@ -211,7 +211,10 @@ def snapdiff(before, after, root):
                     bodies.append("=== %s\n%s" % (rel, text))
                 except (OSError, UnicodeDecodeError):
                     bodies.append("=== %s <binary>" % rel)
-    sys.stdout.write("\n".join(lines) + "\n----\n" + "\n".join(bodies) + "\n")
+    head = "\n".join(lines)
+    tail = "\n".join(bodies)
+    parts = [p for p in (head, "----", tail) if p]
+    sys.stdout.write("\n".join(parts) + "\n")
 
 
 # ---------------------------------------------------------------- settings.json・値の比較
