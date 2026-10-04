@@ -232,7 +232,7 @@ ac_4() {
   cl_py snapdiff "$od/fx10-maint-before.json" "$od/fx10-maint-after.json" "$h" > "$od/fx10-maint.state"
   CL_SIDE_WT="$wt10" cl_norm new "$s" < "$od/fx10-maint.state" > "$od/fx10-maint.state.n"
   local fx10_osascript_maint; fx10_osascript_maint="$({ [ -f "$s/calls.log" ] && grep -c . "$s/calls.log" 2>/dev/null; } || true)"
-  # VB-04＝各自のログに「送らなかった」旨が題を含むちょうど1行（core/executor/notice.sh:97 の固定文言）。
+  # VB-04-R3＝各自のログに「送らなかった」旨が題を含む行数＝FX-1側が同じ入力で送った知らせの数（知らせ1件につき1行）。
   local maint_log_n; maint_log_n="$(grep -cF '口が無いため知らせを送りません: maintenance.sh 異常終了' "$od/fx10-maint.stdout" "$od/fx10-maint.stderr" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')"
   e="$(cl_side_path new "$CLOSING_USAGE_FETCH_OLD")" || e=""
   : > "$s/calls.log"
@@ -252,12 +252,12 @@ ac_4() {
   [ "$(cat "$od/fx1-maint.rc")" = "$(cat "$od/fx10-maint.rc")" ] || bad="$bad maint:rc不一致"
   [ "$fx1_osascript_maint" -ge 1 ] || bad="$bad maint:FX-1側でosascript記録が無い"
   [ "$fx10_osascript_maint" = 0 ] || bad="$bad maint:FX-10側でosascript記録が${fx10_osascript_maint}件（0のはず）"
-  [ "$maint_log_n" = 1 ] || bad="$bad maint:口が無い旨の記録が${maint_log_n}件（ちょうど1件のはず）"
+  [ "$maint_log_n" = "$fx1_osascript_maint" ] || bad="$bad maint:口が無い旨の記録が${maint_log_n}件（FX-1側が送った知らせ${fx1_osascript_maint}件と一致するはず）"
   diff -u "$od/fx1-maint.state.n" "$od/fx10-maint.state.n" > "$od/maint-state.diff" 2>&1 || bad="$bad maint:状態記録(全体)不一致（ac4/maint-state.diff）"
   [ "$(cat "$od/fx1-usage.rc")" = "$(cat "$od/fx10-usage.rc")" ] || bad="$bad usage:rc不一致"
   [ "$fx1_osascript_usage" -ge 1 ] || bad="$bad usage:FX-1側でosascript記録が無い"
   [ "$fx10_osascript_usage" = 0 ] || bad="$bad usage:FX-10側でosascript記録が${fx10_osascript_usage}件（0のはず）"
-  [ "$usage_log_n" = 1 ] || bad="$bad usage:口が無い旨の記録が${usage_log_n}件（ちょうど1件のはず）"
+  [ "$usage_log_n" = "$fx1_osascript_usage" ] || bad="$bad usage:口が無い旨の記録が${usage_log_n}件（FX-1側が送った知らせ${fx1_osascript_usage}件と一致するはず）"
   diff -u "$od/fx1-usage.state.n" "$od/fx10-usage.state.n" > "$od/usage-state.diff" 2>&1 || bad="$bad usage:取得結果(全体)不一致（ac4/usage-state.diff）"
 
   if [ -z "$bad" ]; then cl_result AC-4 ok "① メンテ・Usage とも rc・状態記録・取得結果（全体スナップショット比較）一致・FX-10 は osascript 0 件＋口なしの記録1行ずつ"
