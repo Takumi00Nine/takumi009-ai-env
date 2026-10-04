@@ -1,1 +1,0 @@
-../../team/connect/claude-code/inprocess-gate.sh

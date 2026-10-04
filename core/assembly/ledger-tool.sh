@@ -1,24 +1,39 @@
 #!/usr/bin/env bash
-# 台帳ツール（Core 組立）＝台帳と実体の突合（FR-14）と、照会 2 つ（鍵→部品パス・知らせ→送り手）。
-# 正本＝docs/v1.1-components 設計 §3・§5.6・§10・§11、docs/v1.2-notify-install 設計 §2.1・§2.4。
+# 台帳ツール（Core 組立）＝台帳と実体の突合（FR-14）・照会 2 つ（鍵→部品パス・知らせ→送り手）・
+# 配置の導出・選択（置く機能）の読み書き。
+# 正本＝docs/v1.1-components 設計 §3・§5.6・§10・§11、docs/v1.2-notify-install 設計 §2.1・§2.4・§3.1〜§3.3。
 # 口の契約＝tests/test-ledger.sh・tests/test-notify.sh 冒頭。
 #
 # 使い方:
-#   ledger-tool.sh check         検査 ①〜⑧ を全部行う。合格＝無出力・exit 0。
+#   ledger-tool.sh check         検査 ①〜⑧ と配置の検査を全部行う。合格＝無出力・exit 0。
 #                                不合格＝1 件 1 行を stdout（行頭＝検査名）・exit 1。
 #                                  ① part ② suite ③ coupling ④ provider-leak ⑤ moves ⑥ forward ⑦ live ⑧ readme
+#                                  （「配置」列・置き場の重複・run の実体・雛形のフックの命令は part 行で報告）
 #   ledger-tool.sh lookup <鍵>   鍵→「<repo ルート>/<パス>」を台帳の行順に 1 行ずつ。
 #                                exit 0 あり／1 鍵なし（stderr なし）／2 台帳異常／3 実体異常（2・3 は stderr に固定文 1 行）
 #   ledger-tool.sh route <知らせ>  知らせ（例＝call.ask・answer）→「<届け先><TAB><repo ルート>/<パス>」を台帳の行順に。
 #                                対象＝8 列目「知らせ」に、その知らせか種別だけ（call は call.* 全部）を持つ part 行。
 #                                実体の無い・実行可能でない行は 1 行ずつ stderr に固定文（LEDGER: part …）を出して除く。
 #                                exit 0 あり／1 該当なし／2 台帳異常／3 該当が全件実体異常
+#   ledger-tool.sh placement [--all]  配置の一覧＝「<仕方><TAB><置き場><TAB><実体の絶対パス><TAB><機能>」を台帳の行順に
+#                                （フォルダ単位の行は直下の各ファイルへ同名で展開・置き場の `$HOME` は展開）。
+#                                --all＝選択を読まず全部入り。exit 0／2 台帳異常・選択の異常（stderr に固定文 1 行）
+#   ledger-tool.sh select [<機能名,…|all>]  引数なし＝今の選択（all か保存された値）を 1 行。
+#                                引数あり＝検査して保存（同じフォルダの一時ファイル→rename・all＝ファイルを消す）。
+#                                exit 0／1 保存できない（一時ファイルは消す）／2 選択が不正（何も変えない）
+#   ledger-tool.sh residents     常駐の案内の材料を台帳の行順に＝「<in|out><TAB>install<TAB><登録部品の絶対パス>」
+#                                （鍵 <機能>.install-*）と「<in|out><TAB>label<TAB><ラベル>」（組立層の plist）。
+#                                in／out＝その行の機能が選択に入るか
 #   ledger-tool.sh live-set      ⑦ が突合する対象＝全部入りの組立が生成した settings.json の全フックの command と、
 #                                配置された LaunchAgent の起動対象（一時 HOME は `$HOME` と書く）
-# 上書き口: AIENV_LEDGER＝台帳のパス・AIENV_MOVES＝移動表のパス（既定＝repo ルートの core/data/ 配下）。
+# 選択＝lookup・route・placement・residents は選択の外の機能の行を無いものとして扱う（Core は常に含む）。
+#   選択のファイル＝KEY=VALUE 1 行 `AIENV_COMPONENTS=<機能名,…>`（source せず値だけ読む）。ファイルが無い＝全部入り。
+#   語彙外・読めない＝台帳異常（2・固定文 `LEDGER: ledger …`）＝静かに全部入りへ戻さない。
+# 上書き口: AIENV_LEDGER＝台帳のパス・AIENV_MOVES＝移動表のパス（既定＝repo ルートの core/data/ 配下）・
+#   AIENV_COMPONENTS_FILE＝選択のファイル（既定＝~/.config/takumi009-ai-env/components.env）。
 # 隔離: ⑦ と live-set は repo の複製を一時 HOME に置き、README のメイン機手順（雛形の複写→全部入り→常駐の登録）を
 #   SKIP_LAUNCHCTL=1・LAUNCHCTL_TIMEOUT_SECS=1・偽 launchctl／osascript／cmux で走らせる（実 HOME・実 launchd に触れない）。
-# 依存: bash 3.2・awk・git・python3（標準 lib）。照会（lookup）は shell と awk だけで行う（python を起動しない）。
+# 依存: bash 3.2・awk・git・python3（標準 lib）。照会・導出・選択は shell と awk だけで行う（python を起動しない）。
 
 set -uo pipefail
 
@@ -32,7 +47,7 @@ MOVES="${AIENV_MOVES:-$ROOT/$MOVES_REL}"
 FUNCTIONS="ai-brain team usage notify dock core"   # 機能の語彙
 LAYERS="data rules executor connect assembly"      # 層の語彙
 ROW_KINDS="part suite notify"                      # 台帳の種類列
-LEDGER_COLS=8                                      # 台帳の列数（コメント・空行以外はちょうどこの数。補完しない）
+LEDGER_COLS=9                                      # 台帳の列数（コメント・空行以外はちょうどこの数。補完しない）
 NAME_RE='^[a-z][a-z0-9-]*$'                        # フォルダ名・提供元名の構文
 NOTICES="call call.alert call.usage call.ask answer"  # 「知らせ」列の語彙＝種別（呼出 call・応答 answer）か 呼出.区分
 MSG_HEAD="LEDGER:"                                 # 照会の固定文の先頭語（種別語＝ledger／part）
@@ -42,20 +57,90 @@ REPO_HOME_REL="work/takumi009-ai-env"              # 組立が想定する repo 
 CONFIG_HOME_REL=".config/takumi009-ai-env"         # 雛形の複写先（README のメイン機手順）
 LIVE_MAIN_KEY="core.install"                       # 全部入りの組立の鍵
 LIVE_AGENT_KEY_RE='^[a-z][a-z0-9-]*\.install-'     # 常駐の登録の鍵（全部入りの後に台帳の行順で走らせる）
+SETTINGS_TPL_REL="core/assembly/settings.json"     # 登録の雛形（各フックの命令が全部入りの導出の置き場に当たること）
+COMPONENTS_FILE="${AIENV_COMPONENTS_FILE:-$HOME/$CONFIG_HOME_REL/components.env}"  # 選択のファイル（無い＝全部入り）
+COMPONENTS_KEY="AIENV_COMPONENTS"                  # 選択のファイルの唯一のキー（値＝機能名のカンマ区切り）
+SELECT_ALL="all"                                   # 全部入りを明示する語（保存はファイルを消すこと）
+ALWAYS_FUNCTION="core"                             # 選択に依らず常に含む機能
 
-usage() { sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; }
+usage() { sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; }
 
-# ---------------------------------------------------------------- 照会（lookup・route）
-# ledger_scan <key|route> <鍵|知らせ> — 台帳の形式を検証し、当たった part 行を「HIT<TAB><提供元><TAB><パス>」で行順に出す。
-# 形式不正は「BAD<TAB><原因>」1 行。台帳を読めなければ固定文を stderr に出して RC_LEDGER_BAD。
+# ---------------------------------------------------------------- 選択（置く機能）
+# selection_set <値> — 値（機能名のカンマ区切り）を検査し、SEL＝「 core <機能> … 」にする。不正なら SEL_WHY に理由・1。
+selection_set() {
+  local v="$1" f
+  SEL=" $ALWAYS_FUNCTION "
+  case "$v" in
+    ''|,*|*,|*,,*|*[!a-z0-9,-]*) SEL_WHY="選択の値 '$v' が形式外（機能名のカンマ区切り）"; return 1 ;;
+  esac
+  local IFS=,
+  for f in $v; do
+    case " $FUNCTIONS " in
+      *" $f "*) ;;
+      *) SEL_WHY="選択の機能名 $f が語彙外（${FUNCTIONS}）"; return 1 ;;
+    esac
+    case "$SEL" in *" $f "*) ;; *) SEL="$SEL$f " ;; esac
+  done
+}
+
+# read_selection — 選択のファイルを読み SEL に（全部入り＝空）。読めない・不正なら固定文を stderr に出して 1。
+read_selection() {
+  SEL=""
+  { [ -e "$COMPONENTS_FILE" ] || [ -L "$COMPONENTS_FILE" ]; } || return 0
+  if [ ! -f "$COMPONENTS_FILE" ] || [ ! -r "$COMPONENTS_FILE" ]; then
+    printf '%s ledger 選択のファイルを読めない %s\n' "$MSG_HEAD" "$COMPONENTS_FILE" >&2
+    return 1
+  fi
+  if ! selection_set "$(sed -n "s/^$COMPONENTS_KEY=//p" "$COMPONENTS_FILE")"; then
+    printf '%s ledger %s（%s）\n' "$MSG_HEAD" "$SEL_WHY" "$COMPONENTS_FILE" >&2
+    return 1
+  fi
+}
+
+# select_cmd [<値|all>] — 引数なし＝今の選択を 1 行。引数あり＝検査して保存（設計 §3.1・§3.3 A1／F0s）。
+select_cmd() {
+  local dir tmp
+  if [ $# -eq 0 ]; then
+    read_selection || return "$RC_LEDGER_BAD"
+    if [ -z "$SEL" ]; then echo "$SELECT_ALL"; else sed -n "s/^$COMPONENTS_KEY=//p" "$COMPONENTS_FILE"; fi
+    return 0
+  fi
+  if [ "$1" = "$SELECT_ALL" ]; then
+    rm -f "$COMPONENTS_FILE" 2>/dev/null && return 0
+    echo "台帳ツール: 選択のファイルを消せない（全部入りへ戻せない）: $COMPONENTS_FILE" >&2
+    return 1
+  fi
+  if ! selection_set "$1"; then
+    printf '%s ledger %s\n' "$MSG_HEAD" "$SEL_WHY" >&2
+    return "$RC_LEDGER_BAD"
+  fi
+  dir="$(dirname "$COMPONENTS_FILE")"
+  if ! mkdir -p "$dir" 2>/dev/null || ! tmp="$(mktemp "$dir/.${COMPONENTS_FILE##*/}.tmp.XXXXXX" 2>/dev/null)"; then
+    echo "台帳ツール: 選択を保存できない（一時ファイルを作れない）: $dir" >&2
+    return 1
+  fi
+  if printf '%s=%s\n' "$COMPONENTS_KEY" "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$COMPONENTS_FILE" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp"
+  echo "台帳ツール: 選択を保存できない: $COMPONENTS_FILE" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------- 照会（lookup・route）・導出（placement・residents）
+# ledger_scan <key|route|place|resident> <鍵|知らせ|-> <選択（SEL・空＝全部入り）> — 台帳の形式を検証し、
+# 選択に入る機能の当たった part 行を行順に出す＝key・route「HIT<TAB><提供元><TAB><パス>」／
+# place「HIT<TAB><配置><TAB><パス><TAB><機能>」／resident「HIT<TAB><install|plist><TAB><パス><TAB><機能>」
+# （resident は選択で絞らない）。形式不正は「BAD<TAB><原因>」1 行。台帳を読めなければ固定文を stderr に出して RC_LEDGER_BAD。
 ledger_scan() {
   if [ ! -f "$LEDGER" ] || [ ! -r "$LEDGER" ]; then
     printf '%s ledger 台帳を読めない %s\n' "$MSG_HEAD" "$LEDGER" >&2
     return "$RC_LEDGER_BAD"
   fi
   # 台帳の形式検証（check と同じ語彙＝$FUNCTIONS/$LAYERS/$ROW_KINDS を使う。種類・列数・
-  # part の機能/層・suite の機能語彙・notify の機能＝check が行う判定と同じ）。
-  awk -F'\t' -v mode="$1" -v q="$2" -v cols="$LEDGER_COLS" -v kinds=" $ROW_KINDS " -v fns=" $FUNCTIONS " -v lys=" $LAYERS " '
+  # part の機能/層・suite の機能語彙・notify の機能・「配置」列の形＝check が行う判定と同じ）。
+  awk -F'\t' -v mode="$1" -v q="$2" -v sel="$3" -v cols="$LEDGER_COLS" -v kinds=" $ROW_KINDS " -v fns=" $FUNCTIONS " \
+      -v lys=" $LAYERS " -v agent_re="$LIVE_AGENT_KEY_RE" '
     /^#/ || /^[[:space:]]*$/ { next }
     NF != cols { printf "BAD\t%d 行目の列が %d（%d 列であること）\n", NR, NF, cols; exit }
     index(kinds, " " $1 " ") == 0 { printf "BAD\t%d 行目の種類が語彙外\n", NR; exit }
@@ -65,13 +150,74 @@ ledger_scan() {
       printf "BAD\t%d 行目の機能が語彙外\n", NR; exit }
     $1 == "notify" && $3 != "notify" {
       printf "BAD\t%d 行目の機能が notify でない\n", NR; exit }
+    # 「配置」＝`-` か <link|gen|run>:$HOME/…（設計 §3.2・§4）
+    $9 != "-" && ($1 != "part" || $9 !~ /^(link|gen|run):\$HOME\/./ || ($2 ~ /\/$/ && $9 !~ /^link:.*\/$/) || ($2 !~ /\/$/ && $9 ~ /^(link|gen):.*\/$/)) {
+      printf "BAD\t%d 行目 %s の配置 %s が形式外（- か <link|gen|run>:$HOME/…・フォルダ単位の行は link:…/ だけ）\n", NR, $2, $9; exit }
     $1 != "part" { next }
+    mode == "resident" && $6 ~ agent_re { print "HIT\tinstall\t" $2 "\t" $3 }
+    mode == "resident" && $4 == "assembly" && $2 ~ /\.plist$/ { print "HIT\tplist\t" $2 "\t" $3 }
+    sel != "" && index(sel, " " $3 " ") == 0 { next }
     mode == "key" && $6 == q { print "HIT\t" $5 "\t" $2; next }
+    mode == "place" && $9 != "-" { print "HIT\t" $9 "\t" $2 "\t" $3; next }
     mode == "route" {
       n = split($8, v, ",")
       for (i = 1; i <= n; i++) if (v[i] == q || index(q, v[i] ".") == 1) { print "HIT\t" $5 "\t" $2; break }
     }
   ' "$LEDGER"
+}
+
+# scan_ok <key|route|place|resident> <鍵|知らせ|-> <選択> — ledger_scan を走らせ、当たった行を SCAN に入れる。
+# 台帳異常なら固定文を stderr に出して RC_LEDGER_BAD。
+scan_ok() {
+  local bad rc
+  SCAN="$(ledger_scan "$@")"; rc=$?
+  [ "$rc" = "0" ] || return "$rc"
+  bad="$(printf '%s\n' "$SCAN" | grep '^BAD' | head -1)"
+  if [ -n "$bad" ]; then
+    printf '%s ledger %s\n' "$MSG_HEAD" "${bad#BAD	}" >&2
+    return "$RC_LEDGER_BAD"
+  fi
+}
+
+# placement [--all] — 配置の一覧（設計 §3.2）。フォルダ単位の行は直下の各ファイル（隠しファイルを除く）へ同名で展開する。
+placement() {
+  local tag spec rel fn how place f
+  SEL=""
+  if [ "${1:-}" != "--all" ]; then read_selection || return "$RC_LEDGER_BAD"; fi
+  scan_ok place - "$SEL" || return $?
+  while IFS=$'\t' read -r tag spec rel fn; do
+    [ -n "$tag" ] || continue
+    how="${spec%%:*}"
+    place="$HOME${spec#*:\$HOME}"
+    case "$rel" in
+      */) for f in "$ROOT/$rel"*; do
+            [ -f "$f" ] && printf '%s\t%s%s\t%s\t%s\n' "$how" "$place" "${f##*/}" "$f" "$fn"
+          done ;;
+      *) printf '%s\t%s\t%s\t%s\n' "$how" "$place" "$ROOT/$rel" "$fn" ;;
+    esac
+  done <<EOF
+$SCAN
+EOF
+}
+
+# residents — 常駐の案内の材料（設計 §3.2「常駐の手順」）。ラベルは plist の Label（読めなければファイル名から）。
+residents() {
+  local tag kind rel fn io label
+  read_selection || return "$RC_LEDGER_BAD"
+  scan_ok resident - "" || return $?
+  while IFS=$'\t' read -r tag kind rel fn; do
+    [ -n "$tag" ] || continue
+    io=in
+    [ -z "$SEL" ] || case "$SEL" in *" $fn "*) ;; *) io=out ;; esac
+    if [ "$kind" = "install" ]; then
+      printf '%s\tinstall\t%s\n' "$io" "$ROOT/$rel"
+    else
+      label="$(plutil -extract Label raw -o - "$ROOT/$rel" 2>/dev/null)" || label="$(basename "$rel" .plist)"
+      printf '%s\tlabel\t%s\n' "$io" "$label"
+    fi
+  done <<EOF
+$SCAN
+EOF
 }
 
 # part_ok <鍵|知らせ> <パス> — 実体が実在して実行可能なら 0。そうでなければ固定文を stderr に 1 行出して 1。
@@ -85,18 +231,13 @@ part_ok() {
   fi
 }
 
-# query <key|route> <鍵|知らせ> — 照会 2 つの共通の流れ。key は 1 行でも実体異常なら 3、
-# route は実体異常の行だけを除き、全件が除かれたら 3。
+# query <key|route> <鍵|知らせ> — 照会 2 つの共通の流れ（選択の外の機能の行は無いものとして扱う）。
+# key は 1 行でも実体異常なら 3、route は実体異常の行だけを除き、全件が除かれたら 3。
 query() {
-  local mode="$1" q="$2" res bad hits="" tag prov val rc
-  res="$(ledger_scan "$mode" "$q")"; rc=$?
-  [ "$rc" = "0" ] || return "$rc"
-  bad="$(printf '%s\n' "$res" | grep '^BAD' | head -1)"
-  if [ -n "$bad" ]; then
-    printf '%s ledger %s\n' "$MSG_HEAD" "${bad#BAD	}" >&2
-    return "$RC_LEDGER_BAD"
-  fi
-  [ -n "$res" ] || return "$RC_NO_KEY"
+  local mode="$1" q="$2" hits="" tag prov val
+  read_selection || return "$RC_LEDGER_BAD"
+  scan_ok "$mode" "$q" "$SEL" || return $?
+  [ -n "$SCAN" ] || return "$RC_NO_KEY"
   while IFS=$'\t' read -r tag prov val; do
     if part_ok "$q" "$val"; then
       if [ "$mode" = "key" ]; then hits="$hits$ROOT/$val"$'\n'; else hits="$hits$prov	$ROOT/$val"$'\n'; fi
@@ -104,7 +245,7 @@ query() {
       return "$RC_PART_BAD"
     fi
   done <<EOF
-$res
+$SCAN
 EOF
   [ -n "$hits" ] || return "$RC_PART_BAD"
   printf '%s' "$hits"
@@ -134,7 +275,7 @@ assemble() {
     awk -F'\t' -v re="$LIVE_AGENT_KEY_RE" '!/^#/ && $1 == "part" && $6 ~ re { print $2 }' "$LEDGER"
   } | while IFS= read -r rel; do
       rc=0
-      env HOME="$h" PATH="$stub:$PATH" SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 \
+      env -u AIENV_COMPONENTS_FILE HOME="$h" PATH="$stub:$PATH" SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 \
         bash "$repo/$rel" </dev/null >>"$w/assemble.log" 2>&1 || rc=$?
       [ "$rc" = "0" ] || printf '%s\t%s\n' "$rel" "$rc" >> "$w/failed"
     done
@@ -156,6 +297,8 @@ KINDS = E["LT_ROW_KINDS"].split()
 NAME_RE = re.compile(E["LT_NAME_RE"])
 REPO_HOME_REL = E["LT_REPO_HOME_REL"]
 LEDGER_REL = E["LT_LEDGER_REL"]
+SETTINGS_TPL_REL = E["LT_SETTINGS_TPL_REL"]
+MSG_HEAD = E["LT_MSG_HEAD"]
 
 OUTSIDE_RE = re.compile(r"^(README\.md|LICENSE|\.gitignore|Brewfile|tests/)")   # 部品外（要件 §2）
 SUITE_RE = re.compile(r"^tests/test-[^/]*\.sh$")
@@ -172,6 +315,7 @@ LEAK_OK_LAYERS = ("connect", "assembly")
 MOVE_KINDS = ("移動", "分割", "新規")
 SPLIT, NEW = "分割", "新規"
 NO_MARK = ("", "-")
+FORWARD_MARK, REMOVED_MARK = "転送", "撤去"                                         # 移動表の印（v1.2 FR-17）
 README_HEADINGS = ("### Structure", "### 構成")
 TREE_RE = re.compile(r"^([│├└─\s]*)(\S+)")
 
@@ -229,13 +373,6 @@ def load_moves(path):
         c = (c + ["", ""])[:4]
         rows.append(dict(n=n, old=c[0].strip(), new=c[1].strip(), kind=c[2].strip(), mark=c[3].strip()))
     return rows
-
-def main_successors(mrows):
-    m = {}
-    for r in mrows:
-        if r["old"] not in ("", "-") and r["old"] not in m:
-            m[r["old"]] = r["new"]
-    return m
 
 def check_static(ledger, moves):
     try:
@@ -417,27 +554,21 @@ def check_static(ledger, moves):
         if len(rs) > 1 and any(r["kind"] != SPLIT for r in rs):
             rep("moves", rs[0]["new"], "旧 %s の後継が複数なのに種別が分割でない" % old)
 
-    # ⑥ 転送のリンク先＝主後継
-    mains = main_successors(mrows)
-    done = set()
+    # ⑥ 転送の撤去（v1.2 FR-17）＝転送の印が 0 件・撤去の印の旧パスに追跡ファイルが無い・
+    # repo の中を指す symlink（転送）が追跡されていない
     for r in mrows:
-        old = r["old"]
-        if r["mark"] in NO_MARK or old in ("", "-") or old in done:
-            continue
-        done.add(old)
-        link = old.rstrip("/")
-        lp = full(link)
-        if not os.path.islink(lp):
-            rep("forward", link, "転送 symlink が無い")
-            continue
-        if link not in fileset:
-            rep("forward", link, "git が追跡していない")
-        if os.path.isabs(os.readlink(lp)):
-            rep("forward", link, "相対リンクでない")
-        if not os.path.exists(lp):
-            rep("forward", link, "リンク先が無い（主後継 %s）" % mains[old])
-        elif os.path.realpath(lp) != os.path.realpath(full(mains[old])):
-            rep("forward", link, "リンク先が主後継 %s と違う" % mains[old])
+        old = r["old"].rstrip("/")
+        if r["mark"] == FORWARD_MARK:
+            rep("forward", old, "転送の印が残る（転送は 0 件であること）")
+        elif r["mark"] == REMOVED_MARK:
+            if old in fileset or any(f.startswith(old + "/") for f in files):
+                rep("forward", old, "撤去の印の旧パスに追跡ファイルがある")
+        elif r["mark"] not in NO_MARK:
+            rep("forward", old, "印 %s が語彙外（%s・%s・-）" % (r["mark"], FORWARD_MARK, REMOVED_MARK))
+    root_real = os.path.realpath(ROOT) + os.sep
+    for f in files:
+        if os.path.islink(full(f)) and os.path.realpath(full(f)).startswith(root_real):
+            rep("forward", f, "repo の中を指す symlink（転送）が追跡されている")
 
     # ⑧ README の構成節のフォルダ名＝実フォルダ・台帳の場所。提供元のフォルダ（<機能>/connect/<提供元>/）は
     # 載っていなくてよい（載っていれば実在すること）。台帳に行の無い機能（取り外した木）の記載は問わない（v1.2 §2.4）。
@@ -496,6 +627,42 @@ def check_static(ledger, moves):
     if LEDGER_REL not in text:
         rep("readme", LEDGER_REL, "台帳の場所が README に無い")
 
+def check_placement(out_path, rc, err_path):
+    # 設計 §3.2 の台帳の検査の追加＝「配置」列の形式（導出が台帳異常で止まる）・置き場の重複なし・
+    # run の実体が実行可能・雛形のフックの命令の先頭語が全部入りの導出の置き場に当たる。
+    if rc != "0":
+        with open(err_path, encoding="utf-8", errors="replace") as f:
+            err = f.read().strip()
+        if "配置" in err:   # 他の台帳異常（列数・語彙）は ① が行ごとに報告している
+            rep("part", os.path.relpath(LEDGER, ROOT), err.replace(MSG_HEAD + " ledger ", "", 1))
+        return
+    with open(out_path, encoding="utf-8") as f:
+        items = [l.split("\t") for l in f.read().splitlines() if l]
+    home = E.get("HOME", "")
+    show = lambda p: "$HOME" + p[len(home):] if home and p.startswith(home + "/") else p
+    for place, n in Counter(i[1] for i in items).items():
+        if n > 1:
+            rep("part", show(place), "置き場を %d 件の配置が指す（重複なし）" % n)
+    for how, place, src, fn in items:
+        if how == "run" and (os.path.isdir(src) or not os.access(src, os.X_OK)):
+            rep("part", os.path.relpath(src, ROOT), "run の実体が実行可能でない")
+    places = {i[1] for i in items}
+    try:
+        with open(full(SETTINGS_TPL_REL), encoding="utf-8") as f:
+            tpl = json.load(f)
+    except (OSError, ValueError):
+        rep("part", SETTINGS_TPL_REL, "登録の雛形を読めない")
+        return
+    for groups in (tpl.get("hooks") or {}).values():
+        for g in groups:
+            for hk in g.get("hooks", []):
+                words = (hk.get("command") or "").split()
+                if not words:
+                    continue
+                w = home + words[0][len("$HOME"):] if words[0].startswith("$HOME/") else words[0]
+                if w not in places:
+                    rep("part", SETTINGS_TPL_REL, "フックの命令 %s が全部入りの導出の置き場に当たらない" % hk["command"])
+
 def live_items(h):
     items = []
     try:
@@ -553,7 +720,9 @@ def check_live(w):
 
 cmd = sys.argv[1]
 if cmd == "static":
+    LEDGER = sys.argv[2]
     check_static(sys.argv[2], sys.argv[3])
+    check_placement(sys.argv[4], sys.argv[5], sys.argv[6])
 elif cmd == "live":
     check_live(sys.argv[2])
 elif cmd == "live-items":
@@ -565,7 +734,7 @@ PY
 
 py() {
   LT_ROOT="$ROOT" LT_FUNCTIONS="$FUNCTIONS" LT_LAYERS="$LAYERS" LT_ROW_KINDS="$ROW_KINDS" LT_NAME_RE="$NAME_RE" \
-  LT_REPO_HOME_REL="$REPO_HOME_REL" LT_LEDGER_REL="$LEDGER_REL" \
+  LT_REPO_HOME_REL="$REPO_HOME_REL" LT_LEDGER_REL="$LEDGER_REL" LT_SETTINGS_TPL_REL="$SETTINGS_TPL_REL" LT_MSG_HEAD="$MSG_HEAD" \
   LT_NOTICES="$NOTICES" LT_LEDGER_COLS="$LEDGER_COLS" python3 -c "$PY_CODE" "$@"
 }
 
@@ -580,9 +749,20 @@ case "${1:-}" in
   route)
     [ $# -eq 2 ] || { usage; exit "$RC_USAGE"; }
     query route "$2"; exit $? ;;
+  placement)
+    case "$#:${2:-}" in 1:|2:--all) ;; *) usage; exit "$RC_USAGE" ;; esac
+    placement "${2:-}"; exit $? ;;
+  select)
+    [ $# -le 2 ] || { usage; exit "$RC_USAGE"; }
+    shift; select_cmd "$@"; exit $? ;;
+  residents)
+    [ $# -eq 1 ] || { usage; exit "$RC_USAGE"; }
+    residents; exit $? ;;
   check)
     WORK="$(mktemp -d)" || exit 2
-    result="$(py static "$LEDGER" "$MOVES")" || { echo "台帳ツール: 検査の実行に失敗" >&2; exit 2; }
+    prc=0; placement --all > "$WORK/placement" 2> "$WORK/placement.err" || prc=$?
+    result="$(py static "$LEDGER" "$MOVES" "$WORK/placement" "$prc" "$WORK/placement.err")" \
+      || { echo "台帳ツール: 検査の実行に失敗" >&2; exit 2; }
     assemble "$WORK"
     live="$(py live "$WORK")" || { echo "台帳ツール: ⑦ の実行に失敗" >&2; exit 2; }
     result="$(printf '%s\n%s\n' "$result" "$live" | grep . || true)"

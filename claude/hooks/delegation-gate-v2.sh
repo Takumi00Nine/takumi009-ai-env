@@ -1,1 +1,0 @@
-../../team/connect/claude-code/delegation-gate-v2.sh

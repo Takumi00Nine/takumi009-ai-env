@@ -1,1 +1,0 @@
-../../dock/executor/dock-pane-resolve.sh

@@ -1,178 +1,182 @@
 # 台帳（repo 構成の正本＝設計 §3・FR-3〜FR-5・FR-7）。検査と照会＝core/assembly/ledger-tool.sh。
-# 列＝種類<TAB>パス<TAB>機能<TAB>層<TAB>提供元<TAB>鍵<TAB>備考<TAB>知らせ。値なし＝`-`。`#` 始まりと空行は読まない。
+# 列＝種類<TAB>パス<TAB>機能<TAB>層<TAB>提供元<TAB>鍵<TAB>備考<TAB>知らせ<TAB>配置。ちょうど 9 列・値なし＝`-`。`#` 始まりと空行は読まない。
 #   種類＝part（部品）／suite（スイート）／notify（Notify 所在）。
 #   機能＝ai-brain・team・usage・notify・dock・core。層＝data・rules・executor・connect・assembly。
 #   提供元＝層が connect のときだけ（フォルダ名そのもの）。notify 行では役割で分ける＝発する側（Vault の規則ノート）は `-`・下流の取次は届け先名。
 #   知らせ＝Notify の送り手の行だけが受ける知らせを書く（`call`・`call.<区分>`・`answer` のカンマ区切り。区分＝alert・usage・ask）。他は `-`。
+#   配置＝組立がライブ位置に置くもの（v1.2 設計 §3.2）。`-`（置かない）か `<仕方>:<置き場>`。置き場は `$HOME/` で始まる。
+#     仕方＝link（置き場に部品への symlink。フォルダ単位の行は置き場も末尾 `/`＝直下の各ファイルを同名で）・
+#     gen（雛形の `__AIENV_HOME__` を置き換えた実ファイル）・run（部品を引数なしで実行し、置き場はその手順が置くもの）。
+#     ライブ名が部品名と違うときは置き場で表す。組立・配置の健全性検査・登録の絞り込み・掃除はこの列からの導出だけを使う。
 #   パス＝repo 相対（フォルダ単位は末尾 `/`）。notify 行の repo 外は `Vault:<ノート>`・`~/…`。
 #   鍵＝`<機能>.<働き>`（shell 入口・他機能が照会する入口）。同じ鍵が複数行に付くのは同じ機能の接続行だけ。
 # 部品・スイートを足すときは、この台帳に 1 行足す（v1.1 FR-14）。v1.2 FR-20＝v1.1 の後に足す部品・スイートは台帳の行だけでよい（移動表の行は求めない）。
 
 # ===== AI Brain =====
-part	ai-brain/executor/vault-recall.sh	ai-brain	executor	-	ai-brain.recall	想起（UserPromptSubmit）	-
-part	ai-brain/executor/bootstrap-vault.sh	ai-brain	executor	-	ai-brain.bootstrap	読込（合成器の寄与・枠 must-read・health）	-
-part	ai-brain/executor/vault-read-log.sh	ai-brain	executor	-	ai-brain.read-log	読取記録（PostToolUse Read）	-
-part	ai-brain/executor/health_judge.py	ai-brain	executor	-	ai-brain.health-judge	ヘルス判定機（Dock が照会）	-
-part	ai-brain/executor/keyword_recall_helper.py	ai-brain	executor	-	-	想起補助	-
-part	ai-brain/executor/backup-vault.sh	ai-brain	executor	-	ai-brain.backup	バックアップ（LaunchAgent の起動対象）	-
-part	ai-brain/executor/maintenance.sh	ai-brain	executor	-	ai-brain.maintenance	週次メンテ（LaunchAgent の起動対象）	-
-part	ai-brain/executor/maintenance-kick.sh	ai-brain	executor	-	ai-brain.maintenance-kick	メンテの手動起動	-
-part	ai-brain/executor/export-public-vault.sh	ai-brain	executor	-	ai-brain.export-public	公開スナップショットの出力	-
-part	ai-brain/executor/fragments-reviewed.sh	ai-brain	executor	-	ai-brain.fragments-reviewed	昇格の締め	-
-part	ai-brain/executor/personal-link-check.sh	ai-brain	executor	-	-	公開出力の共有 lib	-
-part	ai-brain/executor/apply_aliases.py	ai-brain	executor	-	-	検出器（alias 適用）	-
-part	ai-brain/executor/fragments_log.py	ai-brain	executor	-	-	検出器（Fragments 記録）	-
-part	ai-brain/executor/maintenance_run_step.py	ai-brain	executor	-	-	メンテの段の記録	-
-part	ai-brain/executor/vault_inventory.py	ai-brain	executor	-	-	検出器（棚卸し）	-
-part	ai-brain/executor/vault_lib.py	ai-brain	executor	-	-	検出器群の共有 lib	-
-part	ai-brain/data/generic-aliases.txt	ai-brain	data	-	-	語彙表	-
-part	ai-brain/data/templates/	ai-brain	data	-	-	private 骨格フォルダの README 雛形	-
-part	ai-brain/data/vault-public/	ai-brain	data	-	-	公開スナップショット	-
-part	ai-brain/connect/claude-code/vault-write-gate.sh	ai-brain	connect	claude-code	ai-brain.write-gate	柵（子向け Vault 保護・Team の子起動が照会）	-
-part	ai-brain/assembly/install-backup.sh	ai-brain	assembly	-	ai-brain.install-backup	バックアップの常駐の登録	-
-part	ai-brain/assembly/install-maintenance.sh	ai-brain	assembly	-	ai-brain.install-maintenance	メンテの常駐の登録	-
-part	ai-brain/assembly/com.takumi009.backup-vault.plist	ai-brain	assembly	-	-	LaunchAgent 定義	-
-part	ai-brain/assembly/com.takumi009.maintenance.plist	ai-brain	assembly	-	-	LaunchAgent 定義	-
+part	ai-brain/executor/vault-recall.sh	ai-brain	executor	-	ai-brain.recall	想起（UserPromptSubmit）	-	link:$HOME/.claude/hooks/vault-recall.sh
+part	ai-brain/executor/bootstrap-vault.sh	ai-brain	executor	-	ai-brain.bootstrap	読込（合成器の寄与・枠 must-read・health）	-	-
+part	ai-brain/executor/vault-read-log.sh	ai-brain	executor	-	ai-brain.read-log	読取記録（PostToolUse Read）	-	link:$HOME/.claude/hooks/vault-read-log.sh
+part	ai-brain/executor/health_judge.py	ai-brain	executor	-	ai-brain.health-judge	ヘルス判定機（Dock が照会）	-	-
+part	ai-brain/executor/keyword_recall_helper.py	ai-brain	executor	-	-	想起補助	-	-
+part	ai-brain/executor/backup-vault.sh	ai-brain	executor	-	ai-brain.backup	バックアップ（LaunchAgent の起動対象）	-	-
+part	ai-brain/executor/maintenance.sh	ai-brain	executor	-	ai-brain.maintenance	週次メンテ（LaunchAgent の起動対象）	-	-
+part	ai-brain/executor/maintenance-kick.sh	ai-brain	executor	-	ai-brain.maintenance-kick	メンテの手動起動	-	-
+part	ai-brain/executor/export-public-vault.sh	ai-brain	executor	-	ai-brain.export-public	公開スナップショットの出力	-	-
+part	ai-brain/executor/fragments-reviewed.sh	ai-brain	executor	-	ai-brain.fragments-reviewed	昇格の締め	-	-
+part	ai-brain/executor/personal-link-check.sh	ai-brain	executor	-	-	公開出力の共有 lib	-	-
+part	ai-brain/executor/apply_aliases.py	ai-brain	executor	-	-	検出器（alias 適用）	-	-
+part	ai-brain/executor/fragments_log.py	ai-brain	executor	-	-	検出器（Fragments 記録）	-	-
+part	ai-brain/executor/maintenance_run_step.py	ai-brain	executor	-	-	メンテの段の記録	-	-
+part	ai-brain/executor/vault_inventory.py	ai-brain	executor	-	-	検出器（棚卸し）	-	-
+part	ai-brain/executor/vault_lib.py	ai-brain	executor	-	-	検出器群の共有 lib	-	-
+part	ai-brain/data/generic-aliases.txt	ai-brain	data	-	-	語彙表	-	-
+part	ai-brain/data/templates/	ai-brain	data	-	-	private 骨格フォルダの README 雛形	-	-
+part	ai-brain/data/vault-public/	ai-brain	data	-	-	公開スナップショット	-	-
+part	ai-brain/connect/claude-code/vault-write-gate.sh	ai-brain	connect	claude-code	ai-brain.write-gate	柵（子向け Vault 保護・Team の子起動が照会）	-	link:$HOME/.claude/hooks/vault-write-gate.sh
+part	ai-brain/assembly/install-backup.sh	ai-brain	assembly	-	ai-brain.install-backup	バックアップの常駐の登録	-	-
+part	ai-brain/assembly/install-maintenance.sh	ai-brain	assembly	-	ai-brain.install-maintenance	メンテの常駐の登録	-	-
+part	ai-brain/assembly/com.takumi009.backup-vault.plist	ai-brain	assembly	-	-	LaunchAgent 定義	-	-
+part	ai-brain/assembly/com.takumi009.maintenance.plist	ai-brain	assembly	-	-	LaunchAgent 定義	-	-
 
 # ===== Team =====
-part	team/rules/agents/	team	rules	-	-	職種定義	-
-part	team/data/profile.md.sample	team	data	-	-	配役表の雛形	-
-part	team/data/models.conf.sample	team	data	-	-	モデル定義の雛形	-
-part	team/executor/profile_resolve.py	team	executor	-	team.profile-resolve	解決器	-
-part	team/connect/claude-code/role_candidates.py	team	connect	claude-code	team.role-candidates	候補一覧（settings 許可行と寄与の照会文が名指す）	-
-part	team/connect/claude-code/claude-exec.sh	team	connect	claude-code	team.claude-exec	職種の起動（claude -p）	-
-part	team/connect/claude-code/claude_exec.py	team	connect	claude-code	-	職種の起動の lib	-
-part	team/connect/claude-code/agent_def.py	team	connect	claude-code	-	職種定義の lib（claude_exec と同居）	-
-part	team/connect/claude-code/guard_common.sh	team	connect	claude-code	-	委任の柵の共有 lib（許容モデル別名・委任マーカー）	-
-part	team/connect/claude-code/agent-model-guard.sh	team	connect	claude-code	-	委任の柵	-
-part	team/connect/claude-code/inprocess-gate.sh	team	connect	claude-code	-	委任の柵	-
-part	team/connect/claude-code/delegation-gate-v2.sh	team	connect	claude-code	-	委任の柵	-
-part	team/connect/claude-code/codex_direct_call_check.py	team	connect	claude-code	-	Codex 直叩き判定	-
-part	team/connect/claude-code/codex-direct-call-gate.sh	team	connect	claude-code	-	Codex 直叩き柵（PreToolUse Bash）	-
-part	team/connect/claude-code/profile-status.sh	team	connect	claude-code	team.session-status	合成器の寄与（枠 opening・directive5・machine_role 保留・profile-warning）	-
-part	team/connect/claude-code/bedrock.env.sample	team	connect	claude-code	-	Bedrock 経路の設定雛形	-
-part	team/connect/claude-code/worker-provider-probe.sh	team	connect	claude-code	-	実験	-
-part	team/connect/codex/codex-exec.sh	team	connect	codex	team.codex-exec	Codex の口（Codex 直叩き柵が照会）	-
-part	team/connect/codex/AGENTS.md	team	connect	codex	-	Codex ワーカーの作法	-
-part	team/connect/codex/config.toml	team	connect	codex	-	Codex の設定雛形	-
-part	team/connect/codex/hooks.json	team	connect	codex	-	Codex の登録	-
+part	team/rules/agents/	team	rules	-	-	職種定義	-	link:$HOME/.claude/agents/
+part	team/data/profile.md.sample	team	data	-	-	配役表の雛形	-	-
+part	team/data/models.conf.sample	team	data	-	-	モデル定義の雛形	-	-
+part	team/executor/profile_resolve.py	team	executor	-	team.profile-resolve	解決器	-	-
+part	team/connect/claude-code/role_candidates.py	team	connect	claude-code	team.role-candidates	候補一覧（settings 許可行と寄与の照会文が名指す）	-	-
+part	team/connect/claude-code/claude-exec.sh	team	connect	claude-code	team.claude-exec	職種の起動（claude -p）	-	-
+part	team/connect/claude-code/claude_exec.py	team	connect	claude-code	-	職種の起動の lib	-	-
+part	team/connect/claude-code/agent_def.py	team	connect	claude-code	-	職種定義の lib（claude_exec と同居）	-	-
+part	team/connect/claude-code/guard_common.sh	team	connect	claude-code	-	委任の柵の共有 lib（許容モデル別名・委任マーカー）	-	-
+part	team/connect/claude-code/agent-model-guard.sh	team	connect	claude-code	-	委任の柵	-	link:$HOME/.claude/hooks/agent-model-guard.sh
+part	team/connect/claude-code/inprocess-gate.sh	team	connect	claude-code	-	委任の柵	-	link:$HOME/.claude/hooks/inprocess-gate.sh
+part	team/connect/claude-code/delegation-gate-v2.sh	team	connect	claude-code	-	委任の柵	-	link:$HOME/.claude/hooks/delegation-gate-v2.sh
+part	team/connect/claude-code/codex_direct_call_check.py	team	connect	claude-code	-	Codex 直叩き判定	-	-
+part	team/connect/claude-code/codex-direct-call-gate.sh	team	connect	claude-code	-	Codex 直叩き柵（PreToolUse Bash）	-	link:$HOME/.claude/hooks/codex-direct-call-gate.sh
+part	team/connect/claude-code/profile-status.sh	team	connect	claude-code	team.session-status	合成器の寄与（枠 opening・directive5・machine_role 保留・profile-warning）	-	-
+part	team/connect/claude-code/bedrock.env.sample	team	connect	claude-code	-	Bedrock 経路の設定雛形	-	-
+part	team/connect/claude-code/worker-provider-probe.sh	team	connect	claude-code	-	実験	-	-
+part	team/connect/codex/codex-exec.sh	team	connect	codex	team.codex-exec	Codex の口（Codex 直叩き柵が照会）	-	-
+part	team/connect/codex/AGENTS.md	team	connect	codex	-	Codex ワーカーの作法	-	link:$HOME/.codex/AGENTS.md
+part	team/connect/codex/config.toml	team	connect	codex	-	Codex の設定雛形	-	gen:$HOME/.codex/config.toml
+part	team/connect/codex/hooks.json	team	connect	codex	-	Codex の登録	-	link:$HOME/.codex/hooks.json
 
 # ===== Usage =====
-part	usage/executor/usage-fetch.sh	usage	executor	-	usage.fetch-entry	取得の入口（LaunchAgent の起動対象）	-
-part	usage/executor/usage-source.sh	usage	executor	-	-	提供元に依らない変換・検証・書込	-
-part	usage/executor/usage-notify.sh	usage	executor	-	-	通知の判定と通知状態の記録（送る段は知らせの共通部品）	-
-part	usage/executor/usage-inject.sh	usage	executor	-	-	使用率注入（UserPromptSubmit）	-
-part	usage/executor/usage-block.sh	usage	executor	-	-	使用率注入の lib	-
-part	usage/executor/usage_snapshot.py	usage	executor	-	usage.snapshot	提示（Team の候補一覧が照会）	-
-part	usage/connect/claude-code/fetch.sh	usage	connect	claude-code	usage.fetch	取得器	-
-part	usage/connect/claude-code/usage.env	usage	connect	claude-code	-	宣言	-
-part	usage/connect/codex/fetch.sh	usage	connect	codex	usage.fetch	取得器	-
-part	usage/connect/codex/usage.env	usage	connect	codex	-	宣言	-
-part	usage/assembly/install-usage-fetch.sh	usage	assembly	-	usage.install-fetch	取得の常駐の登録	-
-part	usage/assembly/com.takumi009.usage-fetch.plist	usage	assembly	-	-	LaunchAgent 定義	-
+part	usage/executor/usage-fetch.sh	usage	executor	-	usage.fetch-entry	取得の入口（LaunchAgent の起動対象）	-	-
+part	usage/executor/usage-source.sh	usage	executor	-	-	提供元に依らない変換・検証・書込	-	-
+part	usage/executor/usage-notify.sh	usage	executor	-	-	通知の判定と通知状態の記録（送る段は知らせの共通部品）	-	-
+part	usage/executor/usage-inject.sh	usage	executor	-	-	使用率注入（UserPromptSubmit）	-	link:$HOME/.claude/hooks/usage-inject.sh
+part	usage/executor/usage-block.sh	usage	executor	-	-	使用率注入の lib	-	-
+part	usage/executor/usage_snapshot.py	usage	executor	-	usage.snapshot	提示（Team の候補一覧が照会）	-	-
+part	usage/connect/claude-code/fetch.sh	usage	connect	claude-code	usage.fetch	取得器	-	-
+part	usage/connect/claude-code/usage.env	usage	connect	claude-code	-	宣言	-	-
+part	usage/connect/codex/fetch.sh	usage	connect	codex	usage.fetch	取得器	-	-
+part	usage/connect/codex/usage.env	usage	connect	codex	-	宣言	-	-
+part	usage/assembly/install-usage-fetch.sh	usage	assembly	-	usage.install-fetch	取得の常駐の登録	-	-
+part	usage/assembly/com.takumi009.usage-fetch.plist	usage	assembly	-	-	LaunchAgent 定義	-	-
 
 # ===== Notify =====
-part	notify/executor/notify.sh	notify	executor	-	notify.send	口（呼出と応答を受ける）	-
-part	notify/connect/macos/deliver.sh	notify	connect	macos	-	macOS 通知の送り手	call.alert,call.usage
-part	notify/connect/cmux/deliver.sh	notify	connect	cmux	-	cmux 通知の送り手（CODE27 の発話は cmux 設定の連鎖）	call.ask
-part	notify/connect/code27/deliver.sh	notify	connect	code27	-	CODE27 取次の消去（応答だけ）	answer
+part	notify/executor/notify.sh	notify	executor	-	notify.send	口（呼出と応答を受ける）	-	-
+part	notify/connect/macos/deliver.sh	notify	connect	macos	-	macOS 通知の送り手	call.alert,call.usage	-
+part	notify/connect/cmux/deliver.sh	notify	connect	cmux	-	cmux 通知の送り手（CODE27 の発話は cmux 設定の連鎖）	call.ask	-
+part	notify/connect/code27/deliver.sh	notify	connect	code27	-	CODE27 取次の消去（応答だけ）	answer	-
 
 # ===== Dock =====
-part	dock/executor/cmux-next-model.sh	dock	executor	-	dock.next-model	供給（dotfiles の既定供給パス）	-
-part	dock/executor/cmux-task-model.sh	dock	executor	-	dock.task-model	供給（dotfiles の既定供給パス）	-
-part	dock/executor/cmux-task-declare.sh	dock	executor	-	dock.task-declare	宣言 CLI（メンテが照会）	-
-part	dock/executor/lib-cmux-workspace.sh	dock	executor	-	-	共有 lib	-
-part	dock/executor/lib-model-view.sh	dock	executor	-	-	共有 lib	-
-part	dock/executor/lib-vault-tasks.sh	dock	executor	-	-	共有 lib	-
-part	dock/executor/dock-pane-resolve.sh	dock	executor	-	-	対応表注入（UserPromptSubmit）	-
-part	dock/executor/declare-state.sh	dock	executor	-	dock.declare-state	合成器の寄与（枠 declare6）	-
+part	dock/executor/cmux-next-model.sh	dock	executor	-	dock.next-model	供給（dotfiles の既定供給パス）	-	-
+part	dock/executor/cmux-task-model.sh	dock	executor	-	dock.task-model	供給（dotfiles の既定供給パス）	-	-
+part	dock/executor/cmux-task-declare.sh	dock	executor	-	dock.task-declare	宣言 CLI（メンテが照会）	-	-
+part	dock/executor/lib-cmux-workspace.sh	dock	executor	-	-	共有 lib	-	-
+part	dock/executor/lib-model-view.sh	dock	executor	-	-	共有 lib	-	-
+part	dock/executor/lib-vault-tasks.sh	dock	executor	-	-	共有 lib	-	-
+part	dock/executor/dock-pane-resolve.sh	dock	executor	-	-	対応表注入（UserPromptSubmit）	-	link:$HOME/.claude/hooks/dock-pane-resolve.sh
+part	dock/executor/declare-state.sh	dock	executor	-	dock.declare-state	合成器の寄与（枠 declare6）	-	-
 
 # ===== Core =====
-part	core/executor/pid-lock.sh	core	executor	-	-	排他ロック	-
-part	core/executor/status-file.sh	core	executor	-	-	状態記録	-
-part	core/executor/notice.sh	core	executor	-	-	知らせの共通部品	-
-part	core/executor/ngwords-path.sh	core	executor	-	-	NG 語の既定の解決（公開前監査と公開出力が共有）	-
-part	core/executor/vault-paths.sh	core	executor	-	-	Vault の AI 向けフォルダ判定	-
-part	core/executor/audit.sh	core	executor	-	core.audit	公開前監査	-
-part	core/connect/claude-code/session-start-compose.sh	core	connect	claude-code	core.session-start	SessionStart 合成器（旧ライブ名 bootstrap-vault.sh の主後継）	-
-part	core/connect/claude-code/prompt-answer.sh	core	connect	claude-code	-	本人の入力の検知（UserPromptSubmit・ライブ名 code27-call-clear.sh）	-
-part	core/connect/claude-code/bash-danger-gate.sh	core	connect	claude-code	-	汎用の柵（リモート実行・保護パス rm）	-
-part	core/connect/claude-code/bash-policy-gate.sh	core	connect	claude-code	-	汎用の柵	-
-part	core/connect/claude-code/context-size-warn.sh	core	connect	claude-code	-	transcript 推定	-
-part	core/connect/claude-code/session-handoff.sh	core	connect	claude-code	core.session-handoff	cct 起動	-
-part	core/assembly/install-main.sh	core	assembly	-	core.install	全部入りの組立	-
-part	core/assembly/install-sub.sh	core	assembly	-	core.sub-install	サブ機の組立	-
-part	core/assembly/update-sub.sh	core	assembly	-	core.update-sub	サブ機の更新	-
-part	core/assembly/check-drift.sh	core	assembly	-	core.check-drift	配置の健全性検査	-
-part	core/assembly/check-sub-update.sh	core	assembly	-	-	サブ機更新確認（SessionStart）	-
-part	core/assembly/managed-symlink.sh	core	assembly	-	-	管理 symlink lib	-
-part	core/assembly/settings.json	core	assembly	-	-	Claude Code の登録の雛形	-
-part	core/assembly/ledger-tool.sh	core	assembly	-	core.ledger	台帳ツール（検査＋照会）	-
-part	core/data/ledger.tsv	core	data	-	-	台帳（本ファイル）	-
-part	core/data/moves.tsv	core	data	-	-	移動表	-
+part	core/executor/pid-lock.sh	core	executor	-	-	排他ロック	-	-
+part	core/executor/status-file.sh	core	executor	-	-	状態記録	-	-
+part	core/executor/notice.sh	core	executor	-	-	知らせの共通部品	-	-
+part	core/executor/ngwords-path.sh	core	executor	-	-	NG 語の既定の解決（公開前監査と公開出力が共有）	-	-
+part	core/executor/vault-paths.sh	core	executor	-	-	Vault の AI 向けフォルダ判定	-	-
+part	core/executor/audit.sh	core	executor	-	core.audit	公開前監査	-	-
+part	core/connect/claude-code/session-start-compose.sh	core	connect	claude-code	core.session-start	SessionStart 合成器（旧ライブ名 bootstrap-vault.sh の主後継）	-	link:$HOME/.claude/hooks/bootstrap-vault.sh
+part	core/connect/claude-code/prompt-answer.sh	core	connect	claude-code	-	本人の入力の検知（UserPromptSubmit・ライブ名 code27-call-clear.sh）	-	link:$HOME/.claude/hooks/code27-call-clear.sh
+part	core/connect/claude-code/bash-danger-gate.sh	core	connect	claude-code	-	汎用の柵（リモート実行・保護パス rm）	-	link:$HOME/.claude/hooks/bash-danger-gate.sh
+part	core/connect/claude-code/bash-policy-gate.sh	core	connect	claude-code	-	汎用の柵	-	link:$HOME/.claude/hooks/bash-policy-gate.sh
+part	core/connect/claude-code/context-size-warn.sh	core	connect	claude-code	-	transcript 推定	-	link:$HOME/.claude/hooks/context-size-warn.sh
+part	core/connect/claude-code/session-handoff.sh	core	connect	claude-code	core.session-handoff	cct 起動	-	-
+part	core/assembly/install-main.sh	core	assembly	-	core.install	全部入りの組立	-	-
+part	core/assembly/install-sub.sh	core	assembly	-	core.sub-install	サブ機の組立	-	-
+part	core/assembly/update-sub.sh	core	assembly	-	core.update-sub	サブ機の更新	-	-
+part	core/assembly/check-drift.sh	core	assembly	-	core.check-drift	配置の健全性検査	-	-
+part	core/assembly/check-sub-update.sh	core	assembly	-	-	サブ機更新確認（SessionStart）	-	link:$HOME/.claude/hooks/check-sub-update.sh
+part	core/assembly/managed-symlink.sh	core	assembly	-	-	管理 symlink lib	-	-
+part	core/assembly/settings.json	core	assembly	-	-	Claude Code の登録の雛形	-	-
+part	core/assembly/ledger-tool.sh	core	assembly	-	core.ledger	台帳ツール（検査＋照会）	-	-
+part	core/data/ledger.tsv	core	data	-	-	台帳（本ファイル）	-	-
+part	core/data/moves.tsv	core	data	-	-	移動表	-	-
 
 # ===== スイート（tests/test-*.sh・1 本 1 機能） =====
-suite	tests/test-apply-aliases.sh	ai-brain	-	-	-	-	-
-suite	tests/test-backup-vault.sh	ai-brain	-	-	-	-	-
-suite	tests/test-bootstrap-vault.sh	ai-brain	-	-	-	-	-
-suite	tests/test-core-docs-placeholder-schema.sh	ai-brain	-	-	-	-	-
-suite	tests/test-export-public-vault.sh	ai-brain	-	-	-	-	-
-suite	tests/test-fragments-log.sh	ai-brain	-	-	-	-	-
-suite	tests/test-fragments-reviewed.sh	ai-brain	-	-	-	-	-
-suite	tests/test-health-judge.sh	ai-brain	-	-	-	-	-
-suite	tests/test-install-backup.sh	ai-brain	-	-	-	-	-
-suite	tests/test-install-maintenance.sh	ai-brain	-	-	-	-	-
-suite	tests/test-keyword-recall-helper.sh	ai-brain	-	-	-	-	-
-suite	tests/test-maintenance.sh	ai-brain	-	-	-	-	-
-suite	tests/test-maintenance-kick.sh	ai-brain	-	-	-	-	-
-suite	tests/test-maintenance-run-step.sh	ai-brain	-	-	-	-	-
-suite	tests/test-personal-link-check.sh	ai-brain	-	-	-	-	-
-suite	tests/test-vault-inventory.sh	ai-brain	-	-	-	-	-
-suite	tests/test-vault-lib.sh	ai-brain	-	-	-	-	-
-suite	tests/test-vault-read-log.sh	ai-brain	-	-	-	-	-
-suite	tests/test-vault-recall.sh	ai-brain	-	-	-	-	-
-suite	tests/test-vault-write-gate.sh	ai-brain	-	-	-	-	-
-suite	tests/test-agent-definitions.sh	team	-	-	-	-	-
-suite	tests/test-agent-model-guard.sh	team	-	-	-	-	-
-suite	tests/test-claude-exec.sh	team	-	-	-	-	-
-suite	tests/test-codex-direct-call-gate.sh	team	-	-	-	-	-
-suite	tests/test-codex-exec.sh	team	-	-	-	-	-
-suite	tests/test-config-samples.sh	team	-	-	-	-	-
-suite	tests/test-delegation-gate-v2.sh	team	-	-	-	-	-
-suite	tests/test-inprocess-gate.sh	team	-	-	-	-	-
-suite	tests/test-model-definitions.sh	team	-	-	-	-	-
-suite	tests/test-role-candidates.sh	team	-	-	-	-	-
-suite	tests/test-session-status.sh	team	-	-	-	-	-
-suite	tests/test-install-usage-fetch.sh	usage	-	-	-	-	-
-suite	tests/test-usage-fetch.sh	usage	-	-	-	-	-
-suite	tests/test-usage-inject.sh	usage	-	-	-	-	-
-suite	tests/test-usage-snapshot.sh	usage	-	-	-	-	-
-suite	tests/test-cmux-next-model.sh	dock	-	-	-	-	-
-suite	tests/test-cmux-task-declare.sh	dock	-	-	-	-	-
-suite	tests/test-cmux-task-model.sh	dock	-	-	-	-	-
-suite	tests/test-notify.sh	notify	-	-	-	-	-
-suite	tests/test-declare-state.sh	dock	-	-	-	-	-
-suite	tests/test-dock-pane-resolve.sh	dock	-	-	-	-	-
-suite	tests/test-code27-call-clear.sh	core	-	-	-	-	-
-suite	tests/test-audit.sh	core	-	-	-	-	-
-suite	tests/test-bash-danger-gate.sh	core	-	-	-	-	-
-suite	tests/test-bash-policy-gate.sh	core	-	-	-	-	-
-suite	tests/test-check-drift.sh	core	-	-	-	-	-
-suite	tests/test-check-sub-update.sh	core	-	-	-	-	-
-suite	tests/test-decoupling.sh	core	-	-	-	疎結合の受入（FR-14 と同列）	-
-suite	tests/test-install-main.sh	core	-	-	-	-	-
-suite	tests/test-install-sub.sh	core	-	-	-	-	-
-suite	tests/test-integration.sh	core	-	-	-	2 機能以上の統合試験	-
-suite	tests/test-ledger.sh	core	-	-	-	台帳検査（FR-14）	-
-suite	tests/test-managed-symlink.sh	core	-	-	-	-	-
-suite	tests/test-session-handoff.sh	core	-	-	-	-	-
-suite	tests/test-session-start-compose.sh	core	-	-	-	-	-
-suite	tests/test-shell-lib.sh	core	-	-	-	-	-
-suite	tests/test-update-sub.sh	core	-	-	-	-	-
-suite	tests/test-with-dotfiles.sh	core	-	-	-	-	-
+suite	tests/test-apply-aliases.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-backup-vault.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-bootstrap-vault.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-core-docs-placeholder-schema.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-export-public-vault.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-fragments-log.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-fragments-reviewed.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-health-judge.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-install-backup.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-install-maintenance.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-keyword-recall-helper.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-maintenance.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-maintenance-kick.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-maintenance-run-step.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-personal-link-check.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-vault-inventory.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-vault-lib.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-vault-read-log.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-vault-recall.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-vault-write-gate.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-agent-definitions.sh	team	-	-	-	-	-	-
+suite	tests/test-agent-model-guard.sh	team	-	-	-	-	-	-
+suite	tests/test-claude-exec.sh	team	-	-	-	-	-	-
+suite	tests/test-codex-direct-call-gate.sh	team	-	-	-	-	-	-
+suite	tests/test-codex-exec.sh	team	-	-	-	-	-	-
+suite	tests/test-config-samples.sh	team	-	-	-	-	-	-
+suite	tests/test-delegation-gate-v2.sh	team	-	-	-	-	-	-
+suite	tests/test-inprocess-gate.sh	team	-	-	-	-	-	-
+suite	tests/test-model-definitions.sh	team	-	-	-	-	-	-
+suite	tests/test-role-candidates.sh	team	-	-	-	-	-	-
+suite	tests/test-session-status.sh	team	-	-	-	-	-	-
+suite	tests/test-install-usage-fetch.sh	usage	-	-	-	-	-	-
+suite	tests/test-usage-fetch.sh	usage	-	-	-	-	-	-
+suite	tests/test-usage-inject.sh	usage	-	-	-	-	-	-
+suite	tests/test-usage-snapshot.sh	usage	-	-	-	-	-	-
+suite	tests/test-cmux-next-model.sh	dock	-	-	-	-	-	-
+suite	tests/test-cmux-task-declare.sh	dock	-	-	-	-	-	-
+suite	tests/test-cmux-task-model.sh	dock	-	-	-	-	-	-
+suite	tests/test-notify.sh	notify	-	-	-	-	-	-
+suite	tests/test-declare-state.sh	dock	-	-	-	-	-	-
+suite	tests/test-dock-pane-resolve.sh	dock	-	-	-	-	-	-
+suite	tests/test-code27-call-clear.sh	core	-	-	-	-	-	-
+suite	tests/test-audit.sh	core	-	-	-	-	-	-
+suite	tests/test-bash-danger-gate.sh	core	-	-	-	-	-	-
+suite	tests/test-bash-policy-gate.sh	core	-	-	-	-	-	-
+suite	tests/test-check-drift.sh	core	-	-	-	-	-	-
+suite	tests/test-check-sub-update.sh	core	-	-	-	-	-	-
+suite	tests/test-decoupling.sh	core	-	-	-	疎結合の受入（FR-14 と同列）	-	-
+suite	tests/test-install-main.sh	core	-	-	-	-	-	-
+suite	tests/test-install-sub.sh	core	-	-	-	-	-	-
+suite	tests/test-integration.sh	core	-	-	-	2 機能以上の統合試験	-	-
+suite	tests/test-ledger.sh	core	-	-	-	台帳検査（FR-14）	-	-
+suite	tests/test-managed-symlink.sh	core	-	-	-	-	-	-
+suite	tests/test-session-handoff.sh	core	-	-	-	-	-	-
+suite	tests/test-session-start-compose.sh	core	-	-	-	-	-	-
+suite	tests/test-shell-lib.sh	core	-	-	-	-	-	-
+suite	tests/test-update-sub.sh	core	-	-	-	-	-	-
+suite	tests/test-with-dotfiles.sh	core	-	-	-	-	-	-
 
 # ===== Notify 所在（repo 外で本人を呼ぶ箇所・FR-7。提供元列＝発する側は `-`・下流の取次は届け先名） =====
-notify	Vault:Preferences/cmux-notifications.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-
-notify	Vault:Preferences/core-conduct.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-
-notify	Vault:Preferences/coding-delegation.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-
-notify	~/work/navi-orchestrator/code27-call	notify	-	code27	-	CODE27 発話取次（別 repo・下流の取次）	-
+notify	Vault:Preferences/cmux-notifications.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
+notify	Vault:Preferences/core-conduct.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
+notify	Vault:Preferences/coding-delegation.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
+notify	~/work/navi-orchestrator/code27-call	notify	-	code27	-	CODE27 発話取次（別 repo・下流の取次）	-	-

@@ -1,1 +1,0 @@
-../../ai-brain/executor/vault-read-log.sh

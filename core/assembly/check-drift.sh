@@ -2,8 +2,8 @@
 # ポータブル化されたAI環境の「ズレ」を検知する手動実行ツール（Phase 1.5）。
 #
 # チェック項目:
-#   ① symlink（install-main.sh の link() 呼び出しと同じ集合）が
-#      repo の実体を指しているか。加えて①-2として、生成物 ~/.claude/settings.json
+#   ① 台帳の導出の一覧（ledger-tool.sh placement＝組立と同じ集合・v1.2 FR-15）の
+#      置き場が repo の実体を指しているか・配置済み settings.json のフックの実体があるか。加えて①-2として、生成物 ~/.claude/settings.json
 #      （2026-08-21よりsymlinkではなく生成物。詳細は下記①-2セクション本体の
 #      コメント参照）がrepoテンプレとプレースホルダ展開込みで一致しているか
 #   ② ~/.codex/config.toml（生成物）が repo の codex/config.toml テンプレと
@@ -150,10 +150,22 @@
 #     total_drift/drift_excluding_item4には含めないが、maintenance.sh側が
 #     informationalとしてlast_result_summaryへ拾えるようにするための値。
 #     詳細＝scripts/maintenance.sh側コメント参照）。
-#   --managed-symlinks-only: installer管理下symlinkの実配置状態だけを検査する
-#     内部利用向けモード。健全ならexit 0、欠落・通常ファイル・誤リンク、または
-#     hook実体が非実行ならexit 1。update-sub.shがHEAD不変時にも配置漏れから
-#     収束するために使う。--jsonとは併用しない。
+#   --managed-symlinks-only: 配置の健全性検査（v1.2 FR-15）。台帳の導出
+#     （core/assembly/ledger-tool.sh placement＝選択の機能の配置一覧）の各置き場と、
+#     配置済み ~/.claude/settings.json の全フックの命令の実在だけを検査する。
+#     健全ならexit 0、欠落・通常ファイル・誤リンク・hook実体の非実行・導出の失敗なら
+#     exit 1。update-sub.shがHEAD不変時にも配置漏れから収束するために使う。
+#     手書きの一覧は持たない（配置の集合の正本は台帳）。--jsonとは併用しない。
+#   --forward-refs [--dotfiles <パス|none>]: 撤去の前提検査（v1.2 FR-18・読むだけ）。
+#     移動表の「撤去」の印の行の旧パスを、参照側 5 種（~/.claude・~/.codex 配下の
+#     symlink のリンク先／~/.claude/settings.json／~/Library/LaunchAgents/*.plist／
+#     dotfiles の checkout の追跡ファイル／Vault の Preferences）から探し、
+#     `<種類><TAB><場所><TAB><旧パス>` を 1 件 1 行で出す。1 件以上で exit 1・0 件で 0。
+#     dotfiles の置き場＝--dotfiles（優先）→ 環境変数 DOTFILES_DIR → 既定
+#     （core/executor/vault-paths.sh の共有定数）。none＝「この機では使わない」＝
+#     「対象なし」を 1 行（stderr）出して飛ばす。置き場・Vault が読めなければ exit 2。
+#     実行中のプロセスが起動時に読んだパスは見えない（README の再起動手順で担保）。
+#     --json・--managed-symlinks-only とは併用しない。
 #   終了コード: --json未指定時は**常に0**（既存の「fail-fastしない設計」を
 #     維持＝tests/test-check-drift.sh「exit codeは常に0」の既存契約を壊さない）。
 #     --json指定時のみ、drift_excluding_item4>0でexit 1にする。この
@@ -180,16 +192,140 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 
 JSON_MODE=0
 MANAGED_SYMLINKS_ONLY=0
-for arg in "$@"; do
-  case "$arg" in
+FORWARD_REFS=0
+DOTFILES_OPT=""
+DOTFILES_OPT_SET=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --json) JSON_MODE=1 ;;
     --managed-symlinks-only) MANAGED_SYMLINKS_ONLY=1 ;;
-    *) echo "[check-drift] FAIL: 不明な引数です: $arg" >&2; exit 2 ;;
+    --forward-refs) FORWARD_REFS=1 ;;
+    --dotfiles)
+      [ "$#" -ge 2 ] || { echo "[check-drift] FAIL: --dotfiles には <パス|none> が要ります" >&2; exit 2; }
+      DOTFILES_OPT="$2"; DOTFILES_OPT_SET=1; shift ;;
+    *) echo "[check-drift] FAIL: 不明な引数です: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 if [ "$JSON_MODE" = "1" ] && [ "$MANAGED_SYMLINKS_ONLY" = "1" ]; then
   echo "[check-drift] FAIL: --json と --managed-symlinks-only は併用できません" >&2
   exit 2
+fi
+if [ "$FORWARD_REFS" = "1" ] && { [ "$JSON_MODE" = "1" ] || [ "$MANAGED_SYMLINKS_ONLY" = "1" ]; }; then
+  echo "[check-drift] FAIL: --forward-refs は --json・--managed-symlinks-only と併用できません" >&2
+  exit 2
+fi
+if [ "$DOTFILES_OPT_SET" = "1" ] && [ "$FORWARD_REFS" != "1" ]; then
+  echo "[check-drift] FAIL: --dotfiles は --forward-refs と一緒に使います" >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# 撤去の前提検査（--forward-refs・v1.2 FR-18・設計 §3.4）。読むだけ・他の検査は行わない。
+# ---------------------------------------------------------------------------
+# 移動表の印の列（4 列目）のうち「撤去」＝転送 symlink を撤去した旧パスの記録。
+RETIRE_MARK="撤去"
+# 照合の境界規則の「repo のフォルダ名」＝組立の想定する repo の置き場の末尾（clone 先の名前）。
+: "${AIENV_REPO_DIRNAME:=takumi009-ai-env}"
+if [ "$FORWARD_REFS" = "1" ]; then
+  # dotfiles の置き場＝オプション優先 → DOTFILES_DIR → 共有の既定（組立と同じ 1 か所）。
+  if [ "$DOTFILES_OPT_SET" = "1" ]; then
+    DOTFILES_DIR="$DOTFILES_OPT"
+  elif [ -z "${DOTFILES_DIR:-}" ]; then
+    # shellcheck source=../executor/vault-paths.sh
+    . "$DIR/core/executor/vault-paths.sh" || { echo "[check-drift] FAIL: 既定の読込に失敗: $DIR/core/executor/vault-paths.sh" >&2; exit 2; }
+    DOTFILES_DIR="$DOTFILES_DIR_DEFAULT"
+  fi
+  if [ "$DOTFILES_DIR" = "none" ]; then
+    echo "[check-drift] dotfiles: 対象なし（--dotfiles none＝この機では使わない）" >&2
+  fi
+  python3 - "$DIR/core/data/moves.tsv" "$RETIRE_MARK" "$AIENV_REPO_DIRNAME" "$HOME" "$DOTFILES_DIR" "$VAULT" <<'PY'
+import os, re, subprocess, sys
+
+moves, mark, repo_name, home, dotfiles, vault = sys.argv[1:7]
+
+def fail(msg):
+    print("[check-drift] FAIL: " + msg, file=sys.stderr)
+    sys.exit(2)
+
+# 旧パスの集合＝移動表の「撤去」の印の行の 1 列目（重複は 1 つに）。
+try:
+    with open(moves, encoding="utf-8") as f:
+        olds = []
+        for line in f:
+            cols = line.rstrip("\n").split("\t")
+            if line.startswith("#") or len(cols) < 4 or cols[3] != mark:
+                continue
+            if cols[0] not in olds:
+                olds.append(cols[0])
+except OSError as e:
+    fail("移動表を読めません: %s (%s)" % (moves, e.strerror))
+
+# 境界規則＝直前が「repo のフォルダ名＋/」かパスの文字でない・直後がパスの続きでない
+# （フォルダ単位の旧パスは直後の「/」＝配下も当てる）。
+pats = []
+for old in olds:
+    is_dir = old.endswith("/")
+    body = re.escape(old.rstrip("/"))
+    after = r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9_])" + ("" if is_dir else r"(?!/)")
+    pats.append((old, re.compile(r"(?:(?<=%s/)|(?<![A-Za-z0-9_./-]))%s%s" % (re.escape(repo_name), body, after))))
+
+hits = []
+def scan(kind, place, text):
+    for old, p in pats:
+        if p.search(text):
+            hits.append((kind, place, old))
+
+def scan_file(kind, path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for n, line in enumerate(f, 1):
+                scan(kind, "%s:%d" % (path, n), line)
+    except OSError:
+        pass  # 読めない個別ファイル（壊れたリンク等）は参照を持たない
+
+# 1. ライブ位置＝~/.claude・~/.codex 配下の symlink のリンク先（symlink のフォルダは辿らない）。
+for top in (os.path.join(home, ".claude"), os.path.join(home, ".codex")):
+    for root, dirs, files in os.walk(top):
+        for name in sorted(dirs + files):
+            p = os.path.join(root, name)
+            if os.path.islink(p):
+                scan("link", p, os.readlink(p))
+# 2. 登録＝~/.claude/settings.json。
+s = os.path.join(home, ".claude", "settings.json")
+if os.path.isfile(s):
+    scan_file("settings", s)
+# 3. 常駐＝~/Library/LaunchAgents/*.plist。
+la = os.path.join(home, "Library", "LaunchAgents")
+if os.path.isdir(la):
+    for name in sorted(os.listdir(la)):
+        if name.endswith(".plist"):
+            scan_file("launchagent", os.path.join(la, name))
+# 4. dotfiles の checkout の追跡ファイル（none＝対象なし・無い／読めない＝止める）。
+if dotfiles != "none":
+    if not os.path.isdir(dotfiles):
+        fail("dotfiles の置き場が無いか読めません: %s（--dotfiles <パス|none> か DOTFILES_DIR で指定）" % dotfiles)
+    r = subprocess.run(["git", "-C", dotfiles, "ls-files", "-z"], capture_output=True)
+    if r.returncode != 0:
+        fail("dotfiles の追跡ファイルを読めません（git ls-files 失敗）: %s" % dotfiles)
+    for rel in sorted(x for x in r.stdout.decode("utf-8", "replace").split("\0") if x):
+        p = os.path.join(dotfiles, rel)
+        if os.path.isfile(p) and not os.path.islink(p):
+            scan_file("dotfiles", p)
+# 5. Vault の Preferences（VAULT で上書き・読めなければ止める）。
+prefs = os.path.join(vault, "Preferences")
+if not (os.path.isdir(prefs) and os.access(prefs, os.R_OK | os.X_OK)):
+    fail("Vault の Preferences が読めません: %s（VAULT で指定）" % prefs)
+for root, dirs, files in os.walk(prefs):
+    dirs.sort()
+    for name in sorted(files):
+        scan_file("vault", os.path.join(root, name))
+
+for h in hits:
+    print("\t".join(h))
+sys.exit(1 if hits else 0)
+PY
+  exit $?
 fi
 
 TOTAL_DRIFT=0
@@ -218,70 +354,90 @@ item_drift() { echo "  - $*"; TOTAL_DRIFT=$((TOTAL_DRIFT + 1)); }
 item4_info() { local n="$1"; shift; log "  -> ℹ️ INFO: $*（export は週次 Phase0 と案件締めで行う＝drift には数えない）"; ITEM4_DRIFT=$((ITEM4_DRIFT + n)); }
 
 echo "======================================================================"
-echo "① symlink が repo を向いているか"
+echo "① 配置（台帳の導出の一覧）と登録フックの実体"
 echo "======================================================================"
 
-# 2026-08-21: bash-danger-gate.sh・Project対応表フック・check-sub-update.sh の
-# 3件が本一覧から漏れていた（install-main.shは配置しているのに監視対象外だった
-# 既存不具合。今回のsettings.json対応でこの配列を触ったのを機にCodex一次
-# レビュー指摘・Major対応として合わせて追加。settings.json/①-2の対応とは独立の
-# 修正のため、READMEの「N件」表記もこの3件を含めた実数に更新している）。
-SYMLINKS=(
-  "$HOME/.claude/hooks/bootstrap-vault.sh|$DIR/core/connect/claude-code/session-start-compose.sh"
-  "$HOME/.claude/hooks/delegation-gate-v2.sh|$DIR/team/connect/claude-code/delegation-gate-v2.sh"
-  "$HOME/.claude/hooks/bash-danger-gate.sh|$DIR/core/connect/claude-code/bash-danger-gate.sh"
-  "$HOME/.claude/hooks/bash-policy-gate.sh|$DIR/core/connect/claude-code/bash-policy-gate.sh"
-  "$HOME/.claude/hooks/vault-recall.sh|$DIR/ai-brain/executor/vault-recall.sh"
-  "$HOME/.claude/hooks/vault-read-log.sh|$DIR/ai-brain/executor/vault-read-log.sh"
-  "$HOME/.claude/hooks/dock-pane-resolve.sh|$DIR/dock/executor/dock-pane-resolve.sh"
-  "$HOME/.claude/hooks/check-sub-update.sh|$DIR/core/assembly/check-sub-update.sh"
-  # 2026-08-30追加: settings.jsonには2026-08-10導入時から登録済みだったが、
-  # install-main.shへのlink配置が漏れていた（同型4回目・§9.0 A-0-2で修理）。
-  # このSYMLINKS一覧にも同時に漏れていたため、あわせて追加する。
-  "$HOME/.claude/hooks/context-size-warn.sh|$DIR/core/connect/claude-code/context-size-warn.sh"
-  "$HOME/.claude/hooks/agent-model-guard.sh|$DIR/team/connect/claude-code/agent-model-guard.sh"
-  # ラッパー起動-設計-v1.1.1.md §4・§2.5・D-3・裁定A（2026-09-17追加）:
-  # in-process起動の境界フックと、子専用のVault保護柵フック。
-  "$HOME/.claude/hooks/inprocess-gate.sh|$DIR/team/connect/claude-code/inprocess-gate.sh"
-  "$HOME/.claude/hooks/vault-write-gate.sh|$DIR/ai-brain/connect/claude-code/vault-write-gate.sh"
-  "$HOME/.claude/hooks/usage-inject.sh|$DIR/usage/executor/usage-inject.sh"
-  "$HOME/.codex/AGENTS.md|$DIR/team/connect/codex/AGENTS.md"
-  "$HOME/.codex/hooks.json|$DIR/team/connect/codex/hooks.json"
-)
-# 案件③ B-1 D-4（設計-v1.1.3.md §5 手順3）: 配置先職種定義（team/rules/agents/*.md）
-# はeffort-per-role v2の生成実ファイル方式を退役し、他の管理symlinkと同じ
-# この一覧へ戻す（symlink総数Nはロール数ぶん増える）。
-if [ -d "$DIR/team/rules/agents" ]; then
-  for f in "$DIR"/team/rules/agents/*.md; do
-    [ -e "$f" ] || continue
-    name="$(basename "$f")"
-    SYMLINKS+=("$HOME/.claude/agents/$name|$DIR/team/rules/agents/$name")
-  done
-fi
-
+# v1.2 FR-15（設計 §3.2）: 対象は台帳の導出（ledger-tool.sh placement＝選択の機能の
+# 配置一覧・行＝<仕方><TAB><置き場><TAB><実体><TAB><機能>）だけ＝手書きの一覧は持たない。
+#   link＝置き場が実体への symlink（.sh は実体が実行可能）／gen＝置き場が実ファイル
+#   （中身の比較は ①-2・②）／run＝配置手順が置いたものが置き場にある。
+# 加えて配置済み settings.json の全フックの命令（先頭語がパスのもの）が実在し実行可能か。
+PLACEMENT=""
+sym_total=0
 sym_drift=0
-for pair in "${SYMLINKS[@]}"; do
-  dest="${pair%%|*}"
-  expect="${pair#*|}"
-  if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
-    item_drift "[MISSING] $dest が存在しません（未インストール？）"
-    sym_drift=$((sym_drift + 1))
-  elif [ ! -L "$dest" ]; then
-    item_drift "[NOT-SYMLINK] $dest は symlink ではありません（実ファイルのまま。pre-aienv.bak退避漏れ or 手動編集？）"
-    sym_drift=$((sym_drift + 1))
-  else
-    actual="$(readlink "$dest")"
-    if [ "$actual" != "$expect" ]; then
-      item_drift "[WRONG-TARGET] $dest -> ${actual} （期待: ${expect}）"
-      sym_drift=$((sym_drift + 1))
-    elif [[ "$dest" == "$HOME/.claude/hooks/"*.sh ]] && [ ! -x "$dest" ]; then
-      item_drift "[NOT-EXECUTABLE] $dest の実体に実行権限がありません"
-      sym_drift=$((sym_drift + 1))
+sym_bad() { item_drift "$*"; sym_drift=$((sym_drift + 1)); }
+placement_err="$(mktemp "${TMPDIR:-/tmp}/check-drift-placement.XXXXXX" 2>/dev/null || echo /dev/null)"
+if ! PLACEMENT="$("$DIR/core/assembly/ledger-tool.sh" placement 2>"$placement_err")"; then
+  sym_bad "[PLACEMENT-FAILED] 台帳の導出（core/assembly/ledger-tool.sh placement）に失敗しました＝監視不能: $(head -1 "$placement_err" 2>/dev/null)"
+  PLACEMENT=""
+fi
+[ "$placement_err" = /dev/null ] || rm -f "$placement_err"
+
+while IFS=$'\t' read -r how dest expect comp; do
+  [ -n "$how" ] || continue
+  dest="${dest/#\$HOME/$HOME}"
+  sym_total=$((sym_total + 1))
+  case "$how" in
+    link)
+      if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+        sym_bad "[MISSING] $dest が存在しません（未インストール？・機能 ${comp}）"
+      elif [ ! -L "$dest" ]; then
+        sym_bad "[NOT-SYMLINK] $dest は symlink ではありません（実ファイルのまま。pre-aienv.bak退避漏れ or 手動編集？）"
+      elif [ "$(readlink "$dest")" != "$expect" ]; then
+        sym_bad "[WRONG-TARGET] $dest -> $(readlink "$dest") （期待: ${expect}）"
+      elif [[ "$dest" == *.sh ]] && [ ! -x "$dest" ]; then
+        sym_bad "[NOT-EXECUTABLE] $dest の実体に実行権限がありません"
+      fi
+      ;;
+    gen)
+      if [ -L "$dest" ] || [ ! -f "$dest" ]; then
+        sym_bad "[MISSING] $dest が生成物（実ファイル）としてありません（未インストール？・機能 ${comp}）"
+      fi
+      ;;
+    run)
+      if [ ! -e "${dest%/}" ]; then
+        sym_bad "[MISSING] $dest が存在しません（配置手順 ${expect} が未実行？・機能 ${comp}）"
+      fi
+      ;;
+    *)
+      sym_bad "[PLACEMENT-FAILED] 導出の行の仕方が不明です: ${how}（置き場 ${dest}）"
+      ;;
+  esac
+done <<EOF
+$PLACEMENT
+EOF
+
+if [ -f "$HOME/.claude/settings.json" ]; then
+  hook_cmds="$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)  # 解析できない settings.json は ①-2 が [JSON-PARSE-FAILED] で拾う
+hooks = d.get("hooks") if isinstance(d, dict) else None
+for groups in (hooks.values() if isinstance(hooks, dict) else []):
+    for g in groups if isinstance(groups, list) else []:
+        for h in (g.get("hooks") or []) if isinstance(g, dict) else []:
+            c = h.get("command") if isinstance(h, dict) else None
+            if isinstance(c, str) and c.strip():
+                print(c.strip().split()[0])
+' "$HOME/.claude/settings.json" | sort -u)"
+  while IFS= read -r cmd; do
+    [ -n "$cmd" ] || continue
+    path="${cmd/#\$HOME/$HOME}"; path="${path/#\$\{HOME\}/$HOME}"; path="${path/#\~/$HOME}"
+    case "$path" in */*) ;; *) continue ;; esac  # PATH 上の命令名（bash 等）は対象外
+    sym_total=$((sym_total + 1))
+    if [ ! -e "$path" ]; then
+      sym_bad "[HOOK-MISSING] settings.json のフックの命令の実体がありません: ${cmd}"
+    elif [ ! -x "$path" ]; then
+      sym_bad "[NOT-EXECUTABLE] settings.json のフックの命令の実体に実行権限がありません: ${cmd}"
     fi
-  fi
-done
-log "symlink総数: ${#SYMLINKS[@]}件 / drift: ${sym_drift}件"
-[ "$sym_drift" -eq 0 ] && log "  -> ✅ 全symlinkがrepoを指しています"
+  done <<EOF
+$hook_cmds
+EOF
+fi
+log "symlink総数: ${sym_total}件 / drift: ${sym_drift}件（台帳の導出の一覧＋settings.json の登録フック）"
+[ "$sym_drift" -eq 0 ] && log "  -> ✅ 全配置がrepoを指し、登録フックの実体が揃っています"
 
 if [ "$MANAGED_SYMLINKS_ONLY" = "1" ]; then
   [ "$sym_drift" -eq 0 ] && exit 0
@@ -600,8 +756,13 @@ KNOWN_APP_MANAGED_TOML_LEAF_KEYS=(
 )
 
 CONFIG_TOML_LIVE="$HOME/.codex/config.toml"
-CONFIG_TOML_TEMPLATE="$DIR/team/connect/codex/config.toml"
-if [ ! -f "$CONFIG_TOML_LIVE" ]; then
+# v1.2 FR-15: テンプレは台帳の導出の一覧の Codex 設定の行（gen・置き場＝CONFIG_TOML_LIVE）の実体。
+# 一覧に無い（選択外・導出の失敗）ときは ② を行わない（導出の失敗は ① で計上済み）。
+CONFIG_TOML_TEMPLATE="$(printf '%s\n' "$PLACEMENT" | awk -F'\t' -v h="$HOME" -v d="$CONFIG_TOML_LIVE" \
+  '$1=="gen" { x=$2; if (index(x, "$HOME")==1) x=h substr(x, 6); if (x==d) { print $3; exit } }')"
+if [ -z "$CONFIG_TOML_TEMPLATE" ]; then
+  log "対象外（台帳の導出の一覧に $CONFIG_TOML_LIVE の置き場がありません＝選択外）"
+elif [ ! -f "$CONFIG_TOML_LIVE" ]; then
   item_drift "[MISSING] $CONFIG_TOML_LIVE が存在しません（未インストール？）"
 elif [ ! -f "$CONFIG_TOML_TEMPLATE" ]; then
   item_drift "[MISSING] リポジトリ側テンプレが見つかりません: $CONFIG_TOML_TEMPLATE"

@@ -1,32 +1,33 @@
 # 移動表（v1.1＝機能の部品化）。旧構成のパス → 新構成のパスの正本（設計 §6・FR-13）。
-# 列＝旧パス<TAB>新パス<TAB>種別<TAB>転送印。`#` 始まりと空行は読まない。
+# 列＝旧パス<TAB>新パス<TAB>種別<TAB>印。`#` 始まりと空行は読まない。
 #   種別＝移動／分割／新規。新規の旧パスは `-`（由来＝FR-14 の検査）。
 #   主後継＝同じ旧パスを持つ行のうち先頭行（分割は主後継を先に書く）。
-#   転送印＝`転送`＝旧パスに主後継への転送 symlink（相対リンク・git 追跡）を置く。無しは `-`。
+#   印＝`撤去`＝v1.1 で旧パスに置いた主後継への転送 symlink を v1.2 で撤去した記録（旧パスに追跡ファイルを置かない・
+#   前提検査 check-drift.sh --forward-refs の旧パスの集合）。`転送`＝旧パスに転送 symlink を置く（v1.2 で 0 件）。無しは `-`。
 #   末尾 `/` の行はフォルダ単位（配下のパスへ前方一致で当てる）。
 #   スイート（tests/）は置き場を変えない。v1.1 FR-14＝v1.1 時点の全スイートが行を持つ＝変更の無いものは旧＝新（移動）、
 #   分けた働きを新スイートへ移したものは分割、新設は新規。
-# 検査＝core/assembly/ledger-tool.sh check の moves（3 条件）・forward（転送のリンク先＝主後継）。
+# 検査＝core/assembly/ledger-tool.sh check の moves（3 条件）・forward（転送の印が 0 件・撤去の旧パスに追跡ファイルが無い）。
 
-# --- 登録フック（claude/hooks/*.sh＝14 本すべて転送） ---
-claude/hooks/bootstrap-vault.sh	core/connect/claude-code/session-start-compose.sh	分割	転送
+# --- 登録フック（claude/hooks/*.sh＝14 本すべて撤去） ---
+claude/hooks/bootstrap-vault.sh	core/connect/claude-code/session-start-compose.sh	分割	撤去
 claude/hooks/bootstrap-vault.sh	ai-brain/executor/bootstrap-vault.sh	分割	-
 claude/hooks/bootstrap-vault.sh	team/connect/claude-code/profile-status.sh	分割	-
 claude/hooks/bootstrap-vault.sh	dock/executor/declare-state.sh	分割	-
-claude/hooks/vault-recall.sh	ai-brain/executor/vault-recall.sh	移動	転送
-claude/hooks/vault-read-log.sh	ai-brain/executor/vault-read-log.sh	移動	転送
-claude/hooks/vault-write-gate.sh	ai-brain/connect/claude-code/vault-write-gate.sh	移動	転送
-claude/hooks/agent-model-guard.sh	team/connect/claude-code/agent-model-guard.sh	移動	転送
-claude/hooks/inprocess-gate.sh	team/connect/claude-code/inprocess-gate.sh	移動	転送
-claude/hooks/delegation-gate-v2.sh	team/connect/claude-code/delegation-gate-v2.sh	移動	転送
-claude/hooks/bash-danger-gate.sh	core/connect/claude-code/bash-danger-gate.sh	分割	転送
+claude/hooks/vault-recall.sh	ai-brain/executor/vault-recall.sh	移動	撤去
+claude/hooks/vault-read-log.sh	ai-brain/executor/vault-read-log.sh	移動	撤去
+claude/hooks/vault-write-gate.sh	ai-brain/connect/claude-code/vault-write-gate.sh	移動	撤去
+claude/hooks/agent-model-guard.sh	team/connect/claude-code/agent-model-guard.sh	移動	撤去
+claude/hooks/inprocess-gate.sh	team/connect/claude-code/inprocess-gate.sh	移動	撤去
+claude/hooks/delegation-gate-v2.sh	team/connect/claude-code/delegation-gate-v2.sh	移動	撤去
+claude/hooks/bash-danger-gate.sh	core/connect/claude-code/bash-danger-gate.sh	分割	撤去
 claude/hooks/bash-danger-gate.sh	team/connect/claude-code/codex-direct-call-gate.sh	分割	-
-claude/hooks/usage-inject.sh	usage/executor/usage-inject.sh	移動	転送
-claude/hooks/code27-call-clear.sh	core/connect/claude-code/prompt-answer.sh	移動	転送
-claude/hooks/dock-pane-resolve.sh	dock/executor/dock-pane-resolve.sh	移動	転送
-claude/hooks/bash-policy-gate.sh	core/connect/claude-code/bash-policy-gate.sh	移動	転送
-claude/hooks/context-size-warn.sh	core/connect/claude-code/context-size-warn.sh	移動	転送
-claude/hooks/check-sub-update.sh	core/assembly/check-sub-update.sh	移動	転送
+claude/hooks/usage-inject.sh	usage/executor/usage-inject.sh	移動	撤去
+claude/hooks/code27-call-clear.sh	core/connect/claude-code/prompt-answer.sh	移動	撤去
+claude/hooks/dock-pane-resolve.sh	dock/executor/dock-pane-resolve.sh	移動	撤去
+claude/hooks/bash-policy-gate.sh	core/connect/claude-code/bash-policy-gate.sh	移動	撤去
+claude/hooks/context-size-warn.sh	core/connect/claude-code/context-size-warn.sh	移動	撤去
+claude/hooks/check-sub-update.sh	core/assembly/check-sub-update.sh	移動	撤去
 
 # --- フックの共有 lib（claude/hooks/lib/） ---
 claude/hooks/lib/health_judge.py	ai-brain/executor/health_judge.py	移動	-
@@ -47,9 +48,9 @@ claude/hooks/lib/usage-block.sh	usage/executor/usage-block.sh	移動	-
 claude/settings.json	core/assembly/settings.json	移動	-
 claude/agents/	team/rules/agents/	移動	-
 
-# --- Dock の供給（cmux/。next-model・task-model は dotfiles の既定供給パス＝転送） ---
-cmux/cmux-next-model.sh	dock/executor/cmux-next-model.sh	移動	転送
-cmux/cmux-task-model.sh	dock/executor/cmux-task-model.sh	移動	転送
+# --- Dock の供給（cmux/。next-model・task-model は dotfiles の既定供給パスだった＝撤去） ---
+cmux/cmux-next-model.sh	dock/executor/cmux-next-model.sh	移動	撤去
+cmux/cmux-task-model.sh	dock/executor/cmux-task-model.sh	移動	撤去
 cmux/cmux-task-declare.sh	dock/executor/cmux-task-declare.sh	移動	-
 cmux/lib-cmux-workspace.sh	dock/executor/lib-cmux-workspace.sh	移動	-
 cmux/lib-model-view.sh	dock/executor/lib-model-view.sh	移動	-
@@ -70,9 +71,9 @@ launchagents/com.takumi009.backup-vault.plist	ai-brain/assembly/com.takumi009.ba
 launchagents/com.takumi009.maintenance.plist	ai-brain/assembly/com.takumi009.maintenance.plist	移動	-
 launchagents/com.takumi009.usage-fetch.plist	usage/assembly/com.takumi009.usage-fetch.plist	移動	-
 
-# --- scripts/（LaunchAgent の起動対象 3 本と旧更新コマンドが呼ぶ install-sub は転送） ---
-scripts/backup-vault.sh	ai-brain/executor/backup-vault.sh	移動	転送
-scripts/maintenance.sh	ai-brain/executor/maintenance.sh	移動	転送
+# --- scripts/（LaunchAgent の起動対象 3 本と旧更新コマンドが呼ぶ install-sub は撤去） ---
+scripts/backup-vault.sh	ai-brain/executor/backup-vault.sh	移動	撤去
+scripts/maintenance.sh	ai-brain/executor/maintenance.sh	移動	撤去
 scripts/maintenance-kick.sh	ai-brain/executor/maintenance-kick.sh	移動	-
 scripts/export-public-vault.sh	ai-brain/executor/export-public-vault.sh	移動	-
 scripts/fragments-reviewed.sh	ai-brain/executor/fragments-reviewed.sh	移動	-
@@ -81,12 +82,12 @@ scripts/install-maintenance.sh	ai-brain/assembly/install-maintenance.sh	移動	-
 scripts/claude-exec.sh	team/connect/claude-code/claude-exec.sh	移動	-
 scripts/experiments/worker-provider-probe.sh	team/connect/claude-code/worker-provider-probe.sh	移動	-
 scripts/codex-exec.sh	team/connect/codex/codex-exec.sh	移動	-
-scripts/usage-fetch.sh	usage/executor/usage-fetch.sh	移動	転送
+scripts/usage-fetch.sh	usage/executor/usage-fetch.sh	移動	撤去
 scripts/install-usage-fetch.sh	usage/assembly/install-usage-fetch.sh	移動	-
 scripts/audit.sh	core/executor/audit.sh	移動	-
 scripts/session-handoff.sh	core/connect/claude-code/session-handoff.sh	移動	-
 scripts/install-main.sh	core/assembly/install-main.sh	移動	-
-scripts/install-sub.sh	core/assembly/install-sub.sh	移動	転送
+scripts/install-sub.sh	core/assembly/install-sub.sh	移動	撤去
 scripts/update-sub.sh	core/assembly/update-sub.sh	移動	-
 scripts/check-drift.sh	core/assembly/check-drift.sh	移動	-
 scripts/lib/personal-link-check.sh	ai-brain/executor/personal-link-check.sh	移動	-
@@ -106,8 +107,8 @@ scripts/vault-agents/vault_lib.py	ai-brain/executor/vault_lib.py	移動	-
 scripts/vault-agents/generic-aliases.txt	ai-brain/data/generic-aliases.txt	移動	-
 scripts/templates/	ai-brain/data/templates/	移動	-
 
-# --- 公開スナップショット（旧更新コマンドの手順 4・5 と公開 repo の目印＝転送） ---
-vault-public/	ai-brain/data/vault-public/	移動	転送
+# --- 公開スナップショット（旧更新コマンドの手順 4・5 と公開 repo の目印だった＝撤去） ---
+vault-public/	ai-brain/data/vault-public/	移動	撤去
 
 # --- 新規（由来＝FR-14 の検査） ---
 -	core/data/ledger.tsv	新規	-

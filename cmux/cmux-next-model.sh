@@ -1,1 +1,0 @@
-../dock/executor/cmux-next-model.sh

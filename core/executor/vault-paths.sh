@@ -3,7 +3,11 @@
 #
 # 正本はここ 1 か所（6 フォルダの literal はここにしか書かない）。Vault 書込の柵と
 # 委任の柵の両方が source して同じ判定を使う。関数名は分割前のまま（呼ぶ側の行を変えない）。
-# Bash 3.2 互換。`source` して使う（何度 source しても副作用は関数定義のみ）。
+# Bash 3.2 互換。`source` して使う（何度 source しても副作用は関数定義と下の定数の代入のみ）。
+
+# dotfiles の checkout の既定の置き場（組立 install-main.sh と配置の健全性検査 check-drift.sh が共有する
+# 1 か所＝v1.2 設計 §4）。上書きは両者とも既存の環境変数 DOTFILES_DIR（check-drift はオプションも）。
+DOTFILES_DIR_DEFAULT="${HOME:-}/work/dotfiles"
 
 # guard_vault_ai_prefixes: $HOME/Data/obsidian 配下の AI 向け 6 フォルダの
 # プレフィックス（末尾に /* を付けない絶対パス）を 1 行ずつ標準出力する。

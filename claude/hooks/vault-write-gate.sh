@@ -1,1 +1,0 @@
-../../ai-brain/connect/claude-code/vault-write-gate.sh

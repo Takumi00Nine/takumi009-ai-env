@@ -43,7 +43,7 @@ takumi009-ai-env/
 │   ├── assembly/                # install-backup.sh, install-maintenance.sh, the 2 LaunchAgent plists (backup-vault / maintenance)
 │   └── data/
 │       ├── templates/           # README templates for the private skeleton folders
-│       └── vault-public/        # Snapshot of the Vault's public folders (see below; a compatibility symlink named `vault-public` still exists at the repo root)
+│       └── vault-public/        # Snapshot of the Vault's public folders (see below)
 ├── team/                        # Worker launch, role definitions, cast/model resolution, delegation gates, the Codex connection
 │   ├── rules/
 │   │   └── agents/               # Worker role definitions (one .md per role)
@@ -85,7 +85,7 @@ takumi009-ai-env/
 └── tests/                            # Unit tests
 ```
 
-Note: the pre-v1.1 folders `claude/`, `codex/`, `scripts/`, `cmux/`, `config/`, `launchagents/` no longer hold real content. A handful of **compatibility forwarding symlinks** are kept at their old paths only where something outside this repository still names them directly (an already-registered `~/.claude/settings.json`/LaunchAgent, or the separate dotfiles repo): the 14 `claude/hooks/*.sh` registered hooks, `cmux/cmux-next-model.sh` / `cmux-task-model.sh` (dotfiles' default supply paths), `scripts/backup-vault.sh` / `maintenance.sh` / `usage-fetch.sh` (the 3 LaunchAgent targets), `scripts/install-sub.sh` (the old update command's fixed call site), and the repo-root `vault-public` symlink. Each one is a relative symlink into the real file above and is itself git-tracked; see `core/data/moves.tsv` for the full map.
+Note: the pre-v1.1 folders `claude/`, `codex/`, `scripts/`, `cmux/`, `config/`, `launchagents/` are gone. The compatibility forwarding symlinks v1.1 kept at some old paths were removed in v1.2; `core/data/moves.tsv` still lists each removed old path with the mark `撤去` (retired), and `core/assembly/check-drift.sh --forward-refs` confirms nothing still names one (see "Drift Detection").
 
 ### Roles: Orchestrator / Worker / Codex
 
@@ -99,13 +99,17 @@ How a worker is launched (`resolve-candidate`, in-process `Agent` rejection, `cl
 
 ### About the public Vault snapshot (`ai-brain/data/vault-public/`)
 
-This repository's `ai-brain/data/vault-public/` is a full-copy snapshot of only the folders in the external brain (Obsidian Vault) that have been designated as "containing no personal information" (currently `Preferences/`). The remaining folders that may contain personal information (`Personal/` `Knowledge/` `Decisions/` `Projects/` `Fragments/` `Explorations/` `Blogs/`) are reproduced as **empty folders with just a README.md, no content** (so that a sub machine trying to write to them doesn't fail with "folder not found"). The export is triggered from two places: the weekly `maintenance.sh` Phase 0 and the close of each task on the main machine (`check-drift.sh` only reports a stale snapshot as informational). A compatibility symlink named `vault-public` is kept at the repo root (the old update command and the public repo's own look both still reach it there).
+This repository's `ai-brain/data/vault-public/` is a full-copy snapshot of only the folders in the external brain (Obsidian Vault) that have been designated as "containing no personal information" (currently `Preferences/`). The remaining folders that may contain personal information (`Personal/` `Knowledge/` `Decisions/` `Projects/` `Fragments/` `Explorations/` `Blogs/`) are reproduced as **empty folders with just a README.md, no content** (so that a sub machine trying to write to them doesn't fail with "folder not found"). The export is triggered from two places: the weekly `maintenance.sh` Phase 0 and the close of each task on the main machine (`check-drift.sh` only reports a stale snapshot as informational).
 
 Generation/updating is done by `ai-brain/executor/export-public-vault.sh` (details = the comment at the top of the script).
 
 ### Component ledger (`core/data/ledger.tsv`)
 
-Every tracked component (file or folder), every test suite, and every "calling the human" site is looked up through this one TSV file (columns: kind, path, function, layer, provider, key, note, notices). `core/assembly/ledger-tool.sh check` re-derives the real tree (via `git ls-files`), the old→new move map (`core/data/moves.tsv`), and this README's own Structure section, and reports any mismatch as a single line each. The move map records the v1.1 split: parts and suites that existed at v1.1 have a row there, while parts and suites added after v1.1 (e.g. `tests/test-notify.sh`) need only their ledger row and are not added to the move map. The same tool's `lookup <key>` is how one component calls into another function without naming it directly (e.g. "the AI Brain health judge", "the Dock declaration CLI") — a missing key is a planned no-op, a broken ledger or a missing/non-executable target is reported with a fixed `LEDGER: …` line. The 8th column, **notices**, is filled only on Notify's senders (`call.alert`, `call.usage`, `call.ask`, `answer`, comma-separated; a bare `call` takes every call), and `route <notice>` returns the senders for one notice (`<destination><TAB><path>`, in ledger order) — that is how the mouth finds where to deliver without naming any destination. Adding a part or a suite always means adding one row here (FR-14).
+Every tracked component (file or folder), every test suite, and every "calling the human" site is looked up through this one TSV file (columns: kind, path, function, layer, provider, key, note, notices, placement). `core/assembly/ledger-tool.sh check` re-derives the real tree (via `git ls-files`), the old→new move map (`core/data/moves.tsv`), and this README's own Structure section, and reports any mismatch as a single line each. The move map records the v1.1 split: parts and suites that existed at v1.1 have a row there, while parts and suites added after v1.1 (e.g. `tests/test-notify.sh`) need only their ledger row and are not added to the move map. The same tool's `lookup <key>` is how one component calls into another function without naming it directly (e.g. "the AI Brain health judge", "the Dock declaration CLI") — a missing key is a planned no-op, a broken ledger or a missing/non-executable target is reported with a fixed `LEDGER: …` line. The 8th column, **notices**, is filled only on Notify's senders (`call.alert`, `call.usage`, `call.ask`, `answer`, comma-separated; a bare `call` takes every call), and `route <notice>` returns the senders for one notice (`<destination><TAB><path>`, in ledger order) — that is how the mouth finds where to deliver without naming any destination. Adding a part or a suite always means adding one row here (FR-14).
+
+The 9th column, **placement**, says where the installer puts the part: `-` (not placed) or `<how>:<where>` — how = `link` (a symlink to the part; a folder row links each file under it), `gen` (a generated file with `$HOME` filled in), `run` (run the part, a setup script, which places its own files); where = a live location starting with `$HOME/`. `ledger-tool.sh placement [--all]` lists the placement of the selected functions (`<how><TAB><where><TAB><part><TAB><function>`, in ledger order; `--all` = every function). The installer, hook registration, the cleanup of unselected functions, and `check-drift.sh` use only this list.
+
+**Selecting functions**: `core/assembly/install-main.sh --select ai-brain,core` places only the named functions (comma-separated, from `ai-brain`, `team`, `usage`, `notify`, `dock`, `core`; Core is always included) and saves the choice to `~/.config/takumi009-ai-env/components.env` as `AIENV_COMPONENTS=ai-brain,core` (path overridable with `AIENV_COMPONENTS_FILE`). No file = everything; `--select all` goes back to everything by deleting the file. Without `--select` the installer keeps the saved selection; `install-sub.sh --select …` passes it on, and `update-sub.sh` (no arguments) always uses the saved one. Lookups (`lookup`, `route`, `placement`) treat unselected functions' rows as absent. To undo, run the installer again with the previous selection spelled out. The installer never runs `launchctl`: the end of its output lists the LaunchAgent install commands for the selected functions and the unload commands for the unselected ones (each marked if already done).
 
 ### Setup
 
@@ -152,8 +156,6 @@ usage/assembly/install-usage-fetch.sh           # re-register the usage-fetch La
 core/assembly/check-drift.sh                    # confirm 0 drift: every registered hook command and every LaunchAgent target must exist
 ```
 
-The old paths (`claude/hooks/*.sh`, `cmux/cmux-next-model.sh` / `cmux-task-model.sh`, `scripts/backup-vault.sh` / `maintenance.sh` / `usage-fetch.sh` / `install-sub.sh`, `vault-public`) are kept only as compatibility symlinks to the files above, so every already-registered hook and LaunchAgent keeps working at each point of this sequence — right after `git pull`, and even if `install-main.sh` fails partway through (see "Component ledger" above and `core/data/moves.tsv` for the full map).
-
 ##### Taking in v1.2 (bundle B: the notification mouth) on an existing main machine
 
 ```sh
@@ -164,7 +166,20 @@ core/executor/audit.sh --quick                  # if the NG-word file is still a
 core/assembly/check-drift.sh                    # confirm 0 drift
 ```
 
-The forwarding symlinks described above stay in place for now.
+##### Taking in v1.2 (bundle C: ledger-driven install, forwarding symlinks removed) on an existing main machine
+
+Bundle C removes the old-path forwarding symlinks. First update dotfiles and restart the Dock's Project and Task panes — they read the supply path only once, when they start — then take in this repository:
+
+```sh
+git -C ~/work/dotfiles pull --ff-only          # dotfiles first (its v1.2 commit points the Dock supply at the new paths)
+# restart the Dock's Project and Task panes now (quit cmux with Cmd+Q and open it again)
+cd ~/work/takumi009-ai-env
+git pull --ff-only
+core/assembly/install-main.sh --with-dotfiles   # keeps the saved selection (none saved = everything)
+# read the end of the output: run the LaunchAgent install/unload commands it lists as needed
+core/assembly/check-drift.sh --managed-symlinks-only   # placement health: exit 0 = every placed item and registered hook exists
+core/assembly/check-drift.sh --forward-refs            # retirement precheck: no output and exit 0 = nothing names a removed old path
+```
 
 #### Sub environment
 
@@ -184,6 +199,8 @@ Details = the comments at the top of `core/assembly/install-sub.sh`, `core/assem
 1. `git pull --ff-only` (a plain pull, not `update-sub.sh` — with the old profile still in place, `update-sub.sh` itself would refuse to run).
 2. Only if the schema changed: copy the samples over the real files (`cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md`, `cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf`; back up the existing real file first, permission `0600`) and edit the profile for this sub machine — at least `machine_role: configured value=sub` (the samples carry the main machine's values), plus `role.leader`, `no_read_paths`, `team_mode` as needed. `core/assembly/install-sub.sh --check-profile` prints the resolve result as one line with no side effects.
 3. `core/assembly/update-sub.sh` — pull → `install-sub.sh` → `ai-brain/data/vault-public/Preferences/` re-sync, every run (no flags; the old re-sync flag is gone). Confirm it ends with `done.`; a new session's mode line should then show the current version. If it prints `AGENTS: dangling`, delete the file(s) it names.
+
+Taking in v1.2 bundle C on a sub machine: (only if this machine uses dotfiles) `git -C ~/work/dotfiles pull --ff-only` and restart the Dock's Project and Task panes → `core/assembly/update-sub.sh` once → `core/assembly/check-drift.sh --forward-refs` (add `--dotfiles none` on a machine without dotfiles) shows no output and exits 0.
 
 ⚠️ `update-sub.sh`'s failure message attributes the cause to "the role-cast profile's `machine_role` isn't `sub`", but the exact same message also appears when the real cause is an old-schema profile whose fixed keys read as `unknown` (the resolver's own `stderr` is discarded). Run `profile_resolve.py resolve` directly first to see what it's actually reading before assuming which cause applies.
 
@@ -243,7 +260,12 @@ Install it with `usage/assembly/install-usage-fetch.sh` (a plain bootstrap+enabl
 core/assembly/check-drift.sh
 ```
 
-Checks the following 5 points and lists them (**it does not exit 1 even if drift is detected** = a report tool for manual checking): ① managed symlinks and the generated `~/.claude/settings.json`, ② the generated `~/.codex/config.toml`, ③ uncommitted changes in this repository, ④ `ai-brain/data/vault-public/Preferences` vs. the real Vault (informational only), ⑤ the Vault-backup / private-patch remote is still **private** on GitHub. Details = the comment at the top of the script.
+Checks the following 5 points and lists them (**it does not exit 1 even if drift is detected** = a report tool for manual checking): ① managed symlinks and the generated `~/.claude/settings.json`, ② the generated `~/.codex/config.toml`, ③ uncommitted changes in this repository, ④ `ai-brain/data/vault-public/Preferences` vs. the real Vault (informational only), ⑤ the Vault-backup / private-patch remote is still **private** on GitHub. ① and ② use the ledger's placement list for the selected functions (② only when the list has the Codex config). Details = the comment at the top of the script.
+
+Two modes do return an exit code:
+
+- `core/assembly/check-drift.sh --managed-symlinks-only` — placement health check: every item of the placement list (`ledger-tool.sh placement`) is in place and every hook command registered in `~/.claude/settings.json` exists and is executable. 0 = healthy, 1 = something missing or wrong (`update-sub.sh` uses it too).
+- `core/assembly/check-drift.sh --forward-refs [--dotfiles <path|none>]` — retirement precheck (read-only): looks for the old paths marked `撤去` in `core/data/moves.tsv` in 5 places (link targets of symlinks under `~/.claude` and `~/.codex`, `~/.claude/settings.json`, `~/Library/LaunchAgents/*.plist`, the tracked files of the dotfiles checkout, the Vault's `Preferences`) and prints one `<kind><TAB><location><TAB><old path>` line per hit; 0 = none, 1 = some. The dotfiles checkout is `--dotfiles` (wins), else `DOTFILES_DIR` (default `~/work/dotfiles`); `--dotfiles none` = this machine doesn't use dotfiles (one "対象なし" line, skipped); a missing or unreadable checkout or Vault (`VAULT`) exits 2. A running process that read a path when it started (the Dock panes) can't be seen — hence the restart in the procedure above.
 
 ### Restore Runbook (Disaster Recovery / Main Migration)
 
@@ -305,7 +327,7 @@ Arguments, exit codes, and environment variables = `core/connect/claude-code/ses
 bash tests/run-all.sh
 ```
 
-This runs every `tests/test-*.sh` suite one after another and exits non-zero at the end if any of them failed. None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). This run also includes the component-ledger check (`tests/test-ledger.sh`, driven by `core/assembly/ledger-tool.sh check`): every part and suite has exactly one ledger row, there are no cross-function references outside the key-lookup mechanism, every forwarding symlink reaches its successor, and every hook/LaunchAgent target that `install-main.sh` registers actually exists.
+This runs every `tests/test-*.sh` suite one after another and exits non-zero at the end if any of them failed. None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). This run also includes the component-ledger check (`tests/test-ledger.sh`, driven by `core/assembly/ledger-tool.sh check`): every part and suite has exactly one ledger row, there are no cross-function references outside the key-lookup mechanism, no forwarding mark is left in the move map and no retired old path is tracked, and every hook/LaunchAgent target that `install-main.sh` registers actually exists.
 
 ### License
 
@@ -352,7 +374,7 @@ takumi009-ai-env/
 │   ├── assembly/                # install-backup.sh・install-maintenance.sh・LaunchAgent plist 2 本（backup-vault／maintenance）
 │   └── data/
 │       ├── templates/           # private 骨格フォルダの README 雛形
-│       └── vault-public/        # Vault の公開フォルダのスナップショット（後述。repo 直下に転送 symlink `vault-public` も残る）
+│       └── vault-public/        # Vault の公開フォルダのスナップショット（後述）
 ├── team/                        # ワーカー起動・職種定義・配役表とモデル定義の解決・委任の柵・Codex 接続
 │   ├── rules/
 │   │   └── agents/               # ワーカー役割定義（1 ファイル＝1 職種）
@@ -394,7 +416,7 @@ takumi009-ai-env/
 └── tests/                            # ユニットテスト
 ```
 
-注: v1.1 以前の `claude/`・`codex/`・`scripts/`・`cmux/`・`config/`・`launchagents/` は、もう実体を持ちません。本 repo の外から直接名指す先（配置済みの `~/.claude/settings.json`・LaunchAgent、別リポジトリ dotfiles）がある分だけ、旧パスに**転送 symlink**を残しています＝`claude/hooks/*.sh` の登録フック 14 本・`cmux/cmux-next-model.sh`／`cmux-task-model.sh`（dotfiles の既定供給パス）・`scripts/backup-vault.sh`／`maintenance.sh`／`usage-fetch.sh`（LaunchAgent の起動対象 3 本）・`scripts/install-sub.sh`（旧更新コマンドの固定呼び出し先）・repo 直下の `vault-public`。いずれも上記の実体への相対 symlink で、git 追跡対象です（一覧＝`core/data/moves.tsv`）。
+注: v1.1 以前の `claude/`・`codex/`・`scripts/`・`cmux/`・`config/`・`launchagents/` は、もうありません。v1.1 が一部の旧パスに残した転送 symlink は v1.2 で撤去しました。撤去した旧パスは `core/data/moves.tsv` に印 `撤去` で残り、`core/assembly/check-drift.sh --forward-refs` がそれを名指す先が残っていないことを確かめます（「ズレの検知」節）。
 
 ### 役割: リーダー／ワーカー／Codex
 
@@ -415,13 +437,17 @@ takumi009-ai-env/
 
 ### 公開 Vault スナップショット（`ai-brain/data/vault-public/`）について
 
-このリポジトリの `ai-brain/data/vault-public/` は、外部脳（Obsidian Vault）のうち「個人情報を含まない」と決めたフォルダ（現状 `Preferences/`）だけを丸ごとコピーしたスナップショットです。個人情報を含みうる残りのフォルダ（`Personal/` `Knowledge/` `Decisions/` `Projects/` `Fragments/` `Explorations/` `Blogs/`）は、**中身を含めず空フォルダ＋README.mdだけ**を再現しています（サブ機で書き込もうとした際に「フォルダが無い」で失敗しないようにするため）。export の起点は 2 つ＝週次 `maintenance.sh` の Phase 0 と、メイン機での案件の締め（`check-drift.sh` はスナップショットの遅れを informational として表示するだけ）。repo 直下には転送 symlink `vault-public` を残しています（旧更新コマンドと公開 repo の見た目の両方がそこを見る）。
+このリポジトリの `ai-brain/data/vault-public/` は、外部脳（Obsidian Vault）のうち「個人情報を含まない」と決めたフォルダ（現状 `Preferences/`）だけを丸ごとコピーしたスナップショットです。個人情報を含みうる残りのフォルダ（`Personal/` `Knowledge/` `Decisions/` `Projects/` `Fragments/` `Explorations/` `Blogs/`）は、**中身を含めず空フォルダ＋README.mdだけ**を再現しています（サブ機で書き込もうとした際に「フォルダが無い」で失敗しないようにするため）。export の起点は 2 つ＝週次 `maintenance.sh` の Phase 0 と、メイン機での案件の締め（`check-drift.sh` はスナップショットの遅れを informational として表示するだけ）。
 
 生成・更新は `ai-brain/executor/export-public-vault.sh` が行います（詳細＝スクリプト冒頭のコメント）。
 
 ### 台帳（`core/data/ledger.tsv`）
 
-全部品（ファイル・フォルダ）・全スイート・本人を呼ぶ全箇所は、この TSV 1 本（列＝種類・パス・機能・層・提供元・鍵・備考・知らせ）から引けます。`core/assembly/ledger-tool.sh check` が、実フォルダ（`git ls-files` から導出）・移動表（`core/data/moves.tsv`）・この README の構成節それぞれと突合し、食い違いを 1 件 1 行で報告します。移動表は v1.1 の分割の記録で、v1.1 時点の部品・スイートには行がありますが、v1.1 より後に足した部品・スイート（例＝`tests/test-notify.sh`）は台帳の行だけで、移動表には足しません。同じツールの `lookup <鍵>` が、他機能の部品名を書かずに呼ぶ経路です（例＝「AI Brain のヘルス判定機」「Dock の宣言 CLI」）。鍵が無ければ予定された省略、台帳異常・実体異常は固定文 `LEDGER: …` で報告します。8 列目「知らせ」は Notify の送り手の行だけが持ち（`call.alert`・`call.usage`・`call.ask`・`answer` のカンマ区切り。`call` だけなら全ての呼出）、`route <知らせ>` がその知らせの送り手を台帳の行順に返します（`<届け先><TAB><パス>`）＝口は届け先の名前を持たずにこれで引きます。部品・スイートを足すときは、この台帳に 1 行を足します（FR-14）。
+全部品（ファイル・フォルダ）・全スイート・本人を呼ぶ全箇所は、この TSV 1 本（列＝種類・パス・機能・層・提供元・鍵・備考・知らせ・配置）から引けます。`core/assembly/ledger-tool.sh check` が、実フォルダ（`git ls-files` から導出）・移動表（`core/data/moves.tsv`）・この README の構成節それぞれと突合し、食い違いを 1 件 1 行で報告します。移動表は v1.1 の分割の記録で、v1.1 時点の部品・スイートには行がありますが、v1.1 より後に足した部品・スイート（例＝`tests/test-notify.sh`）は台帳の行だけで、移動表には足しません。同じツールの `lookup <鍵>` が、他機能の部品名を書かずに呼ぶ経路です（例＝「AI Brain のヘルス判定機」「Dock の宣言 CLI」）。鍵が無ければ予定された省略、台帳異常・実体異常は固定文 `LEDGER: …` で報告します。8 列目「知らせ」は Notify の送り手の行だけが持ち（`call.alert`・`call.usage`・`call.ask`・`answer` のカンマ区切り。`call` だけなら全ての呼出）、`route <知らせ>` がその知らせの送り手を台帳の行順に返します（`<届け先><TAB><パス>`）＝口は届け先の名前を持たずにこれで引きます。部品・スイートを足すときは、この台帳に 1 行を足します（FR-14）。
+
+9 列目「配置」は、組立がその部品をどこへ置くか＝`-`（置かない）か `<仕方>:<置き場>`。仕方＝`link`（部品への symlink。フォルダの行は配下の各ファイルを同名で）・`gen`（`$HOME` を埋めた生成物）・`run`（部品＝配置手順を実行し、手順が自分で置く）。置き場は `$HOME/` で始まるライブ位置。`ledger-tool.sh placement [--all]` が選択の機能の配置一覧を台帳の行順に返します（`<仕方><TAB><置き場><TAB><実体><TAB><機能>`。`--all`＝全機能）。組立・フックの登録・選択外の機能の掃除・`check-drift.sh` はこの一覧だけを使います。
+
+**機能の選択**: `core/assembly/install-main.sh --select ai-brain,core` は名指した機能だけを置き（カンマ区切り。`ai-brain`・`team`・`usage`・`notify`・`dock`・`core` から。Core は常に含む）、選択を `~/.config/takumi009-ai-env/components.env` に `AIENV_COMPONENTS=ai-brain,core` として保存します（パスは `AIENV_COMPONENTS_FILE` で上書き可）。ファイルが無い＝全部入り。`--select all` はファイルを消して全部入りへ戻します。`--select` なしは保存済みの選択のまま。`install-sub.sh --select …` は同じ引数を渡し、`update-sub.sh`（引数なし）は常に保存済みの選択で組み立てます。照会（`lookup`・`route`・`placement`）は選択外の機能の行を無いものとして扱います。戻すときは前の選択を明示して組立を再実行します。組立は `launchctl` を実行しません＝出力の末尾に、選択の機能の常駐の登録コマンドと選択外の機能の常駐の解除コマンドを毎回示します（済みならその旨を添える）。
 
 ### 導入手順
 
@@ -468,8 +494,6 @@ usage/assembly/install-usage-fetch.sh           # 使用率取得器 LaunchAgent
 core/assembly/check-drift.sh                    # drift 0 件を確認（登録フックの全コマンド・LaunchAgent の起動対象が実在すること）
 ```
 
-旧パス（`claude/hooks/*.sh`・`cmux/cmux-next-model.sh`／`cmux-task-model.sh`・`scripts/backup-vault.sh`／`maintenance.sh`／`usage-fetch.sh`／`install-sub.sh`・`vault-public`）は上記の実体への転送 symlink として残るだけなので、`git pull` 直後や `install-main.sh` が途中で失敗した場合を含め、この手順のどの時点でも既存の登録フック・LaunchAgent は動作し続けます（一覧＝前述「台帳」節・`core/data/moves.tsv`）。
-
 ##### 既存メイン機の v1.2 取込み手順（束 B＝通知の口）
 
 ```sh
@@ -480,7 +504,20 @@ core/executor/audit.sh --quick                  # NG 語ファイルが旧 scrip
 core/assembly/check-drift.sh                    # drift 0 件を確認
 ```
 
-前述の転送 symlink は当面そのまま残ります。
+##### 既存メイン機の v1.2 取込み手順（束 C＝台帳駆動の組立・転送の撤去）
+
+束 C は旧パスの転送 symlink を撤去します。先に dotfiles を更新して Dock の Project・Task の 2 枠を再起動し（供給のパスを起動時に 1 回だけ読むため）、それからこの repo を取り込みます:
+
+```sh
+git -C ~/work/dotfiles pull --ff-only          # 先に dotfiles（v1.2 の commit で Dock の供給を新パスへ）
+# ここで Dock の Project・Task の 2 枠を再起動する（cmux を Cmd+Q で終了して開き直す）
+cd ~/work/takumi009-ai-env
+git pull --ff-only
+core/assembly/install-main.sh --with-dotfiles   # 保存済みの選択のまま（保存なし＝全部入り）
+# 出力の末尾を読む＝示された常駐の登録・解除のコマンドを要るぶん実行する
+core/assembly/check-drift.sh --managed-symlinks-only   # 配置の健全性検査＝exit 0 で全配置・全登録フックの実体が揃っている
+core/assembly/check-drift.sh --forward-refs            # 撤去の前提検査＝出力なし・exit 0 で撤去した旧パスを名指す先が無い
+```
 
 #### サブ環境
 
@@ -500,6 +537,8 @@ core/assembly/install-sub.sh
 1. `git pull --ff-only`（`update-sub.sh` ではなく素の pull。旧プロファイルのままでは `update-sub.sh` 自体が拒否するため）。
 2. schema が変わったときだけ: sample を実体へコピーし（`cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf`。既存の実体は先に退避・権限 `0600`）、プロファイルをサブ機用に編集する——最低限 `machine_role: configured value=sub`（sample はメイン機の値のため）、必要に応じて `role.leader`・`no_read_paths`・`team_mode` も。`core/assembly/install-sub.sh --check-profile` が resolve 結果を1行で返す（副作用ゼロ）。
 3. `core/assembly/update-sub.sh` — pull → `install-sub.sh` → `ai-brain/data/vault-public/Preferences/` 再同期を毎回行う（引数なし・旧・再同期フラグは廃止）。`done.` で終わることを確認し、新しいセッションの開幕1行で版を確認する。`AGENTS: dangling` が出た場合は、表示されたファイルを削除する。
+
+サブ機の v1.2 束 C の取込み: （dotfiles を使う機だけ）`git -C ~/work/dotfiles pull --ff-only` と Dock の Project・Task の 2 枠の再起動 → `core/assembly/update-sub.sh` を 1 回 → `core/assembly/check-drift.sh --forward-refs`（dotfiles を使わない機は `--dotfiles none` を足す）が出力なし・exit 0。
 
 ⚠️ `update-sub.sh` の失敗文面は原因を「配役表の `machine_role` が `sub` でない」と示しますが、実際の起点が「プロファイルが旧 schema で固定キーが `unknown` 扱いになっている」場合でも同じ文面になります（resolver 自身の `stderr` は捨てられます）。まず `profile_resolve.py resolve` を直接叩いて何が読めているかを確認してから、原因を判断してください。
 
@@ -559,7 +598,12 @@ python3 ~/work/takumi009-ai-env/ai-brain/executor/health_judge.py ack \
 core/assembly/check-drift.sh
 ```
 
-以下5点を検査し、一覧表示します（**検知しても exit 1 にはしません**＝手動確認用のレポートツール）: ① symlink と生成物 `~/.claude/settings.json`、② 生成物 `~/.codex/config.toml`、③ 未commitの変更、④ `ai-brain/data/vault-public/Preferences` の差分（informational）、⑤ private repo の remote が **private** のままか。詳細＝スクリプト冒頭のコメント。
+以下5点を検査し、一覧表示します（**検知しても exit 1 にはしません**＝手動確認用のレポートツール）: ① symlink と生成物 `~/.claude/settings.json`、② 生成物 `~/.codex/config.toml`、③ 未commitの変更、④ `ai-brain/data/vault-public/Preferences` の差分（informational）、⑤ private repo の remote が **private** のままか。① と ② は台帳の配置一覧（選択の機能）を使います（② は一覧に Codex 設定があるときだけ）。詳細＝スクリプト冒頭のコメント。
+
+終了コードを持つモードが 2 つあります:
+
+- `core/assembly/check-drift.sh --managed-symlinks-only` — 配置の健全性検査: 配置一覧（`ledger-tool.sh placement`）の全項目が置かれ、`~/.claude/settings.json` に登録された全フックの命令が実在して実行可能か。0＝健全・1＝欠け・誤り（`update-sub.sh` も使う）。
+- `core/assembly/check-drift.sh --forward-refs [--dotfiles <パス|none>]` — 撤去の前提検査（読むだけ）: `core/data/moves.tsv` の印 `撤去` の旧パスを 5 か所（`~/.claude`・`~/.codex` 配下の symlink のリンク先・`~/.claude/settings.json`・`~/Library/LaunchAgents/*.plist`・dotfiles の checkout の追跡ファイル・Vault の `Preferences`）から探し、1 件 1 行 `<種類><TAB><場所><TAB><旧パス>` で出します。0＝該当なし・1＝あり。dotfiles の checkout は `--dotfiles`（優先）→ `DOTFILES_DIR`（既定 `~/work/dotfiles`）。`--dotfiles none`＝この機では使わない（「対象なし」を 1 行出して飛ばす）。checkout・Vault（`VAULT`）が無い・読めないときは exit 2。起動時にパスを読んだ実行中のプロセス（Dock の 2 枠）は見えません＝上の手順の再起動で担保します。
 
 ### 復元 Runbook（災害復旧・メインの移転）
 
@@ -621,7 +665,7 @@ core/connect/claude-code/session-handoff.sh -h | --help
 bash tests/run-all.sh
 ```
 
-`tests/test-*.sh` の全スイートを続けて実行し、失敗があれば最後に非 0 で終わります。いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。この一括実行には台帳の検査（`tests/test-ledger.sh`＝`core/assembly/ledger-tool.sh check` が行う）も含まれます＝全部品・全スイートが台帳にちょうど1行持つこと、鍵の照会以外で機能をまたぐ参照が無いこと、全転送 symlink が主後継へ届くこと、`install-main.sh` が登録する全フック・LaunchAgent の起動対象が実在すること。
+`tests/test-*.sh` の全スイートを続けて実行し、失敗があれば最後に非 0 で終わります。いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。この一括実行には台帳の検査（`tests/test-ledger.sh`＝`core/assembly/ledger-tool.sh check` が行う）も含まれます＝全部品・全スイートが台帳にちょうど1行持つこと、鍵の照会以外で機能をまたぐ参照が無いこと、移動表に転送の印が残らず撤去した旧パスに追跡ファイルが無いこと、`install-main.sh` が登録する全フック・LaunchAgent の起動対象が実在すること。
 
 ### ライセンス
 

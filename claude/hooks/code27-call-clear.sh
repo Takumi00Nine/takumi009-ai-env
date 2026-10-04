@@ -1,1 +1,0 @@
-../../core/connect/claude-code/prompt-answer.sh
