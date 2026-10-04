@@ -85,7 +85,7 @@ assert_eq "FX-12: part 行がそのパスを 1 件報告" "1" "$(lines_of part |
 
 echo "=== 3. AC-3 ② FX-13（実在しないパスの行 1 行）＝① が不合格・そのパスを報告 ==="
 fresh_copy
-printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\t-\t\n' >> "$FX/$LF_LEDGER_REL"
+printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\t-\t-\t-\n' >> "$FX/$LF_LEDGER_REL"
 lf_commit_all "$FX"
 run_check "$FX"
 assert_true "FX-13: 非 0" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
@@ -310,16 +310,16 @@ run_lookup "ai-brain.recall" "$WORK/short.tsv"
 assert_eq "台帳異常（列数不足）: 終了 2" "2" "$LOOKUP_RC"
 assert_true "台帳異常（列数不足）: LEDGER: ledger …" "$(grep -q '^LEDGER: ledger ' "$WORK/lk.err" && echo 1 || echo 0)"
 # V-06: 照会も check と同じ語彙検査をする＝suite 行の機能が語彙外の台帳は台帳異常（設計 §5.6）。
-{ cat "$LEDGER"; printf 'suite\ttests/test-ledger.sh\tzz-not-a-function\t-\t-\t-\t\n'; } > "$WORK/bad-vocab.tsv" 2>/dev/null
+{ cat "$LEDGER"; printf 'suite\ttests/test-ledger.sh\tzz-not-a-function\t-\t-\t-\t-\t-\n'; } > "$WORK/bad-vocab.tsv" 2>/dev/null
 run_lookup "ai-brain.recall" "$WORK/bad-vocab.tsv"
 assert_eq "台帳異常（suite 行の機能が語彙外）: 終了 2" "2" "$LOOKUP_RC"
 assert_true "台帳異常（suite 行の機能が語彙外）: LEDGER: ledger …" "$(grep -q '^LEDGER: ledger ' "$WORK/lk.err" && echo 1 || echo 0)"
-{ cat "$LEDGER"; printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\tzz.missing\t\n'; } > "$WORK/bad-part.tsv" 2>/dev/null
+{ cat "$LEDGER"; printf 'part\tai-brain/executor/zz-missing.sh\tai-brain\texecutor\t-\tzz.missing\t-\t-\n'; } > "$WORK/bad-part.tsv" 2>/dev/null
 run_lookup "zz.missing" "$WORK/bad-part.tsv"
 assert_eq "実体異常（パス不在）: 終了 3" "3" "$LOOKUP_RC"
 assert_true "実体異常: stderr 1 行＝LEDGER: part zz.missing <パス> …" \
   "$([ "$(grep -c . "$WORK/lk.err")" = "1" ] && grep -q '^LEDGER: part zz\.missing .*ai-brain/executor/zz-missing\.sh' "$WORK/lk.err" && echo 1 || echo 0)"
-{ cat "$LEDGER"; printf 'part\t%s\tcore\tdata\t-\tzz.noexec\t\n' "$LF_LEDGER_REL"; } > "$WORK/noexec.tsv" 2>/dev/null
+{ cat "$LEDGER"; printf 'part\t%s\tcore\tdata\t-\tzz.noexec\t-\t-\n' "$LF_LEDGER_REL"; } > "$WORK/noexec.tsv" 2>/dev/null
 run_lookup "zz.noexec" "$WORK/noexec.tsv"
 assert_eq "実体異常（実行不可）: 終了 3" "3" "$LOOKUP_RC"
 
