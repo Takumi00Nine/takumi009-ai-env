@@ -1062,6 +1062,60 @@ echo "=== 37. v1.2 §3.1 C-V04: 選択ファイルが不正（KEY=VALUE 1キー�
   done
 }
 
+echo "=== 38. v1.2 設計§3.3 A0/F0・FR-10・FR-14・検証C2-V04: settings.json雛形が壊れている（①不正JSON／②必須placeholder欠落）＝--selectしても何も変えずに非0・理由1行（選択ファイル未作成・ライブ位置不変・既存settings.jsonがbyte不変）。--dry-runでも同じ非0 ==="
+{
+  for VARIANT in invalid-json missing-placeholder; do
+    TMP_REPO="$(mktemp -d)"
+    cp -R "$REPO_ROOT/." "$TMP_REPO/"
+    TPL="$TMP_REPO/core/assembly/settings.json"
+
+    FAKE_HOME="$(mktemp -d)"
+    make_fake_home "$FAKE_HOME"
+    # 事前に全部入りで組立てる（まだ雛形を壊していない状態＝「既存のsettings.jsonを事前に全部入りで作っておく」）。
+    rc=0
+    SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" >/dev/null 2>&1 || rc=$?
+    assert_eq "C2-V04（${VARIANT}）前提: 正しい雛形での全部入り組立はexit 0" "0" "$rc"
+    assert_true "C2-V04（${VARIANT}）前提: 事前の全部入り組立は選択ファイルを作らない" \
+      "$([ ! -e "$FAKE_HOME/$COMPONENTS_REL" ] && echo 1 || echo 0)"
+    BEFORE_NAMES="$(live_names "$FAKE_HOME")"
+
+    # ここで雛形を壊す（既に完了した事前の正常な組立には影響しない）。
+    case "$VARIANT" in
+      invalid-json)
+        printf '{ "model": "__AIENV_MODEL__", BROKEN' > "$TPL"
+        ;;
+      missing-placeholder)
+        python3 -c "
+import json
+with open('$TPL') as f:
+    d = json.load(f)
+d['model'] = 'claude-hardcoded-not-a-placeholder'
+with open('$TPL', 'w') as f:
+    json.dump(d, f, indent=2)
+"
+        ;;
+    esac
+    BEFORE_SETTINGS_SUM="$(cksum "$FAKE_HOME/.claude/settings.json" 2>/dev/null | awk '{print $1, $2}')"
+
+    rc=0
+    OUT="$(SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" --select ai-brain,core 2>&1)" || rc=$?
+    assert_true "C2-V04（${VARIANT}）: 非0終了" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+    assert_eq "C2-V04（${VARIANT}）: 理由が1行（[install-main] FAIL: が1回）" "1" \
+      "$(printf '%s\n' "$OUT" | grep -c '\[install-main\] FAIL:' || true)"
+    assert_true "C2-V04（${VARIANT}）: 選択ファイルが作られない" \
+      "$([ ! -e "$FAKE_HOME/$COMPONENTS_REL" ] && echo 1 || echo 0)"
+    assert_eq "C2-V04（${VARIANT}）: ライブ位置に名前が1つも増えない（不変）" "$BEFORE_NAMES" "$(live_names "$FAKE_HOME")"
+    assert_eq "C2-V04（${VARIANT}）: 既存のsettings.jsonがbyte不変" "$BEFORE_SETTINGS_SUM" \
+      "$(cksum "$FAKE_HOME/.claude/settings.json" 2>/dev/null | awk '{print $1, $2}')"
+
+    rc=0
+    SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$FAKE_HOME" bash "$TMP_REPO/core/assembly/install-main.sh" --select ai-brain,core --dry-run >/dev/null 2>&1 || rc=$?
+    assert_true "C2-V04（${VARIANT}）: --dry-run でも非0終了" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+
+    rm -rf "$FAKE_HOME" "$TMP_REPO"
+  done
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

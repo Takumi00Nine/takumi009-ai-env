@@ -3317,6 +3317,23 @@ echo "=== 92. v1.2 FR-18 C-V02: 読めない dotfiles 追跡ファイル・Vault
   rm -rf "$HOME92C" "$VAULT92C_PARENT"
 }
 
+echo "=== 93. v1.2 FR-18 検証C2-V06: 列挙不能な \$HOME/Library/LaunchAgents（os.listdir失敗・C-V02の読取失敗とは独立の分岐）＝--forward-refs は exit 2・対象パスを stderr へ ==="
+{
+  HOME93="$(mktemp -d)"; mkdir -p "$HOME93/.claude" "$HOME93/Library/LaunchAgents"
+  VAULT93_PARENT="$(mktemp -d)"; VAULT93="$VAULT93_PARENT/obsidian"; mkdir -p "$VAULT93/Preferences"
+  chmod 000 "$HOME93/Library/LaunchAgents"
+
+  ERR93="$(mktemp)"
+  rc=0
+  HOME="$HOME93" VAULT="$VAULT93" bash "$REPO_ROOT/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles none >/dev/null 2>"$ERR93" || rc=$?
+  assert_eq_num "C2-V06: 列挙不能な LaunchAgents は exit 2" "$rc" "2"
+  assert_true "C2-V06: stderr に対象パス（LaunchAgents）" "$(grep -qF "$HOME93/Library/LaunchAgents" "$ERR93" && echo 1 || echo 0)"
+
+  chmod 755 "$HOME93/Library/LaunchAgents"
+  rm -rf "$HOME93" "$VAULT93_PARENT"; rm -f "$ERR93"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

@@ -446,10 +446,8 @@ fi
 # python3依存の早期チェック: generate_settings_json()がclaude/settings.json生成に
 # python3のjson moduleを必須で使う。マーカー書込・symlink化等の実処理が始まって
 # から中途半端な状態でpython3不在に気付くより、着手前に明確な指示を出す。
-# --dry-run は実際には何も生成しない＝python3を必要としないため対象外。
-if [ "$DRY_RUN" != "1" ]; then
-  command -v python3 >/dev/null 2>&1 || fail_settings_generation "python3 が見つかりません（core/assembly/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
-fi
+# --dry-run も対象（A0 の雛形の検証＝check_settings_template() が python3 を使う＝v1.2 設計 §3.3 A0）。
+command -v python3 >/dev/null 2>&1 || fail_settings_generation "python3 が見つかりません（core/assembly/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
 # バックアップは「.pre-aienv.bak がまだ無いときだけ」作る（何度実行しても
 # 常にインストール前オリジナルを保持する。symlink化後は dest が symlink に
 # なるため自然と対象外になるが、generate_config_toml() のように毎回実ファイルを
@@ -580,13 +578,39 @@ generate_config_toml() {
 # 当たらないフックは 1 件 1 行で報告する（hooks が空になったイベントは消す）。他の生成規則は変えない。
 # 生成物を置けたら AIENV_SETTINGS_WRITTEN=1（掃除＝登録の後、の判定に使う）。
 AIENV_SETTINGS_WRITTEN=0
+# SETTINGS_TPL_CHECK_PY — settings.json の雛形の検証（読める・JSON のオブジェクト・"model"／"effortLevel" が
+# 目印 __AIENV_MODEL__／__AIENV_EFFORT__ のまま）を行い、雛形を data に読む python の断片。A0 の
+# check_settings_template() と generate_settings_json() の生成の python が同じこの断片から始まる＝検証は
+# ここ 1 か所（テンプレへのモデル値のハードコードの回帰を fail で早期に気付く＝Codex二次レビュー指摘・Minor）。
+# 不正なら理由を stderr へ 1 行出して exit 1。
+SETTINGS_TPL_CHECK_PY='
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (OSError, ValueError) as e:
+    sys.exit("template is not readable JSON: %s" % e)
+if not isinstance(data, dict):
+    sys.exit("template is not a JSON object (got: %s)" % type(data).__name__)
+for key, mark in (("model", "__AIENV_MODEL__"), ("effortLevel", "__AIENV_EFFORT__")):
+    if data.get(key) != mark:
+        sys.exit("template %s field is not the %s placeholder (got: %r)" % (key, mark, data.get(key)))
+'
+
+# check_settings_template <雛形の repo 相対パス> — A0（何も変える前）に雛形を検証する。不正なら理由 1 行で非0終了
+# （選択の保存・配置・既存 settings.json はどれも変えていない＝v1.2 設計 §3.3 F0）。
+check_settings_template() {
+  local err
+  if ! err="$(python3 -c "$SETTINGS_TPL_CHECK_PY" "$DIR/$1" 2>&1)"; then
+    fail_settings_generation "settings.json の雛形が不正です。何も変えていません: $DIR/$1（${err##*$'\n'}）"
+  fi
+}
+
 generate_settings_json() {
   local src="$DIR/$1" dest="$2" model="$3" bedrock_env_file="${4:-}" effort="${5:-}" places="${6:-}" tmp PY_ERR PY_OUT
   local bedrock_status bedrock_env_perm bedrock_payload bedrock_kind
-  # ⚠️ テンプレ欠落（設計書S5）。fail_settings_generation()を使う（他の
-  # link()・generate_config_toml()内の同文言はsettings.json以外のファイル
-  # 用なので対象外＝そちらは変更しない）。
-  [ -e "$src" ] || fail_settings_generation "リポジトリのファイルが見つかりません（checkout破損の可能性）: $src"
+  # テンプレの欠落・不正（設計書S5）は A0 の check_settings_template() が先に止める。下の生成の python も
+  # 同じ検証の断片（SETTINGS_TPL_CHECK_PY）から始まる。
   # Bedrock envファイルの状態を3分類する（bedrock_env_file_kind()参照）:
   # ABSENT(未導入・正常)／EXISTS_BUT_UNAVAILABLE(存在するのに読めない・解析
   # できない)／OK。EXISTS_BUT_UNAVAILABLEの場合は「生成失敗時は旧ファイルを
@@ -688,23 +712,8 @@ generate_settings_json() {
   if [ "$bedrock_status" != "OK" ]; then
     bedrock_payload='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
   fi
-  # テンプレの"model"値が __AIENV_MODEL__ の目印のままであることを検証してから
-  # 上書きする（Codex二次レビュー指摘・Minor対応: 検証無しに常時上書きすると、
-  # 誰かがテンプレへ再び特定モデルをハードコードしてしまう回帰＝今回のタスクの
-  # 発端そのもの＝が起きても、installは何も気付かず成功してしまう。fail()で
-  # 早期に気付けるようにする）。
-  if ! PY_OUT="$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-if not isinstance(data, dict) or data.get('model') != '__AIENV_MODEL__':
-    got = data.get('model') if isinstance(data, dict) else type(data).__name__
-    print('template \"model\" field is not the __AIENV_MODEL__ placeholder (got: ' + repr(got) + ')', file=sys.stderr)
-    sys.exit(1)
-if data.get('effortLevel') != '__AIENV_EFFORT__':
-    got = data.get('effortLevel')
-    print('template \"effortLevel\" field is not the __AIENV_EFFORT__ placeholder (got: ' + repr(got) + ')', file=sys.stderr)
-    sys.exit(1)
+  # 雛形の検証（SETTINGS_TPL_CHECK_PY＝A0 と同じ断片）を通ったものだけを上書きする。
+  if ! PY_OUT="$(python3 -c "$SETTINGS_TPL_CHECK_PY
 data['model'] = sys.argv[3]
 effort = sys.argv[5]
 if effort:
@@ -849,7 +858,7 @@ print(d.get("effort", ""))
 }
 
 # ============================================================
-# A0 開始（台帳・選択の検査と配置の導出）・A1 選択の保存（v1.2 設計 §3.1〜§3.3）
+# A0 開始（雛形・台帳・選択の検査と配置の導出）・A1 選択の保存（v1.2 設計 §3.1〜§3.3）
 # ============================================================
 # 置く集合は台帳ツールの導出だけから得る（手書きの一覧を持たない＝FR-13・FR-15）。
 # 選択の読み書き（ファイルの場所・形式・語彙）も台帳ツールだけが知る。
@@ -874,6 +883,7 @@ ledger_tool_or_fail() {
 if [ -n "$RENDER_SETTINGS_JSON" ] && [ -n "$SELECT_ARG" ]; then
   fail "--render-settings-json と --select は併用できません（生成物は保存された選択で作ります）"
 fi
+check_settings_template core/assembly/settings.json
 ALL_LIST="$(ledger_tool_or_fail "台帳から配置を導けません。何も変えていません" placement --all)"
 if [ -n "$SELECT_ARG" ]; then
   if [ "$DRY_RUN" = "1" ]; then

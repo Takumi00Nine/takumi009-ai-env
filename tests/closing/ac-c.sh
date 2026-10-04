@@ -15,8 +15,9 @@
 #   Team の Codex の gen 行で rename が失敗して止まる想定＝「配置を 1 件以上変えた後・登録の前」。
 # - 台帳から導いた配置の集合＝`ledger-tool.sh placement [--all]`（未実装の間は赤＝そのための試験）。
 #   選択を直接 CLI で渡す引数は無い（plan §1）ので、AIENV_COMPONENTS_FILE で一時ファイルを渡して解決する。
-# - AC-11④＝dotfiles の FR-19 commit（implementer C-3 が後で作る）。closing.conf の CLOSING_DOTFILES_REPO・
-#   CLOSING_DOTFILES_COMMIT が空（または commit が無い）間は `AC-11④ skip <理由>` を出して NG に数えない。
+# - AC-11④＝dotfiles の FR-19 commit。closing.conf の CLOSING_DOTFILES_REPO・CLOSING_DOTFILES_COMMIT は
+#   必須（C-V08）＝run-closing-c.sh が実走開始前に検査し、未指定・commit 不在は事前条件エラーで exit 2
+#   （skip にして NG を免れさせない・C2-V05）。
 
 # ---------------------------------------------------------------- 共有ヘルパ
 # clc_strip_features <wt> <fn...> — v1.1 FX-8／FX-9 の取り外し方（機能フォルダ・そのスイート・台帳の
@@ -358,6 +359,21 @@ EOF
   fi
 }
 
+# clc_dotfiles_pull_fixture <home> <stubdir> <log> — README の既定経路（$HOME/work/dotfiles）に、
+#   ローカル origin（bare）から CLOSING_DOTFILES_COMMIT の 1 つ前を clone し main で追跡させる
+#   （AC-10 の origin の作り方＝ac10_origin_reset/advance と同じ型）。README の
+#   `git -C ~/work/dotfiles pull --ff-only` が実際に commit を進める形にする（C2-V02）。
+clc_dotfiles_pull_fixture() {
+  local h="$1" s="$2" log="$3" origin="$WORK/dotfiles-origin.git" parent dest
+  dest="$h/$CLOSING_DOTFILES_DIR_DEFAULT"
+  parent="$(git -C "$CLOSING_DOTFILES_REPO" rev-parse "${CLOSING_DOTFILES_COMMIT}^")" 2>>"$log" || return 1
+  rm -rf "$origin"; git init -q --bare -b main "$origin" >>"$log" 2>&1 || return 1
+  git -C "$CLOSING_DOTFILES_REPO" push -q -f "$origin" "$parent:refs/heads/main" >>"$log" 2>&1 || return 1
+  rm -rf "$dest"; mkdir -p "$(dirname "$dest")"
+  cl_run "$h" "$s" "$h" git clone -q "$origin" "$dest" >>"$log" 2>&1 || return 1
+  git -C "$CLOSING_DOTFILES_REPO" push -q "$origin" "${CLOSING_DOTFILES_COMMIT}:refs/heads/main" >>"$log" 2>&1
+}
+
 # ---------------------------------------------------------------- AC-12 取込み（①②③④＝束 C）
 ac_12() {
   local od="$OUT/ac12c" h1="$WORK/home-ac12c-1" s1 rc=0 m1="" m2="" m3="" m4="" why
@@ -392,20 +408,25 @@ ac_12() {
   cl_readme_notes_present "$WT1/README.md" "$CLOSING_README_MARK_IMPORT_C" \
     "$CLOSING_README_NOTE_DOCK_RESTART" "$CLOSING_README_NOTE_LA_RESIDENT" > "$od/3-notes.txt" 2>&1 \
     || { cl_result AC-12 NG "③ 束 C 節に注記が無い（ac12c/3-notes.txt）"; return; }
-  local h3="$WORK/home-ac12c-3" s3 repo3 p rc3=0 dw3="$WORK/dotfiles-ac12c-3"
+  local h3="$WORK/home-ac12c-3" s3 repo3 p rc3=0 dw3
   s3="$WORK/s-ac12c-3"; cl_stubs "$s3"
   ac10_clone "$h3" "$s3" && cl_install_main base "$h3" "$h3/$CLOSING_REPO_HOME_REL" "$s3" "$od/fx6-3.log" \
     || { cl_result AC-12 NG "③ FX-6（基準のメイン機導入）が失敗（ac12c/fx6-3.log）"; return; }
   ac10_origin_advance
+  cl_mk_vault_fx4 "$h3/$CLOSING_VAULT_REL"   # 撤去の前提検査（5 本目）が読む Vault（forward-refs は VAULT 既定）
   repo3="$h3/$CLOSING_REPO_HOME_REL"
-  cl_new_wt_at "$CLOSING_DOTFILES_REPO" "$dw3" "$CLOSING_DOTFILES_COMMIT" \
-    || { cl_result AC-12 NG "③ dotfiles の worktree（FX-16）を作れない"; return; }
-  # 1 本目＝dotfiles の pull（FX-16 の worktree は commit で detach 済み＝進める先が無いのは正しい挙動。
-  #   exit は判定に使わず、実行した記録だけ残す）
-  { cl_run "$h3" "$s3" "$dw3" git pull -q --ff-only; echo "rc=$? dotfiles-pull"; } >"$od/3-import.log" 2>&1
+  # dw3＝README の既定経路のまま（$HOME/work/dotfiles・C2-V01＝cl_run は env -i なので --dotfiles を
+  #   渡さず検査器の既定解決に任せる）。ローカル origin + 追跡 branch を 1 つ前の commit で持たせ、
+  #   README どおりの pull が実際に進む形にする（C2-V02）。
+  dw3="$h3/$CLOSING_DOTFILES_DIR_DEFAULT"
+  clc_dotfiles_pull_fixture "$h3" "$s3" "$od/fx16-3-origin.log" \
+    || { cl_result AC-12 NG "③ dotfiles の origin 固定（FX-16・C2-V02）を作れない（ac12c/fx16-3-origin.log）"; return; }
+  # 1 本目＝dotfiles の pull（README の既定経路。exit 0 を必須判定＝C2-V02）
+  rc3=0; { cl_run "$h3" "$s3" "$dw3" git pull -q --ff-only; rc3=$?; echo "rc=$rc3 dotfiles-pull"; } >"$od/3-import.log" 2>&1
+  [ "$rc3" -eq 0 ] || m3="dotfiles-pull=$rc3"
   # 2 本目＝repo 自身の pull（README の `cd …; git pull --ff-only`）
   { rc3=0; cl_run "$h3" "$s3" "$repo3" git pull -q --ff-only </dev/null || rc3=$?; echo "rc=$rc3 pull"; } >>"$od/3-import.log" 2>&1
-  [ "$rc3" -eq 0 ] || m3="pull=$rc3"
+  [ "$rc3" -eq 0 ] || m3="$m3 pull=$rc3"
   # 3 本目＝installer（--with-dotfiles は README の表記のみ＝ここでは引数なしで実行＝CLOSING_README_DROP_ARGS と同じ扱い）
   p="$(cl_side_path new "$CLOSING_INSTALL_MAIN_OLD")" || { m3="$m3 引けない:$CLOSING_INSTALL_MAIN_OLD"; p=""; }
   if [ -n "$p" ]; then
@@ -414,6 +435,9 @@ ac_12() {
     [ "$rc3" -eq 0 ] || m3="$m3 $p=$rc3"
   fi
   m3="$m3$(ac10_three "$h3" "ac12c-3")"
+  # LA の起動対象（ProgramArguments）が全て実在（共有＝lib-closing.sh cl_la_targets_missing・C2-V03）
+  cl_la_targets_missing "$h3" > "$od/3-la-targets.txt"
+  [ -s "$od/3-la-targets.txt" ] && m3="$m3 起動対象欠$(grep -c . "$od/3-la-targets.txt")"
   # 4 本目＝配置の健全性検査
   p="$(cl_side_path new "$CLOSING_CHECK_DRIFT_OLD")" && {
     rc3=0; cl_run "$h3" "$s3" "$repo3" "$repo3/$p" "$CLOSING_CHECK_DRIFT_HEALTH_ARG" </dev/null >>"$od/3-import.log" 2>&1 || rc3=$?
@@ -425,7 +449,13 @@ ac_12() {
     [ "$rc3" -eq 0 ] || m3="$m3 撤去の前提検査=$rc3"
   fi
 
-  # ④ ① の後の FX-5（h1）で、FX-14 の選択→更新コマンド1回→失敗注入（.codex 読取専用）→更新コマンド
+  # ④ ① の後の FX-5（h1）で、FX-14 の選択→更新コマンド1回→失敗注入（.codex 読取専用）→更新コマンド。
+  #   r3 の発見＝選択が Core のままだと台帳の Team（Codex）行は配置の対象外で、.codex は最初の選択
+  #   切替（all→core）の退避で既に空＝chmod -w が二度と何にも当たらない。「選択が保たれる」の確認
+  #   （2 回目の更新＝exit 0・名前集合=Core）はここより前で終えたうえで、注入の直前に選択を一旦
+  #   全部入りへ戻し（同じ install-sub.sh --select、同じ cl_run）、AC-10（FX-8）と同じ位置＝
+  #   Team の Codex の行（AI Brain 相当の後・登録の前。gen:config.toml を含む）で実際に止めてから
+  #   update-sub.sh→install-sub.sh→install-main.sh の経路を通す。
   local repo1="$h1/$CLOSING_REPO_HOME_REL"
   p="$(cl_side_path new "$CLOSING_INSTALL_SUB_OLD")"
   rc=0; cl_run "$h1" "$s1" "$repo1" "$repo1/$p" "$CLOSING_SELECT_ARG" "$CLOSING_SELECT_CORE" </dev/null >"$od/4-sel.log" 2>&1 || rc=$?
@@ -433,6 +463,8 @@ ac_12() {
   rc=0; cl_run "$h1" "$s1" "$repo1" "$repo1/$CLOSING_UPDATE_SUB_OLD" </dev/null >"$od/4-update1.log" 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || m4="$m4 更新1回目=$rc"
   clc_names_match "$h1" "$repo1" "$CLOSING_SELECT_CORE" "$od/4-names" || m4="$m4 名前集合≠Core(ac12c/4-names.diff)"
+  rc=0; cl_run "$h1" "$s1" "$repo1" "$repo1/$p" "$CLOSING_SELECT_ARG" "$CLOSING_SELECT_ALL" </dev/null >"$od/4-sel-all.log" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || m4="$m4 選択を戻す(install-sub --select all)=$rc"
   chmod -w "$h1/.codex" 2>/dev/null
   rc=0; cl_run "$h1" "$s1" "$repo1" "$repo1/$CLOSING_UPDATE_SUB_OLD" </dev/null >"$od/4-update2-fail.log" 2>&1 || rc=$?
   chmod +w "$h1/.codex" 2>/dev/null

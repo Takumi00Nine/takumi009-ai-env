@@ -214,10 +214,7 @@ ac_10() {
     [ "$rc" -eq 0 ] || m2="$m2 $p=$rc"   # 配置の健全性検査（check-drift）も rc 0 を必須（C-2）
   done
   m2="$m2$(ac10_three "$h" 2)"
-  for x in $CLOSING_LA_PLISTS; do
-    plutil -extract ProgramArguments json -o - "$h/$CLOSING_LA_DIR_REL/$x" 2>/dev/null | jq -r '.[] | select(startswith("/"))' |
-      while IFS= read -r p; do [ -e "$p" ] || echo "不在 $x $p"; done
-  done > "$od/2-la-targets.txt"
+  cl_la_targets_missing "$h" > "$od/2-la-targets.txt"   # 共有＝lib-closing.sh cl_la_targets_missing（C2-V03）
   [ -s "$od/2-la-targets.txt" ] && m2="$m2 起動対象欠$(grep -c . "$od/2-la-targets.txt")"
   [ -z "$m2" ] || bad=1
   # ③ FX-22（pull だけ）

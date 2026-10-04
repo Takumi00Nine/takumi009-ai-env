@@ -334,6 +334,16 @@ EOF
   return "$bad"
 }
 
+# cl_la_targets_missing <home> — 各 LaunchAgent plist の ProgramArguments（絶対パス）のうち実在しないものを
+#   「不在 <plist> <path>」の形で 1 行ずつ出す（ac-live.sh AC-10 ②・ac-c.sh AC-12③ で共有＝C2-V03・複製しない）。
+cl_la_targets_missing() {
+  local h="$1" x p
+  for x in $CLOSING_LA_PLISTS; do
+    plutil -extract ProgramArguments json -o - "$h/$CLOSING_LA_DIR_REL/$x" 2>/dev/null | jq -r '.[] | select(startswith("/"))' |
+      while IFS= read -r p; do [ -e "$p" ] || echo "不在 $x $p"; done
+  done
+}
+
 # 正規化（比較から除く値）。<side> が base のときだけ旧パス→新パスの置換をする。
 cl_norm() {  # cl_norm <side> <run_dir> < in > out
   local side="$1" rd="$2" a=()

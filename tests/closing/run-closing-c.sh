@@ -7,7 +7,8 @@
 # 使い方: bash tests/closing/run-closing-c.sh <基準コミット> [<worktree>]
 #   <基準コミット>＝束 C 着手ゲート C1（束 B 取込み後の main＝束 C の基準）。<worktree>＝FX-1 を取る repo（既定＝このファイルの repo ルート）。
 #   設定値＝tests/closing/closing.conf（環境変数で上書き可）。AC を絞るとき＝CLOSING_ONLY="AC-8 AC-10"。
-#   AC-11④（FX-16・dotfiles）＝CLOSING_DOTFILES_REPO・CLOSING_DOTFILES_COMMIT が未指定なら skip（NG に数えない）。
+#   AC-11④・FX-16（dotfiles）＝CLOSING_DOTFILES_REPO・CLOSING_DOTFILES_COMMIT は必須。未指定・commit 不在は
+#   実走開始前に事前条件エラーで exit 2（skip にして NG を免れさせない・C2-V05）。
 #
 # 出力・安全＝run-closing-b.sh と同じ契約（AC ごとに `AC-n <ok|NG> <要点>`・最後に `closing: ok=<n> ng=<n>`・
 #   詳細は tests/closing/out/<実行時刻>-c/・使い捨て worktree・一時 HOME・PATH 先頭の偽コマンド・
