@@ -67,13 +67,19 @@ clc_placement_set() {
 }
 
 # clc_names_match <home> <wt> <all|SEL> <out_prefix> — <out_prefix>.diff を書く。名前集合が一致すれば 0。
+#   H-1（リーダー裁定）＝比べる集合は導出（ledger-tool.sh placement --all）が司る名前だけ。
+#   $HOME/.claude/settings.json は登録の生成物・$HOME/Library/LaunchAgents/*.plist は常駐＝
+#   組立は触らない（設計 §3.2 source of truth）ので actual 側から除く（settings.json は
+#   AC-10 の別項「登録が再実行後と等しい」で見る＝既存）。
 clc_names_match() {
   local h="$1" wt="$2" sel="$3" outp="$4"
   clc_placement_set "$wt" "$h" "$sel" \
     | sed -E 's/^[a-z]+://' \
     | awk -v home="$h" '{ if (index($0, home "/") == 1) print substr($0, length(home) + 2); else print $0 }' \
     | sort -u > "$outp.expect"
-  ac8_live "$h" "$wt" | awk -F'\t' '$2!="-"{print $1}' | sort -u > "$outp.actual"
+  ac8_live "$h" "$wt" \
+    | awk -F'\t' -v la="$CLOSING_LA_DIR_REL/" '$2!="-" && $1!=".claude/settings.json" && index($1, la)!=1 {print $1}' \
+    | sort -u > "$outp.actual"
   diff -u "$outp.expect" "$outp.actual" > "$outp.diff" 2>&1
 }
 
@@ -112,6 +118,36 @@ clc_ac8_entry_same() {
   local od="$1" f bad=0
   : > "$od/diff.txt"
   for f in rc stdout state; do diff -u "$od/A.$f.n" "$od/B.$f.n" >> "$od/diff.txt" 2>&1 || bad=1; done
+  return "$bad"
+}
+
+# clc_dock_watch_run <side> <wd:dotfiles 相対 dir> <dw> <odbase> — H-3（リーダー裁定）＝
+#   AC-11④「既定供給パス 2 本を起動」の実体は FX-16 の dotfiles 描画スクリプト
+#   （<wd>/<basename(wd)>.sh）。$HOME/work/takumi009-ai-env にその側の ai-env clone を
+#   持つ一時 HOME（ac12_prep の tmpl12-<side> の複製）で --once 起動する。供給パスの
+#   上書き口（CMUX_DOCK_SUPPLY_*）は渡さない＝既定供給パスで解決させる（FR-19 の目的）。
+#   入力（Vault・宣言・偽 cmux）は ac12_run の dock-* と同じ（ac-12.sh）。Dock・cmux の
+#   実体には触れない（偽 cmux を PATH 先頭）。
+clc_dock_watch_run() {
+  local side="$1" wd="$2" dw="$3" odbase="$4" n h="$WORK/home" rd script rc=0
+  n="$(basename "$wd")"; rd="$WORK/r11dock-$n-$side"; mkdir -p "$odbase/$n"
+  rm -rf "$h" "$rd"; cp -Rp "$WORK/tmpl12-$side" "$h"; cl_stubs "$rd/s"
+  ( . "$WT0/tests/lib-cmux-fixtures.sh"
+    cl_mk_vault_fx4 "$h/$CLOSING_VAULT_REL"; mk_note_V1 "$h/$CLOSING_VAULT_REL"; mk_notes_N_all "$h/$CLOSING_VAULT_REL"
+    mkdir -p "$h/.config/cmux-task-watch"; mk_decl_single v1proj "$h/.config/cmux-task-watch/workspaces.json"
+    write_cmux_stub "$rd/s/bin/cmux"; reset_stub_state "$rd/cmux-state" )
+  script="$dw/$wd/$n.sh"
+  cl_run "$h" "$rd/s" "$dw" STUB_STATE="$rd/cmux-state" /bin/bash "$script" --once \
+    </dev/null >"$odbase/$n/$side.stdout" 2>"$odbase/$n/$side.stderr" || rc=$?
+  printf '%s\n' "$rc" > "$odbase/$n/$side.rc"
+  local f; for f in rc stdout; do cl_norm "$side" "$rd" < "$odbase/$n/$side.$f" > "$odbase/$n/$side.$f.n"; done
+}
+
+# clc_dock_watch_same <wd> <odbase> — 正規化後の rc・stdout が base/new で一致すれば 0
+clc_dock_watch_same() {
+  local wd="$1" odbase="$2" n f bad=0
+  n="$(basename "$wd")"; : > "$odbase/$n/diff.txt"
+  for f in rc stdout; do diff -u "$odbase/$n/base.$f.n" "$odbase/$n/new.$f.n" >> "$odbase/$n/diff.txt" 2>&1 || bad=1; done
   return "$bad"
 }
 
@@ -242,11 +278,14 @@ ac_11() {
   if ! cl_fx1_ready; then cl_result AC-11 NG "③ $CL_FX1_WHY"; return; fi
 
   # ③ FX-5（サブ機）の HOME へ check-drift --forward-refs（dotfiles は none・Vault は FX-5 の複製）
+  #   H-2（リーダー裁定）＝検査器は FX-1 側（HEAD の core/assembly/check-drift.sh --forward-refs）の
+  #   実体（$WT1）を、FX-5 の HOME（基準の clone と配置＝$h）へ HOME・VAULT を向けて当てる
+  #   （FX-5 の clone 内の旧 check-drift.sh は --forward-refs 未対応＝呼ばない）。
   h="$WORK/home-ac11c"; s="$WORK/s-ac11c"; cl_stubs "$s"
   ac10_fx15 "$h" "$s" "$od/fx5.log" || { cl_result AC-11 NG "③ FX-5（サブ機導入）が失敗（ac11c/fx5.log）"; return; }
   cl_mk_vault_fx5 "$h/$CLOSING_VAULT_REL"
   p="$(cl_side_path new "$CLOSING_CHECK_DRIFT_OLD")"
-  rc=0; cl_run "$h" "$s" "$h/$CLOSING_REPO_HOME_REL" "$h/$CLOSING_REPO_HOME_REL/$p" \
+  rc=0; cl_run "$h" "$s" "$WT1" VAULT="$h/$CLOSING_VAULT_REL" "$WT1/$p" \
     "$CLOSING_CHECK_DRIFT_FORWARD_ARG" --dotfiles "$CLOSING_DOTFILES_NONE_VALUE" \
     >"$od/forward-refs.log" 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || e3="exit=${rc}（ac11c/forward-refs.log）"
@@ -296,14 +335,17 @@ EOF
   elif [ "$t_fail" -gt 0 ]; then e4="$e4 描画常駐のテスト ${t_fail}/${t_ran} 本が非 0"
   fi
 
-  # ④-d 既定供給パス 2 本を v1.1 AC-9 と同じ入力で起動し、FX-2 の供給と同じ出力（既存の ac12_run/ac12_same を共有）
-  local id same=0 dn=0
+  # ④-d 既定供給パス 2 本を v1.1 AC-9 と同じ入力で起動し、FX-2 の供給と同じ出力
+  #   H-3（リーダー裁定）＝起動する実体は FX-16 の dotfiles 描画スクリプト 2 本
+  #   （cmux-next-watch.sh・cmux-task-watch.sh＝既定供給パスの解決先が FR-19 の対象）。
+  #   供給パスの上書き口（CMUX_DOCK_SUPPLY_*）は渡さず既定供給パスで解決させる。
+  local same=0 dn=0
   if ac12_prep base && ac12_prep new; then
-    for id in dock-next-list dock-next-frame dock-task-list dock-task-frame; do
+    for wd in $CLOSING_DOTFILES_RETIRE_WATCH_DIRS; do
       dn=$((dn + 1))
-      CL_AC12_OD="$od/dock" ac12_run base "$id"
-      CL_AC12_OD="$od/dock" ac12_run new "$id" literal
-      if CL_AC12_OD="$od/dock" ac12_same "$id"; then same=$((same + 1)); else e4="$e4 供給差:$id"; fi
+      clc_dock_watch_run base "$wd" "$dw" "$od/dock"
+      clc_dock_watch_run new "$wd" "$dw" "$od/dock"
+      if clc_dock_watch_same "$wd" "$od/dock"; then same=$((same + 1)); else e4="$e4 供給差:$(basename "$wd")"; fi
     done
   else
     e4="$e4 導入手順が失敗（ac12/install-*.log）"
