@@ -145,6 +145,9 @@ setup_fake_repo() {
     cp "$REPO_ROOT/core/assembly/ledger-tool.sh" "$repo/core/assembly/ledger-tool.sh"
     chmod +x "$repo/core/assembly/ledger-tool.sh"
   fi
+  # ledger-tool.sh が source する共有ライブラリ（実物）。無いと「LEDGER: ledger
+  # 共有ライブラリを読めない」で照会が失敗する。
+  cp "$REPO_ROOT/core/executor/vault-paths.sh" "$repo/core/executor/vault-paths.sh"
   cat > "$repo/notify/executor/notify.sh" <<'FAKEEOF'
 #!/bin/bash
 # FAKE 口（本ファイル専用）: call <区分> <題> <本文> [<音>] を受け、偽 osascript へ
@@ -1312,8 +1315,11 @@ echo "=== 39. Phase3宣言掃除: 入口のパスはMAINTENANCE_TASK_PRUNE_CMD�
 # 宣言 CLI の置き場（台帳が指すパス）のディレクトリを返す（v1.1 設計 §6-2＝他機能の入口は鍵の照会で引く）。
 setup_prune_ledger() {
   local repo="$1"
-  mkdir -p "$repo/core/assembly" "$repo/core/data" "$repo/dock/executor"
+  mkdir -p "$repo/core/assembly" "$repo/core/data" "$repo/core/executor" "$repo/dock/executor"
   cp "$REPO_ROOT/core/assembly/ledger-tool.sh" "$repo/core/assembly/ledger-tool.sh"
+  # ledger-tool.sh が source する共有ライブラリ（実物）。無いと「LEDGER: ledger
+  # 共有ライブラリを読めない」で照会が失敗する。
+  cp "$REPO_ROOT/core/executor/vault-paths.sh" "$repo/core/executor/vault-paths.sh"
   printf 'part\tdock/executor/cmux-task-declare.sh\tdock\texecutor\t-\tdock.task-declare\t宣言 CLI\t-\t-\n' > "$repo/core/data/ledger.tsv"
   printf '%s' "$repo/dock/executor"
 }
