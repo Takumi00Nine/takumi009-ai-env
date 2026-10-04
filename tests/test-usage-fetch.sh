@@ -912,6 +912,16 @@ echo "=== 検証職1巡目 MINOR-7: 通知タイトルは移設元のまま（Q-
 
 echo "=== 検証職1巡目 MINOR-8 → v1.2 D-2: 通知失敗（osascript失敗）は取得成功を損なわず、知らせの記録（口）へ観測可能になる ==="
 {
+  # 口の有無は走査対象の木（REPO_ROOT）の構成に依る（FX-10＝Notify除去では
+  # notify.send鍵も notify/executor/notify.sh も無い）。ここでテストが
+  # 実repoの構成へ暗黙に依存しないよう、口の有無をfixture変数として
+  # 明示し、FR-5(a)どおりの2経路をそれぞれ別ケースとして固定の期待値で見る。
+  NOTIFY_MOUTH_PRESENT=0
+  if [ -x "$REPO_ROOT/notify/executor/notify.sh" ] \
+    && grep -q '	notify\.send	' "$REPO_ROOT/core/data/ledger.tsv" 2>/dev/null; then
+    NOTIFY_MOUTH_PRESENT=1
+  fi
+
   E="$(new_env)"; load_entry_for "$E"; reset_stubs; valid_claude_token
   # WARN_THRESHOLD(既定80)を超える値でwarn通知イベントを発生させ、
   # osascriptが失敗する状況（AIENV_USAGE_TEST_NOTIFY_LOGを使わず実経路＝
@@ -929,13 +939,20 @@ EOF
   unset AIENV_USAGE_TEST_NOTIFY_LOG
   NOTIFY_LOG="$E/home/.claude/logs/notify.tsv"
   rc=0
-  refresh_service claude >/dev/null 2>&1 || rc=$?
+  refresh_service claude >"$E/out.log" 2>&1 || rc=$?
   assert_eq "MINOR-8回帰: osascript失敗でも取得結果はrefresh_service=0のまま" "0" "$rc"
   assert_eq "MINOR-8回帰: five_hour.used_percentは正常に記録される" "85" "$(jq -r '.five_hour.used_percent' "$CLAUDE_CACHE")"
-  assert_true "v1.2: 知らせの記録に failed 行が残る（既定 \$HOME/.claude/logs/notify.tsv）" \
-    "$([ -f "$NOTIFY_LOG" ] && grep -q "	failed	" "$NOTIFY_LOG" && echo 1 || echo 0)"
-  assert_true "v1.2: その行に題 claude-codex-usage を含む" \
-    "$([ -f "$NOTIFY_LOG" ] && grep -q "claude-codex-usage" "$NOTIFY_LOG" && echo 1 || echo 0)"
+  if [ "$NOTIFY_MOUTH_PRESENT" = "1" ]; then
+    assert_true "v1.2 口あり: 知らせの記録に failed 行が残る（既定 \$HOME/.claude/logs/notify.tsv）" \
+      "$([ -f "$NOTIFY_LOG" ] && grep -q "	failed	" "$NOTIFY_LOG" && echo 1 || echo 0)"
+    assert_true "v1.2 口あり: その行に題 claude-codex-usage を含む" \
+      "$([ -f "$NOTIFY_LOG" ] && grep -q "claude-codex-usage" "$NOTIFY_LOG" && echo 1 || echo 0)"
+  else
+    assert_eq "v1.2 口なし（FR-5(a)）: 知らせの記録ファイルは作られない（予定された省略）" "0" \
+      "$([ -f "$NOTIFY_LOG" ] && echo 1 || echo 0)"
+    assert_true "v1.2 口なし（FR-5(a)）: 自分のログへ『口が無いため知らせを送りません』1行（題 claude-codex-usage を含む）" \
+      "$(grep -q '口が無いため知らせを送りません: claude-codex-usage' "$E/out.log" && echo 1 || echo 0)"
+  fi
   rm -f "$FAKE_BIN/osascript"; hash -r
   rm -rf "$E"
 }

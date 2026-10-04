@@ -523,7 +523,7 @@ EOF
 
   new_fixture
   { awk -F'\t' '$6!="ai-brain.write-gate"' "$LEDGER_REAL"
-    printf 'part\tai-brain/connect/claude-code/zz-missing-gate.sh\tai-brain\tconnect\tclaude-code\tai-brain.write-gate\t\n'; } > "$WORK/ledger-badpart.tsv"
+    printf 'part\tai-brain/connect/claude-code/zz-missing-gate.sh\tai-brain\tconnect\tclaude-code\tai-brain.write-gate\t-\t-\n'; } > "$WORK/ledger-badpart.tsv"
   AIENV_LEDGER="$WORK/ledger-badpart.tsv" run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-v08c --model-def t-sonnet-high
   assert_eq "V-08 実体異常: 起動を止める(exit8)" "8" "$RC"
   assert_eq "V-08 実体異常: stub 0行" "0" "$(stub_lines)"

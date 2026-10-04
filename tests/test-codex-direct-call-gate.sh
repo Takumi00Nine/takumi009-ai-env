@@ -195,7 +195,7 @@ export AIENV_LEDGER="$WORK/no-such-dir/ledger.tsv"
 assert_denied "台帳異常: codex exec 直叩きはdeny・deny 文に LEDGER: ledger" "codex exec --sandbox read-only 'hi'" "LEDGER: ledger "
 if grep -q '^LEDGER: ledger ' "$WORK/hook.err"; then pass "台帳異常: stderr に LEDGER: ledger"; else fail_case "台帳異常: stderr に LEDGER: ledger"; fi
 { awk -F'\t' '$6!="team.codex-exec"' "$LEDGER"
-  printf 'part\tteam/connect/codex/zz-missing-codex-exec.sh\tteam\tconnect\tcodex\tteam.codex-exec\t\n'; } > "$WORK/bad-part.tsv" 2>/dev/null
+  printf 'part\tteam/connect/codex/zz-missing-codex-exec.sh\tteam\tconnect\tcodex\tteam.codex-exec\t-\t-\n'; } > "$WORK/bad-part.tsv" 2>/dev/null
 export AIENV_LEDGER="$WORK/bad-part.tsv"
 assert_denied "実体異常: codex exec 直叩きはdeny・deny 文に LEDGER: part team.codex-exec" "codex exec --sandbox read-only 'hi'" "LEDGER: part team.codex-exec "
 if grep -q '^LEDGER: part team.codex-exec ' "$WORK/hook.err"; then pass "実体異常: stderr に LEDGER: part team.codex-exec"; else fail_case "実体異常: stderr に LEDGER: part team.codex-exec"; fi
