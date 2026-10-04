@@ -591,18 +591,21 @@ else
   echo "SKIP: python3 が無いため v5_ac146_perf_20runs を省略します"
 fi
 
-echo "=== verifier 1巡目 VM-02 回帰: tests/lib-cmux-fixtures.sh の timing_judge 自身にハングを注入する ==="
+echo "=== verifier 2巡目 VM-02-R2 回帰: tests/lib-cmux-fixtures.sh の timing_judge 自身にハングを注入する（独立プロセスグループへ TERM→KILL） ==="
 if command -v python3 >/dev/null 2>&1; then
   # TERM を無視する子を持つ関数（design-v1.md の CODE27 偽物と同じ形＝§2.3 failure mode）。
   # プロセスグループごと打ち切らないと、この子だけ生き残ってしまう（VM-02 の指摘そのもの）。
   VM02_PIDFILE="$WORKDIR/vm02_hang_child.pid"
-  rm -f "$VM02_PIDFILE"
+  VM02_PGIDFILE="$WORKDIR/vm02_hang_child.pgid"
+  rm -f "$VM02_PIDFILE" "$VM02_PGIDFILE"
   vm02_hang_fn() {
     # bash 3.2 に $BASHPID は無く、$$ は（関数の中でもサブシェルの中でも）起動した
     # 最上位シェルの PID のまま変わらない（POSIX の既定どおり・実測）。子の実際の PID は
-    # バックグラウンド化した直後の $! でしか正しく取れない。
+    # バックグラウンド化した直後の $! でしか正しく取れない。プロセスグループ番号は
+    # 生きている間に ps で読んで残す（死んだ後は読めない＝VM-02-R2 の pgrep -g 検査用）。
     ( trap '' TERM; sleep 30 ) &
     echo "$!" > "$VM02_PIDFILE"
+    ps -o pgid= -p "$!" 2>/dev/null | tr -d ' ' > "$VM02_PGIDFILE"
     wait
   }
   VM02_TIMES="$WORKDIR/vm02_times.txt"
@@ -621,9 +624,12 @@ if command -v python3 >/dev/null 2>&1; then
   # 「別ワーカーが締めハーネスを実走中」の実測で揺れを確認）。
   sleep 2
   VM02_CHILD_PID="$(cat "$VM02_PIDFILE" 2>/dev/null)"
+  VM02_GROUP="$(cat "$VM02_PGIDFILE" 2>/dev/null)"
   assert_true "VM-02: 記録された子の PID が実在する（計測できた前提の確認）" "$([ -n "$VM02_CHILD_PID" ] && echo 1 || echo 0)"
   assert_true "VM-02: TERM を無視する子孫もプロセスグループごと打ち切られ生存しない" \
     "$([ -n "$VM02_CHILD_PID" ] && ! kill -0 "$VM02_CHILD_PID" 2>/dev/null && echo 1 || echo 0)"
+  assert_true "VM-02-R2: 独立プロセスグループに生存者なし（pgrep -g）" \
+    "$([ -n "$VM02_GROUP" ] && [ -z "$(pgrep -g "$VM02_GROUP" 2>/dev/null)" ] && echo 1 || echo 0)"
 else
   echo "SKIP: python3 が無いため VM-02 回帰を省略します"
 fi

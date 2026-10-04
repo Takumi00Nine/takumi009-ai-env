@@ -912,57 +912,51 @@ mk_maintenance_state() {
 # 対象＝AC-117（本ファイル・test-cmux-task-model.sh）・v5_ac146（本ファイル）の3箇所
 # （着手ゲート B3 で grep して確定・AC-78 は裁定どおり据え置き＝別の timeout 実装の試験）。
 #
-# verifier 1巡目 VM-01（判定関数を1つへ集約）・VM-02（プロセスグループごと打ち切る）の反映＝
-# 連続測定・中央値判定・実行タイムアウトを下の1関数 timing_judge だけで行う（3箇所とも
-# これを呼ぶ・v5_ac146 の独自 Python 計測も廃止してこれを使う）。
-
-# _timing_collect_tree <root_pid> — root_pid とその子孫全部の PID を pgrep -P で再帰収集し、
-# 1 行 1 個で返す（test-maintenance.sh の kill_process_tree と同じ技法＝プロセスグループで
-# なく子孫の木を辿る。bash のジョブ制御〔set -m〕はコマンド置換の中など入れ子の script で
-# 不安定だったため採らない・新しい bash -c を介すと export -f した関数が元の非 export 変数
-# （$WORKDIR 等）を見失う問題もある＝verifier 1巡目 VM-02 の修正時に実測）。
-_timing_collect_tree() {
-  local root="$1" queue pids=() i=0 pid child
-  queue=("$root")
-  while [ "$i" -lt "${#queue[@]}" ]; do
-    pid="${queue[$i]}"; i=$((i + 1)); pids+=("$pid")
-    for child in $(pgrep -P "$pid" 2>/dev/null); do queue+=("$child"); done
-  done
-  printf '%s\n' "${pids[@]}"
-}
+# verifier 1巡目 VM-01（判定関数を1つへ集約）・VM-02／VM-02-R2（独立プロセスグループへ
+# TERM→KILL）の反映＝連続測定・中央値判定・実行タイムアウトを下の1関数 timing_judge だけで
+# 行う（3箇所ともこれを呼ぶ）。子孫 PID を一度だけ列挙して個別 kill する旧実装は、その後
+# fork した子や PID 再利用を扱えない（verifier 2巡目 VM-02-R2）ため、サブシェル内
+# `set -m` で <実行する関数名> を背景起動し、その job 自身を独立プロセスグループにする
+# （bash 3.2 で可能な最も単純な形・macOS に setsid は無い）。打ち切りはそのグループ
+# （負の PID）へ TERM→1 秒後 KILL。
 
 # _timing_run_with_timeout <実行タイムアウト秒> <実行する関数名> — <実行する関数名> を
-# 同じ shell から背景起動し、<実行タイムアウト秒> を超えたらその PID を根にした子孫の木
-# 全部（起動した関数が待つ外部子プロセスを含む＝VM-02）へ TERM→1 秒後に KILL を送る。
+# 独立プロセスグループで背景起動し、<実行タイムアウト秒> を超えたらそのグループ（起動した
+# 関数が待つ外部子プロセスを含む＝VM-02-R2）へ TERM→1 秒後に KILL を送る。
 # 戻り値＝関数の終了コード（打ち切られたら非 0）。
 _timing_run_with_timeout() {
-  local run_timeout="$1" fn="$2" pid watcher rc marker
+  local run_timeout="$1" fn="$2" pid watcher rc marker pidfile cpid
   marker="$(mktemp -u)"
-  "$fn" &
+  pidfile="$(mktemp -u)"
+  ( set -m
+    "$fn" &
+    echo "$!" >"$pidfile"
+    wait "$!"
+  ) &
   pid=$!
   ( sleep "$run_timeout"
-    if kill -0 "$pid" 2>/dev/null; then
+    cpid="$(cat "$pidfile" 2>/dev/null)"
+    if [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; then
       # 打ち切りに入った印（marker）を先に置く＝呼び出し元は $pid が死んだ後、この印が
       # あれば KILL まで watcher の完了を待つ（無ければ即 kill して良い＝通常完了）。
       : > "$marker"
-      # 木は 1 回だけ集める（TERM で根が死ぬと孫が再割当てされ、2 回目の pgrep -P では
-      # 辿れなくなる＝最初の実装で実測した落とし穴）。同じ一覧へ TERM→1 秒後に KILL。
-      tree="$(_timing_collect_tree "$pid")"
-      for p in $tree; do kill -TERM "$p" 2>/dev/null; done
+      kill -TERM -- "-$cpid" 2>/dev/null
       sleep 1
-      for p in $tree; do kill -KILL "$p" 2>/dev/null; done
+      kill -KILL -- "-$cpid" 2>/dev/null
     fi
   ) 2>/dev/null &
   watcher=$!
   rc=0
   wait "$pid" 2>/dev/null || rc=$?
+  cpid="$(cat "$pidfile" 2>/dev/null)"
+  [ -n "$cpid" ] && kill -KILL -- "-$cpid" 2>/dev/null   # 通常完了後の生き残りの掃除（安全側）
   if [ -e "$marker" ]; then
     wait "$watcher" 2>/dev/null   # 打ち切り中＝KILL を送り終わるまで watcher の完了を待つ
   else
     kill "$watcher" 2>/dev/null
     wait "$watcher" 2>/dev/null
   fi
-  rm -f "$marker"
+  rm -f "$marker" "$pidfile"
   return "$rc"
 }
 

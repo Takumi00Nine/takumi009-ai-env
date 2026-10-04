@@ -6,7 +6,7 @@
 # 実行方法: bash tests/test-ledger.sh
 #
 # 契約（テストが決めた口。実装計画 §3 の名前・固定文・終了コードをそのまま使い、足りない分だけ決めた）:
-#   台帳        core/data/ledger.tsv＝TSV・`#` 始まりはコメント。列＝種類 パス 機能 層 提供元 鍵 備考。
+#   台帳        core/data/ledger.tsv＝TSV・`#` 始まりはコメント。列＝種類 パス 機能 層 提供元 鍵 備考 知らせ。
 #               種類＝part／suite／notify。層＝data／rules／executor／connect／assembly。値なし＝`-`。
 #               パス＝repo 相対（フォルダ単位は末尾 `/`）。notify のパスは repo 外なら `Vault:<ノート>`・`~/…`。
 #   移動表      core/data/moves.tsv＝TSV・`#` 始まりはコメント。1 列目＝旧パス・2 列目＝新パス・3 列目＝種別。
