@@ -233,7 +233,7 @@ cl_proc_cmds_import_c() {
   printf 'git -C ~/%s pull --ff-only\n' "$CLOSING_DOTFILES_DIR_DEFAULT"
   printf '%s\n' "$CLOSING_IMPORT_PULL"
   p="$(cl_side_path "$side" "$CLOSING_INSTALL_MAIN_OLD")" || p="<引けない:$CLOSING_INSTALL_MAIN_OLD>"
-  printf '%s\n' "$p"
+  printf '%s %s\n' "$p" "$CLOSING_INSTALL_MAIN_DOTFILES_ARG"
   p="$(cl_side_path "$side" "$CLOSING_CHECK_DRIFT_OLD")" || p="<引けない:$CLOSING_CHECK_DRIFT_OLD>"
   printf '%s %s\n' "$p" "$CLOSING_CHECK_DRIFT_HEALTH_ARG"
   printf '%s %s\n' "$p" "$CLOSING_CHECK_DRIFT_FORWARD_ARG"
@@ -281,7 +281,11 @@ cl_readme_check() {
   esac
   a=()
   for x in $CLOSING_README_SKIP_LINE_ARGS; do a+=(--skip-line-arg "$x"); done
-  for x in $CLOSING_README_DROP_ARGS; do a+=(--drop-arg "$x"); done
+  # import_c（束 C・AC-12③）は --with-dotfiles を落とさず README のまま突合する（CROSS-01）。
+  # v1.1 節（import）は隔離済み fixture を持たず実行しないため、そちらだけ引き続き落とす。
+  if [ "$proc" != "import_c" ]; then
+    for x in $CLOSING_README_DROP_ARGS; do a+=(--drop-arg "$x"); done
+  fi
   if [ "$proc" = "import_c" ]; then exp="$(cl_proc_cmds_import_c "$side")"; else exp="$(cl_proc_cmds "$side" "$proc")"; fi
   while [ -n "$marks" ]; do
     m="${marks%%|*}"; [ "$m" = "$marks" ] && marks="" || marks="${marks#*|}"

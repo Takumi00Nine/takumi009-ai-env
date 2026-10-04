@@ -427,11 +427,13 @@ ac_12() {
   # 2 本目＝repo 自身の pull（README の `cd …; git pull --ff-only`）
   { rc3=0; cl_run "$h3" "$s3" "$repo3" git pull -q --ff-only </dev/null || rc3=$?; echo "rc=$rc3 pull"; } >>"$od/3-import.log" 2>&1
   [ "$rc3" -eq 0 ] || m3="$m3 pull=$rc3"
-  # 3 本目＝installer（--with-dotfiles は README の表記のみ＝ここでは引数なしで実行＝CLOSING_README_DROP_ARGS と同じ扱い）
+  # 3 本目＝installer（README のまま --with-dotfiles を付けて実行＝CROSS-01。dw3 の隔離済み dotfiles
+  #   fixture（FX-16・origin 付き）に対して dotfiles/install.sh まで実走する。隔離＝cl_run の
+  #   env -i HOME=h3・SKIP_LAUNCHCTL=1・偽 launchctl/osascript stub＝実 HOME・実 launchd には触れない）
   p="$(cl_side_path new "$CLOSING_INSTALL_MAIN_OLD")" || { m3="$m3 引けない:$CLOSING_INSTALL_MAIN_OLD"; p=""; }
   if [ -n "$p" ]; then
-    rc3=0; cl_run "$h3" "$s3" "$repo3" "$repo3/$p" </dev/null >>"$od/3-import.log" 2>&1 || rc3=$?
-    echo "rc=$rc3 $p" >> "$od/3-import.log"
+    rc3=0; cl_run "$h3" "$s3" "$repo3" "$repo3/$p" "$CLOSING_INSTALL_MAIN_DOTFILES_ARG" </dev/null >>"$od/3-import.log" 2>&1 || rc3=$?
+    echo "rc=$rc3 $p $CLOSING_INSTALL_MAIN_DOTFILES_ARG" >> "$od/3-import.log"
     [ "$rc3" -eq 0 ] || m3="$m3 $p=$rc3"
   fi
   m3="$m3$(ac10_three "$h3" "ac12c-3")"

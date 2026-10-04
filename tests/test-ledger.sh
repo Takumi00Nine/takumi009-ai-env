@@ -431,6 +431,23 @@ echo "=== v1.2 束 C FR-17: ⑥ の置き換え＝「転送の印が 0 件」＋
   assert_true "撤去の旧パスに追跡ファイルを置いた複製＝不合格" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
 }
 
+echo "=== v1.2 束 C FR-17（CROSS-04）: ⑥ 第 3 条件＝撤去一覧に無いパスでも repo 内を指す追跡 symlink は不合格 ==="
+{
+  fresh_copy
+  mkdir -p "$FX/zz"
+  ( cd "$FX/zz" && ln -s "../core/executor/pid-lock.sh" forward.sh )
+  lf_commit_all "$FX"
+  run_check "$FX"
+  assert_true "撤去一覧に無い repo 内向き追跡 symlink を足した複製＝不合格" "$([ "$CHECK_RC" != "0" ] && echo 1 || echo 0)"
+  assert_eq "forward 行がその symlink のパスを 1 件報告" "1" "$(lines_of forward | grep -c 'zz/forward.sh' || true)"
+
+  fresh_copy
+  mkdir -p "$FX/zz"
+  ( cd "$FX/zz" && ln -s "../core/executor/pid-lock.sh" forward.sh )
+  run_check "$FX"
+  assert_eq "対照＝同じ symlink を追跡させない（未追跡）＝不合格行 0（既存の振る舞い）" "" "$(grep -E "$CHECK_LINES" "$WORK/check.out" || true)"
+}
+
 echo "=== v1.2 束 C FR-15: placement [--all] の出力形（4 列・台帳の行順・フォルダ単位は職種定義をファイルごとに展開） ==="
 {
   run_placement "$REPO_ROOT" --all

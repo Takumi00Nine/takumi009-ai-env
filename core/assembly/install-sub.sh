@@ -59,7 +59,7 @@
 # Local config files on a sub machine (moved from README "Sub environment" 2026-09-19):
 # The sub environment is self-contained with just the base package and does not install the private patch (it also has no edit permission = pull only). As with the main environment, `models.conf` and `bedrock.env` have no auto-copy — copy `team/data/models.conf.sample` yourself before running `install-sub.sh` (and `team/connect/claude-code/bedrock.env.sample` too, if this machine uses Bedrock).
 # `profile.md` is auto-copied from `team/data/profile.md.sample` on first run if it doesn't exist yet (same mechanism as the main environment, since `install-sub.sh` calls `install-main.sh` internally) — but for a sub machine you should copy it yourself first anyway, so you can edit `machine_role` to `value=sub` (and `role.leader` if this machine plays a different leader) before the installer runs.
-# The role-update flow after install (SessionStart notice → manual `core/assembly/update-sub.sh`) is described at the top of core/assembly/check-sub-update.sh and scripts/update-sub.sh.
+# The role-update flow after install (SessionStart notice → manual `core/assembly/update-sub.sh`) is described at the top of core/assembly/check-sub-update.sh and core/assembly/update-sub.sh.
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
 

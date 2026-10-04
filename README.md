@@ -200,7 +200,7 @@ Details = the comments at the top of `core/assembly/install-sub.sh`, `core/assem
 2. Only if the schema changed: copy the samples over the real files (`cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md`, `cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf`; back up the existing real file first, permission `0600`) and edit the profile for this sub machine — at least `machine_role: configured value=sub` (the samples carry the main machine's values), plus `role.leader`, `no_read_paths`, `team_mode` as needed. `core/assembly/install-sub.sh --check-profile` prints the resolve result as one line with no side effects.
 3. `core/assembly/update-sub.sh` — pull → `install-sub.sh` → `ai-brain/data/vault-public/Preferences/` re-sync, every run (no flags; the old re-sync flag is gone). Confirm it ends with `done.`; a new session's mode line should then show the current version. If it prints `AGENTS: dangling`, delete the file(s) it names.
 
-Taking in v1.2 bundle C on a sub machine: (only if this machine uses dotfiles) `git -C ~/work/dotfiles pull --ff-only` and restart the Dock's Project and Task panes → `core/assembly/update-sub.sh` once → `core/assembly/check-drift.sh --forward-refs` (add `--dotfiles none` on a machine without dotfiles) shows no output and exits 0.
+Taking in v1.2 bundle C on a sub machine: (only if this machine uses dotfiles) `git -C ~/work/dotfiles pull --ff-only` and restart the Dock's Project and Task panes → `core/assembly/update-sub.sh` once → `core/assembly/check-drift.sh --forward-refs` (add `--dotfiles none` on a machine without dotfiles) exits 0 with no hit lines — with `--dotfiles none` its only output is one "対象なし" (not applicable) line on stderr.
 
 ⚠️ `update-sub.sh`'s failure message attributes the cause to "the role-cast profile's `machine_role` isn't `sub`", but the exact same message also appears when the real cause is an old-schema profile whose fixed keys read as `unknown` (the resolver's own `stderr` is discarded). Run `profile_resolve.py resolve` directly first to see what it's actually reading before assuming which cause applies.
 
@@ -265,7 +265,7 @@ Checks the following 5 points and lists them (**it does not exit 1 even if drift
 Two modes do return an exit code:
 
 - `core/assembly/check-drift.sh --managed-symlinks-only` — placement health check: every item of the placement list (`ledger-tool.sh placement`) is in place and every hook command registered in `~/.claude/settings.json` exists and is executable. 0 = healthy, 1 = something missing or wrong (`update-sub.sh` uses it too).
-- `core/assembly/check-drift.sh --forward-refs [--dotfiles <path|none>]` — retirement precheck (read-only): looks for the old paths marked `撤去` in `core/data/moves.tsv` in 5 places (link targets of symlinks under `~/.claude` and `~/.codex`, `~/.claude/settings.json`, `~/Library/LaunchAgents/*.plist`, the tracked files of the dotfiles checkout, the Vault's `Preferences`) and prints one `<kind><TAB><location><TAB><old path>` line per hit; 0 = none, 1 = some. The dotfiles checkout is `--dotfiles` (wins), else `DOTFILES_DIR` (default `~/work/dotfiles`); `--dotfiles none` = this machine doesn't use dotfiles (one "対象なし" line, skipped); a missing or unreadable checkout or Vault (`VAULT`) exits 2. A running process that read a path when it started (the Dock panes) can't be seen — hence the restart in the procedure above.
+- `core/assembly/check-drift.sh --forward-refs [--dotfiles <path|none>]` — retirement precheck (read-only): looks for the old paths marked `撤去` in `core/data/moves.tsv` in 5 places (link targets of symlinks under `~/.claude` and `~/.codex`, `~/.claude/settings.json`, `~/Library/LaunchAgents/*.plist`, the tracked files of the dotfiles checkout, the Vault's `Preferences`) and prints one `<kind><TAB><location><TAB><old path>` line per hit; 0 = none, 1 = some. The dotfiles checkout is `--dotfiles` (wins), else `DOTFILES_DIR` (default `~/work/dotfiles`); `--dotfiles none` = this machine doesn't use dotfiles (dotfiles is skipped with one "対象なし" line on stderr; with no hits the exit is still 0); a missing or unreadable checkout or Vault (`VAULT`) exits 2. A running process that read a path when it started (the Dock panes) can't be seen — hence the restart in the procedure above.
 
 ### Restore Runbook (Disaster Recovery / Main Migration)
 
@@ -327,7 +327,7 @@ Arguments, exit codes, and environment variables = `core/connect/claude-code/ses
 bash tests/run-all.sh
 ```
 
-This runs every `tests/test-*.sh` suite one after another and exits non-zero at the end if any of them failed. None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). This run also includes the component-ledger check (`tests/test-ledger.sh`, driven by `core/assembly/ledger-tool.sh check`): every part and suite has exactly one ledger row, there are no cross-function references outside the key-lookup mechanism, no forwarding mark is left in the move map and no retired old path is tracked, and every hook/LaunchAgent target that `install-main.sh` registers actually exists.
+This runs every `tests/test-*.sh` suite one after another and exits non-zero at the end if any of them failed. None of them depend on the real Vault, real GitHub, the real `~/.claude`, or the real `~/.codex` — they run entirely against disposable fixture directories (`rg` and `gitleaks` are required; both are already available once `brew bundle` has been run). This run also includes the component-ledger check (`tests/test-ledger.sh`, driven by `core/assembly/ledger-tool.sh check`): every part and suite has exactly one ledger row, there are no cross-function references outside the key-lookup mechanism, no forwarding mark is left in the move map, no retired old path is tracked, and no tracked symlink points inside the repo, and every hook/LaunchAgent target that `install-main.sh` registers actually exists.
 
 ### License
 
@@ -538,7 +538,7 @@ core/assembly/install-sub.sh
 2. schema が変わったときだけ: sample を実体へコピーし（`cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf`。既存の実体は先に退避・権限 `0600`）、プロファイルをサブ機用に編集する——最低限 `machine_role: configured value=sub`（sample はメイン機の値のため）、必要に応じて `role.leader`・`no_read_paths`・`team_mode` も。`core/assembly/install-sub.sh --check-profile` が resolve 結果を1行で返す（副作用ゼロ）。
 3. `core/assembly/update-sub.sh` — pull → `install-sub.sh` → `ai-brain/data/vault-public/Preferences/` 再同期を毎回行う（引数なし・旧・再同期フラグは廃止）。`done.` で終わることを確認し、新しいセッションの開幕1行で版を確認する。`AGENTS: dangling` が出た場合は、表示されたファイルを削除する。
 
-サブ機の v1.2 束 C の取込み: （dotfiles を使う機だけ）`git -C ~/work/dotfiles pull --ff-only` と Dock の Project・Task の 2 枠の再起動 → `core/assembly/update-sub.sh` を 1 回 → `core/assembly/check-drift.sh --forward-refs`（dotfiles を使わない機は `--dotfiles none` を足す）が出力なし・exit 0。
+サブ機の v1.2 束 C の取込み: （dotfiles を使う機だけ）`git -C ~/work/dotfiles pull --ff-only` と Dock の Project・Task の 2 枠の再起動 → `core/assembly/update-sub.sh` を 1 回 → `core/assembly/check-drift.sh --forward-refs`（dotfiles を使わない機は `--dotfiles none` を足す）が該当行なし・exit 0（`--dotfiles none` のときの出力は stderr の「対象なし」1 行だけ）。
 
 ⚠️ `update-sub.sh` の失敗文面は原因を「配役表の `machine_role` が `sub` でない」と示しますが、実際の起点が「プロファイルが旧 schema で固定キーが `unknown` 扱いになっている」場合でも同じ文面になります（resolver 自身の `stderr` は捨てられます）。まず `profile_resolve.py resolve` を直接叩いて何が読めているかを確認してから、原因を判断してください。
 
@@ -603,7 +603,7 @@ core/assembly/check-drift.sh
 終了コードを持つモードが 2 つあります:
 
 - `core/assembly/check-drift.sh --managed-symlinks-only` — 配置の健全性検査: 配置一覧（`ledger-tool.sh placement`）の全項目が置かれ、`~/.claude/settings.json` に登録された全フックの命令が実在して実行可能か。0＝健全・1＝欠け・誤り（`update-sub.sh` も使う）。
-- `core/assembly/check-drift.sh --forward-refs [--dotfiles <パス|none>]` — 撤去の前提検査（読むだけ）: `core/data/moves.tsv` の印 `撤去` の旧パスを 5 か所（`~/.claude`・`~/.codex` 配下の symlink のリンク先・`~/.claude/settings.json`・`~/Library/LaunchAgents/*.plist`・dotfiles の checkout の追跡ファイル・Vault の `Preferences`）から探し、1 件 1 行 `<種類><TAB><場所><TAB><旧パス>` で出します。0＝該当なし・1＝あり。dotfiles の checkout は `--dotfiles`（優先）→ `DOTFILES_DIR`（既定 `~/work/dotfiles`）。`--dotfiles none`＝この機では使わない（「対象なし」を 1 行出して飛ばす）。checkout・Vault（`VAULT`）が無い・読めないときは exit 2。起動時にパスを読んだ実行中のプロセス（Dock の 2 枠）は見えません＝上の手順の再起動で担保します。
+- `core/assembly/check-drift.sh --forward-refs [--dotfiles <パス|none>]` — 撤去の前提検査（読むだけ）: `core/data/moves.tsv` の印 `撤去` の旧パスを 5 か所（`~/.claude`・`~/.codex` 配下の symlink のリンク先・`~/.claude/settings.json`・`~/Library/LaunchAgents/*.plist`・dotfiles の checkout の追跡ファイル・Vault の `Preferences`）から探し、1 件 1 行 `<種類><TAB><場所><TAB><旧パス>` で出します。0＝該当なし・1＝あり。dotfiles の checkout は `--dotfiles`（優先）→ `DOTFILES_DIR`（既定 `~/work/dotfiles`）。`--dotfiles none`＝この機では使わない（stderr に「対象なし」を 1 行出して飛ばす＝該当が無ければ exit 0）。checkout・Vault（`VAULT`）が無い・読めないときは exit 2。起動時にパスを読んだ実行中のプロセス（Dock の 2 枠）は見えません＝上の手順の再起動で担保します。
 
 ### 復元 Runbook（災害復旧・メインの移転）
 
@@ -665,7 +665,7 @@ core/connect/claude-code/session-handoff.sh -h | --help
 bash tests/run-all.sh
 ```
 
-`tests/test-*.sh` の全スイートを続けて実行し、失敗があれば最後に非 0 で終わります。いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。この一括実行には台帳の検査（`tests/test-ledger.sh`＝`core/assembly/ledger-tool.sh check` が行う）も含まれます＝全部品・全スイートが台帳にちょうど1行持つこと、鍵の照会以外で機能をまたぐ参照が無いこと、移動表に転送の印が残らず撤去した旧パスに追跡ファイルが無いこと、`install-main.sh` が登録する全フック・LaunchAgent の起動対象が実在すること。
+`tests/test-*.sh` の全スイートを続けて実行し、失敗があれば最後に非 0 で終わります。いずれも実 Vault・実 GitHub・実 `~/.claude`・実 `~/.codex` に依存せず、使い捨てのfixtureディレクトリ上で完結します（`rg`・`gitleaks` が必要。`brew bundle` 済みなら揃っています）。この一括実行には台帳の検査（`tests/test-ledger.sh`＝`core/assembly/ledger-tool.sh check` が行う）も含まれます＝全部品・全スイートが台帳にちょうど1行持つこと、鍵の照会以外で機能をまたぐ参照が無いこと、移動表に転送の印が残らず・撤去の印の旧パスに追跡ファイルが無く・repo 内を指す追跡 symlink が無いこと、`install-main.sh` が登録する全フック・LaunchAgent の起動対象が実在すること。
 
 ### ライセンス
 
