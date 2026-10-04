@@ -3224,6 +3224,99 @@ echo "=== 90. v1.2 §3.4: 旧パスの照合境界＝ライブ名・新パスの
   rm -rf "$FX3D_ROOT" "$FX3D" "$VAULT_FX4_PARENT"; rm -f "$FX4_ERR"
 }
 
+echo "=== 91. v1.2 FR-14/FR-15 C-V01: settings.json の消失・不正JSON＝--managed-symlinks-only は exit 1（理由1行）・通常モードは drift に数えつつ exit 0 不変 ==="
+{
+  RHOME="$(mktemp -d)"
+  write_real_profile "$RHOME"
+  rc=0
+  SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$RHOME" bash "$REPO_ROOT/core/assembly/install-main.sh" --select core >/dev/null 2>&1 || rc=$?
+  assert_eq_num "前提: Core だけの組立は exit 0" "$rc" "0"
+  SETTINGS="$RHOME/.claude/settings.json"
+  SETTINGS_BAK="$(mktemp)"; cp "$SETTINGS" "$SETTINGS_BAK"
+
+  # ① settings.json の消失。
+  rm -f "$SETTINGS"
+  rc=0
+  MANAGED_OUT="$(HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only 2>&1)" || rc=$?
+  assert_eq_num "C-V01 消失: --managed-symlinks-only は exit 1" "$rc" "1"
+  assert_eq "C-V01 消失: 理由1行" "1" "$(printf '%s\n' "$MANAGED_OUT" | grep -c '^  - ' || true)"
+  rc=0
+  NORMAL_OUT="$(HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" 2>&1)" || rc=$?
+  assert_eq_num "C-V01 消失: 通常モードは exit 0（契約不変）" "$rc" "0"
+  assert_true "C-V01 消失: 通常モードも drift に数える（総drift件数が0でない）" \
+    "$(echo "$NORMAL_OUT" | grep -q '総drift件数: 0' && echo 0 || echo 1)"
+
+  # ② settings.json が不正JSON。
+  cp "$SETTINGS_BAK" "$SETTINGS"
+  printf '{not valid json' > "$SETTINGS"
+  rc=0
+  MANAGED_OUT2="$(HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only 2>&1)" || rc=$?
+  assert_eq_num "C-V01 不正JSON: --managed-symlinks-only は exit 1" "$rc" "1"
+  assert_eq "C-V01 不正JSON: 理由1行" "1" "$(printf '%s\n' "$MANAGED_OUT2" | grep -c '^  - ' || true)"
+  rc=0
+  NORMAL_OUT2="$(HOME="$RHOME" bash "$REPO_ROOT/core/assembly/check-drift.sh" 2>&1)" || rc=$?
+  assert_eq_num "C-V01 不正JSON: 通常モードは exit 0（契約不変）" "$rc" "0"
+  assert_true "C-V01 不正JSON: 通常モードも drift に数える（総drift件数が0でない）" \
+    "$(echo "$NORMAL_OUT2" | grep -q '総drift件数: 0' && echo 0 || echo 1)"
+
+  rm -rf "$RHOME"; rm -f "$SETTINGS_BAK"
+}
+
+echo "=== 92. v1.2 FR-18 C-V02: 読めない dotfiles 追跡ファイル・Vault Preferences 配下のサブディレクトリ＝--forward-refs は exit 2・対象パスを stderr へ（壊れたsymlinkは対象外でexit 0） ==="
+{
+  # ① 読めない dotfiles の追跡ファイル。
+  HOME92A="$(mktemp -d)"; mkdir -p "$HOME92A/.claude" "$HOME92A/Library/LaunchAgents"
+  DOTFILES92A="$(mktemp -d)"
+  lf_git -C "$DOTFILES92A" init -q >/dev/null 2>&1
+  printf '#!/bin/bash\necho hi\n' > "$DOTFILES92A/unreadable.sh"
+  lf_git -C "$DOTFILES92A" add -A >/dev/null 2>&1
+  lf_git -C "$DOTFILES92A" commit -q -m init >/dev/null 2>&1 || true
+  chmod 000 "$DOTFILES92A/unreadable.sh"
+  VAULT92A_PARENT="$(mktemp -d)"; VAULT92A="$VAULT92A_PARENT/obsidian"; mkdir -p "$VAULT92A/Preferences"
+
+  ERR92A="$(mktemp)"
+  rc=0
+  HOME="$HOME92A" VAULT="$VAULT92A" bash "$REPO_ROOT/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles "$DOTFILES92A" >/dev/null 2>"$ERR92A" || rc=$?
+  assert_eq_num "C-V02 ①: 読めない dotfiles 追跡ファイルは exit 2" "$rc" "2"
+  assert_true "C-V02 ①: stderr に対象パス" "$(grep -qF "$DOTFILES92A/unreadable.sh" "$ERR92A" && echo 1 || echo 0)"
+
+  chmod 644 "$DOTFILES92A/unreadable.sh"
+  rm -rf "$HOME92A" "$DOTFILES92A" "$VAULT92A_PARENT"; rm -f "$ERR92A"
+}
+{
+  # ② Vault Preferences 配下の読めないサブディレクトリ。
+  HOME92B="$(mktemp -d)"; mkdir -p "$HOME92B/.claude" "$HOME92B/Library/LaunchAgents"
+  VAULT92B_PARENT="$(mktemp -d)"; VAULT92B="$VAULT92B_PARENT/obsidian"
+  mkdir -p "$VAULT92B/Preferences/unreadable-sub"
+  printf 'dummy\n' > "$VAULT92B/Preferences/unreadable-sub/note.md"
+  chmod 000 "$VAULT92B/Preferences/unreadable-sub"
+
+  ERR92B="$(mktemp)"
+  rc=0
+  HOME="$HOME92B" VAULT="$VAULT92B" bash "$REPO_ROOT/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles none >/dev/null 2>"$ERR92B" || rc=$?
+  assert_eq_num "C-V02 ②: 読めない Vault Preferences 配下のサブディレクトリは exit 2" "$rc" "2"
+  assert_true "C-V02 ②: stderr に対象パス" "$(grep -qF "$VAULT92B/Preferences/unreadable-sub" "$ERR92B" && echo 1 || echo 0)"
+
+  chmod 755 "$VAULT92B/Preferences/unreadable-sub"
+  rm -rf "$HOME92B" "$VAULT92B_PARENT"; rm -f "$ERR92B"
+}
+{
+  # ③ 壊れた symlink（リンク先なし）は対象外＝陽性のない FX-3。
+  HOME92C="$(mktemp -d)"; mkdir -p "$HOME92C/.claude" "$HOME92C/Library/LaunchAgents"
+  VAULT92C_PARENT="$(mktemp -d)"; VAULT92C="$VAULT92C_PARENT/obsidian"
+  mkdir -p "$VAULT92C/Preferences"
+  ln -s "$VAULT92C/Preferences/no-such-target" "$VAULT92C/Preferences/zz-broken-link.md"
+
+  rc=0
+  HOME="$HOME92C" VAULT="$VAULT92C" bash "$REPO_ROOT/core/assembly/check-drift.sh" \
+    --forward-refs --dotfiles none >/dev/null 2>&1 || rc=$?
+  assert_eq_num "C-V02 ③: 壊れたsymlinkは対象外＝exit 0" "$rc" "0"
+
+  rm -rf "$HOME92C" "$VAULT92C_PARENT"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

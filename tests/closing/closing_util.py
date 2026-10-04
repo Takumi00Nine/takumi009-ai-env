@@ -303,30 +303,89 @@ def settings_cmp(base_p, new_p):
 
 # ---------------------------------------------------------------- 束 C・AC-11④（dotfiles の 1 commit の純粋さ）
 def pathswap_diff(repo, commit, pairs):
-    """<commit>~1..<commit> の差分が、pairs（旧パス→新パス）の文字列置換だけの行置換であることを確かめる
-    （追加行と削除行が 1 対 1 で、置換以外の差が無い＝FR-19）。戻り値＝(ok, message)。"""
-    out = subprocess.run(["git", "-C", repo, "diff", "-U0", commit + "~1", commit],
-                          capture_output=True, text=True, check=False).stdout
-    added, removed = [], []
-    for line in out.splitlines():
-        if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+    """<commit>~1..<commit> の差分が、pairs（旧パス→新パス）だけの行置換であることを厳密に確かめる
+    （FR-19・AC-11④・C-V09）。
+    ① git diff 系コマンドの終了コードを見る（失敗はそのまま不合格）
+    ② --name-status が全行 M（追加・削除・rename・copy は不合格）
+    ③ --raw でモード変更が無い（旧モード＝新モード）
+    ④ ファイルごと・hunk ごとに削除行と追加行が同数で、削除行へ pairs の置換を当てると同じ hunk の
+       追加行の並びに一致する（全ファイルの行をまとめて sort して比べない＝無関係な行の移動を見逃さない）
+    戻り値＝(ok, message)。"""
+    base = commit + "~1"
+
+    ns = subprocess.run(["git", "-C", repo, "diff", "--name-status", "-z", base, commit],
+                         capture_output=True, text=True)
+    if ns.returncode != 0:
+        return False, "git diff --name-status が失敗（exit %d）: %s" % (ns.returncode, ns.stderr.strip())
+    toks = [t for t in ns.stdout.split("\0") if t != ""]
+    files = []
+    i = 0
+    while i < len(toks):
+        status = toks[i]
+        if not status or status[0] != "M":
+            return False, "name-status が M でない行がある: %s %s" % (status, toks[i + 1] if i + 1 < len(toks) else "?")
+        files.append(toks[i + 1])
+        i += 2
+    if not files:
+        return False, "差分が無い"
+
+    raw = subprocess.run(["git", "-C", repo, "diff", "--raw", base, commit],
+                          capture_output=True, text=True)
+    if raw.returncode != 0:
+        return False, "git diff --raw が失敗（exit %d）: %s" % (raw.returncode, raw.stderr.strip())
+    for line in raw.stdout.splitlines():
+        if not line.startswith(":"):
             continue
-        if line.startswith("+"):
-            added.append(line[1:])
+        meta = line.split("\t", 1)[0].lstrip(":").split()
+        if len(meta) >= 2 and meta[0] != meta[1]:
+            return False, "mode 変更がある: %s" % line
+
+    diff = subprocess.run(["git", "-C", repo, "diff", "-U0", base, commit],
+                           capture_output=True, text=True)
+    if diff.returncode != 0:
+        return False, "git diff が失敗（exit %d）: %s" % (diff.returncode, diff.stderr.strip())
+
+    total = 0
+    cur_file = "?"
+    removed, added = [], []
+
+    def flush():
+        if not removed and not added:
+            return None
+        if len(removed) != len(added):
+            return "%s の hunk で削除%d行・追加%d行（1対1でない）" % (cur_file, len(removed), len(added))
+        for r, a in zip(removed, added):
+            rr = r
+            for old, new in pairs:
+                rr = rr.replace(old, new)
+            if rr != a:
+                return "%s で置換以外の差がある行: -%s / +%s" % (cur_file, r, a)
+        return None
+
+    for line in diff.stdout.splitlines():
+        if line.startswith("diff --git "):
+            err = flush()
+            if err:
+                return False, err
+            removed, added = [], []
+            cur_file = line[len("diff --git "):]
+        elif line.startswith("@@"):
+            err = flush()
+            if err:
+                return False, err
+            removed, added = [], []
+        elif line.startswith("+++") or line.startswith("---"):
+            continue
+        elif line.startswith("+"):
+            added.append(line[1:]); total += 1
         elif line.startswith("-"):
             removed.append(line[1:])
-    if len(added) != len(removed):
-        return False, "追加%d行・削除%d行（1対1でない）" % (len(added), len(removed))
-    if not added:
+    err = flush()
+    if err:
+        return False, err
+    if total == 0:
         return False, "差分が無い"
-    expect = []
-    for line in removed:
-        for old, new in pairs:
-            line = line.replace(old, new)
-        expect.append(line)
-    if sorted(expect) != sorted(added):
-        return False, "置換後に一致しない行がある（置換以外の差を含む）"
-    return True, "追加%d行＝削除%d行の置換のみ" % (len(added), len(removed))
+    return True, "ファイル%d件・置換%d行＝hunk ごとに1対1で置換のみ" % (len(files), total)
 
 
 # ---------------------------------------------------------------- README の手順
@@ -357,6 +416,9 @@ def readme_cmds(readme, heading, skip_line_args, drop_args):
             out.append("cp " + toks[1])
         elif toks[:2] == ["git", "pull"] or toks[0].endswith(".sh"):
             out.append(" ".join(toks))
+        elif toks[:2] == ["git", "-C"] and len(toks) >= 4 and toks[3] == "pull":
+            # 束 C の取込み節（C-V10）＝`git -C <path> pull --ff-only`（dotfiles を先に進める行）
+            out.append(" ".join(toks))
     return None
 
 
@@ -376,7 +438,9 @@ def main(argv):
         return 0 if is_split_new(load_moves(args[0]), args[1]) else 1
     elif cmd == "norm":
         rules_p, rest = args[0], args[1:]
-        moves_rows, subs, repo_dirname, extra = None, [], "takumi009-ai-env", []
+        # repo 名の正本は呼び手が渡す（C-V06＝埋込みの既定値を持たない。呼び手＝lib-closing.sh の
+        # cl_norm は常に CLOSING_REPO_HOME_REL の basename を --repo-dirname で渡す）。
+        moves_rows, subs, repo_dirname, extra = None, [], None, []
         i = 0
         while i < len(rest):
             if rest[i] == "--moves":
@@ -389,6 +453,8 @@ def main(argv):
                 repo_dirname = rest[i + 1]; i += 2
             else:
                 die("norm: 不明な引数 %s" % rest[i])
+        if repo_dirname is None:
+            die("norm: --repo-dirname が必須（C-V06・repo 名の正本は呼び手が渡す）")
         if moves_rows is not None:
             moves_rows = moves_rows + extra   # 補足は移動表の後ろ＝同じ旧パスなら移動表が勝つ・長い旧パス（ファイル行）から当てる
         text = sys.stdin.buffer.read().decode("utf-8", "replace")

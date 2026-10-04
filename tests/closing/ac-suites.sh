@@ -79,9 +79,16 @@ cl_mk_fx10() {
   chmod +x "$zz/recall-shim.sh" "$zz/install.sh"
   # ゲート①X-06（締め側）＝移動表の行は足さない（FR-20＝v1.1 の後の新規部品に移動表の行を求めない。
   # README 側の由来の記載は test-writer A の担当＝tests/fixtures/zz-cli/README.md）。
-  # 9 列目「配置」＝install.sh が $HOME/.zz-cli/ 配下へ書く run 行（束 C の台帳の契約＝ちょうど 9 列）。
-  printf '%s\t%s/\t%s\t%s\t%s\t-\t%s\t-\trun:$HOME/.zz-cli/\n' "$CLOSING_LEDGER_PART_KIND" "$CLOSING_ZZ_DIR_REL" "$CLOSING_ZZ_FN" \
-    "$CLOSING_ZZ_LAYER" "$CLOSING_ZZ_PROVIDER" "AC-2 試験の第 3 提供元（締めの実走が足す）" >> "$wt/$CLOSING_LEDGER_REL"
+  # 台帳の契約（README の契約どおり・C-V03）＝フォルダ単位の 1 行でなくファイルごとに 3 行
+  # （フォルダは実行可能でなく run を持てない。tests/test-decoupling.sh の mk_zz_connect と同じ形）。
+  # 9 列目「配置」＝run:$HOME/.zz-cli/ は install.sh の行だけに持たせる（AC-9 が全部入りの組立で
+  # この行を拾って install.sh を自動実行する）。他 2 行の配置は `-`。
+  local f place
+  for f in recall-shim.sh register.tmpl install.sh; do
+    place="-"; [ "$f" = install.sh ] && place='run:$HOME/.zz-cli/'
+    printf '%s\t%s/%s\t%s\t%s\t%s\t-\t%s\t-\t%s\n' "$CLOSING_LEDGER_PART_KIND" "$CLOSING_ZZ_DIR_REL" "$f" \
+      "$CLOSING_ZZ_FN" "$CLOSING_ZZ_LAYER" "$CLOSING_ZZ_PROVIDER" "AC-2 試験の第 3 提供元（締めの実走が足す・${f}）" "$place" >> "$wt/$CLOSING_LEDGER_REL"
+  done
 }
 
 # AC-2 ③ FX-10 で一括テスト全スイート exit 0 ／ ④ zz-cli の配置手順＋偽 zz-cli に FX-17 → Knowledge/zz-probe.md

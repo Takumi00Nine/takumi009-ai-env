@@ -475,6 +475,35 @@ echo "=== v1.2 束 C FR-10〜FR-12: 選択（AIENV_COMPONENTS_FILE）で lookup�
   run_lookup2 "core.ledger" "$LEDGER" "$COMP_UNREADABLE"
   assert_eq "読めない選択ファイル＝台帳異常 2" "2" "$LOOKUP_RC"
   chmod 644 "$COMP_UNREADABLE"
+
+  # C-V04（FR-10・設計 §3.1）＝選択ファイルは「KEY=VALUE 1 キー・1 行」でなければ台帳異常 2。
+  # 4 変種（余分な行／別キー／重複キー／キー無し）を lookup・route・placement の 3 口で検査。
+  COMP_EXTRALINE="$WORK/comp-extraline.env"
+  { printf 'AIENV_COMPONENTS=core\n'; printf 'extra garbage line\n'; } > "$COMP_EXTRALINE"
+  COMP_EXTRAKEY="$WORK/comp-extrakey.env"
+  { printf 'AIENV_COMPONENTS=core\n'; printf 'AIENV_OTHER=x\n'; } > "$COMP_EXTRAKEY"
+  COMP_DUPKEY="$WORK/comp-dupkey.env"
+  { printf 'AIENV_COMPONENTS=core\n'; printf 'AIENV_COMPONENTS=ai-brain\n'; } > "$COMP_DUPKEY"
+  COMP_NOKEY="$WORK/comp-nokey.env"
+  printf 'core\n' > "$COMP_NOKEY"
+
+  for CASE in "余分な行:$COMP_EXTRALINE" "別キー:$COMP_EXTRAKEY" "同じキーが2行:$COMP_DUPKEY" "キーが無い:$COMP_NOKEY"; do
+    CASE_LABEL="${CASE%%:*}"; CASE_FILE="${CASE#*:}"
+
+    run_lookup2 "core.ledger" "$LEDGER" "$CASE_FILE"
+    assert_eq "C-V04 選択ファイル不正（${CASE_LABEL}）: lookup 終了 2" "2" "$LOOKUP_RC"
+    assert_true "C-V04 選択ファイル不正（${CASE_LABEL}）: lookup 固定文 LEDGER: ledger …" \
+      "$(grep -q '^LEDGER: ledger ' "$WORK/lk2.err" && echo 1 || echo 0)"
+    assert_eq "C-V04 選択ファイル不正（${CASE_LABEL}）: lookup stdout 空" "" "$(cat "$WORK/lk2.out")"
+
+    run_route2 "call.alert" "$LEDGER" "$CASE_FILE"
+    assert_eq "C-V04 選択ファイル不正（${CASE_LABEL}）: route 終了 2" "2" "$ROUTE_RC"
+    assert_eq "C-V04 選択ファイル不正（${CASE_LABEL}）: route stdout 空" "" "$(cat "$WORK/rt2.out")"
+
+    run_placement "$REPO_ROOT" --select "$CASE_FILE"
+    assert_eq "C-V04 選択ファイル不正（${CASE_LABEL}）: placement 終了 2" "2" "$PLACEMENT_RC"
+    assert_eq "C-V04 選択ファイル不正（${CASE_LABEL}）: placement stdout 空" "" "$(cat "$WORK/pl.out")"
+  done
 }
 
 echo "=== 13. 照会 3 種（設計 §5.6・§11）: あり 0／鍵なし 1／台帳異常 2／実体異常 3＋固定文 ==="

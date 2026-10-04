@@ -194,7 +194,12 @@ ac_10() {
   fi
   cl_hooks_exist "$h" "$h/.claude/settings.json" > "$od/fx8-hooks.txt" 2>&1 \
     || bad="$bad 再実行前:全フック実在しない($(grep -c . "$od/fx8-hooks.txt")件)"
-  grep -qE '[./][A-Za-z0-9_./-]+\.(sh|toml)' "$od/fx8.log" || bad="$bad 再実行前:失敗報告に終わらなかった項目が見えない"
+  # C-V07＝① と ② を別々に厳密に見る（任意の .sh／.toml パス 1 個が見えるだけでは合格にしない）。
+  # ①「未完了: <仕方>:<置き場>」の項目行が 1 行以上
+  grep -qE '未完了: (link|gen|run):/' "$od/fx8.log" || bad="$bad 再実行前:失敗報告に未完了の項目行が無い"
+  # ②「同じ選択で再実行してください: <installer> --select <保存値>」の行（この導入は無選択＝保存値は全部入り）
+  grep -qE "${CLOSING_INSTALL_MAIN_OLD##*/}[[:space:]]+${CLOSING_SELECT_ARG}[[:space:]]+${CLOSING_SELECT_ALL}([[:space:]]|\$)" "$od/fx8.log" \
+    || bad="$bad 再実行前:再実行コマンド行（${CLOSING_SELECT_ARG} ${CLOSING_SELECT_ALL}）が見えない"
 
   # 同じ取込み手順を再実行（.codex を書込み可に戻す）＝exit 0・名前集合＝全部入り・配置の健全性検査 exit0
   chmod +w "$h/.codex" 2>/dev/null
@@ -246,15 +251,8 @@ ac_11() {
     >"$od/forward-refs.log" 2>&1 || rc=$?
   [ "$rc" -eq 0 ] || e3="exit=${rc}（ac11c/forward-refs.log）"
 
-  # ④ FX-16（dotfiles の 1 commit）＝値が無ければ skip（NG に数えない）
-  if [ -z "${CLOSING_DOTFILES_REPO:-}" ] || [ -z "${CLOSING_DOTFILES_COMMIT:-}" ] \
-     || ! git -C "$CLOSING_DOTFILES_REPO" rev-parse --verify "${CLOSING_DOTFILES_COMMIT}^{commit}" >/dev/null 2>&1; then
-    echo "AC-11④ skip dotfiles の commit が未指定・未作成（closing.conf の CLOSING_DOTFILES_REPO・CLOSING_DOTFILES_COMMIT で与える＝implementer C-3 の成果を指す）"
-    if [ -z "$e3" ]; then cl_result AC-11 ok "③ check-drift --forward-refs（dotfiles=none）exit 0"
-    else cl_result AC-11 NG "③ $e3"; fi
-    return
-  fi
-
+  # ④ FX-16（dotfiles の 1 commit）＝CLOSING_DOTFILES_REPO・CLOSING_DOTFILES_COMMIT は run-closing-c.sh の
+  #   起動時に必須化ずみ（C-V08＝未指定・commit 不在は事前条件エラーで exit 2・skip で NG を免れさせない）。
   local dw="$WORK/dotfiles-fx16" e4=""
   cl_new_wt_at "$CLOSING_DOTFILES_REPO" "$dw" "$CLOSING_DOTFILES_COMMIT" \
     || { cl_result AC-11 NG "③${e3:- ok} ④ dotfiles の worktree を作れない"; return; }
@@ -344,33 +342,46 @@ ac_12() {
     [ -z "$fence" ] || m2="柵フック欠落: $(printf '%s' "$fence" | tr '\n' ';')"
   fi
 
-  # ③ FX-6 で clone を FX-1 へ進め、README に示すメイン機の取込み手順を実行（印付きコマンドの照合は v1.1 ハーネスのまま）
-  why="$(cl_readme_check new import "$WT1/README.md")" || { cl_result AC-12 NG "③ README の手順と定数が不一致(FX-1): ${why}"; return; }
-  local h3="$WORK/home-ac12c-3" s3 repo3 p x rc3=0
+  # ③ FX-6 で clone を FX-1 へ進め、README の束 C の取込み節（印＝C-V10）に示す手順を実行。
+  #   照合・実行する印を v1.1 節から束 C 節へ切替＝dotfiles の pull（FX-16 の worktree へ向ける）・
+  #   installer・check-drift の検査 2 本（managed-symlinks-only・forward-refs）の 4 コマンドを順に実行する。
+  #   Dock 再起動の注記・常駐手順の注記は「存在の確認」だけ（実行しない）。v1.1 節の LaunchAgent 固定一覧は実行しない。
+  why="$(cl_readme_check new import_c "$WT1/README.md")" || { cl_result AC-12 NG "③ README の手順と定数が不一致(FX-1・束C): ${why}"; return; }
+  cl_readme_notes_present "$WT1/README.md" "$CLOSING_README_MARK_IMPORT_C" \
+    "$CLOSING_README_NOTE_DOCK_RESTART" "$CLOSING_README_NOTE_LA_RESIDENT" > "$od/3-notes.txt" 2>&1 \
+    || { cl_result AC-12 NG "③ 束 C 節に注記が無い（ac12c/3-notes.txt）"; return; }
+  local h3="$WORK/home-ac12c-3" s3 repo3 p rc3=0 dw3="$WORK/dotfiles-ac12c-3"
   s3="$WORK/s-ac12c-3"; cl_stubs "$s3"
   ac10_clone "$h3" "$s3" && cl_install_main base "$h3" "$h3/$CLOSING_REPO_HOME_REL" "$s3" "$od/fx6-3.log" \
     || { cl_result AC-12 NG "③ FX-6（基準のメイン機導入）が失敗（ac12c/fx6-3.log）"; return; }
   ac10_origin_advance
   repo3="$h3/$CLOSING_REPO_HOME_REL"
-  { rc3=0; cl_run "$h3" "$s3" "$repo3" git pull -q --ff-only </dev/null || rc3=$?; echo "rc=$rc3 pull"; } >"$od/3-import.log" 2>&1
+  cl_new_wt_at "$CLOSING_DOTFILES_REPO" "$dw3" "$CLOSING_DOTFILES_COMMIT" \
+    || { cl_result AC-12 NG "③ dotfiles の worktree（FX-16）を作れない"; return; }
+  # 1 本目＝dotfiles の pull（FX-16 の worktree は commit で detach 済み＝進める先が無いのは正しい挙動。
+  #   exit は判定に使わず、実行した記録だけ残す）
+  { cl_run "$h3" "$s3" "$dw3" git pull -q --ff-only; echo "rc=$? dotfiles-pull"; } >"$od/3-import.log" 2>&1
+  # 2 本目＝repo 自身の pull（README の `cd …; git pull --ff-only`）
+  { rc3=0; cl_run "$h3" "$s3" "$repo3" git pull -q --ff-only </dev/null || rc3=$?; echo "rc=$rc3 pull"; } >>"$od/3-import.log" 2>&1
   [ "$rc3" -eq 0 ] || m3="pull=$rc3"
-  for x in $CLOSING_INSTALL_MAIN_OLD $CLOSING_INSTALL_LA_OLD; do
-    p="$(cl_side_path new "$x")" || { m3="$m3 引けない:$x"; continue; }
+  # 3 本目＝installer（--with-dotfiles は README の表記のみ＝ここでは引数なしで実行＝CLOSING_README_DROP_ARGS と同じ扱い）
+  p="$(cl_side_path new "$CLOSING_INSTALL_MAIN_OLD")" || { m3="$m3 引けない:$CLOSING_INSTALL_MAIN_OLD"; p=""; }
+  if [ -n "$p" ]; then
     rc3=0; cl_run "$h3" "$s3" "$repo3" "$repo3/$p" </dev/null >>"$od/3-import.log" 2>&1 || rc3=$?
     echo "rc=$rc3 $p" >> "$od/3-import.log"
     [ "$rc3" -eq 0 ] || m3="$m3 $p=$rc3"
-  done
+  fi
   m3="$m3$(ac10_three "$h3" "ac12c-3")"
-  : > "$od/3-la-targets.txt"
-  for x in $CLOSING_LA_PLISTS; do
-    plutil -extract ProgramArguments json -o - "$h3/$CLOSING_LA_DIR_REL/$x" 2>/dev/null | jq -r '.[] | select(startswith("/"))' |
-      while IFS= read -r p; do [ -e "$p" ] || echo "不在 $x $p"; done
-  done >> "$od/3-la-targets.txt"
-  [ -s "$od/3-la-targets.txt" ] && m3="$m3 起動対象欠$(grep -c . "$od/3-la-targets.txt")"
+  # 4 本目＝配置の健全性検査
   p="$(cl_side_path new "$CLOSING_CHECK_DRIFT_OLD")" && {
     rc3=0; cl_run "$h3" "$s3" "$repo3" "$repo3/$p" "$CLOSING_CHECK_DRIFT_HEALTH_ARG" </dev/null >>"$od/3-import.log" 2>&1 || rc3=$?
     [ "$rc3" -eq 0 ] || m3="$m3 配置の健全性検査=$rc3"
   }
+  # 5 本目＝撤去の前提検査
+  if [ -n "$p" ]; then
+    rc3=0; cl_run "$h3" "$s3" "$repo3" "$repo3/$p" "$CLOSING_CHECK_DRIFT_FORWARD_ARG" </dev/null >>"$od/3-import.log" 2>&1 || rc3=$?
+    [ "$rc3" -eq 0 ] || m3="$m3 撤去の前提検査=$rc3"
+  fi
 
   # ④ ① の後の FX-5（h1）で、FX-14 の選択→更新コマンド1回→失敗注入（.codex 読取専用）→更新コマンド
   local repo1="$h1/$CLOSING_REPO_HOME_REL"

@@ -21,14 +21,15 @@
 #   ledger-tool.sh select [<機能名,…|all>]  引数なし＝今の選択（all か保存された値）を 1 行。
 #                                引数あり＝検査して保存（同じフォルダの一時ファイル→rename・all＝ファイルを消す）。
 #                                exit 0／1 保存できない（一時ファイルは消す）／2 選択が不正（何も変えない）
+#   ledger-tool.sh select --check <機能名,…|all>  検査だけ（保存しない・何も変えない）。exit 0／2 選択が不正
 #   ledger-tool.sh residents     常駐の案内の材料を台帳の行順に＝「<in|out><TAB>install<TAB><登録部品の絶対パス>」
 #                                （鍵 <機能>.install-*）と「<in|out><TAB>label<TAB><ラベル>」（組立層の plist）。
 #                                in／out＝その行の機能が選択に入るか
 #   ledger-tool.sh live-set      ⑦ が突合する対象＝全部入りの組立が生成した settings.json の全フックの command と、
 #                                配置された LaunchAgent の起動対象（一時 HOME は `$HOME` と書く）
 # 選択＝lookup・route・placement・residents は選択の外の機能の行を無いものとして扱う（Core は常に含む）。
-#   選択のファイル＝KEY=VALUE 1 行 `AIENV_COMPONENTS=<機能名,…>`（source せず値だけ読む）。ファイルが無い＝全部入り。
-#   語彙外・読めない＝台帳異常（2・固定文 `LEDGER: ledger …`）＝静かに全部入りへ戻さない。
+#   選択のファイル＝末尾改行を除きちょうど 1 行 `AIENV_COMPONENTS=<機能名,…>`（source せず値だけ読む）。
+#   ファイルが無い＝全部入り。余分な行・別キー・重複キー・キー無し・語彙外・読めない＝台帳異常（2・固定文 `LEDGER: ledger …`）＝静かに全部入りへ戻さない。
 # 上書き口: AIENV_LEDGER＝台帳のパス・AIENV_MOVES＝移動表のパス（既定＝repo ルートの core/data/ 配下）・
 #   AIENV_COMPONENTS_FILE＝選択のファイル（既定＝~/.config/takumi009-ai-env/components.env）。
 # 隔離: ⑦ と live-set は repo の複製を一時 HOME に置き、README のメイン機手順（雛形の複写→全部入り→常駐の登録）を
@@ -53,7 +54,11 @@ NOTICES="call call.alert call.usage call.ask answer"  # 「知らせ」列の語
 MSG_HEAD="LEDGER:"                                 # 照会の固定文の先頭語（種別語＝ledger／part）
 RC_FOUND=0; RC_NO_KEY=1; RC_LEDGER_BAD=2; RC_PART_BAD=3; RC_USAGE=64
 CHECK_FAIL_RC=1
-REPO_HOME_REL="work/takumi009-ai-env"              # 組立が想定する repo の置き場（HOME 相対＝README の clone 先）
+# 組立が想定する repo の置き場（HOME 相対）＝共有の 1 定数（core/executor/vault-paths.sh の AIENV_REPO_HOME_REL）
+# shellcheck source=../executor/vault-paths.sh
+. "$ROOT/core/executor/vault-paths.sh" 2>/dev/null \
+  || { printf 'LEDGER: ledger 共有ライブラリを読めない %s\n' "$ROOT/core/executor/vault-paths.sh" >&2; exit 2; }
+REPO_HOME_REL="$AIENV_REPO_HOME_REL"
 CONFIG_HOME_REL=".config/takumi009-ai-env"         # 雛形の複写先（README のメイン機手順）
 LIVE_MAIN_KEY="core.install"                       # 全部入りの組立の鍵
 LIVE_AGENT_KEY_RE='^[a-z][a-z0-9-]*\.install-'     # 常駐の登録の鍵（全部入りの後に台帳の行順で走らせる）
@@ -63,7 +68,7 @@ COMPONENTS_KEY="AIENV_COMPONENTS"                  # 選択のファイルの唯
 SELECT_ALL="all"                                   # 全部入りを明示する語（保存はファイルを消すこと）
 ALWAYS_FUNCTION="core"                             # 選択に依らず常に含む機能
 
-usage() { sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; }
+usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; }
 
 # ---------------------------------------------------------------- 選択（置く機能）
 # selection_set <値> — 値（機能名のカンマ区切り）を検査し、SEL＝「 core <機能> … 」にする。不正なら SEL_WHY に理由・1。
@@ -83,18 +88,25 @@ selection_set() {
   done
 }
 
-# read_selection — 選択のファイルを読み SEL に（全部入り＝空）。読めない・不正なら固定文を stderr に出して 1。
+# read_selection — 選択のファイルを読み SEL に（全部入り＝空）・保存された値を SEL_VALUE に。
+# ファイルは末尾改行を除きちょうど 1 行 `<キー>=<値>`（余分な行・別キー・重複キー・キー無しは不正）。
+# 読めない・不正なら固定文を stderr に出して 1。
 read_selection() {
-  SEL=""
+  local c
+  SEL=""; SEL_VALUE="$SELECT_ALL"
   { [ -e "$COMPONENTS_FILE" ] || [ -L "$COMPONENTS_FILE" ]; } || return 0
-  if [ ! -f "$COMPONENTS_FILE" ] || [ ! -r "$COMPONENTS_FILE" ]; then
+  if [ ! -f "$COMPONENTS_FILE" ] || [ ! -r "$COMPONENTS_FILE" ] || ! c="$(cat "$COMPONENTS_FILE"; printf x)"; then
     printf '%s ledger 選択のファイルを読めない %s\n' "$MSG_HEAD" "$COMPONENTS_FILE" >&2
     return 1
   fi
-  if ! selection_set "$(sed -n "s/^$COMPONENTS_KEY=//p" "$COMPONENTS_FILE")"; then
-    printf '%s ledger %s（%s）\n' "$MSG_HEAD" "$SEL_WHY" "$COMPONENTS_FILE" >&2
-    return 1
-  fi
+  c="${c%x}"; c="${c%$'\n'}"
+  case "$c" in
+    *$'\n'*) SEL_WHY="選択のファイルが 1 行でない（$COMPONENTS_KEY=<機能名,…> の 1 行だけ）" ;;
+    "$COMPONENTS_KEY="*) SEL_VALUE="${c#"$COMPONENTS_KEY="}"; selection_set "$SEL_VALUE" && return 0 ;;
+    *) SEL_WHY="選択のファイルのキーが $COMPONENTS_KEY でない（$COMPONENTS_KEY=<機能名,…> の 1 行だけ）" ;;
+  esac
+  printf '%s ledger %s（%s）\n' "$MSG_HEAD" "$SEL_WHY" "$COMPONENTS_FILE" >&2
+  return 1
 }
 
 # select_cmd [<値|all>] — 引数なし＝今の選択を 1 行。引数あり＝検査して保存（設計 §3.1・§3.3 A1／F0s）。
@@ -102,8 +114,13 @@ select_cmd() {
   local dir tmp
   if [ $# -eq 0 ]; then
     read_selection || return "$RC_LEDGER_BAD"
-    if [ -z "$SEL" ]; then echo "$SELECT_ALL"; else sed -n "s/^$COMPONENTS_KEY=//p" "$COMPONENTS_FILE"; fi
+    echo "$SEL_VALUE"
     return 0
+  fi
+  if [ "$1" = "--check" ]; then   # 検査だけ（保存しない＝組立が何かを変える前の検証口）
+    [ "$2" = "$SELECT_ALL" ] || selection_set "$2" && return 0
+    printf '%s ledger %s\n' "$MSG_HEAD" "$SEL_WHY" >&2
+    return "$RC_LEDGER_BAD"
   fi
   if [ "$1" = "$SELECT_ALL" ]; then
     rm -f "$COMPONENTS_FILE" 2>/dev/null && return 0
@@ -753,7 +770,7 @@ case "${1:-}" in
     case "$#:${2:-}" in 1:|2:--all) ;; *) usage; exit "$RC_USAGE" ;; esac
     placement "${2:-}"; exit $? ;;
   select)
-    [ $# -le 2 ] || { usage; exit "$RC_USAGE"; }
+    case "$#:${2:-}" in 1:|2:*) [ "${2:-}" != "--check" ] ;; 3:--check) ;; *) false ;; esac || { usage; exit "$RC_USAGE"; }
     shift; select_cmd "$@"; exit $? ;;
   residents)
     [ $# -eq 1 ] || { usage; exit "$RC_USAGE"; }

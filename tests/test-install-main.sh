@@ -1036,6 +1036,32 @@ echo "=== 36. v1.2 束 C 着手ゲート C4: dotfiles の既定は DOTFILES_DIR 
     "$(grep -l 'AIENV_DOTFILES_DIR' "$SCRIPT" "$REPO_ROOT/core/assembly/check-drift.sh" 2>/dev/null | grep -c . || true)"
 }
 
+echo "=== 37. v1.2 §3.1 C-V04: 選択ファイルが不正（KEY=VALUE 1キー・1行でない）＝組立は何も変えず非0（ライブ位置・settings.json・選択ファイルが不変） ==="
+{
+  for VARIANT in extra-line other-key dup-key no-key; do
+    FAKE_HOME="$(mktemp -d)"
+    make_fake_home "$FAKE_HOME"
+    run_select "$FAKE_HOME" --select core
+    COMPFILE="$FAKE_HOME/$COMPONENTS_REL"
+    case "$VARIANT" in
+      extra-line) { printf 'AIENV_COMPONENTS=core\n'; printf 'extra garbage line\n'; } > "$COMPFILE" ;;
+      other-key)  { printf 'AIENV_COMPONENTS=core\n'; printf 'AIENV_OTHER=x\n'; } > "$COMPFILE" ;;
+      dup-key)    { printf 'AIENV_COMPONENTS=core\n'; printf 'AIENV_COMPONENTS=ai-brain\n'; } > "$COMPFILE" ;;
+      no-key)     printf 'core\n' > "$COMPFILE" ;;
+    esac
+    BEFORE_NAMES="$(live_names "$FAKE_HOME")"
+    BEFORE_SETTINGS_SUM="$(cksum "$FAKE_HOME/.claude/settings.json" 2>/dev/null | awk '{print $1, $2}')"
+    BEFORE_COMPFILE="$(cat "$COMPFILE")"
+    rc=0; run_select "$FAKE_HOME" || rc=$?
+    assert_true "C-V04（${VARIANT}）: 非0終了" "$([ "$SELECT_RC" != "0" ] && echo 1 || echo 0)"
+    assert_eq "C-V04（${VARIANT}）: ライブ位置は不変" "$BEFORE_NAMES" "$(live_names "$FAKE_HOME")"
+    assert_eq "C-V04（${VARIANT}）: settings.json は不変" "$BEFORE_SETTINGS_SUM" \
+      "$(cksum "$FAKE_HOME/.claude/settings.json" 2>/dev/null | awk '{print $1, $2}')"
+    assert_eq "C-V04（${VARIANT}）: 選択ファイルは不変（組立が書き換えない）" "$BEFORE_COMPFILE" "$(cat "$COMPFILE")"
+    rm -rf "$FAKE_HOME"
+  done
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

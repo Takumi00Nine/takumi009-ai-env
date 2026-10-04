@@ -1062,15 +1062,15 @@ fi
 # 各ワーカーが team/connect/codex/codex-exec.sh を直接叩く方式になったため、インストーラ側の
 # 自動登録ステップは不要になった。
 
-# --- リーダー実行値と動的Bedrock許可キーの決定・settings.json 生成（全 link・chmod・codex/ の配置の後）---
+# --- リーダー実行値と動的Bedrock許可キーの決定・settings.json 生成（A4 登録＝全配置の完了後）---
 # 検証 V-04（3 巡目 BLOCKING）対応・2026-10-03: 以前はこの決定・生成をフック／
 # 職種定義の link・chmod・codex/ の link より前に置いていたため、途中で ln が
 # 失敗すると「新しい settings.json だけが公開され、まだ配置されていない新フック
 # （例＝Codex 直叩き柵）を参照する」状態になり得た（設計 §8.1 S2「登録は配置の
 # 後」・F1「配置中失敗＝同じコマンドの再実行で前へ進む」の前提に反する・NFR-4・
-# AC-10 ③）。全 link・chmod・codex/ の配置が終わったこの位置で初めて決定・生成
-# する＝途中失敗時は旧 settings.json が残ったまま `set -euo pipefail` でここへ
-# 到達せず止まる。
+# AC-10 ③）。v1.2 では A2（導出の一覧の全配置）が終わったこの位置で初めて決定・生成
+# する＝配置の途中で失敗したら旧 settings.json が残ったまま A2 の末尾で止まり、ここへ到達しない。
+# 部品の実行ビットは組立が付け直さない（git が記録する mode・台帳の検査 ⑦ の live と run の実体の検査で担保）。
 # --dry-run では resolver を呼ばない（「--dry-run は python3 を要求しない」保証を
 # 崩さない。計画表示は generate_settings_json() の dry-run 分岐が行う）。
 AIENV_SETTINGS_MODEL=""
@@ -1086,8 +1086,8 @@ fi
 # generate_settings_json()はWARNを出しsettings.json本体の生成を中止・既存
 # ファイルを保持したまま**AIENV_DEFERRED_EXIT_CODEを立てて戻る**（設計書
 # §6.2-B S4「bedrock.envが実在するのに読めない/解析できない場合は非0終了」。
-# 詳細は同関数のコメント参照）。hooks・職種定義のsymlink化・chmod・codex/の
-# 配置はここより前で既に完走しているため、残る処理（--with-dotfiles時の
+# 詳細は同関数のコメント参照）。導出の一覧の全配置（A2）は
+# ここより前で既に完走しているため、残る処理（--with-dotfiles時の
 # dotfiles導入＝独立したsoft-fail経路）はそのまま続行させ、最終的な終了コード
 # だけスクリプト末尾で非0へ反映する。これは意図した安全側の分岐であり、
 # `|| true`のような一律の抑制は付けない（2026-08-30 Codex四次レビュー指摘・

@@ -567,6 +567,20 @@ echo "=== 19. v1.2 FR-10: --select の委譲（install-sub.sh → install-main.s
   rm -rf "$FAKE_HOME"
 }
 
+echo "=== 20. v1.2 §3.1 C-V05: 空 HOME に語彙外の --select で install-sub.sh＝非0・HOME配下に Vault骨格・選択ファイル・ライブ位置の名前が1つも作られない（実行前後の find \$HOME が同じ） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  BEFORE_FIND="$(find "$FAKE_HOME" | sort)"
+
+  rc=0
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --select zz >/dev/null 2>&1 || rc=$?
+  assert_true "C-V05: 語彙外の --select は非0終了" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
+  assert_eq "C-V05: find \$HOME が実行前後で同じ（Vault骨格・選択ファイル・ライブ位置が何も作られない）" \
+    "$BEFORE_FIND" "$(find "$FAKE_HOME" | sort)"
+
+  rm -rf "$FAKE_HOME"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

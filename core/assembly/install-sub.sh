@@ -65,7 +65,7 @@
 
 set -euo pipefail
 
-# repo ルートは実体の位置から導く＝旧更新コマンドが固定で呼ぶ旧パスの転送 symlink から起動されてもリンクを辿る。
+# repo ルートは実体の位置から導く＝本スクリプトが symlink 経由で起動されてもリンクを辿って repo の中を指す。
 _self="${BASH_SOURCE[0]}"
 while [ -L "$_self" ]; do
   _dir="$(cd "$(dirname "$_self")" && pwd)"
@@ -117,6 +117,14 @@ fail() { echo "[install-sub] FAIL: $*" >&2; exit 1; }
 
 [ -d "$DIR/ai-brain/data/vault-public" ] || fail "リポジトリに ai-brain/data/vault-public/ が見つかりません（checkout破損の可能性）: $DIR/ai-brain/data/vault-public"
 [ -x "$DIR/core/assembly/install-main.sh" ] || fail "install-main.sh が見つかりません（checkout破損の可能性）: $DIR/core/assembly/install-main.sh"
+
+# --- 0. 選択の検査（v1.2 設計 §3.1＝不正な選択は何も変えずに止まる）。Vault骨格の配置より前に、
+#        台帳ツールの保存しない検証口で値だけを見る（保存と配置は委譲先の install-main.sh）。 ---
+if [ -n "$SELECT_ARG" ]; then
+  if ! _select_err="$(bash "$DIR/core/assembly/ledger-tool.sh" select --check "$SELECT_ARG" 2>&1 >/dev/null)"; then
+    fail "選択を受け付けられません。何も変えていません（${_select_err:-台帳ツールの検証口が失敗}）"
+  fi
+fi
 
 # --- 1. Vault骨格の配置（$VAULT が無い時だけ。既存Vaultは上書きしない） ---
 # ⚠️ --check-profile 検査モードでは一切進まない（2026-09-02追加）。検査は

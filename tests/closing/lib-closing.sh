@@ -225,14 +225,64 @@ cl_proc_cmds() {
   done
 }
 
-# cl_readme_check <side> <main|sub|import> <README> — 英日の印の手順と定数を突合。一致で 0、不一致は差分 1 行を出して 1
+# cl_proc_cmds_import_c <side> — 束 C の取込み節（見出し＝CLOSING_README_MARK_IMPORT_C）で照合・実行する
+#   行（C-V10＝AC-12③専用。v1.1 節の LaunchAgent 固定一覧は実行しない）。dotfiles の pull は README の literal
+#   （~/<既定 dotfiles 置き場>）のまま＝実行時にどこへ向けるかは呼び手（ac_12）の責務。
+cl_proc_cmds_import_c() {
+  local side="$1" p
+  printf 'git -C ~/%s pull --ff-only\n' "$CLOSING_DOTFILES_DIR_DEFAULT"
+  printf '%s\n' "$CLOSING_IMPORT_PULL"
+  p="$(cl_side_path "$side" "$CLOSING_INSTALL_MAIN_OLD")" || p="<引けない:$CLOSING_INSTALL_MAIN_OLD>"
+  printf '%s\n' "$p"
+  p="$(cl_side_path "$side" "$CLOSING_CHECK_DRIFT_OLD")" || p="<引けない:$CLOSING_CHECK_DRIFT_OLD>"
+  printf '%s %s\n' "$p" "$CLOSING_CHECK_DRIFT_HEALTH_ARG"
+  printf '%s %s\n' "$p" "$CLOSING_CHECK_DRIFT_FORWARD_ARG"
+}
+
+# cl_readme_block <README> <見出し行> — 見出し行直後の最初の ```sh ブロックの中身を標準出力へ（何も無ければ無出力）
+cl_readme_block() {
+  awk -v want="$2" '
+    $0 == want { hit=1; next }
+    hit && started != 1 && /^```/ { started=1; next }
+    hit && started != 1 && /^#/ { exit }
+    hit && started == 1 { if ($0 ~ /^```/) exit; print }
+  ' "$1"
+}
+
+# cl_readme_notes_present <README> <mark EN|JA> <note EN|JA> ... — 見出し直後のブロックに、各 note の
+#   いずれかの言語表記が含まれるか（実行しない注記の「存在の確認」だけ＝C-V10）。欠けを 1 行ずつ出し、あれば 1。
+cl_readme_notes_present() {
+  local readme="$1" marks="$2" m blk note bad=0
+  shift 2
+  while [ -n "$marks" ]; do
+    m="${marks%%|*}"; [ "$m" = "$marks" ] && marks="" || marks="${marks#*|}"
+    blk="$(cl_readme_block "$readme" "$m")"
+    if [ -z "$blk" ]; then echo "見出し直後にブロックが無い: $m"; bad=1; continue; fi
+    for note in "$@"; do
+      local hit=0 alts="$note" a
+      while [ -n "$alts" ]; do
+        a="${alts%%|*}"; [ "$a" = "$alts" ] && alts="" || alts="${alts#*|}"
+        printf '%s' "$blk" | grep -qF -- "$a" && { hit=1; break; }
+      done
+      [ "$hit" -eq 1 ] || { echo "注記が無い（${m}）: $note"; bad=1; }
+    done
+  done
+  return "$bad"
+}
+
+# cl_readme_check <side> <main|sub|import|import_c> <README> — 英日の印の手順と定数を突合。一致で 0、不一致は差分 1 行を出して 1
 cl_readme_check() {
   local side="$1" proc="$2" readme="$3" marks m got exp a x first
-  case "$proc" in main) marks="$CLOSING_README_MARK_MAIN" ;; sub) marks="$CLOSING_README_MARK_SUB" ;; *) marks="$CLOSING_README_MARK_IMPORT" ;; esac
+  case "$proc" in
+    main) marks="$CLOSING_README_MARK_MAIN" ;;
+    sub) marks="$CLOSING_README_MARK_SUB" ;;
+    import_c) marks="$CLOSING_README_MARK_IMPORT_C" ;;
+    *) marks="$CLOSING_README_MARK_IMPORT" ;;
+  esac
   a=()
   for x in $CLOSING_README_SKIP_LINE_ARGS; do a+=(--skip-line-arg "$x"); done
   for x in $CLOSING_README_DROP_ARGS; do a+=(--drop-arg "$x"); done
-  exp="$(cl_proc_cmds "$side" "$proc")"
+  if [ "$proc" = "import_c" ]; then exp="$(cl_proc_cmds_import_c "$side")"; else exp="$(cl_proc_cmds "$side" "$proc")"; fi
   while [ -n "$marks" ]; do
     m="${marks%%|*}"; [ "$m" = "$marks" ] && marks="" || marks="${marks#*|}"
     if ! got="$(cl_py readme-cmds "$readme" "$m" "${a[@]}")"; then

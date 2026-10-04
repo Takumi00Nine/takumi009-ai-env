@@ -225,21 +225,22 @@ fi
 # ---------------------------------------------------------------------------
 # 移動表の印の列（4 列目）のうち「撤去」＝転送 symlink を撤去した旧パスの記録。
 RETIRE_MARK="撤去"
-# 照合の境界規則の「repo のフォルダ名」＝組立の想定する repo の置き場の末尾（clone 先の名前）。
-: "${AIENV_REPO_DIRNAME:=takumi009-ai-env}"
 if [ "$FORWARD_REFS" = "1" ]; then
-  # dotfiles の置き場＝オプション優先 → DOTFILES_DIR → 共有の既定（組立と同じ 1 か所）。
+  # 共有の定数（DOTFILES_DIR_DEFAULT・AIENV_REPO_HOME_REL）は組立と同じ 1 か所から読む。
+  # shellcheck source=../executor/vault-paths.sh
+  . "$DIR/core/executor/vault-paths.sh" || { echo "[check-drift] FAIL: 共有の定数を読めません: $DIR/core/executor/vault-paths.sh" >&2; exit 2; }
+  # 照合の境界規則の「repo のフォルダ名」＝想定の置き場（AIENV_REPO_HOME_REL）の末尾。
+  REPO_DIRNAME="$(basename "$AIENV_REPO_HOME_REL")"
+  # dotfiles の置き場＝オプション優先 → DOTFILES_DIR → 共有の既定。
   if [ "$DOTFILES_OPT_SET" = "1" ]; then
     DOTFILES_DIR="$DOTFILES_OPT"
   elif [ -z "${DOTFILES_DIR:-}" ]; then
-    # shellcheck source=../executor/vault-paths.sh
-    . "$DIR/core/executor/vault-paths.sh" || { echo "[check-drift] FAIL: 既定の読込に失敗: $DIR/core/executor/vault-paths.sh" >&2; exit 2; }
     DOTFILES_DIR="$DOTFILES_DIR_DEFAULT"
   fi
   if [ "$DOTFILES_DIR" = "none" ]; then
     echo "[check-drift] dotfiles: 対象なし（--dotfiles none＝この機では使わない）" >&2
   fi
-  python3 - "$DIR/core/data/moves.tsv" "$RETIRE_MARK" "$AIENV_REPO_DIRNAME" "$HOME" "$DOTFILES_DIR" "$VAULT" <<'PY'
+  python3 - "$DIR/core/data/moves.tsv" "$RETIRE_MARK" "$REPO_DIRNAME" "$HOME" "$DOTFILES_DIR" "$VAULT" <<'PY'
 import os, re, subprocess, sys
 
 moves, mark, repo_name, home, dotfiles, vault = sys.argv[1:7]
@@ -276,17 +277,26 @@ def scan(kind, place, text):
         if p.search(text):
             hits.append((kind, place, old))
 
+# 読めないファイル・フォルダは環境異常＝対象パス付きで exit 2（黙って合格にしない）。
+# 例外は壊れた symlink（リンク先が無い）だけ＝中身が無いので対象外として読み飛ばす。
 def scan_file(kind, path):
+    if os.path.islink(path) and not os.path.exists(path):
+        return
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for n, line in enumerate(f, 1):
                 scan(kind, "%s:%d" % (path, n), line)
-    except OSError:
-        pass  # 読めない個別ファイル（壊れたリンク等）は参照を持たない
+    except OSError as e:
+        fail("読めません: %s (%s)" % (path, e.strerror))
+
+def walk_error(e):
+    fail("フォルダを読めません: %s (%s)" % (e.filename, e.strerror))
 
 # 1. ライブ位置＝~/.claude・~/.codex 配下の symlink のリンク先（symlink のフォルダは辿らない）。
 for top in (os.path.join(home, ".claude"), os.path.join(home, ".codex")):
-    for root, dirs, files in os.walk(top):
+    if not os.path.isdir(top):
+        continue
+    for root, dirs, files in os.walk(top, onerror=walk_error):
         for name in sorted(dirs + files):
             p = os.path.join(root, name)
             if os.path.islink(p):
@@ -298,7 +308,11 @@ if os.path.isfile(s):
 # 3. 常駐＝~/Library/LaunchAgents/*.plist。
 la = os.path.join(home, "Library", "LaunchAgents")
 if os.path.isdir(la):
-    for name in sorted(os.listdir(la)):
+    try:
+        names = os.listdir(la)
+    except OSError as e:
+        fail("フォルダを読めません: %s (%s)" % (la, e.strerror))
+    for name in sorted(names):
         if name.endswith(".plist"):
             scan_file("launchagent", os.path.join(la, name))
 # 4. dotfiles の checkout の追跡ファイル（none＝対象なし・無い／読めない＝止める）。
@@ -310,13 +324,15 @@ if dotfiles != "none":
         fail("dotfiles の追跡ファイルを読めません（git ls-files 失敗）: %s" % dotfiles)
     for rel in sorted(x for x in r.stdout.decode("utf-8", "replace").split("\0") if x):
         p = os.path.join(dotfiles, rel)
-        if os.path.isfile(p) and not os.path.islink(p):
+        if os.path.islink(p):
+            scan("dotfiles", p, os.readlink(p))  # 追跡された symlink はリンク先の字面を見る
+        elif os.path.lexists(p):
             scan_file("dotfiles", p)
 # 5. Vault の Preferences（VAULT で上書き・読めなければ止める）。
 prefs = os.path.join(vault, "Preferences")
 if not (os.path.isdir(prefs) and os.access(prefs, os.R_OK | os.X_OK)):
     fail("Vault の Preferences が読めません: %s（VAULT で指定）" % prefs)
-for root, dirs, files in os.walk(prefs):
+for root, dirs, files in os.walk(prefs, onerror=walk_error):
     dirs.sort()
     for name in sorted(files):
         scan_file("vault", os.path.join(root, name))
@@ -407,13 +423,22 @@ done <<EOF
 $PLACEMENT
 EOF
 
-if [ -f "$HOME/.claude/settings.json" ]; then
+# 登録＝配置済み settings.json は通常ファイルとして実在し JSON として読めること（不在・破損＝drift。
+# 静かに飛ばさない＝C-V01）。読めたら全フックの命令（先頭語がパスのもの）の実体を見る。
+check_registered_hooks() {
+  local f="$HOME/.claude/settings.json" hook_cmds cmd path rc=0
+  sym_total=$((sym_total + 1))
+  if [ -L "$f" ] || [ ! -f "$f" ]; then
+    sym_bad "[SETTINGS-MISSING] $f が通常ファイルとしてありません＝登録フックを確かめられません（core/assembly/install-main.sh を再実行）"
+    return
+  fi
   hook_cmds="$(python3 -c '
 import json, sys
 try:
     d = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception:
-    sys.exit(0)  # 解析できない settings.json は ①-2 が [JSON-PARSE-FAILED] で拾う
+except Exception as e:
+    print(type(e).__name__)
+    sys.exit(3)
 hooks = d.get("hooks") if isinstance(d, dict) else None
 for groups in (hooks.values() if isinstance(hooks, dict) else []):
     for g in groups if isinstance(groups, list) else []:
@@ -421,7 +446,11 @@ for groups in (hooks.values() if isinstance(hooks, dict) else []):
             c = h.get("command") if isinstance(h, dict) else None
             if isinstance(c, str) and c.strip():
                 print(c.strip().split()[0])
-' "$HOME/.claude/settings.json" | sort -u)"
+' "$f")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    sym_bad "[SETTINGS-PARSE-FAILED] $f を JSON として解析できません（${hook_cmds:-exit $rc}）＝登録フックを確かめられません"
+    return
+  fi
   while IFS= read -r cmd; do
     [ -n "$cmd" ] || continue
     path="${cmd/#\$HOME/$HOME}"; path="${path/#\$\{HOME\}/$HOME}"; path="${path/#\~/$HOME}"
@@ -433,9 +462,10 @@ for groups in (hooks.values() if isinstance(hooks, dict) else []):
       sym_bad "[NOT-EXECUTABLE] settings.json のフックの命令の実体に実行権限がありません: ${cmd}"
     fi
   done <<EOF
-$hook_cmds
+$(printf '%s\n' "$hook_cmds" | sort -u)
 EOF
-fi
+}
+check_registered_hooks
 log "symlink総数: ${sym_total}件 / drift: ${sym_drift}件（台帳の導出の一覧＋settings.json の登録フック）"
 [ "$sym_drift" -eq 0 ] && log "  -> ✅ 全配置がrepoを指し、登録フックの実体が揃っています"
 

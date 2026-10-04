@@ -38,6 +38,17 @@ trap 'exit 130' INT TERM
 
 if ! why="$(cl_check_env)"; then echo "環境が FX-6 の前提を満たさない:$why" >&2; exit 2; fi
 
+# AC-11④・FX-16（dotfiles の FR-19 commit）の事前条件（C-V08）＝未指定・commit 不在を skip にして
+# AC-11 を ok にしない。既定値は空のまま（実 ~/work/dotfiles を既定にしない＝test-runner が必ず指定する）。
+if [ -z "${CLOSING_DOTFILES_REPO:-}" ] || [ -z "${CLOSING_DOTFILES_COMMIT:-}" ]; then
+  echo "事前条件エラー: CLOSING_DOTFILES_REPO・CLOSING_DOTFILES_COMMIT を指定してください（AC-11④・FR-19）" >&2
+  exit 2
+fi
+if ! git -C "$CLOSING_DOTFILES_REPO" rev-parse --verify "${CLOSING_DOTFILES_COMMIT}^{commit}" >/dev/null 2>&1; then
+  echo "事前条件エラー: CLOSING_DOTFILES_COMMIT ${CLOSING_DOTFILES_COMMIT} が CLOSING_DOTFILES_REPO ${CLOSING_DOTFILES_REPO} に無い（AC-11④・FR-19）" >&2
+  exit 2
+fi
+
 WT0="$WORK/wt0"; WT1="$WORK/wt1"
 cl_new_wt "$WT0" "$BASE_COMMIT" || { echo "基準の worktree を作れない（$OUT/detail.log）" >&2; exit 2; }
 cl_new_wt "$WT1" "$FX1_COMMIT" || { echo "FX-1 の worktree を作れない（$OUT/detail.log）" >&2; exit 2; }
