@@ -103,7 +103,6 @@ ac_2() {
   # ② v1.1 AC-8 の比較（FX-3 に FX-2・FX-1 それぞれの導入手順を実行＝ac8_side は締め層 ac-live.sh の既存機）。
   #    許容差分＝口のための 1 名以内（v1.2 は口をライブ位置に置かない設計＝期待は 0 だが要件の上限どおり 1 まで許容）。
   local e1="" e2="" e3="" e4="" extra_n=0
-  why="$(ac8_side base "$WT0" 2>&1)" || : ; [ -d "$OUT/ac8/base" ] || mkdir -p "$OUT/ac8/base"
   if ! ac8_side base "$WT0"; then cl_result AC-2 NG "② 基準側の導入手順が失敗（ac8/base/install.log）"; return; fi
   if ! ac8_side new "$WT1"; then cl_result AC-2 NG "② FX-1 側の導入手順が失敗（ac8/new/install.log）"; return; fi
   while IFS="$(printf '\t')" read -r nm k t; do
@@ -162,7 +161,9 @@ cl_mk_fx11_zzd() {
   mkdir -p "$dest"
   cp "$CL_DIR/../../$CLOSING_ZZD_FIX_REL/connect/deliver.sh" "$dest/deliver.sh"
   chmod +x "$dest/deliver.sh"
-  printf 'part\t%s/\t%s\tconnect\t%s\t-\t%s\tcall\n' \
+  # VB-02（verify-impl-r1）＝知らせを持つ行は実行可能ファイル＝ディレクトリでなく deliver.sh そのものを指す
+  # （常設 fixture tests/test-notify.sh:169-172 と同じ字面）。
+  printf 'part\t%s/deliver.sh\t%s\tconnect\t%s\t-\t%s\tcall\n' \
     "$CLOSING_ZZD_DIR_REL" "$CLOSING_NOTIFY_FN" "$CLOSING_ZZD_PROVIDER" \
     "AC-3 試験の第 4 届け先（締めの実走が足す・移動表は変えない）" >> "$wt/$CLOSING_LEDGER_REL"
 }
@@ -206,6 +207,10 @@ ac_4() {
     "$WT1/$e" </dev/null >"$od/fx1-usage.stdout" 2>"$od/fx1-usage.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx1-usage.rc"
   local fx1_osascript_usage; fx1_osascript_usage="$(grep -c '警告' "$s/calls.log" 2>/dev/null || true)"
+  local fx1_maint_result fx1_claude_pct fx1_notify_state
+  fx1_maint_result="$(jq -r '.last_result // empty' "$h/.claude/logs/maintenance/last-run.json" 2>/dev/null)"
+  fx1_claude_pct="$(jq -Sc '{fh:.five_hour.used_percent, sd:.seven_day.used_percent}' "$h/.cache/claude-codex-usage/claude-cache.json" 2>/dev/null)"
+  fx1_notify_state="$(jq -Sc 'walk(if type=="object" then with_entries(if (.key|test("_at$")) then .value=0 else . end) else . end)' "$h/.cache/claude-codex-usage/notify-state.json" 2>/dev/null)"
 
   # --- FX-10（Notify を除いた）側
   h="$WORK/home-ac4-fx10"; s="$WORK/s-ac4-fx10"; rm -rf "$h" "$s"; mkdir -p "$h"; cl_stubs "$s"
@@ -215,7 +220,9 @@ ac_4() {
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$wt10" AIENV_REPO="$wt10" "$wt10/$e" </dev/null >"$od/fx10-maint.stdout" 2>"$od/fx10-maint.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx10-maint.rc"
   local fx10_osascript_maint; fx10_osascript_maint="$({ [ -f "$s/calls.log" ] && grep -c . "$s/calls.log" 2>/dev/null; } || true)"
-  local maint_log_ok; maint_log_ok="$(grep -qF '異常終了' "$od/fx10-maint.stdout" "$od/fx10-maint.stderr" 2>/dev/null && echo 1 || echo 0)"
+  # VB-04＝各自のログに「送らなかった」旨が題を含むちょうど1行（core/executor/notice.sh:97 の固定文言）。
+  local maint_log_n; maint_log_n="$(grep -cF '口が無いため知らせを送りません: maintenance.sh 異常終了' "$od/fx10-maint.stdout" "$od/fx10-maint.stderr" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')"
+  local fx10_maint_result; fx10_maint_result="$(jq -r '.last_result // empty' "$h/.claude/logs/maintenance/last-run.json" 2>/dev/null)"
   e="$(cl_side_path new "$CLOSING_USAGE_FETCH_OLD")" || e=""
   : > "$s/calls.log"
   rc=0; [ -n "$e" ] && { cl_run "$h" "$s" "$wt10" "$(cl_path "$s" "$CL_FIX/usage-bin")" \
@@ -225,17 +232,23 @@ ac_4() {
     "$wt10/$e" </dev/null >"$od/fx10-usage.stdout" 2>"$od/fx10-usage.stderr" || rc=$?; }
   printf '%s\n' "$rc" > "$od/fx10-usage.rc"
   local fx10_osascript_usage; fx10_osascript_usage="$({ [ -f "$s/calls.log" ] && grep -c . "$s/calls.log" 2>/dev/null; } || true)"
-  local usage_log_ok; usage_log_ok="$(grep -qF 'claude-codex-usage' "$od/fx10-usage.stdout" "$od/fx10-usage.stderr" 2>/dev/null; echo $?)"
+  local usage_log_n; usage_log_n="$(grep -cF '口が無いため知らせを送りません: claude-codex-usage' "$od/fx10-usage.stdout" "$od/fx10-usage.stderr" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')"
+  local fx10_claude_pct; fx10_claude_pct="$(jq -Sc '{fh:.five_hour.used_percent, sd:.seven_day.used_percent}' "$h/.cache/claude-codex-usage/claude-cache.json" 2>/dev/null)"
+  local fx10_notify_state; fx10_notify_state="$(jq -Sc 'walk(if type=="object" then with_entries(if (.key|test("_at$")) then .value=0 else . end) else . end)' "$h/.cache/claude-codex-usage/notify-state.json" 2>/dev/null)"
 
   [ "$(cat "$od/fx1-maint.rc")" = "$(cat "$od/fx10-maint.rc")" ] || bad="$bad maint:rc不一致"
   [ "$fx1_osascript_maint" -ge 1 ] || bad="$bad maint:FX-1側でosascript記録が無い"
   [ "$fx10_osascript_maint" = 0 ] || bad="$bad maint:FX-10側でosascript記録が${fx10_osascript_maint}件（0のはず）"
-  [ "$maint_log_ok" = 1 ] || bad="$bad maint:口が無い旨の記録が無い"
+  [ "$maint_log_n" = 1 ] || bad="$bad maint:口が無い旨の記録が${maint_log_n}件（ちょうど1件のはず）"
+  [ -n "$fx1_maint_result" ] && [ "$fx1_maint_result" = "$fx10_maint_result" ] || bad="$bad maint:状態記録(last_result)不一致(FX-1=$fx1_maint_result,FX-10=$fx10_maint_result)"
   [ "$(cat "$od/fx1-usage.rc")" = "$(cat "$od/fx10-usage.rc")" ] || bad="$bad usage:rc不一致"
   [ "$fx1_osascript_usage" -ge 1 ] || bad="$bad usage:FX-1側でosascript記録が無い"
   [ "$fx10_osascript_usage" = 0 ] || bad="$bad usage:FX-10側でosascript記録が${fx10_osascript_usage}件（0のはず）"
+  [ "$usage_log_n" = 1 ] || bad="$bad usage:口が無い旨の記録が${usage_log_n}件（ちょうど1件のはず）"
+  [ -n "$fx1_claude_pct" ] && [ "$fx1_claude_pct" = "$fx10_claude_pct" ] || bad="$bad usage:取得結果・キャッシュ不一致"
+  [ -n "$fx1_notify_state" ] && [ "$fx1_notify_state" = "$fx10_notify_state" ] || bad="$bad usage:通知状態JSON不一致"
 
-  if [ -z "$bad" ]; then cl_result AC-4 ok "① メンテ・Usage とも rc 一致・FX-10 は osascript 0 件＋口なしの記録あり"
+  if [ -z "$bad" ]; then cl_result AC-4 ok "① メンテ・Usage とも rc・状態記録・取得結果一致・FX-10 は osascript 0 件＋口なしの記録1行ずつ"
   else cl_result AC-4 NG "①${bad}（ac4/）"; fi
 }
 
@@ -287,11 +300,17 @@ ac_7() {
   svb="$(git -C "$CL_SRC" show "$BASE_COMMIT:team/data/profile.md.sample" 2>/dev/null | grep -m1 '^schema_version:')"
   svn="$(git -C "$CL_SRC" show "$FX1_COMMIT:team/data/profile.md.sample" 2>/dev/null | grep -m1 '^schema_version:')"
   [ "$svb" = "$svn" ] || e4="$e4 配役表schema_version(${svb}→${svn})"
+  # VM-03＝実物の見出しは全角「列＝」・列名は <TAB> という文字列で区切られる（半角 `=` の grep は空振りしていた）。
   local colb coln addb addn
-  colb="$(git -C "$CL_SRC" show "$BASE_COMMIT:$CLOSING_LEDGER_REL" 2>/dev/null | grep -m1 '^# 列=')"
-  coln="$(git -C "$CL_SRC" show "$FX1_COMMIT:$CLOSING_LEDGER_REL" 2>/dev/null | grep -m1 '^# 列=')"
-  addb="$(printf '%s' "$colb" | tr -cd '・' | wc -c)"; addn="$(printf '%s' "$coln" | tr -cd '・' | wc -c)"
-  [ "$((addn - addb))" -le 2 ] || e4="$e4 台帳列見出しの増分$((addn - addb))件(上限2)"
+  colb="$(git -C "$CL_SRC" show "$BASE_COMMIT:$CLOSING_LEDGER_REL" 2>/dev/null | grep -m1 '^# 列＝')"
+  coln="$(git -C "$CL_SRC" show "$FX1_COMMIT:$CLOSING_LEDGER_REL" 2>/dev/null | grep -m1 '^# 列＝')"
+  if [ -z "$colb" ] || [ -z "$coln" ]; then
+    e4="$e4 台帳列見出しが取れない（基準=${colb:-空}／FX-1=${coln:-空}）"
+  else
+    addb="$(printf '%s' "$colb" | grep -o '<TAB>' | wc -l | tr -d ' ')"
+    addn="$(printf '%s' "$coln" | grep -o '<TAB>' | wc -l | tr -d ' ')"
+    [ "$((addn - addb))" -le 2 ] || e4="$e4 台帳列見出しの増分$((addn - addb))件(上限2)"
+  fi
 
   # ④ (b) bash 3.2 構文・実行時非互換
   local f syntax_bad=""
