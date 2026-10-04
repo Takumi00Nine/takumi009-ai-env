@@ -181,14 +181,20 @@ cl_mk_vault_fx5() {  # FX-4＋git（初期コミット 1・remote 無し・未�
 }
 
 # ---------------------------------------------------------------- 導入手順（契約 3）
-# cl_install_agents <repo> <home> <stubdir> <log> — README のメイン機手順の常駐の登録 3 本（旧仕様）を、
-#   「その木に存在する分だけ」に置き換える（裁定2026-10-05＝取り外した木に無い部品を固定一覧で呼んで exit 127
-#   にしない）。鍵（設計 §4「常駐の登録の鍵」＝<機能>.install-*・CLOSING_LIVE_AGENT_KEY_RE）は repo 自身の台帳
-#   （$CLOSING_LEDGER_REL）の行順に拾い、repo 自身の ledger-tool.sh lookup で解決する＝リネームしても鍵は
-#   変わらないので cl_side_path（移動表）を経由しない。基準（FX-2）側の ledger-tool.sh にも lookup があり、
-#   同じ導出が通る（確認ずみ＝分岐は不要）。
+# cl_install_agents <repo> <home> <stubdir> <log> [<sel:機能名をカンマ区切り>] — README のメイン機手順の
+#   常駐の登録 3 本（旧仕様）を、「その木に存在する分だけ」に置き換える（裁定2026-10-05＝取り外した木に無い
+#   部品を固定一覧で呼んで exit 127 にしない）。鍵（設計 §4「常駐の登録の鍵」＝<機能>.install-*・
+#   CLOSING_LIVE_AGENT_KEY_RE）は repo 自身の台帳（$CLOSING_LEDGER_REL）の行順に拾い、repo 自身の
+#   ledger-tool.sh lookup で解決する＝リネームしても鍵は変わらないので cl_side_path（移動表）を経由しない。
+#   基準（FX-2）側の ledger-tool.sh にも lookup があり、同じ導出が通る（確認ずみ＝分岐は不要）。
+#   <sel> 省略時＝台帳の行から絞らない（取り外した木はそもそも行が無いので結果は変わらない）。<sel> 指定時＝
+#   台帳の機能列（3 列目）がその集合に無い行は呼ばない（裁定2026-10-05＝木を取り外さず --select だけで
+#   絞った HOME にも、選択した機能の常駐だけを登録させる＝選択外の usage 等を呼ばない）。
 cl_install_agents() {
-  local repo="$1" h="$2" s="$3" log="$4" ledger="$repo/$CLOSING_LEDGER_REL" tool="$repo/$CLOSING_LEDGER_TOOL_REL" key p rc
+  local repo="$1" h="$2" s="$3" log="$4" sel="${5:-}" ledger tool key p rc
+  # ledger・tool は $repo 代入後に別文で（同じ local 文の中だと RHS が先に・代入前の値で評価され、
+  # set -u 下で repo 未定義エラーになりうる＝ac-c.sh clc_ac8_entry_run の既知パターンと同じ）。
+  ledger="$repo/$CLOSING_LEDGER_REL"; tool="$repo/$CLOSING_LEDGER_TOOL_REL"
   [ -f "$ledger" ] && [ -x "$tool" ] || { echo "引けない: $CLOSING_LEDGER_REL か $CLOSING_LEDGER_TOOL_REL" >>"$log"; return 1; }
   while IFS= read -r key; do
     [ -n "$key" ] || continue
@@ -199,7 +205,10 @@ cl_install_agents() {
     rc=0; cl_run "$h" "$s" "$repo" "$p" </dev/null >>"$log" 2>&1 || rc=$?
     [ "$rc" = 0 ] || { echo "rc=$rc: $p" >>"$log"; return "$rc"; }
   done <<EOF
-$(awk -F'\t' -v re="$CLOSING_LIVE_AGENT_KEY_RE" '!/^#/ && NF && $1 == "part" && $6 ~ re { print $6 }' "$ledger")
+$(awk -F'\t' -v re="$CLOSING_LIVE_AGENT_KEY_RE" -v sel="$sel" '
+    BEGIN { n = split(sel, a, ","); for (i = 1; i <= n; i++) selset[a[i]] = 1 }
+    !/^#/ && NF && $1 == "part" && $6 ~ re && (sel == "" || $3 in selset) { print $6 }
+  ' "$ledger")
 EOF
   return 0
 }

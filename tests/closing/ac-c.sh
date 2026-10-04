@@ -40,6 +40,8 @@ EOF
 }
 
 # clc_home_select <home> <wt> <stubdir> <log> <selection> — 空 HOME へ install-main.sh --select <selection>
+#   した後、組立が出力の末尾に示す手順（常駐の登録＝ledger-tool.sh が解決する鍵）を選択で絞って実行する
+#   （裁定2026-10-05＝取り外した木〔HOME-B〕は常駐の登録済み＝HOME-A も選択した機能分だけ揃える）。
 clc_home_select() {
   local h="$1" wt="$2" s="$3" log="$4" sel="$5" cfg p
   rm -rf "$h"; cfg="$h/$CLOSING_CONFIG_DIR_REL"; mkdir -p "$cfg"
@@ -48,7 +50,8 @@ clc_home_select() {
   p="$(cl_side_path new "$CLOSING_MODELS_SAMPLE_OLD")" || { echo "引けない: $CLOSING_MODELS_SAMPLE_OLD" >>"$log"; return 1; }
   cp "$wt/$p" "$cfg/models.conf"
   p="$(cl_side_path new "$CLOSING_INSTALL_MAIN_OLD")" || { echo "引けない: $CLOSING_INSTALL_MAIN_OLD" >>"$log"; return 1; }
-  cl_run "$h" "$s" "$wt" "$wt/$p" "$CLOSING_SELECT_ARG" "$sel" </dev/null >>"$log" 2>&1
+  cl_run "$h" "$s" "$wt" "$wt/$p" "$CLOSING_SELECT_ARG" "$sel" </dev/null >>"$log" 2>&1 || return 1
+  cl_install_agents "$wt" "$h" "$s" "$log" "$sel"
 }
 
 # clc_placement_set <wt> <home> <all|SELECTION> — 台帳から導いた配置の集合（$HOME 展開ずみ）＝
@@ -175,6 +178,10 @@ ac_8() {
 
   # ② 選択（FX-13＝{Core, AI Brain}）vs v1.1 FX-8 の作り方で AI Brain・Core だけにした木を全部入りで組み立てた HOME
   local wtA="$WORK/wt-ac8c-a" wtB="$WORK/wt-ac8c-b" hA="$WORK/home-ac8c-a" hB="$WORK/home-ac8c-b" sA="$WORK/s-ac8c-a" sB="$WORK/s-ac8c-b"
+  # HOME-A・HOME-B のパスを比較前に同じ印へ（リーダー裁定2026-10-05）＝closing_util.py normalize は
+  # 長い文字列から当てる（subs を -len でソート）ので、この行を先に積めば既存の汎用規則「$WORK/home=<HOME>」
+  # の前方一致（末尾 -ac8c-a／-ac8c-b が残る）より先にこちらが丸ごと当たる。新しい正規化方式は作らない。
+  CL_SUBS+=("$hA=<HOME>" "$hB=<HOME>")
   cl_new_wt "$wtA" "$FX1_COMMIT" || { cl_result AC-8 NG "②④ worktree(A) を作れない"; return; }
   cl_new_wt "$wtB" "$FX1_COMMIT" || { cl_result AC-8 NG "②④ worktree(B) を作れない"; return; }
   why="$(clc_strip_features "$wtB" team usage notify dock)"
