@@ -163,7 +163,7 @@ cl_mk_fx11_zzd() {
   chmod +x "$dest/deliver.sh"
   # VB-02（verify-impl-r1）＝知らせを持つ行は実行可能ファイル＝ディレクトリでなく deliver.sh そのものを指す
   # （常設 fixture tests/test-notify.sh:169-172 と同じ字面）。
-  printf 'part\t%s/deliver.sh\t%s\tconnect\t%s\t-\t%s\tcall\n' \
+  printf 'part\t%s/deliver.sh\t%s\tconnect\t%s\t-\t%s\tcall.ask\n' \
     "$CLOSING_ZZD_DIR_REL" "$CLOSING_NOTIFY_FN" "$CLOSING_ZZD_PROVIDER" \
     "AC-3 試験の第 4 届け先（締めの実走が足す・移動表は変えない）" >> "$wt/$CLOSING_LEDGER_REL"
 }
