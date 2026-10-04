@@ -87,9 +87,17 @@ d_mtime_ts() { local n="$1"; [[ "$n" != -* ]] && n="+$n"; date -v"${n}"d +%Y%m%d
 # claude/・codex/・ai-brain/data/vault-public/・scripts/check-drift.sh本体だけをコピーする）。
 make_fake_repo() {
   local repo="$1"
-  mkdir -p "$repo/core/assembly" "$repo/core/connect/claude-code" "$repo/team/rules/agents" "$repo/team/connect/claude-code" "$repo/team/connect/codex" "$repo/team/executor" "$repo/ai-brain/executor" "$repo/ai-brain/connect/claude-code" "$repo/dock/executor" "$repo/usage/executor" "$repo/ai-brain/data/vault-public/Preferences"
+  mkdir -p "$repo/core/assembly" "$repo/core/connect/claude-code" "$repo/core/data" "$repo/core/executor" "$repo/team/rules/agents" "$repo/team/connect/claude-code" "$repo/team/connect/codex" "$repo/team/executor" "$repo/ai-brain/executor" "$repo/ai-brain/connect/claude-code" "$repo/dock/executor" "$repo/usage/executor" "$repo/ai-brain/data/vault-public/Preferences"
   cp "$REPO_ROOT/$SCRIPT_REL" "$repo/core/assembly/check-drift.sh"
   chmod +x "$repo/core/assembly/check-drift.sh"
+  # T-C2: check-drift.sh ①（配置の健全性）は core/assembly/ledger-tool.sh placement
+  # から配置一覧を導出し、--forward-refs は core/data/moves.tsv・core/executor/vault-paths.sh
+  # を読む＝正本は台帳1か所なので実物を複製する（stubは書かない）。
+  cp "$REPO_ROOT/core/data/ledger.tsv" "$repo/core/data/ledger.tsv"
+  cp "$REPO_ROOT/core/data/moves.tsv" "$repo/core/data/moves.tsv"
+  cp "$REPO_ROOT/core/assembly/ledger-tool.sh" "$repo/core/assembly/ledger-tool.sh"
+  chmod +x "$repo/core/assembly/ledger-tool.sh"
+  cp "$REPO_ROOT/core/executor/vault-paths.sh" "$repo/core/executor/vault-paths.sh"
   # check-drift.sh ①-2 は model/effort値を自前で持たず、fixture内の
   # core/assembly/install-main.sh --render-settings-json（生成関数そのもの）に
   # 一時ファイルへ再生成させて比べる（2026-09-19 着手順3・設計 §4.2）。
@@ -126,6 +134,10 @@ EOF
   echo '#!/bin/bash' > "$repo/team/connect/claude-code/inprocess-gate.sh"
   echo '#!/bin/bash' > "$repo/ai-brain/connect/claude-code/vault-write-gate.sh"
   echo '#!/bin/bash' > "$repo/usage/executor/usage-inject.sh"
+  # 実台帳の配置行（9列目）にある残り2本＝real ledger.tsv に合わせて追加
+  # （本体は実装と無関係のstub。正本はコピーした台帳側）。
+  echo '#!/bin/bash' > "$repo/team/connect/claude-code/codex-direct-call-gate.sh"
+  echo '#!/bin/bash' > "$repo/core/connect/claude-code/prompt-answer.sh"
   chmod +x "$repo"/*/executor/*.sh "$repo"/*/connect/*/*.sh "$repo"/core/assembly/check-sub-update.sh
   echo '# agent' > "$repo/team/rules/agents/sample-agent.md"
   echo '# AGENTS' > "$repo/team/connect/codex/AGENTS.md"
@@ -165,6 +177,8 @@ install_fake_home() {
   ln -s "$repo/team/connect/claude-code/inprocess-gate.sh" "$home/.claude/hooks/inprocess-gate.sh"
   ln -s "$repo/ai-brain/connect/claude-code/vault-write-gate.sh" "$home/.claude/hooks/vault-write-gate.sh"
   ln -s "$repo/usage/executor/usage-inject.sh" "$home/.claude/hooks/usage-inject.sh"
+  ln -s "$repo/team/connect/claude-code/codex-direct-call-gate.sh" "$home/.claude/hooks/codex-direct-call-gate.sh"
+  ln -s "$repo/core/connect/claude-code/prompt-answer.sh" "$home/.claude/hooks/code27-call-clear.sh"
   ln -s "$repo/team/rules/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/team/connect/codex/AGENTS.md" "$home/.codex/AGENTS.md"
   ln -s "$repo/team/connect/codex/hooks.json" "$home/.codex/hooks.json"
@@ -3142,18 +3156,20 @@ PLIST
   rm -rf "$FX23_ROOT" "$FX3" "$DOTFILES_FX" "$VAULT_FX_PARENT"
 }
 
-echo "=== 88. v1.2 FR-18: 何も無い FX-3 は exit 0・出力なし ==="
+echo "=== 88. v1.2 FR-18: 何も無い FX-3 は exit 0・stdout 空・stderr に「対象なし」1 行（裁定＝T-C3） ==="
 {
   FX3B_ROOT="$(mktemp -d)"
   FREPO2="$(mk_takumi_repo "$FX3B_ROOT")"
   FX3B="$(mktemp -d)"
   mkdir -p "$FX3B/.claude" "$FX3B/Library/LaunchAgents"
   VAULT_FX2_PARENT="$(mktemp -d)"; VAULT_FX2="$VAULT_FX2_PARENT/obsidian"; mkdir -p "$VAULT_FX2/Preferences"
+  FWD_ERR2="$(mktemp)"
   rc=0
-  FWD_OUT2="$(HOME="$FX3B" VAULT="$VAULT_FX2" bash "$FREPO2/core/assembly/check-drift.sh" --forward-refs --dotfiles none 2>&1)" || rc=$?
+  FWD_OUT2="$(HOME="$FX3B" VAULT="$VAULT_FX2" bash "$FREPO2/core/assembly/check-drift.sh" --forward-refs --dotfiles none 2>"$FWD_ERR2")" || rc=$?
   assert_eq_num "参照側が無ければ exit 0" "$rc" "0"
-  assert_eq "出力なし" "" "$FWD_OUT2"
-  rm -rf "$FX3B_ROOT" "$FX3B" "$VAULT_FX2_PARENT"
+  assert_eq "stdout は空（該当行のみの契約＝設計 §3.4）" "" "$FWD_OUT2"
+  assert_eq "stderr は「対象なし」1 行（--dotfiles none＝設計 §3.4 (b)）" "1" "$(grep -ci '対象なし' "$FWD_ERR2" || true)"
+  rm -rf "$FX3B_ROOT" "$FX3B" "$VAULT_FX2_PARENT"; rm -f "$FWD_ERR2"
 }
 
 echo "=== 89. v1.2 FR-18/§3.4: dotfiles の 3 区別（読める→照合／none→対象なし／無い→非0）・VAULT が読めない→非0 ==="
@@ -3185,7 +3201,7 @@ echo "=== 89. v1.2 FR-18/§3.4: dotfiles の 3 区別（読める→照合／non
   rm -rf "$FX3C_ROOT" "$FX3C" "$VAULT_FX3_PARENT"
 }
 
-echo "=== 90. v1.2 §3.4: 旧パスの照合境界＝ライブ名・新パスの部分一致を拾わない（陰性） ==="
+echo "=== 90. v1.2 §3.4: 旧パスの照合境界＝ライブ名・新パスの部分一致を拾わない（陰性・裁定＝T-C3） ==="
 {
   FX3D_ROOT="$(mktemp -d)"
   FREPO4="$(mk_takumi_repo "$FX3D_ROOT")"
@@ -3198,12 +3214,14 @@ echo "=== 90. v1.2 §3.4: 旧パスの照合境界＝ライブ名・新パスの
   VAULT_FX4_PARENT="$(mktemp -d)"; VAULT_FX4="$VAULT_FX4_PARENT/obsidian"; mkdir -p "$VAULT_FX4/Preferences"
   printf '新パスの言及: %s/ai-brain/executor/vault-recall.sh\n' "$FREPO4" > "$VAULT_FX4/Preferences/zz-new-path-note.md"
 
+  FX4_ERR="$(mktemp)"
   rc=0
-  out4="$(HOME="$FX3D" VAULT="$VAULT_FX4" bash "$FREPO4/core/assembly/check-drift.sh" --forward-refs --dotfiles none 2>&1)" || rc=$?
+  out4="$(HOME="$FX3D" VAULT="$VAULT_FX4" bash "$FREPO4/core/assembly/check-drift.sh" --forward-refs --dotfiles none 2>"$FX4_ERR")" || rc=$?
   assert_eq_num "ライブ名・新パスの部分一致だけなら exit 0" "$rc" "0"
-  assert_eq "出力なし" "" "$out4"
+  assert_eq "stdout は空（該当なし＝設計 §3.4）" "" "$out4"
+  assert_eq "stderr は「対象なし」1 行（--dotfiles none＝設計 §3.4 (b)）" "1" "$(grep -ci '対象なし' "$FX4_ERR" || true)"
 
-  rm -rf "$FX3D_ROOT" "$FX3D" "$VAULT_FX4_PARENT"
+  rm -rf "$FX3D_ROOT" "$FX3D" "$VAULT_FX4_PARENT"; rm -f "$FX4_ERR"
 }
 
 echo

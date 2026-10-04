@@ -982,12 +982,12 @@ echo "=== 34. v1.2 §3.2: 掃除の退避＝gen・run の置き場は中身を�
   run_select "$FAKE_HOME" --select ai-brain,core,team,usage,notify,dock
   CODEX_TOML="$FAKE_HOME/.codex/config.toml"
   assert_true "前提: gen の置き場（config.toml）がある" "$([ -e "$CODEX_TOML" ] && echo 1 || echo 0)"
-  CODEX_TOML_SUM_BEFORE="$(cksum "$CODEX_TOML" 2>/dev/null || true)"
+  CODEX_TOML_SUM_BEFORE="$(cksum "$CODEX_TOML" 2>/dev/null | awk '{print $1, $2}')"
   rc=0; run_select "$FAKE_HOME" --select ai-brain,core || rc=$?
   assert_eq "exit 0" "0" "$SELECT_RC"
   assert_true "gen の置き場は退避名で残る（中身は消えない）" \
     "$(ls "$CODEX_TOML".aienv-removed.bak* >/dev/null 2>&1 && echo 1 || echo 0)"
-  assert_eq "退避した内容は選択外にする直前と同じ" "$CODEX_TOML_SUM_BEFORE" "$(cksum "$CODEX_TOML".aienv-removed.bak* 2>/dev/null | head -1)"
+  assert_eq "退避した内容は選択外にする直前と同じ（checksum・サイズの 2 欄だけを比較＝退避名でファイル名欄は変わる）" "$CODEX_TOML_SUM_BEFORE" "$(cksum "$CODEX_TOML".aienv-removed.bak* 2>/dev/null | head -1 | awk '{print $1, $2}')"
   OTHER_LINK="$FAKE_HOME/.claude/hooks/zz-other-target.sh"
   ln -s "/bin/echo" "$OTHER_LINK"
   rc=0; run_select "$FAKE_HOME" || rc=$?
