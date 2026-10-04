@@ -549,6 +549,24 @@ echo "=== 18. PA-12: install-sub.sh 経由でも追加と削除が同時に起�
   rm -rf "$FAKE_HOME" "$TMP_REPO"
 }
 
+echo "=== 19. v1.2 FR-10: --select の委譲（install-sub.sh → install-main.sh に同じ引数・実装計画 §1 束 C） ==="
+{
+  FAKE_HOME="$(mktemp -d)"
+  make_fake_home "$FAKE_HOME"
+
+  rc=0
+  SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$FAKE_HOME" bash "$SCRIPT" --select ai-brain,core >/dev/null 2>&1 || rc=$?
+  assert_eq "exit code 0" "0" "$rc"
+  assert_eq "components.env の中身＝AIENV_COMPONENTS=ai-brain,core（委譲先が保存）" \
+    "AIENV_COMPONENTS=ai-brain,core" "$(cat "$FAKE_HOME/.config/takumi009-ai-env/components.env" 2>/dev/null || true)"
+  assert_true "選択外（usage）の usage-inject.sh はライブ位置に無い" \
+    "$([ ! -e "$FAKE_HOME/.claude/hooks/usage-inject.sh" ] && echo 1 || echo 0)"
+  assert_true "選択内（ai-brain）の vault-recall.sh はライブ位置にある" \
+    "$([ -e "$FAKE_HOME/.claude/hooks/vault-recall.sh" ] && echo 1 || echo 0)"
+
+  rm -rf "$FAKE_HOME"
+}
+
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

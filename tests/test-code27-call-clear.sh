@@ -172,20 +172,20 @@ sleep 0.5
 if notify_log_tail_has "LEDGER: ledger"; then pass "FX-25b: 知らせの記録に種別語 ledger の固定文が1行"
 else fail_case "FX-25b: 知らせの記録に種別語 ledger の固定文が1行 (log=$(cat "$NOTIFY_LOG_DEFAULT" 2>/dev/null))"; fi
 
-echo "--- VB-01 回帰: 台帳の形式不正（7列＝8列目「知らせ」が無い行）→ no-dest 等に化けず ledger の固定文のまま ---"
-SHORT7_LEDGER="$WORK_DIR/short7-ledger.tsv"
-printf 'part\tnotify/executor/notify.sh\tnotify\texecutor\t-\tnotify.send\t口\n' > "$SHORT7_LEDGER"
+echo "--- VB-01 回帰: 台帳の形式不正（8列＝9列目「配置」が無い行）→ no-dest 等に化けず ledger の固定文のまま ---"
+SHORT8_LEDGER="$WORK_DIR/short8-ledger.tsv"
+printf 'part\tnotify/executor/notify.sh\tnotify\texecutor\t-\tnotify.send\t口\t-\n' > "$SHORT8_LEDGER"
 rm -f "$NOTIFY_LOG_DEFAULT"
-run_hook_prompt "聞こえた" "$FAKE_CLEAR" "$SHORT7_LEDGER"
-if [ "$HOOK_EXIT" -eq 0 ] && [ -z "$HOOK_STDOUT" ]; then pass "VB-01: 7列行＝終了0・標準出力は空"
-else fail_case "VB-01: 7列行＝終了0・標準出力は空 (exit=$HOOK_EXIT out=[$HOOK_STDOUT])"; fi
+run_hook_prompt "聞こえた" "$FAKE_CLEAR" "$SHORT8_LEDGER"
+if [ "$HOOK_EXIT" -eq 0 ] && [ -z "$HOOK_STDOUT" ]; then pass "VB-01: 8列行＝終了0・標準出力は空"
+else fail_case "VB-01: 8列行＝終了0・標準出力は空 (exit=$HOOK_EXIT out=[$HOOK_STDOUT])"; fi
 sleep 0.5
-if notify_log_tail_has "LEDGER: ledger"; then pass "VB-01: 7列行＝知らせの記録に種別語 ledger の固定文が1行（no-dest 等に化けない）"
-else fail_case "VB-01: 7列行＝知らせの記録に種別語 ledger の固定文が1行 (log=$(cat "$NOTIFY_LOG_DEFAULT" 2>/dev/null))"; fi
+if notify_log_tail_has "LEDGER: ledger"; then pass "VB-01: 8列行＝知らせの記録に種別語 ledger の固定文が1行（no-dest 等に化けない）"
+else fail_case "VB-01: 8列行＝知らせの記録に種別語 ledger の固定文が1行 (log=$(cat "$NOTIFY_LOG_DEFAULT" 2>/dev/null))"; fi
 
 echo "--- FX-25c: 口の行はあるがその実体が無い ---"
 MISSING_LEDGER="$WORK_DIR/missing-part-ledger.tsv"
-printf 'part\tnotify/executor/zz-missing-mouth.sh\tnotify\texecutor\t-\tnotify.send\t\t-\n' > "$MISSING_LEDGER"
+printf 'part\tnotify/executor/zz-missing-mouth.sh\tnotify\texecutor\t-\tnotify.send\t\t-\t-\n' > "$MISSING_LEDGER"
 rm -f "$NOTIFY_LOG_DEFAULT"
 run_hook_prompt "聞こえた" "$FAKE_CLEAR" "$MISSING_LEDGER"
 if [ "$HOOK_EXIT" -eq 0 ] && [ -z "$HOOK_STDOUT" ]; then pass "FX-25c: 終了0・標準出力は空"

@@ -77,11 +77,11 @@ cl_mk_fx10() {
   rel="$(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$wt/$recall" "$zz")"
   sed "s#__RECALL_REL__#$rel#" "$CL_ZZ_FIX/connect/recall-shim.sh" > "$zz/recall-shim.sh"
   chmod +x "$zz/recall-shim.sh" "$zz/install.sh"
-  printf '%s\t%s/\t%s\t%s\t%s\t-\t%s\n' "$CLOSING_LEDGER_PART_KIND" "$CLOSING_ZZ_DIR_REL" "$CLOSING_ZZ_FN" \
+  # ゲート①X-06（締め側）＝移動表の行は足さない（FR-20＝v1.1 の後の新規部品に移動表の行を求めない。
+  # README 側の由来の記載は test-writer A の担当＝tests/fixtures/zz-cli/README.md）。
+  # 9 列目「配置」＝install.sh が $HOME/.zz-cli/ 配下へ書く run 行（束 C の台帳の契約＝ちょうど 9 列）。
+  printf '%s\t%s/\t%s\t%s\t%s\t-\t%s\t-\trun:$HOME/.zz-cli/\n' "$CLOSING_LEDGER_PART_KIND" "$CLOSING_ZZ_DIR_REL" "$CLOSING_ZZ_FN" \
     "$CLOSING_ZZ_LAYER" "$CLOSING_ZZ_PROVIDER" "AC-2 試験の第 3 提供元（締めの実走が足す）" >> "$wt/$CLOSING_LEDGER_REL"
-  # 移動表にも由来の行（FR-13＝新規の部品にも由来が要る・列＝旧パス 新パス 種別 転送印）
-  [ -f "$wt/$CLOSING_MOVES_REL" ] || { echo "移動表 $CLOSING_MOVES_REL が無い"; return 1; }
-  printf -- '-\t%s/\t新規\t-\n' "$CLOSING_ZZ_DIR_REL" >> "$wt/$CLOSING_MOVES_REL"
 }
 
 # AC-2 ③ FX-10 で一括テスト全スイート exit 0 ／ ④ zz-cli の配置手順＋偽 zz-cli に FX-17 → Knowledge/zz-probe.md

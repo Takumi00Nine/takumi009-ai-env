@@ -165,7 +165,7 @@ case "$kind" in
 esac
 FAKEEOF
   chmod +x "$repo/notify/executor/notify.sh"
-  printf 'part\tnotify/executor/notify.sh\tnotify\texecutor\t-\tnotify.send\tFAKE 口（test-maintenance 専用）\t-\n' \
+  printf 'part\tnotify/executor/notify.sh\tnotify\texecutor\t-\tnotify.send\tFAKE 口（test-maintenance 専用）\t-\t-\n' \
     > "$repo/core/data/ledger.tsv"
 
   # --- FAKE check-drift.sh（環境変数で終了コード・JSON出力を制御） ---
@@ -1314,7 +1314,7 @@ setup_prune_ledger() {
   local repo="$1"
   mkdir -p "$repo/core/assembly" "$repo/core/data" "$repo/dock/executor"
   cp "$REPO_ROOT/core/assembly/ledger-tool.sh" "$repo/core/assembly/ledger-tool.sh"
-  printf 'part\tdock/executor/cmux-task-declare.sh\tdock\texecutor\t-\tdock.task-declare\t宣言 CLI\t-\n' > "$repo/core/data/ledger.tsv"
+  printf 'part\tdock/executor/cmux-task-declare.sh\tdock\texecutor\t-\tdock.task-declare\t宣言 CLI\t-\t-\n' > "$repo/core/data/ledger.tsv"
   printf '%s' "$repo/dock/executor"
 }
 
@@ -1449,9 +1449,9 @@ echo "=== 39d. V-08（設計 §5.6）: 宣言 CLI の照会 3 分類＝鍵なし
     fi
     assert_eq "$label: 宣言 CLI のスタブは呼ばれない" "0" "$([ -s "$PRUNE_CALL_LOG" ] && echo 1 || echo 0)"
   }
-  prune_lookup_case "鍵なし" 'part\tdock/executor/other.sh\tdock\texecutor\t-\t-\t-\t-\n' ""
+  prune_lookup_case "鍵なし" 'part\tdock/executor/other.sh\tdock\texecutor\t-\t-\t-\t-\t-\n' ""
   prune_lookup_case "台帳異常（台帳が無い）" "-" "LEDGER: ledger "
-  prune_lookup_case "実体異常（パス不在）" 'part\tdock/executor/zz-missing-declare.sh\tdock\texecutor\t-\tdock.task-declare\t-\t-\n' "LEDGER: part dock.task-declare "
+  prune_lookup_case "実体異常（パス不在）" 'part\tdock/executor/zz-missing-declare.sh\tdock\texecutor\t-\tdock.task-declare\t-\t-\t-\n' "LEDGER: part dock.task-declare "
 }
 
 # =============================================================================

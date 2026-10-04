@@ -18,6 +18,8 @@
                                           （`cp <見本>`・`<…>.sh [引数]`・`git pull …`）。見出しかブロックが無ければ exit 3
   settings-cmp <base.json> <new.json>     正規化済み settings.json 2 つ: FX-1 にだけある登録を `EXTRA <command>` で出し、
                                           それを除いて一致しなければ `DIFF` と差分を出す（exit 0＝一致・1＝不一致）
+  pathswap-diff <repo> <commit> [OLD=NEW ...]   <commit>~1..<commit> の差分が、与えた旧パス→新パスの置換だけの
+                                          行置換か（追加行と削除行が 1 対 1・置換後に一致＝exit 0・AC-11④／FR-19）
 
 移動表の契約（tests/closing/lib-closing.sh 冒頭と同じ）: TSV・`#` 始まりと空行は読まない・列＝旧パス 新パス 種別 転送印。
 旧パスが `-` か空＝新規。末尾 `/` の行はフォルダ単位（その配下のパスへ前方一致で当てる）。
@@ -299,6 +301,34 @@ def settings_cmp(base_p, new_p):
     return 1
 
 
+# ---------------------------------------------------------------- 束 C・AC-11④（dotfiles の 1 commit の純粋さ）
+def pathswap_diff(repo, commit, pairs):
+    """<commit>~1..<commit> の差分が、pairs（旧パス→新パス）の文字列置換だけの行置換であることを確かめる
+    （追加行と削除行が 1 対 1 で、置換以外の差が無い＝FR-19）。戻り値＝(ok, message)。"""
+    out = subprocess.run(["git", "-C", repo, "diff", "-U0", commit + "~1", commit],
+                          capture_output=True, text=True, check=False).stdout
+    added, removed = [], []
+    for line in out.splitlines():
+        if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+            continue
+        if line.startswith("+"):
+            added.append(line[1:])
+        elif line.startswith("-"):
+            removed.append(line[1:])
+    if len(added) != len(removed):
+        return False, "追加%d行・削除%d行（1対1でない）" % (len(added), len(removed))
+    if not added:
+        return False, "差分が無い"
+    expect = []
+    for line in removed:
+        for old, new in pairs:
+            line = line.replace(old, new)
+        expect.append(line)
+    if sorted(expect) != sorted(added):
+        return False, "置換後に一致しない行がある（置換以外の差を含む）"
+    return True, "追加%d行＝削除%d行の置換のみ" % (len(added), len(removed))
+
+
 # ---------------------------------------------------------------- README の手順
 def readme_cmds(readme, heading, skip_line_args, drop_args):
     with open(readme, encoding="utf-8") as f:
@@ -390,6 +420,14 @@ def main(argv):
         print("\n".join(got))
     elif cmd == "settings-cmp":
         return settings_cmp(args[0], args[1])
+    elif cmd == "pathswap-diff":
+        pairs = []
+        for p in args[2:]:
+            o, _, n = p.partition("=")
+            pairs.append((o, n))
+        ok, msg = pathswap_diff(args[0], args[1], pairs)
+        print(msg)
+        return 0 if ok else 1
     else:
         die("不明なサブコマンド: %s" % cmd)
     return 0

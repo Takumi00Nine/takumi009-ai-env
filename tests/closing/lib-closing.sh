@@ -62,18 +62,29 @@ cl_wait_lines() {
 }
 
 # ---------------------------------------------------------------- worktree
-cl_new_wt() {  # cl_new_wt <dir> <commit>
-  git -C "$CL_SRC" worktree add -q --detach "$1" "$2" >>"$OUT/detail.log" 2>&1 || return 1
-  CL_WTS="$CL_WTS $1"
+# cl_new_wt <dir> <commit> — $CL_SRC（本 repo）からの worktree（既定の使い方）
+cl_new_wt() { cl_new_wt_at "$CL_SRC" "$1" "$2"; }
+
+# cl_new_wt_at <src> <dir> <commit> — 任意の repo（束 C・AC-11④＝dotfiles）からの worktree。
+#   CL_WTS に "<src>|<dir>" で積む（cl_cleanup がその src で remove する）。
+cl_new_wt_at() {
+  git -C "$1" worktree add -q --detach "$2" "$3" >>"$OUT/detail.log" 2>&1 || return 1
+  CL_WTS="$CL_WTS $1|$2"
 }
 
 cl_cleanup() {
-  local w
+  local w src dir
   for w in $CL_WTS; do
-    chmod -R u+w "$w" 2>/dev/null
-    git -C "$CL_SRC" worktree remove --force "$w" >/dev/null 2>&1 || true
+    case "$w" in
+      *'|'*) src="${w%%|*}"; dir="${w#*|}" ;;
+      *) src="$CL_SRC"; dir="$w" ;;
+    esac
+    chmod -R u+w "$dir" 2>/dev/null
+    git -C "$src" worktree remove --force "$dir" >/dev/null 2>&1 || true
   done
   git -C "$CL_SRC" worktree prune >/dev/null 2>&1 || true
+  [ -n "${CLOSING_DOTFILES_REPO:-}" ] && [ -d "$CLOSING_DOTFILES_REPO" ] \
+    && git -C "$CLOSING_DOTFILES_REPO" worktree prune >/dev/null 2>&1
   [ -n "${WORK:-}" ] && { chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"; }
 }
 
