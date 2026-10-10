@@ -373,12 +373,17 @@ echo "=== 8. 必須引数の欠落 → exit 1（使い方が表示される） =
   rm -rf "$WORK"
 }
 
-echo "=== 9. --sandbox に read-only/workspace-write 以外を渡すと拒否される ==="
+echo "=== 9. AC-S2: --sandbox に3値（read-only/workspace-write/danger-full-access）以外を渡すと拒否される・codex未起動 ==="
 {
   WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"
+  : > "$LOG"
+  make_mock_codex "$BINDIR" "$LOG"
   rc=0
-  bash "$SCRIPT" --cwd "$WORK" --sandbox danger-full-access --out "$WORK/o.md" --prompt-file - <<< "absolute-rules" >/dev/null 2>&1 || rc=$?
-  assert_eq "danger-full-accessはexit 1で拒否" "1" "$rc"
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox full --out "$WORK/o.md" --prompt-file - <<< "absolute-rules" >/dev/null 2>&1 || rc=$?
+  assert_eq "AC-S2 3値以外（full）はexit 1で拒否（現行の挙動）" "1" "$rc"
+  assert_true "AC-S2 codexは起動されていない" "$([ ! -s "$LOG" ] && echo 1 || echo 0)"
   rm -rf "$WORK"
 }
 
@@ -577,7 +582,7 @@ echo "=== 17. PA-23: --out の親を先に mkdir -p してから起動し、事�
   mkdir -p "$(dirname "$OUT")"
 
   rc=0
-  stdout_out="$(PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox danger-full-access --out "$OUT" --prompt-file - \
+  stdout_out="$(PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox full --out "$OUT" --prompt-file - \
     <<< "absolute-rules を読んでやって" 2>"$OUT.wrapper.log")" || rc=$?
   assert_eq "(b) 引数不備はexit 1" "1" "$rc"
   assert_true "(b) stdoutに3行出ない（空）" "$([ -z "$stdout_out" ] && echo 1 || echo 0)"
@@ -818,6 +823,36 @@ echo "=== 25. AC7: カンマを含むパス（a,b.png）は実在しても exit 
     "$(grep -qF -- "$COMMA" "$WORK/err.log" && echo 1 || echo 0)"
 
   rm -rf "$WORK"
+}
+
+echo "=== 26. AC-S1: --sandbox danger-full-access → -s danger-full-access が入り、他の並びは workspace-write 指定時と同じ・exit 0 ==="
+{
+  WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"
+  : > "$LOG"
+  make_mock_codex "$BINDIR" "$LOG"
+  OUT="$WORK/out-full.md"
+
+  rc=0
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox danger-full-access --out "$OUT" \
+    --prompt-file - <<< "absolute-rules を読んで" >/dev/null 2>&1 || rc=$?
+  assert_eq "AC-S1 exit code 0" "0" "$rc"
+  load_args "$LOG"
+  assert_true "AC-S1 引数列が完全一致（-s danger-full-access・他は workspace-write 時と同じ並び）" \
+    "$(argv_eq exec --skip-git-repo-check -s danger-full-access -C "$WORK" --json -o "$OUT" - && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 27. AC-S3: --help の出力と冒頭コメントの「使い方」に danger-full-access が載る ==="
+{
+  help_out="$(bash "$SCRIPT" --help 2>&1)" || true
+  assert_true "AC-S3 --help の出力に danger-full-access が載る" \
+    "$(printf '%s\n' "$help_out" | grep -qF -- 'danger-full-access' && echo 1 || echo 0)"
+  header_usage="$(awk '/^# 使い方:/{f=1} f&&/^#/{print} f&&!/^#/{exit}' "$SCRIPT")"
+  assert_true "AC-S3 冒頭コメントの「使い方」に danger-full-access が載る" \
+    "$(printf '%s\n' "$header_usage" | grep -qF -- 'danger-full-access' && echo 1 || echo 0)"
 }
 
 echo

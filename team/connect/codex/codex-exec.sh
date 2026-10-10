@@ -12,7 +12,7 @@
 # ものであり、呼び出し側（ワーカー・職種定義）は本スクリプトだけを叩けばよい。
 #
 # 使い方:
-#   team/connect/codex/codex-exec.sh --cwd <絶対パス> --sandbox read-only|workspace-write \
+#   team/connect/codex/codex-exec.sh --cwd <絶対パス> --sandbox read-only|workspace-write|danger-full-access \
 #     --out <絶対パス> --prompt-file <file>|- \
 #     [--search] [--resume <thread_id>] [--developer-instructions <file>] \
 #     [--model <model>] [--effort <effort>] [--image <path>]...
@@ -62,7 +62,7 @@ IMAGES=()
 
 usage() {
   cat >&2 <<EOF
-使い方: $SCRIPT_NAME --cwd <絶対パス> --sandbox read-only|workspace-write \\
+使い方: $SCRIPT_NAME --cwd <絶対パス> --sandbox read-only|workspace-write|danger-full-access \\
   --out <絶対パス> --prompt-file <file>|- \\
   [--search] [--resume <thread_id>] [--developer-instructions <file>] \\
   [--model <model>] [--effort <effort>] [--image <path>]...   (パスにカンマ不可)
@@ -130,8 +130,8 @@ case "$OUT" in
 esac
 
 case "$SANDBOX" in
-  read-only|workspace-write) ;;
-  *) fail_usage "--sandbox は read-only か workspace-write のみ指定できます: $SANDBOX" ;;
+  read-only|workspace-write|danger-full-access) ;;
+  *) fail_usage "--sandbox は read-only・workspace-write・danger-full-access のみ指定できます: $SANDBOX" ;;
 esac
 
 # 画像は存在しない・パスにカンマを含む（codex CLI が -i の値をカンマで分割する）
