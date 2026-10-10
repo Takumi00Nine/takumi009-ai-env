@@ -111,7 +111,7 @@ make_sub_profile() {
   cat > "$home/.config/takumi009-ai-env/models.conf" <<'EOF'
 [t-sonnet-high]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 EOF
   cat > "$home/.config/takumi009-ai-env/profile.md" <<EOF
 ---
@@ -404,7 +404,7 @@ echo "=== 13. v1.2 FR-10/FR-14: Core を選んだサブ機の更新コマンド�
   cat > "$SUBHOME/.config/takumi009-ai-env/models.conf" <<'EOF'
 [t-sonnet-high]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 EOF
   cat > "$SUBHOME/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---

@@ -172,8 +172,8 @@ ROLE_EXEMPT_FROM_DEFINITION_CHECK = frozenset({"leader"})
 AGENT_MODEL_ALIASES = {
     "claude-fable-5-1": "fable",
     "claude-opus-5-5": "opus",
-    "claude-sonnet-5": "sonnet",
-    "claude-haiku-4-5-20251001": "haiku",
+    "claude-sonnet-5-5": "sonnet",
+    "claude-haiku-5-5": "haiku",
 }
 
 # Bedrockピン留め論理名の導出（§1-3・§6.1）。人はこの名前を書けない

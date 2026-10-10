@@ -174,7 +174,7 @@ echo "=== 5. v1.2 束 C AC-9（FX-12 ZZ）: 台帳の行だけで zz-cli の配�
     cat > "$home/.config/takumi009-ai-env/models.conf" <<'EOF'
 [t-sonnet-high]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 EOF
     cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---

@@ -91,7 +91,7 @@ effort=high
 
 [sonnet-noeffort]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 
 [codex-high]
 provider=external
@@ -106,7 +106,7 @@ model=opus
 # AC-7: role.*のどの候補列からも参照されない定義（構造的に出ないことの確認用）。
 [unused-def]
 provider=anthropic-api
-model=claude-haiku-4-5-20251001
+model=claude-haiku-5-5
 EOF
 
 cat > "$BASE/agents/implementer.md" <<'EOF'

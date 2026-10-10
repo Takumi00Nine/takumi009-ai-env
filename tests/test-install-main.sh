@@ -77,7 +77,7 @@ write_models_conf_at() {
   cat > "$dir/models.conf" <<'EOF'
 [t-sonnet-high]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 
 [t-opus-high]
 provider=anthropic-api
@@ -649,7 +649,7 @@ EOF
   cat > "$FAKE_LIB" <<'PYEOF'
 import sys
 if len(sys.argv) >= 2 and sys.argv[1] == "resolve-leader":
-    print('{"model": "claude-sonnet-5"}')
+    print('{"model": "claude-sonnet-5-5"}')
     sys.exit(0)
 if len(sys.argv) >= 2 and sys.argv[1] == "list-roles":
     sys.stderr.write("PROFILE_INVALID:T6\tfake failure for test\n")
