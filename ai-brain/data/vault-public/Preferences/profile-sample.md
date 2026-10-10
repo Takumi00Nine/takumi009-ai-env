@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-10-04
+updated: 2026-10-10
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -34,7 +34,7 @@ aliases:
 - 各キー・各状態のとりうる値は**本ノートの「書式ととりうる値」節に書く**（2026-09-16 本人指示＝サンプルと実体から説明コメントを除去して起動注入を軽量化。deprecated 2026-09-16＝旧「コメントに書く」2026-08-30 方針）。本文中で説明しない値は書かない。
 - `role.leader`はサンプル（メイン機の実値）では確定値のまま配布する。未確定・サブ機で変える場合は**installerの対話（U-1・設計§3.9）が実体側で確定させる**（2026-09-08 本人決定でサンプル＝雛形の unknown 前提は解消）。
 - 能力軸3キー（`team_mode`／`no_read_paths`／`machine_role`）。キー名・書式（`configured value=...`）は A-1 から変更していない（§3.2 の④）。`no_read_paths` は P3 段階4（schema_version 3）で追加。`vault_scope` は 2026-09-07 に撤去（[[Decisions/2026-09-07-retire-vault-scope-axis]]・schema は 4 のまま）。`inventory_source`／`vault_write`／`ui.user_call`／`git_role`／`web_verification` は 2026-09-07 に撤去・`machine_role` を新設（[[Decisions/2026-09-07-profile-axes-consolidation]]・schema 5）。
-- `effort` は effort 対応モデル（Fable／Opus／Sonnet）の定義に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通・[[Preferences/model-definitions-sample]]）。Haiku 4.5 は effort 非対応のため書かない（`haiku` 定義）。定義ファイルのサンプルにある `effort=high` は一例で、機体ごとに選び直してよい。ワーカー行の候補の `effort` は installer が職種定義へ生成して届ける（[[Preferences/model-definitions-sample]]）。配役表を編集したら installer（メイン機 `install-main.sh`／サブ機 `update-sub.sh`）を再実行する＝流していない状態は `check-drift.sh` が DRIFT で報告する。
+- `effort` は effort 対応モデル（Fable／Opus／Sonnet／Haiku 5.5 以降）の定義に明示する（2026-09-02 本人指示＝セッション既定の継承は使わない・全マシン共通・[[Preferences/model-definitions-sample]]）。Haiku 4.5 は非対応だったが Haiku 5.5 から対応＝2026-10-10 以降は明示する（[[Decisions/2026-10-10-sonnet-haiku-5-5-gpt-6-1-sol-adoption]]・`haiku` 定義）。定義ファイルのサンプルにある `effort=high` は一例で、機体ごとに選び直してよい。ワーカー行の候補の `effort` は installer が職種定義へ生成して届ける（[[Preferences/model-definitions-sample]]）。配役表を編集したら installer（メイン機 `install-main.sh`／サブ機 `update-sub.sh`）を再実行する＝流していない状態は `check-drift.sh` が DRIFT で報告する。
 
 ## 書式ととりうる値（サンプルの説明コメントの移設先・2026-09-16）
 - 行の書式＝`<キー>: <状態> [属性=値 ...]`。状態は先頭に1語。属性は `名前=値` をスペース区切り（値にスペース・日本語は使わない）。行頭 `#` と、値の後ろの「スペース+#」以降は無視。⚠️ 認証情報は書かない（毎セッション AI が読む・Bedrock のピン留めは bedrock.env）。
