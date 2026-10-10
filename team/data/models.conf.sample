@@ -165,8 +165,8 @@ execution=external-cli
 model=gpt-5.6-terra
 effort=low
 
-# GPT-6 Luna。GPT-6系で最速・最安。抽出・分類・構造化要約など
-# 成功基準が明確な定型の大量処理向け
+# GPT-6 Luna（2026-09-22 リリース）。抽出・分類・構造化要約など定型の大量処理向け。
+# 特性は Vault Preferences/model-catalog を見る
 [codex-luna-high]
 provider=external
 execution=external-cli
@@ -204,8 +204,8 @@ effort=low
 #  をamazon-bedrockへ切り替える手段がこの属性群には無いため、Bedrock経由
 #  にはならず、通常のexternal-cli（ChatGPTサブスク経由・codex-sol-*のmodel値）と
 #  して静かに実行されてしまう（2026-09-10検証職実測: 解除するとexit 0で
-#  CODEX_ARGS --model <codex-sol-*のmodel値>が生成され（当時gpt-5.6-sol）、Bedrock指定は一切含まれ
-#  ない）。resolverがprovider overrideを表現できるschemaへ拡張されるまで、
+#  CODEX_ARGS --model <codex-sol-*のmodel値>が生成され（当時gpt-5.6-sol）、
+#  Bedrock指定は一切含まれない）。resolverがprovider overrideを表現できるschemaへ拡張されるまで、
 #  このブロックは実際に有効化してはいけない参考例にすぎない
 # =====================================================================
 # [codex-bedrock-sol]

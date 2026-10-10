@@ -857,11 +857,12 @@ EOF
     assert_eq "GEN2610-AC-3: ${pair%%:*} exit0" "0" "$rc_gen"
     assert_eq "GEN2610-AC-3: ${pair%%:*} AGENT_MODEL==${pair##*:}" "${pair##*:}" "$(printf '%s\n' "$out_gen" | awk -F'\t' '$1=="AGENT_MODEL"{print $2}')"
   done
-  for name in old-sonnet old-haiku; do
+  for pair in old-sonnet:claude-sonnet-5 old-haiku:claude-haiku-4-5-20251001; do
+    name="${pair%%:*}"; old_id="${pair##*:}"
     out_old="$(gen2610_c "$name")"; rc_old=$?
     assert_eq "GEN2610-AC-4: $name exit2（旧IDは別名表に無い）" "2" "$rc_old"
     assert_contains "GEN2610-AC-4: $name AGENT_MODEL_UNSUPPORTED" "$out_old" "AGENT_MODEL_UNSUPPORTED"
-    assert_contains "GEN2610-AC-4: $name 理由にmodel=<旧ID>を含む" "$out_old" "model=$(awk -v n="[$name]" '$0==n{s=1;next} /^\[/{s=0} s&&/^model=/{sub(/^model=/,"");print;exit}' "$WORK/gen2610.conf")"
+    assert_contains "GEN2610-AC-4: $name 理由にmodel=<旧ID>を含む" "$out_old" "model=$old_id"
   done
   # 候補一覧 ok=no・ラッパー exit 5 は汎用テスト（test-claude-exec.sh の claude-sonnet-4-6 の経路）で代替。
 }

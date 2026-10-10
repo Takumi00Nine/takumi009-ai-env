@@ -133,9 +133,9 @@ echo "=== GEN2610-AC-1/2: team/data/models.conf.sample の sonnet-*／haiku／co
   for name in codex-luna-high codex-luna-medium codex-luna-low; do
     assert_eq "GEN2610-AC-2: [$name] model==gpt-6-luna" "gpt-6-luna" "$(model_of "$name")"
   done
-  # [haiku] の effort=medium（implementer 反映前は赤でよい）
+  # [haiku] の effort=medium
   assert_eq "GEN2610-AC-1: [haiku] effort==medium" "medium" "$(awk '$0=="[haiku]"{s=1;next} /^\[/{s=0} s&&/^effort=/{sub(/^effort=/,"");print;exit}' "$MODELS_SAMPLE")"
-  # GEN2610-AC-5: 定義名の並び（全定義・順序つき）が完全一致
+  # GEN2610-AC-5: 定義名の並び（全定義・順序つき）が完全一致（仕様追加 2026-10-10（検証1巡目 m6）。AC-6 も同じ）
   expected_names="fable-high opus-high sonnet-high haiku fable-max opus-low opus-medium sonnet-low sonnet-medium codex-astra-high codex-astra-medium codex-astra-low codex-sol-high codex-sol-medium codex-sol-low codex-terra-high codex-terra-medium codex-terra-low codex-luna-high codex-luna-medium codex-luna-low"
   actual_names="$(grep '^\[' "$MODELS_SAMPLE" | tr -d '[]' | tr '\n' ' ' | sed 's/ $//')"
   assert_eq "GEN2610-AC-5: 定義名の並びが期待と完全一致" "$expected_names" "$actual_names"
@@ -146,9 +146,7 @@ echo "=== GEN2610-AC-1/2: team/data/models.conf.sample の sonnet-*／haiku／co
   for name in codex-terra-high codex-terra-medium codex-terra-low; do
     assert_eq "GEN2610-AC-6: [$name] model==gpt-5.6-terra" "gpt-5.6-terra" "$(model_of "$name")"
   done
-  for name in fable-high fable-max; do
-    assert_eq "GEN2610-AC-6: [$name] model==claude-fable-5-1" "claude-fable-5-1" "$(model_of "$name")"
-  done
+  assert_eq "GEN2610-AC-6: [fable-max] model==claude-fable-5-1" "claude-fable-5-1" "$(model_of fable-max)"
   for name in opus-high opus-medium opus-low; do
     assert_eq "GEN2610-AC-6: [$name] model==claude-opus-5-5" "claude-opus-5-5" "$(model_of "$name")"
   done
