@@ -119,11 +119,11 @@ model=claude-fable-5[1m]
 
 [t-sonnet-high]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 
 [sonnet-max]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 effort=max
 
 [bedrock-opus]
@@ -1294,7 +1294,7 @@ echo "=== 54. effort enum境界の直接検証(V9-b/V9-e): Claude系max・Codex�
   # 2026-09-08 モデル定義ファイルと候補指定対応: effortの許可集合検査は
   # モデル定義ファイル側（validate_model_def・T12）へ移った。
   CODEX_MINIMAL_ELSEWHERE_CONF="$(mktemp -d)/codexminimalelsewhere.conf"
-  make_model_defs "$CODEX_MINIMAL_ELSEWHERE_CONF" "[bad-sonnet-minimal]" "provider=anthropic-api" "model=claude-sonnet-5" "effort=minimal"
+  make_model_defs "$CODEX_MINIMAL_ELSEWHERE_CONF" "[bad-sonnet-minimal]" "provider=anthropic-api" "model=claude-sonnet-5-5" "effort=minimal"
   CODEX_MINIMAL_ELSEWHERE="$(mktemp -d)/codexminimalelsewhere.md"
   make_v2_profile "$CODEX_MINIMAL_ELSEWHERE" "role.leader: configured model=t-opus-high"
   out="$(AIENV_MODEL_DEFS_FILE="$CODEX_MINIMAL_ELSEWHERE_CONF" resolve_v2 "$CODEX_MINIMAL_ELSEWHERE")"  || true

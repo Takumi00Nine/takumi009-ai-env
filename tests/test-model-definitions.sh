@@ -76,7 +76,7 @@ effort=high
 
 [sonnet-noeffort]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 
 [codex-high]
 provider=external
@@ -98,7 +98,7 @@ EOF
 cat > "$BASE/agents/implementer.md" <<'EOF'
 ---
 name: implementer
-model: claude-sonnet-5
+model: claude-sonnet-5-5
 ---
 EOF
 cat > "$BASE/agents/verifier.md" <<'EOF'
@@ -110,7 +110,7 @@ EOF
 cat > "$BASE/agents/ja-doc.md" <<'EOF'
 ---
 name: ja-doc
-model: claude-sonnet-5
+model: claude-sonnet-5-5
 ---
 EOF
 
@@ -159,7 +159,7 @@ role.ja-doc:      unavailable model=sonnet-noeffort'
   out="$(R "$WORK/b3.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B3: exit0" "0" "$rc"
   lroles="$(L "$WORK/b3.md")"
-  assert_contains "FX-B3: list-rolesにja-doc/unavailable/sonnet-noeffortの行" "$lroles" "$(printf 'ja-doc\tunavailable\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5\tsubagent\t')"
+  assert_contains "FX-B3: list-rolesにja-doc/unavailable/sonnet-noeffortの行" "$lroles" "$(printf 'ja-doc\tunavailable\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5-5\tsubagent\t')"
 
   # 2026-09-08 Codexレビュー指摘・BLOCKING-1対応（1巡目）: 旧記法の断片
   # （"provider="）を変数へ分けてから展開する（AC-14のrepo検索＝完成
@@ -186,7 +186,7 @@ role.ja-doc:      not_adopted model=sonnet-noeffort'
 echo "=== AC-2: FX-B1のlist-rolesが4行に行単位完全一致 ==="
 {
   actual="$(L "$BASE/profile.md")"
-  expected="$(printf 'implementer\tconfigured\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5\tsubagent\t\nimplementer\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh\nleader\tconfigured\tt-opus-high\tanthropic-api\tclaude-opus-5-5\tsubagent\thigh\nverifier\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh')"
+  expected="$(printf 'implementer\tconfigured\tsonnet-noeffort\tanthropic-api\tclaude-sonnet-5-5\tsubagent\t\nimplementer\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh\nleader\tconfigured\tt-opus-high\tanthropic-api\tclaude-opus-5-5\tsubagent\thigh\nverifier\tconfigured\tcodex-high\texternal\tdefault\texternal-cli\thigh')"
   assert_eq "AC-2: list-roles 4行完全一致" "$expected" "$actual"
 }
 
@@ -200,7 +200,7 @@ echo "=== AC-3: FX-B1・FX-B7（陽性）／FX-B4a〜FX-B4d（陰性） ==="
   assert_eq "FX-B7: exit0" "0" "$rc"
 
   cp "$BASE/models.conf" "$WORK/b4a.conf"
-  printf '\n[sonnet-noeffort]\nprovider=anthropic-api\nmodel=claude-sonnet-5\n' >> "$WORK/b4a.conf"
+  printf '\n[sonnet-noeffort]\nprovider=anthropic-api\nmodel=claude-sonnet-5-5\n' >> "$WORK/b4a.conf"
   out="$(AIENV_MODEL_DEFS_FILE="$WORK/b4a.conf" R "$BASE/profile.md" "$BASE/agents")"; rc=$?
   assert_eq "FX-B4a: exit1（定義名重複）" "1" "$rc"
 
@@ -244,7 +244,7 @@ team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
 role.leader:      configured ${legacy_attr_frag}anthropic-api model=claude-opus-5-5 effort=high
-role.implementer: configured ${legacy_attr_frag}anthropic-api model=claude-sonnet-5
+role.implementer: configured ${legacy_attr_frag}anthropic-api model=claude-sonnet-5-5
 role.verifier:    configured ${legacy_attr_frag}external execution=external-cli model=default effort=high
 ---
 EOF
@@ -296,7 +296,7 @@ echo "=== AC-7(FR-11): 職種ごとの候補注入は撤去済み（bootstrap-va
   # 2026-09-17 bootstrap-vault fa1b7de）。
   assert_not_contains "AC-7(FR-11)陽性: 候補定義名sonnet-noeffortは出ない" "$ctx" "sonnet-noeffort"
   assert_not_contains "AC-7(FR-11)陽性: 候補定義名codex-highは出ない" "$ctx" "codex-high"
-  assert_not_contains "AC-7(FR-11)陽性: model値claude-sonnet-5も出ない" "$ctx" "claude-sonnet-5"
+  assert_not_contains "AC-7(FR-11)陽性: model値claude-sonnet-5-5も出ない" "$ctx" "claude-sonnet-5-5"
   assert_contains "AC-7(FR-11)陽性: 照会コマンドの呼び出し例が現れる" "$ctx" "role_candidates.py"
 
   ctx2="$(echo '{"session_id":"test-model-defs-2"}' \
@@ -606,8 +606,8 @@ root = work / "model-removal-fx"
 root.mkdir()
 profile = (r / "tests/fixtures/profile.md").read_text()
 defs = (r / "tests/fixtures/models.conf").read_text()
-models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5",
-          "claude-haiku-4-5-20251001", "claude-fable-5", "claude-opus-4-8",
+models = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5",
+          "claude-haiku-5-5", "claude-fable-5", "claude-opus-4-8",
           "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
           "claude-opus-5-unknown", "opus"]
 for n in range(1, 29):
@@ -649,7 +649,7 @@ for n in range(1, 29):
             f.write(f"\n[probe]\nprovider={provider}\nmodel={model}\nexecution=subagent\n")
     if n in (21, 22):
         agent = d / "agents/requirements-analyst.md"
-        value = "claude-sonnet-5" if n == 21 else "claude-fable-5-1"
+        value = "claude-sonnet-5-5" if n == 21 else "claude-fable-5-1"
         agent.write_text(agent.read_text().replace("---\n", f"---\nmodel: {value}\n", 1))
     if n == 18: (d / "agents/requirements-analyst.md").unlink()
 
@@ -666,7 +666,7 @@ def run(n, *, model_def="pick", profile_path=None, command="resolve-candidate"):
     return subprocess.run(args, env={**os.environ, "AIENV_MODEL_DEFS_FILE": str(d / "models.conf")}, capture_output=True)
 
 aliases = {"claude-fable-5-1":"fable", "claude-opus-5-5":"opus",
-           "claude-sonnet-5":"sonnet", "claude-haiku-4-5-20251001":"haiku"}
+           "claude-sonnet-5-5":"sonnet", "claude-haiku-5-5":"haiku"}
 for n, model in enumerate(list(aliases), 1):
     p = run(n); effort = "" if n == 4 else "high"
     # ラッパー起動-設計-v1.1.1.md §2.4・AC-20①②: AGENT_MODEL行の隣に
@@ -822,6 +822,48 @@ EOF
   assert_eq "OPUS55-AC-3: exit2（旧IDclaude-opus-5は別名表に無い）" "2" "$rc_legacy"
   assert_contains "OPUS55-AC-3: AGENT_MODEL_UNSUPPORTED" "$out_legacy" "AGENT_MODEL_UNSUPPORTED"
   assert_contains "OPUS55-AC-3: 理由にmodel=claude-opus-5を含む" "$out_legacy" "model=claude-opus-5"
+}
+
+echo "=== モデル世代更新 2026-10 GEN2610-AC-3・GEN2610-AC-4: 別名表の解決と旧IDの解決失敗 ==="
+{
+  # GEN2610-AC-3: claude-sonnet-5-5→sonnet・claude-haiku-5-5→haiku（FX-03/04と同じ表の確認）。
+  # GEN2610-AC-4: 旧ID claude-sonnet-5・claude-haiku-4-5-20251001 は別名表に無く解決失敗する
+  # （⚠️ 意図的に旧IDを使う陰性fixture）。
+  cp "$BASE/models.conf" "$WORK/gen2610.conf"
+  cat >> "$WORK/gen2610.conf" <<'EOF'
+
+[gen-sonnet]
+provider=anthropic-api
+model=claude-sonnet-5-5
+
+[gen-haiku]
+provider=anthropic-api
+model=claude-haiku-5-5
+
+[old-sonnet]
+provider=anthropic-api
+model=claude-sonnet-5
+
+[old-haiku]
+provider=anthropic-api
+model=claude-haiku-4-5-20251001
+EOF
+  gen2610_c() { # gen2610_c <定義名> — leaderの候補としてresolve-candidate（stdout+stderr）
+    variant_profile "$WORK/gen2610.md" "s/role.leader:      configured model=t-opus-high/role.leader:      configured model=$1/"
+    AIENV_MODEL_DEFS_FILE="$WORK/gen2610.conf" python3 "$LIB" resolve-candidate "$WORK/gen2610.md" --role leader --model-def "$1" --agents-dir "$BASE/agents" 2>&1
+  }
+  for pair in gen-sonnet:sonnet gen-haiku:haiku; do
+    out_gen="$(gen2610_c "${pair%%:*}")"; rc_gen=$?
+    assert_eq "GEN2610-AC-3: ${pair%%:*} exit0" "0" "$rc_gen"
+    assert_eq "GEN2610-AC-3: ${pair%%:*} AGENT_MODEL==${pair##*:}" "${pair##*:}" "$(printf '%s\n' "$out_gen" | awk -F'\t' '$1=="AGENT_MODEL"{print $2}')"
+  done
+  for name in old-sonnet old-haiku; do
+    out_old="$(gen2610_c "$name")"; rc_old=$?
+    assert_eq "GEN2610-AC-4: $name exit2（旧IDは別名表に無い）" "2" "$rc_old"
+    assert_contains "GEN2610-AC-4: $name AGENT_MODEL_UNSUPPORTED" "$out_old" "AGENT_MODEL_UNSUPPORTED"
+    assert_contains "GEN2610-AC-4: $name 理由にmodel=<旧ID>を含む" "$out_old" "model=$(awk -v n="[$name]" '$0==n{s=1;next} /^\[/{s=0} s&&/^model=/{sub(/^model=/,"");print;exit}' "$WORK/gen2610.conf")"
+  done
+  # 候補一覧 ok=no・ラッパー exit 5 は汎用テスト（test-claude-exec.sh の claude-sonnet-4-6 の経路）で代替。
 }
 
 echo ""

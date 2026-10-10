@@ -328,7 +328,7 @@ write_model_defs() {
   cat > "$dest" <<'EOF'
 [t-sonnet-high]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 
 [t-opus-high]
 provider=anthropic-api
@@ -3026,7 +3026,7 @@ write_real_profile() {  # write_real_profile <home> — install-main.sh が要�
   cat > "$home/.config/takumi009-ai-env/models.conf" <<'EOF'
 [t-sonnet-high]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 EOF
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---

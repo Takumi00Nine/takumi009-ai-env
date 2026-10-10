@@ -103,7 +103,7 @@ EOF
   cat > "$(dirname "$path")/models.conf" <<'EOF'
 [t-sonnet-high]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 EOF
 }
 

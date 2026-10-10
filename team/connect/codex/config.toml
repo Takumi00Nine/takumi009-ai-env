@@ -25,7 +25,7 @@ approval_policy = "never"
 # 戻すときはこの行の先頭 # を外す。パスは Codex.app 同梱の Computer Use クライアント。）
 # notify = ["__AIENV_HOME__/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
 
-model = "gpt-5.6-sol"
+model = "gpt-6.1-sol"
 model_reasoning_effort = "medium"
 
 # 2026-08-08 本人指示: workspace-write サンドボックスでもネットワーク許可を常時有効化。

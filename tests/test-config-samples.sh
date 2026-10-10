@@ -102,11 +102,11 @@ echo "=== AC-1c: 配役表の職種名が職種定義ファイルの集合に収
   fi
 }
 
-echo "=== OPUS55-AC-1: team/data/models.conf.sample の opus-*定義がclaude-opus-5-5・他3定義は不変 ==="
+echo "=== OPUS55-AC-1: team/data/models.conf.sample の opus-*定義がclaude-opus-5-5・fable-highは不変 ==="
 {
   # Opus 5.5 採用（opus-*定義をclaude-opus-5-5へ）AC-1: [opus-high]/[opus-medium]/
   # [opus-low]のmodel=がclaude-opus-5-5（provider/effortは変えない）。
-  # fable-high/sonnet-high/haikuは不変（値でなく対象3定義だけを見る）。
+  # fable-highは不変。
   model_of() { # model_of <定義名> — [定義名]セクション内のmodel=値を1つ返す
     awk -v name="[$1]" '
       $0==name{insec=1; next}
@@ -118,8 +118,40 @@ echo "=== OPUS55-AC-1: team/data/models.conf.sample の opus-*定義がclaude-op
     assert_eq "OPUS55-AC-1: [$name] model==claude-opus-5-5" "claude-opus-5-5" "$(model_of "$name")"
   done
   assert_eq "OPUS55-AC-1: [fable-high] model は不変" "claude-fable-5-1" "$(model_of fable-high)"
-  assert_eq "OPUS55-AC-1: [sonnet-high] model は不変" "claude-sonnet-5" "$(model_of sonnet-high)"
-  assert_eq "OPUS55-AC-1: [haiku] model は不変" "claude-haiku-4-5-20251001" "$(model_of haiku)"
+}
+
+echo "=== GEN2610-AC-1/2: team/data/models.conf.sample の sonnet-*／haiku／codex-sol-*／codex-luna-* が最新世代 ==="
+{
+  # モデル世代更新 2026-10。定義名・並びは変えず model= だけが新 ID（model_of は上の節で定義）。
+  for name in sonnet-high sonnet-medium sonnet-low; do
+    assert_eq "GEN2610-AC-1: [$name] model==claude-sonnet-5-5" "claude-sonnet-5-5" "$(model_of "$name")"
+  done
+  assert_eq "GEN2610-AC-1: [haiku] model==claude-haiku-5-5" "claude-haiku-5-5" "$(model_of haiku)"
+  for name in codex-sol-high codex-sol-medium codex-sol-low; do
+    assert_eq "GEN2610-AC-2: [$name] model==gpt-6.1-sol" "gpt-6.1-sol" "$(model_of "$name")"
+  done
+  for name in codex-luna-high codex-luna-medium codex-luna-low; do
+    assert_eq "GEN2610-AC-2: [$name] model==gpt-6-luna" "gpt-6-luna" "$(model_of "$name")"
+  done
+  # [haiku] の effort=medium（implementer 反映前は赤でよい）
+  assert_eq "GEN2610-AC-1: [haiku] effort==medium" "medium" "$(awk '$0=="[haiku]"{s=1;next} /^\[/{s=0} s&&/^effort=/{sub(/^effort=/,"");print;exit}' "$MODELS_SAMPLE")"
+  # GEN2610-AC-5: 定義名の並び（全定義・順序つき）が完全一致
+  expected_names="fable-high opus-high sonnet-high haiku fable-max opus-low opus-medium sonnet-low sonnet-medium codex-astra-high codex-astra-medium codex-astra-low codex-sol-high codex-sol-medium codex-sol-low codex-terra-high codex-terra-medium codex-terra-low codex-luna-high codex-luna-medium codex-luna-low"
+  actual_names="$(grep '^\[' "$MODELS_SAMPLE" | tr -d '[]' | tr '\n' ' ' | sed 's/ $//')"
+  assert_eq "GEN2610-AC-5: 定義名の並びが期待と完全一致" "$expected_names" "$actual_names"
+  # GEN2610-AC-6: astra/terra/fable/opus の model 値
+  for name in codex-astra-high codex-astra-medium codex-astra-low; do
+    assert_eq "GEN2610-AC-6: [$name] model==gpt-6-astra" "gpt-6-astra" "$(model_of "$name")"
+  done
+  for name in codex-terra-high codex-terra-medium codex-terra-low; do
+    assert_eq "GEN2610-AC-6: [$name] model==gpt-5.6-terra" "gpt-5.6-terra" "$(model_of "$name")"
+  done
+  for name in fable-high fable-max; do
+    assert_eq "GEN2610-AC-6: [$name] model==claude-fable-5-1" "claude-fable-5-1" "$(model_of "$name")"
+  done
+  for name in opus-high opus-medium opus-low; do
+    assert_eq "GEN2610-AC-6: [$name] model==claude-opus-5-5" "claude-opus-5-5" "$(model_of "$name")"
+  done
 }
 
 echo "=== AC-2: 経路（provider×execution）ごとの代表1件が起動でき、未対応の経路は保留になる（要件書 FR-7・AC-2） ==="

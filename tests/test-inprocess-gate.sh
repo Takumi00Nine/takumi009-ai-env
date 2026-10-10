@@ -57,7 +57,7 @@ EOF
 cat > "$BASE/models.conf" <<'EOF'
 [sonnet-noeffort]
 provider=anthropic-api
-model=claude-sonnet-5
+model=claude-sonnet-5-5
 
 [codex-high]
 provider=external
