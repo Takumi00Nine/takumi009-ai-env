@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-10-04
+updated: 2026-10-10
 tags: [preference, codex, review, delegation, protocol]
 project: meta
 related:
@@ -17,6 +17,7 @@ related:
   - "[[Preferences/core-worker]]"
   - "[[Decisions/2026-09-06-codex-mcp-retire]]"
   - "[[Decisions/2026-09-07-three-team-mode-rollout]]"
+  - "[[Decisions/2026-10-10-sonnet-haiku-5-5-gpt-6-1-sol-adoption]]"
 aliases:
   - "レビュー委任プロトコル"
   - "リーダーが起動するCodex検証"
@@ -39,9 +40,9 @@ aliases:
 - ⚠️ **`--out` の基底名は試行ごとに変える**（`…-r<N>-a<M>.md`）＝補助ファイルの存在を診断に使うので、使い回すと前の試行の残骸で誤判定する。
 
 ## 使用モデルと effort の指標（2026-07-20 追加）
-レビューの軽重で GPT-5.6 の3階層＋effort を使い分ける（可用性・実測の正本＝[[Knowledge/gpt-5-6-and-gpt-live]]。exec の `-m`／`-c model_reasoning_effort=` で上書き）:
-- **通常の一次レビュー（既定）**: 指定なし＝config の `gpt-5.6-sol`・medium。迷ったらこれ。
-- **軽い定型チェック**（形式・命名・小差分・正解が明確な突合）: `-m gpt-5.6-luna`（高速・枠節約）。日常レビューで枠を節約したいときの中間は `-m gpt-5.6-terra`。
+レビューの軽重で Sol／Terra／Luna の3階層（世代は [[Preferences/model-catalog]]）＋effort を使い分ける（可用性・実測の正本＝[[Knowledge/gpt-5-6-and-gpt-live]]。exec の `-m`／`-c model_reasoning_effort=` で上書き）:
+- **通常の一次レビュー（既定）**: 指定なし＝config の既定（2026-10-10 から `gpt-6.1-sol`）・medium。迷ったらこれ。
+- **軽い定型チェック**（形式・命名・小差分・正解が明確な突合）: `-m gpt-6-luna`（高速・枠節約）。日常レビューで枠を節約したいときの中間は `-m gpt-5.6-terra`。
 - **締めの全体構成レビュー・後戻りコスト高の判断**: 既定 sol ＋ `-c model_reasoning_effort=xhigh`（xhigh は実測で通る）。⚠️**xhigh はこの「品質最優先」場面に限る唯一の例外**（2026-08-07 本人決定＝[[Decisions/2026-08-07-avoid-xhigh-effort]]。それ以外は原則使わない）。
 - 実効モデル/effort の確認は `~/.codex/sessions/**/rollout-*.jsonl` の `"model"`/`"effort"`（自己申告は不正確）。`gpt-5.6-sol-ultra`・`gpt-5.6-codex` 等は ChatGPT アカウントでは 400＝使わない。
 

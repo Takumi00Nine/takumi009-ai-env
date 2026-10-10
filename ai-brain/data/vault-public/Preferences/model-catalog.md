@@ -1,6 +1,6 @@
 ---
 date: 2026-09-09
-updated: 2026-10-03
+updated: 2026-10-10
 tags: [preference, model, catalog, claude, codex, routing, quota, bedrock, vllm]
 project: meta
 related:
@@ -21,6 +21,7 @@ related:
   - "[[Decisions/2026-09-10-leader-free-model-choice]]"
   - "[[Decisions/2026-09-10-models-conf-comprehensive]]"
   - "[[Decisions/2026-09-23-opus-5-5-adoption]]"
+  - "[[Decisions/2026-10-10-sonnet-haiku-5-5-gpt-6-1-sol-adoption]]"
 aliases:
   - "モデル特性カタログ"
   - "モデルの選び方"
@@ -42,11 +43,11 @@ aliases:
 | **Claude Fable 5.1**（`claude-fable-5-1`） | Claude 系の最上位。1M コンテキスト・adaptive thinking 常時オン・長時間の自律作業に強い | 向く＝要件定義・設計・採否判定など判断の質が下流全体に効く上流工程。向かない＝日常の軽い実装・定型作業 | Fable 専用の週次上限があるが、これは全体7日枠の内側の追加上限で、Fable 利用は両方を進める（別財布ではない・[[Knowledge/anthropic-claude-models-2026-06]]）。ワーカーに使うかはリーダーが案件ごとに判断（既定も禁止も無い）。プロンプトキャッシュ読取は base 入力価格の 2.5%（Fable 5.1／Mythos 5.1 のみ・他モデルは 10%・公式モデル表脚注 2026-09-10 確認） |
 | **Claude Opus 5.5**（`claude-opus-5-5`） | 2026-09-22 リリース。ほとんどの作業で Fable 5.1 と同水準の性能を Opus 5 より軽い単価（入力$4・出力$20/MTok＝Opus 5 比 -20%・公式主張で実コスト -40%）で出す新しい日常の最上位。用途＝長時間のエージェント的コーディング・知識作業。thinking 常時オン・無効化不可。既定 effort は `medium`（Opus 5 の `high` から変更） | 向く＝Opus 5 の位置づけを継承＝要件定義・設計・採否判定の既定候補、複雑な統合判断、Codex 上限到達時の一次レビュー代替。向かない＝大量の並列軽作業 | Opus 5 からの移行時の破壊的変更＝forced tool use 不可・thinking block がモデル/会話に紐付く・旧 `computer_20251124` 不可。キャッシュ読取は base 入力の 5%（最小 512 トークン）。**Claude Code は 2.1.280 以上が必要**（2.1.258 は API 400・2.1.280 で正常応答＝2026-09-23 実測）。models.conf の opus-high／medium／low が 2026-09-23 から本モデルを指す（定義名据え置き＝[[Decisions/2026-09-23-opus-5-5-adoption]]）。出典: https://platform.claude.com/docs/en/models/opus-5-5/overview ・ https://www.anthropic.com/claude-opus-5-5 （2026-09-23 取得） |
 | **Claude Opus 5**（`claude-opus-5`） | **2026-09-22 に後継の Opus 5.5 が登場し Legacy 化（提供継続・退役は 2027-07-24 より早くはならない）。** 5段階 effort（low〜max）対応・推奨 effort の初期値は high | 向く＝現行の定義は参照しない（2026-09-23 に opus-* が Opus 5.5 へ移行＝[[Decisions/2026-09-23-opus-5-5-adoption]]）。位置づけは Opus 5.5 行を参照 | Claude Code の別名 `opus` が 5.5 を指すため、ラッパー経由で Opus 5 を pin する手段は無い（旧 ID の定義は解決失敗）。API 直叩きでは引き続き利用可 |
-| **Claude Sonnet 5**（`claude-sonnet-5`） | 作る工程の主力候補。実装・調査・テストなど「作る工程」の主力 | 向く＝開発4工程の実働・探索的調査。向かない＝後戻りコストが高い設計判断の単独決定 | 並行起動しやすく枠の主消費源になりやすい |
-| **Claude Haiku 4.5** | Claude 系で最も軽量・高速 | 向く＝分類・抽出・定型変換など判断の重くない大量処理。向かない＝設計判断・複雑なコード理解 | 使う場合は models.conf に個別定義を足す（実測メモ無し） |
-| **Codex 既定（GPT-5.6 Sol、`gpt-5.6-sol`）** | Codex の一次レビュー・実装委任・画像生成一気通貫で使う既定モデル。ターミナル系のエージェント作業に強い傾向 | 向く＝コードレビュー、bounded task（目的・範囲・出力形式・停止条件が明確な小さな実装委任）、非同期の反復作業。向かない＝広範囲・複数部品にまたがる不可逆な設計判断の単独決定 | 旧世代 GPT-5.5／5.4 も一部経路（Bedrock 経由）でまだ選べる。Terra・Luna は別行を参照 |
-| **GPT-5.6 Terra**（`gpt-5.6-terra`） | OpenAI 公式が旧世代でいう mini ティア相当と位置づける中位モデル。速度・コストと能力のバランスを取った日常ワークロード向け | 向く＝日常のコードレビューで枠を節約したい中間ケース、Sol ほど重くしなくてよい一般的なコーディング作業。向かない＝締めの全体構成レビューなど品質最優先の場面（そこは Sol＋高 effort） | Codex 一次レビューでは既定 Sol に対し明示指定（`-m gpt-5.6-terra`）で使う運用。実効モデルの確認はセッションログの `model` フィールドで行う（自己申告は不正確） |
-| **GPT-5.6 Luna**（`gpt-5.6-luna`） | OpenAI 公式が旧世代でいう nano ティア相当と位置づける、GPT-5.6 系で最速・最低コストのモデル。高速・大量処理向け | 向く＝形式・命名・小差分など正解が明確な軽い定型チェック、抽出・分類等の定型大量処理。向かない＝複雑な設計判断・微妙な文脈理解が要るレビュー | Codex 一次レビューでは明示指定（`-m gpt-5.6-luna`）で日常レビューの枠節約に使う運用 |
+| **Claude Sonnet 5.5**（`claude-sonnet-5-5`） | 2026-09-28 リリース。作る工程の主力候補。1M コンテキスト・既定 effort high・入力$2・出力$10/MTok・キャッシュ読取は base 入力の 5%（2026-10-08 から $0.10/MTok） | 向く＝開発4工程の実働・探索的調査。向かない＝後戻りコストが高い設計判断の単独決定 | 並行起動しやすく枠の主消費源になりやすい。models.conf の sonnet-* が 2026-10-10 から本モデルを指す（[[Decisions/2026-10-10-sonnet-haiku-5-5-gpt-6-1-sol-adoption]]）。Claude Code 2.1.296 以上（2.1.280 には本モデルの ID が無い）。Sonnet 5 は Legacy（提供継続）。出典: https://platform.claude.com/docs/en/models/overview （2026-10-10 取得） |
+| **Claude Haiku 5.5**（`claude-haiku-5-5`） | 2026-10-07（米国）リリース。Claude 系で最も軽量・高速。1M コンテキスト・128K 出力・adaptive thinking・既定 effort medium・入力$0.10・出力$0.50/MTok（100K トークン超は $0.50/$2.50） | 向く＝分類・抽出・定型変換など判断の重くない大量処理。向かない＝設計判断・複雑なコード理解 | models.conf の haiku が 2026-10-10 から本モデル（effort=medium 明示）。Haiku 4.5 は Legacy。出典: https://platform.claude.com/docs/en/models/haiku-5-5/overview （2026-10-10 取得） |
+| **Codex 既定（GPT-6.1 Sol、`gpt-6.1-sol`）** | 2026-09-29 発表。Codex の一次レビュー・実装委任・画像生成一気通貫で使う既定モデル。1M 級コンテキスト（1,050,000）・API 入力$2・出力$10/MTok（272K 超はサーチャージ） | 向く＝コードレビュー、bounded task（目的・範囲・出力形式・停止条件が明確な小さな実装委任）、非同期の反復作業。向かない＝広範囲・複数部品にまたがる不可逆な設計判断の単独決定 | ChatGPT Plus の Codex で利用可（2026-10-10 実測）。Ultrafast は Pro 500／Enterprise 限定。`gpt-6.1-luna`・`gpt-6.1-astra` は ChatGPT アカウントでは 400。5.6 Sol とのレビュー品質比較は未実施。models.conf の codex-sol-* と Codex の config 既定が 2026-10-10 から本モデル。出典: https://developers.openai.com/api/docs/models/gpt-6.1-sol ・ https://learn.chatgpt.com/docs/models （2026-10-10 取得） |
+| **GPT-5.6 Terra**（`gpt-5.6-terra`） | OpenAI 公式が旧世代でいう mini ティア相当と位置づける中位モデル。速度・コストと能力のバランスを取った日常ワークロード向け | 向く＝日常のコードレビューで枠を節約したい中間ケース、Sol ほど重くしなくてよい一般的なコーディング作業。向かない＝締めの全体構成レビューなど品質最優先の場面（そこは Sol＋高 effort） | Codex 一次レビューでは既定 Sol に対し明示指定（`-m gpt-5.6-terra`）で使う運用。実効モデルの確認はセッションログの `model` フィールドで行う（自己申告は不正確）。GPT-6 系に Terra は無い（2026-10-10 時点） |
+| **GPT-6 Luna**（`gpt-6-luna`） | 2026-09-22 リリース。GPT-6 系で最速・最安（API 入力$0.10・出力$0.50/MTok）。高速・大量処理向け | 向く＝形式・命名・小差分など正解が明確な軽い定型チェック、抽出・分類等の定型大量処理。向かない＝複雑な設計判断・微妙な文脈理解が要るレビュー | Plus の Codex で到達可（2026-09-25・2026-10-10 実測）。models.conf の codex-luna-* が 2026-10-10 から本モデル |
 | **GPT-6 Astra** | Codex 経由で使える上位モデル。消費量が Sol より重い | 向く＝デザイン系案件（3D モデル等）で Codex が上流を主担当する要件定義・設計の工程限定。向かない＝それ以外の全用途（一次レビュー・画像生成・通常実装は Sol のまま） | 既定を切り替えず用途限定で使う運用（ベンチ1本で既定を動かさない方針） |
 | **gpt-oss-20b**（OpenAI・オープンウェイト） | MoE（専門家混合）構成で総パラメータ約21B・活性化パラメータ約3.6B。**reasoning effort を low/medium/high から選べる**（プロンプトで指示）。エージェント向けにブラウジング（検索）・Python 実行・関数呼び出しをネイティブに訓練されている | 向く＝reasoning effort を落として軽い定型応答に使う、関数呼び出し中心のエージェント作業。向かない＝ブラウジング・Python 実行はモデルがそのツール呼び出し形式を**訓練で覚えているだけ**で、vLLM 側にそのツール自体を実装・接続しない限り実行されない（提供状況は要確認） | ライセンス＝**Apache 2.0**（改変・商用利用とも制限が緩い）。多言語評価（公式 MMMLU）に日本語を含むが、日本語特化のチューニングではない素の多言語能力（日本語特化の派生モデルは別途コミュニティ製が存在する＝本モデルとは別物） |
 | **Gemma 4 12B**（Google DeepMind・オープンウェイト。"12B Unified"） | 約11.95B パラメータ・エンコーダ不要のマルチモーダル（テキスト・画像・音声を1つのデコーダで直接処理）。ローカル／ハイブリッド注意機構（局所+全体）で256Kトークンの長文脈に対応。**ツール利用（function calling）をネイティブサポート**、エージェント的ワークフロー向け | 向く＝長文脈が要る要約・ドキュメント処理、画像を含むマルチモーダル入力が要る軽作業、関数呼び出しを使うエージェント処理。向かない＝皮肉・比喩など機微なニュアンスの読み取り、最新事実の参照（学習データ依存で知識が古くなりうる） | ライセンス＝**Apache 2.0**（Google公式ページ・Hugging Face の両方で確認。旧世代 Gemma の Gemma 利用規約から変わっている点に注意＝再配布時は現行ライセンス文言を都度確認）。35以上の言語に対応し**日本語を含む**（公式サポート言語として明記） |
@@ -70,7 +71,7 @@ aliases:
 - **検証職（Codex 一次レビュー）**＝Codex サブスクが既定。枠が切迫してもチケット（reset credit）で回復できる余地があり、Bedrock へ落とす前に確認する価値が高い。
 - **researcher・裏取りが要る調査**＝Claude サブスクか Codex サブスク（どちらも WebSearch 可）。**Bedrock（Claude・Codex とも）は Codex 側で WebSearch 不可、Claude 側は 2026-09-01 以降は可**——Codex を Bedrock 経由で裏取り系に使わない。
 - **上流工程（要件定義・設計・採否判定）**＝Claude の Opus 5.5（Opus 5 は Legacy）／Fable 5.1（判断の質が重要・枠消費は許容）。ローカル LLM は不向き（性能が下位）。
-- **量産・定型（分類・抽出・軽い実装の反復）**＝ローカル LLM か Claude Haiku 4.5。サブスク枠を温存できる。
+- **量産・定型（分類・抽出・軽い実装の反復）**＝ローカル LLM か Claude Haiku 5.5。サブスク枠を温存できる。
 - **サブスク枠が枯渇している状況**＝まずローカル LLM（費用ゼロに近い）→ 次に Bedrock（従量課金だが確実に動く）→ サブスクの `/limit-reset`（Claude）やチケット（Codex）は温存策であって代替経路ではない。
 
 ## ④選ぶときの目安（職種→モデル固定ではない）
@@ -93,6 +94,7 @@ aliases:
 - Gemma 4 12B の構成・マルチモーダル・注意機構・ツール利用・言語対応＝Google AI for Developers 公式モデルカード https://ai.google.dev/gemma/docs/core/model_card_4 （2026-09-09 取得）。
 - Gemma 4 12B のライセンス（Apache 2.0）＝上記公式ページおよび Hugging Face https://huggingface.co/google/gemma-4-12B （2026-09-09 取得・2ソース一致で確認）。
 - Claude Opus 5.5（価格・effort 既定・破壊的変更・Legacy 化した Opus 5）＝ https://platform.claude.com/docs/en/models/opus-5-5/overview ・ https://www.anthropic.com/claude-opus-5-5 ・ https://platform.claude.com/docs/en/models/opus-5/overview （2026-09-23 取得）。Claude Code の必要バージョンは 2026-09-23 実測。
+- Sonnet 5.5／Haiku 5.5／GPT-6.1 Sol の採用と実測＝[[Decisions/2026-10-10-sonnet-haiku-5-5-gpt-6-1-sol-adoption]]（2026-10-10）。
 
 ## 未裏取り・要確認
 - **Codex Bedrock 経路がチケット（rate-limit reset credit）の対象になるかは未確認**（公式ドキュメントに記載なし。サブスクとは別建てなので対象外の可能性が高いが、断定はしていない）。
