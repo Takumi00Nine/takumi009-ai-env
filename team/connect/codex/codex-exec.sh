@@ -15,7 +15,11 @@
 #   team/connect/codex/codex-exec.sh --cwd <絶対パス> --sandbox read-only|workspace-write \
 #     --out <絶対パス> --prompt-file <file>|- \
 #     [--search] [--resume <thread_id>] [--developer-instructions <file>] \
-#     [--model <model>] [--effort <effort>]
+#     [--model <model>] [--effort <effort>] [--image <path>]...
+#
+# --image は繰り返し可（指定順に `codex exec -i <path>` として渡す。--resume でも有効）。
+# 存在しないファイル・カンマを含むパスは不可（codex が -i の値をカンマで分割するため）で、
+# codex を起動せず exit 2。
 #
 # 絶対厳守④の機械強制（[[Preferences/absolute-rules]]）: 依頼文（プロンプト）に
 # "absolute-rules" の文字列が含まれていなければ、codex を起動せず exit 2 で
@@ -54,13 +58,14 @@ RESUME_ID=""
 DEV_INSTR_FILE=""
 MODEL=""
 EFFORT=""
+IMAGES=()
 
 usage() {
   cat >&2 <<EOF
 使い方: $SCRIPT_NAME --cwd <絶対パス> --sandbox read-only|workspace-write \\
   --out <絶対パス> --prompt-file <file>|- \\
   [--search] [--resume <thread_id>] [--developer-instructions <file>] \\
-  [--model <model>] [--effort <effort>]
+  [--model <model>] [--effort <effort>] [--image <path>]...   (パスにカンマ不可)
 EOF
 }
 
@@ -98,6 +103,9 @@ while [ $# -gt 0 ]; do
     --effort)
       [ $# -ge 2 ] || fail_usage "--effort には値が必要です"
       EFFORT="$2"; shift 2 ;;
+    --image)
+      [ $# -ge 2 ] || fail_usage "--image には値が必要です"
+      IMAGES+=("$2"); shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -125,6 +133,28 @@ case "$SANDBOX" in
   read-only|workspace-write) ;;
   *) fail_usage "--sandbox は read-only か workspace-write のみ指定できます: $SANDBOX" ;;
 esac
+
+# 画像は存在しない・パスにカンマを含む（codex CLI が -i の値をカンマで分割する）
+# なら exit 2（codex を起動しない）。絶対パスに直して渡す＝先頭が '-' のパスを
+# オプションと誤解釈させない。
+IMAGE_OPTS=()
+for img in ${IMAGES[@]+"${IMAGES[@]}"}; do
+  if [ ! -f "$img" ]; then
+    echo "[$SCRIPT_NAME] FAIL: --image のファイルが存在しません: $img" >&2
+    exit 2
+  fi
+  img_dir="$(cd -- "$(dirname -- "$img")" && pwd)" || {
+    echo "[$SCRIPT_NAME] FAIL: --image のパスを絶対パスに直せません: $img" >&2
+    exit 2
+  }
+  img_abs="$img_dir/$(basename -- "$img")"
+  case "$img_abs" in
+    *,*)
+      echo "[$SCRIPT_NAME] FAIL: --image のパスにカンマは使えません: $img_abs" >&2
+      exit 2 ;;
+  esac
+  IMAGE_OPTS+=(-i "$img_abs")
+done
 
 if [ -n "$DEV_INSTR_FILE" ]; then
   [ -r "$DEV_INSTR_FILE" ] || fail_usage "--developer-instructions のファイルが読めません: $DEV_INSTR_FILE"
@@ -173,7 +203,8 @@ mkdir -p "$OUT_DIR" || fail_usage "--out の出力先ディレクトリを作成
 GLOBAL_OPTS=()
 [ "$SEARCH" = "1" ] && GLOBAL_OPTS+=(--search)
 
-EXEC_OPTS=(--skip-git-repo-check -s "$SANDBOX" -C "$CWD" --json -o "$OUT")
+# -i は num_args=1.. で後続の値まで取り込むため、必ず次のオプション（-s）の直前に置く。
+EXEC_OPTS=(--skip-git-repo-check ${IMAGE_OPTS[@]+"${IMAGE_OPTS[@]}"} -s "$SANDBOX" -C "$CWD" --json -o "$OUT")
 [ -n "$MODEL" ] && EXEC_OPTS+=(-m "$MODEL")
 [ -n "$EFFORT" ] && EXEC_OPTS+=(-c "model_reasoning_effort=$EFFORT")
 if [ -n "$DEV_INSTR_FILE" ]; then

@@ -10,6 +10,9 @@
 # 2026-09-06 Codex一次レビュー指摘対応＝argv経由のプロンプト受け渡しの
 # ハイフン誤解釈・ARG_MAX対策、developer_instructionsのTOML誤解釈対策）。
 #
+# 画像受け渡し（--image）の公式根拠: https://developers.openai.com/codex/cli/reference の `codex exec` と
+# `codex exec resume` の両表に `--image, -i  path[,path...]`（繰り返し可）があり、resume でも -i を受け付ける（2026-10-10 確認）。
+#
 # 実行方法: bash tests/test-codex-exec.sh
 
 set -uo pipefail
@@ -617,6 +620,202 @@ echo "=== 18. PA-24: 前の試行の残骸（別の基底名の<out>.events.json
   assert_true "古い試行の残骸（別の基底名）は影響を受けず残ったまま（前の試行に引きずられないことの確認）" \
     "$([ -f "$OLD_OUT.events.jsonl" ] && [ -f "$OLD_OUT.stderr.log" ] && echo 1 || echo 0)"
   assert_true "codexは一度も呼ばれていない" "$([ ! -s "$LOG" ] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+# --- 画像受け渡し（--image）の受入条件 AC1〜AC7 ---
+# 位置の仕様: 公式の exec -i は num_args=1..（後続の値を複数取り込む）ため、-i 群は
+# --skip-git-repo-check の直後・-s の直前に置く（-s が値の取り込みを止める）。
+
+# モックのログ（1引数1行）の最初の呼び出し分を配列 ARGV へ読む。
+load_args() {
+  ARGV=()
+  local l
+  while IFS= read -r l; do
+    [ "$l" = "===ARGS-END===" ] && break
+    ARGV+=("$l")
+  done < "$1"
+}
+# ARGV が引数列 "$@" と要素数・値とも完全一致なら成功。
+argv_eq() {
+  [ "${#ARGV[@]}" -eq "$#" ] || return 1
+  local i=0 e
+  for e in "$@"; do
+    [ "${ARGV[$i]}" = "$e" ] || return 1
+    i=$((i + 1))
+  done
+}
+
+echo "=== 19. AC1: --image を2回指定 → --skip-git-repo-check の直後・-s の直前に -i <p1> -i <p2> が指定順で並ぶ（空白入りパスも1要素） ==="
+{
+  WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"
+  : > "$LOG"
+  make_mock_codex "$BINDIR" "$LOG"
+  OUT="$WORK/out-img.md"
+  IMG1="$WORK/b-first.png"; IMG2="$WORK/a second.png"   # 辞書順と逆・2つ目は空白入り
+  : > "$IMG1"; : > "$IMG2"
+
+  rc=0
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+    --prompt-file - --image "$IMG1" --image "$IMG2" <<< "absolute-rules を読んで画像を見て" >/dev/null 2>&1 || rc=$?
+  assert_eq "AC1 exit code 0" "0" "$rc"
+
+  load_args "$LOG"
+  assert_eq "AC1 引数の要素数（空白入りパスが分割されない）" "14" "${#ARGV[@]}"
+  assert_true "AC1 引数列が完全一致（-i 群は --skip-git-repo-check の直後・-s の直前・指定順・末尾 '-'）" \
+    "$(argv_eq exec --skip-git-repo-check -i "$IMG1" -i "$IMG2" -s read-only -C "$WORK" --json -o "$OUT" - && echo 1 || echo 0)"
+
+  # '|' を含むパスも1要素のまま（要素数と値が一致）
+  PIPE_IMG="$WORK/p|q.png"; : > "$PIPE_IMG"
+  : > "$LOG"
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+    --prompt-file - --image "$PIPE_IMG" <<< "absolute-rules を読んで画像を見て" >/dev/null 2>&1
+  load_args "$LOG"
+  assert_eq "AC1 '|' を含むパスでも要素数が崩れない" "12" "${#ARGV[@]}"
+  assert_true "AC1 '|' を含むパスが1要素の値のまま渡る" \
+    "$(argv_eq exec --skip-git-repo-check -i "$PIPE_IMG" -s read-only -C "$WORK" --json -o "$OUT" - && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 20. AC2: --image に存在しないパス → exit 2・codexを起動しない・stderrにパスが出る ==="
+{
+  WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"   # あえて作らない（起動されればモックが作る）
+  make_mock_codex "$BINDIR" "$LOG"
+  OUT="$WORK/out-img-missing.md"
+  MISSING="$WORK/no-such-dir/missing.png"
+  IMG1="$WORK/exists.png"; : > "$IMG1"
+
+  rc=0
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+    --prompt-file - --image "$IMG1" --image "$MISSING" <<< "absolute-rules を読んで画像を見て" >/dev/null 2>"$WORK/err.log" || rc=$?
+  assert_eq "AC2 exit code 2" "2" "$rc"
+  assert_true "AC2 codexは起動されていない（ログファイルが作られない）" "$([ ! -e "$LOG" ] && echo 1 || echo 0)"
+  assert_true "AC2 stderrに存在しないパスが出る" \
+    "$(grep -qF -- "$MISSING" "$WORK/err.log" && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 21. AC3: --image 無しの引数列は現行と完全同一（通常／--resume） ==="
+{
+  WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"
+  : > "$LOG"
+  make_mock_codex "$BINDIR" "$LOG"
+  OUT="$WORK/out-noimg.md"
+
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+    --prompt-file - <<< "absolute-rules を読んで" >/dev/null 2>&1
+  load_args "$LOG"
+  assert_true "AC3 通常の引数列が完全一致" \
+    "$(argv_eq exec --skip-git-repo-check -s read-only -C "$WORK" --json -o "$OUT" - && echo 1 || echo 0)"
+
+  : > "$LOG"
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox workspace-write --out "$OUT" \
+    --prompt-file - --resume "thread-r" <<< "absolute-rules を読んで" >/dev/null 2>&1
+  load_args "$LOG"
+  assert_true "AC3 --resume の引数列が完全一致" \
+    "$(argv_eq exec --skip-git-repo-check -s workspace-write -C "$WORK" --json -o "$OUT" resume -- thread-r - && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 22. AC4(公式でexec resumeが-iを受け付ける→採用): --resume と --image の併用で -i 群が --skip-git-repo-check の直後・-s の直前に入る ==="
+{
+  WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"
+  : > "$LOG"
+  make_mock_codex "$BINDIR" "$LOG"
+  OUT="$WORK/out-img-resume.md"
+  IMG1="$WORK/r1.png"; IMG2="$WORK/r2.png"
+  : > "$IMG1"; : > "$IMG2"
+
+  rc=0
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+    --prompt-file - --resume "thread-r" --image "$IMG1" --image "$IMG2" <<< "absolute-rules を読んで続き" >/dev/null 2>&1 || rc=$?
+  assert_eq "AC4 exit code 0" "0" "$rc"
+
+  load_args "$LOG"
+  assert_true "AC4 引数列が完全一致（-i 群は -s の直前・指定順、末尾は従来どおり resume -- <id> -）" \
+    "$(argv_eq exec --skip-git-repo-check -i "$IMG1" -i "$IMG2" -s read-only -C "$WORK" --json -o "$OUT" resume -- thread-r - && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 23. AC5: --help／usage に --image とカンマ不可の注意が載る ==="
+{
+  rc=0
+  help_out="$(bash "$SCRIPT" --help 2>&1)" || rc=$?
+  assert_eq "AC5 --help は exit 0" "0" "$rc"
+  assert_true "AC5 --help の出力に --image が載る" \
+    "$(printf '%s\n' "$help_out" | grep -qF -- '--image' && echo 1 || echo 0)"
+  assert_true "AC5 --help の出力に「カンマを含むパス不可」が載る" \
+    "$(printf '%s\n' "$help_out" | grep -F -- '--image' | grep -qF 'カンマ' && echo 1 || echo 0)"
+}
+
+echo "=== 24. AC6: 先頭が '-' の相対パス（-shot.png）は絶対パスに直して codex へ渡る ==="
+{
+  WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"
+  : > "$LOG"
+  make_mock_codex "$BINDIR" "$LOG"
+  OUT="$WORK/out-img-hyphen.md"
+  : > "$WORK/-shot.png"
+  REAL_WORK="$(cd "$WORK" && pwd -P)"
+
+  rc=0
+  (cd "$WORK" && PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+    --prompt-file - --image -shot.png <<< "absolute-rules を読んで画像を見て" >/dev/null 2>&1) || rc=$?
+  assert_eq "AC6 exit code 0" "0" "$rc"
+
+  load_args "$LOG"
+  img_arg="${ARGV[3]:-}"
+  assert_true "AC6 --skip-git-repo-check の直後が -i、その次が絶対パス、その次が -s" \
+    "$([ "${ARGV[1]:-}" = "--skip-git-repo-check" ] && [ "${ARGV[2]:-}" = "-i" ] && [ "${ARGV[4]:-}" = "-s" ] && [[ "$img_arg" == /* ]] && echo 1 || echo 0)"
+  assert_true "AC6 渡るパスは <cwd>/-shot.png を指す（先頭ハイフンのまま渡らない）" \
+    "$([ "$img_arg" != "-shot.png" ] && [ "$(basename "$img_arg")" = "-shot.png" ] && [ "$(cd "$(dirname "$img_arg")" 2>/dev/null && pwd -P)" = "$REAL_WORK" ] && echo 1 || echo 0)"
+
+  # ディレクトリ名が '-' で始まる相対パス（-dir/shot.png）も絶対パスで渡る
+  mkdir "$WORK/-dir"; : > "$WORK/-dir/shot.png"
+  : > "$LOG"
+  rc=0
+  (cd "$WORK" && PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+    --prompt-file - --image -dir/shot.png <<< "absolute-rules を読んで画像を見て" >/dev/null 2>&1) || rc=$?
+  assert_eq "AC6 -dir/shot.png: exit code 0" "0" "$rc"
+  load_args "$LOG"
+  img_arg="${ARGV[3]:-}"
+  assert_true "AC6 -dir/shot.png: -i の直後が絶対パスで <cwd>/-dir/shot.png を指す" \
+    "$([ "${ARGV[2]:-}" = "-i" ] && [ "${ARGV[4]:-}" = "-s" ] && [[ "$img_arg" == /* ]] && [ "$(basename "$img_arg")" = "shot.png" ] && [ "$(cd "$(dirname "$img_arg")" 2>/dev/null && pwd -P)" = "$REAL_WORK/-dir" ] && echo 1 || echo 0)"
+
+  rm -rf "$WORK"
+}
+
+echo "=== 25. AC7: カンマを含むパス（a,b.png）は実在しても exit 2 で拒否・codexを起動しない ==="
+{
+  WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"   # あえて作らない（起動されればモックが作る）
+  make_mock_codex "$BINDIR" "$LOG"
+  OUT="$WORK/out-img-comma.md"
+  COMMA="$WORK/a,b.png"
+  : > "$COMMA"
+
+  rc=0
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+    --prompt-file - --image "$COMMA" <<< "absolute-rules を読んで画像を見て" >/dev/null 2>"$WORK/err.log" || rc=$?
+  assert_eq "AC7 exit code 2" "2" "$rc"
+  assert_true "AC7 codexは起動されていない（ログファイルが作られない）" "$([ ! -e "$LOG" ] && echo 1 || echo 0)"
+  assert_true "AC7 stderrにカンマを含むパスが出る" \
+    "$(grep -qF -- "$COMMA" "$WORK/err.log" && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }
