@@ -1,6 +1,6 @@
 ---
 date: 2026-06-16
-updated: 2026-07-21
+updated: 2026-10-10
 tags: [preference, python, venv]
 project: meta
 related:
@@ -17,6 +17,7 @@ aliases:
 **Python を実行・パッケージ導入するときは、必ず先に仮想環境（venv）を作ってその中で行う。グローバル環境への直接 `pip install` はしない。**
 
 - 新しい Python 作業を始めるときは、まず `python -m venv .venv` で仮想環境を作成し、`source .venv/bin/activate` してから作業する。
+- **`uv venv` は pip を含まない**（2026-10-10 実測・uv 0.13.0）＝pip が要るときは `uv venv --seed` で作るか、`uv pip install --python <venv>/bin/python <pkg>` で venv を直接指定して入れる。
 - 依存パッケージは **venv を有効化した状態で** `pip install`（または `pip install -r requirements.txt`）する。**システム/グローバルの pip に直接入れない。**
 - スクリプト実行も venv の python（`.venv/bin/python` など）を使う。`run.sh` のように `source .venv/bin/activate` してから実行する形にしてもよい。
 - `.venv/` は `.gitignore` に入れてコミットしない。

@@ -1,6 +1,6 @@
 ---
 date: 2026-09-03
-updated: 2026-10-05
+updated: 2026-10-11
 tags: [preference, codex, delegation, worker, exec]
 project: meta
 related:
@@ -16,7 +16,7 @@ aliases:
 ---
 # Codex を実装ワーカーとして直接起動する手順（`codex exec` 背景実行）
 
-**2026-09-06 以降、Codex 呼び出しの唯一経路**（MCP 廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]）。一次レビュー委任は `~/work/takumi009-ai-env/team/connect/codex/codex-exec.sh` ラッパー経由（正本＝[[Preferences/codex-review-protocol]]）、本ノートの生 `codex exec` の型は実装ワーカー起動用に残す。
+**2026-09-06 以降、Codex 呼び出しの唯一経路**（MCP 廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]）。一次レビュー委任は `~/work/takumi009-ai-env/team/connect/codex/codex-exec.sh` ラッパー経由（正本＝[[Preferences/codex-review-protocol]]）。起動はラッパー（codex-exec.sh）経由のみ＝フックが直接実行を deny する（2026-10-11）。
 
 用途＝実装を Codex に任せるとき、リーダーが**implementer 等のラッパーワーカーを挟まず** Codex を直接ワーカーとして起動する手順。既定の実装担当は引き続き Claude の implementer（[[Preferences/coding-delegation]]）。Codex に振るのは implementer が空席・上限、本人指定、Codex 枠の余剰のいずれか（[[Decisions/2026-07-23-codex-delegation-reopened]]）。
 
@@ -49,6 +49,8 @@ codex exec --skip-git-repo-check -s workspace-write -C /abs/path -o report2.md \
 - 直近スレッドの継続は `codex exec resume --last '<依頼文>'` でも可（thread_id を控え損ねたときの救済。並列起動中は取り違えるので thread_id 指定を既定にする）。
 - **依頼文に必ず入れる内容は Claude ワーカーと同じ**: ①absolute-rules を読む指示（**exec は PreToolUse フックの対象外**なので手動で明記。[[Preferences/absolute-rules]]）②承認済み設計 ③担当ファイル範囲 ④受入条件 ⑤Vault 書込禁止と「Vault記録候補:」での申告 ⑥報告形式（変更ファイル一覧→動作確認手順→受入条件との対応→未解決点）。
 - **1呼び出し＝1工程・15分以内で返る粒度に切る**。大きい実装は resume で分割。
+- **サンドボックス＝ラッパーの `--sandbox` は `read-only|workspace-write|danger-full-access` の 3 値。2026-10-10 以降の既定は `danger-full-access`（本人決定＝[[Decisions/2026-10-10-codex-sandbox-full-access]]・理由＝サンドボックス内で Blender が起動時に落ちる等の弊害）。依頼文の「担当ファイル範囲」「Vault 書込禁止」が守りの正本。**
+- **画像を渡す＝ラッパーの `--image <path>`（繰り返し可・`--resume` 併用可）**＝`codex exec -i` へ絶対パスで渡す。存在しないファイル・カンマを含むパスは exit 2 で codex を起動しない（2026-10-10 追加・Astra の画像検品用。テスト＝`tests/test-codex-exec.sh` ケース 19〜25）。
 - **背景起動した exec は Bash の10分上限に縛られず走り切る**（公式仕様）。止まるのは①前景サブエージェントから起動した場合（その最終応答時）②セッション終了 ③`</dev/null` 忘れ、の3つだけ。
 - モデルと effort は `~/.codex/config.toml` の既定（sol・medium）。変えるときは `-m` と `-c model_reasoning_effort=`。xhigh は使わない（[[Decisions/2026-08-07-avoid-xhigh-effort]]）。
 - stderr に "Reading additional input from stdin..." が出るのは `</dev/null` の EOF 読みで、正常。

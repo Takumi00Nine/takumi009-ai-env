@@ -1,6 +1,6 @@
 ---
 date: 2026-07-20
-updated: 2026-10-04
+updated: 2026-10-11
 tags: [preference, coding, documentation, structure]
 project: meta
 related:
@@ -84,3 +84,6 @@ aliases:
 **How to apply**: 設計委任プロンプトに本節を明記する。リーダーの形チェック時に本節と突合し、混入があれば検証に出さず作成元へ返す。既存の設計書は次の改訂時に適合させる。
 
 関連＝[[Preferences/codex-review-protocol]]（レビュー巡回でこの2点を検出した実例あり）・[[Knowledge/validator-in-process-pure-function]]（既定値・判定規則の設計則と対）。
+
+## 7. 識別子は言葉の名前とペアで書く（2026-10-11 追加）
+- 要件書・設計書・図面で記号・番号の識別子（部品名・開口番号・指摘番号・課題番号）を使うときは、初出で必ず日本語の名前を添える（例＝「O5（縁側への出口）」「M-1（外角の材質）」）。節の見出しは言葉で書き、識別子は括弧に入れる。本人向けの要約・報告では識別子を使わない（[[Preferences/core-conduct]] §1・[[Decisions/2026-10-11-plain-words-for-the-user]]）。
