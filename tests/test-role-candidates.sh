@@ -365,6 +365,8 @@ exit 2' "2"
 echo ""
 # 設計 v3 §7.7: ID ごとに1件。境界は generated_at を固定して直接渡す。
 IDLE_CANDIDATE_TEST="$WORK/idle-candidate-test.py"
+IDLE_USAGE_ABSENT=0
+if key_absent usage.snapshot; then IDLE_USAGE_ABSENT=1; fi
 cat > "$IDLE_CANDIDATE_TEST" <<'PY'
 import copy
 import importlib.util
@@ -375,12 +377,15 @@ import subprocess
 import sys
 import time
 
-path, work, base = sys.argv[1:]
+path, work, base, usage_absent = sys.argv[1:]
 spec = importlib.util.spec_from_file_location('role_candidates_idle_test', path)
 rc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rc)
 snapshot_path = str(Path(path).parents[3] / 'usage/executor/usage_snapshot.py')
 for number in range(1, 7):
+    if number <= 2 and usage_absent == '1':
+        print(f'skip - 候補-{number}: Usage の鍵 usage.snapshot なし')
+        continue
     try:
         if number <= 2:
             directory = Path(work) / ('idle-candidate-' + str(number))
@@ -430,9 +435,10 @@ while IFS= read -r result; do
   IDLE_COUNT=$((IDLE_COUNT + 1))
   case "$result" in
     'ok - '*) pass "${result#ok - }" ;;
+    'skip - '*) skip_case "${result#skip - }" ;;
     *) fail_case "${result#NG - }" ;;
   esac
-done < <(PYTHONDONTWRITEBYTECODE=1 python3 "$IDLE_CANDIDATE_TEST" "$RC" "$WORK" "$BASE")
+done < <(PYTHONDONTWRITEBYTECODE=1 python3 "$IDLE_CANDIDATE_TEST" "$RC" "$WORK" "$BASE" "$IDLE_USAGE_ABSENT")
 [ "$IDLE_COUNT" -eq 6 ] || fail_case "設計 v3: 候補の6 IDを実行できていない"
 
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="

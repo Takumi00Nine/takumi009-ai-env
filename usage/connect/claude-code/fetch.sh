@@ -203,7 +203,9 @@ transform_claude_usage() {
 claude_rejected_shape() {
   local body
   body="$1"
-  printf '%s' "$body" | jq -e . >/dev/null 2>&1 || { printf '%s' "$_CLAUDE_DIAG_UNREADABLE"; return 0; }
+  # 構文の成否だけを見る（`jq -e .` だと正しい JSON の false・null も失敗になる。
+  # 空の本文は値が 1 つも無いので `true` を出させて読めない扱いにする）。
+  printf '%s' "$body" | jq -e true >/dev/null 2>&1 || { printf '%s' "$_CLAUDE_DIAG_UNREADABLE"; return 0; }
   printf '%s' "$body" | jq -r \
     --argjson top_keys "$_CLAUDE_DIAG_TOP_KEYS" \
     --argjson window_keys "$_CLAUDE_DIAG_WINDOW_KEYS" \

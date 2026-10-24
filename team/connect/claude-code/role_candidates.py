@@ -63,6 +63,16 @@ POOL_FOR_ROUTE = {
 ASSUMED_FULL_REMAINING = "100"
 
 
+def _is_whole_epoch(value) -> bool:
+    """整数、または整数値の float（真偽値は除く）。提示（usage_snapshot.py）の
+    リセット済の判定と同じ型の扱い（設計 v3 §5.4）。"""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    return isinstance(value, float) and value.is_integer()
+
+
 def _profile_path(cli_value: Optional[str]) -> str:
     if cli_value:
         return os.path.expanduser(cli_value)
@@ -189,11 +199,7 @@ def _remaining_percent(snapshot: Optional[dict], pool_ref: str, window_name: str
     # この側で当てる（`--json` は事実のまま。提示を取り込まない設計）。
     epoch = window.get("resets_at_epoch")
     generated_at = snapshot.get("generated_at")
-    if (
-        isinstance(epoch, int) and not isinstance(epoch, bool)
-        and isinstance(generated_at, int) and not isinstance(generated_at, bool)
-        and epoch <= generated_at
-    ):
+    if _is_whole_epoch(epoch) and _is_whole_epoch(generated_at) and epoch <= generated_at:
         return ASSUMED_FULL_REMAINING
     return str(math.floor(remaining))
 

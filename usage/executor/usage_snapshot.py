@@ -802,6 +802,17 @@ def _format_ticket_text(pool: dict, now: int) -> str:
     return f"チケット {count}枚（{date_str}）"
 
 
+def _is_whole_epoch(value) -> bool:
+    """リセット済の判定に使う epoch の型（設計 v3 §5.4＝整数。真偽値は除く）。
+    整数、または整数値の float（既存の `_valid_epoch` と同じ扱い）。
+    配役の候補表示（role_candidates.py）も同じ判定にそろえている。"""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    return isinstance(value, float) and value.is_integer()
+
+
 def _format_window_segment(window: dict, now: int) -> str:
     """窓 1 つの文言（設計 v3 §5.4。先勝ち）。①未開始の形（5h・7d。枠が ok／stale の
     窓でリセット時刻が無いのは、有効性の判定を通った未開始の形だけ）→「残100%（未開始）」
@@ -813,7 +824,7 @@ def _format_window_segment(window: dict, now: int) -> str:
     epoch = window["resets_at_epoch"]
     if epoch is None and not is_weekly:
         return f"{label} 残{ASSUMED_FULL_PERCENT}%（{UNSTARTED_NOTE}）"
-    if epoch is not None and epoch <= now:
+    if _is_whole_epoch(epoch) and epoch <= now:
         return f"{label} 残{ASSUMED_FULL_PERCENT}%（{RESET_ESTIMATED_NOTE}）"
     remaining = _format_percent(window["remaining_percent"])
     if is_weekly:
