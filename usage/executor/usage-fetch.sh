@@ -10,6 +10,11 @@
 # 動かし続けるため。設定ファイルも現物と同じ
 # `${XDG_CONFIG_HOME:-$HOME/.config}/claude-codex-usage/config.sh` を読む
 # （D-12。表示側も同じファイルを読んでいるため）。
+# 2026-10-24 追記：形式（キーの集合・各キーの型・schema_version）は変えないが、
+# 値の組み合わせを 1 つ足した＝Claude の必須窓（5h・7d）で「枠が未開始」を表す
+# used_percent=0・resets_at=null・resets_at_epoch=null（model_weekly は元から
+# resets_at_epoch=null を書いている）。表示側は未開始の形を読んでも壊れない。
+# （出典＝~/Claude/usage-fetch-fix/docs/usage-idle-fix-design.md v3 §6.1）
 #
 # ⚠️ 現物（claude-codex-usage/refresh.sh）から意図的に変えた5点（担当A・
 # 設計書§4）:

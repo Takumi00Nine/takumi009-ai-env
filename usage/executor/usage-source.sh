@@ -106,6 +106,12 @@ run_with_timeout() {
 # 存在する窓なのに resets_at_epoch が null／非整数なら失敗（リセット時刻の
 # 抽出に失敗した壊れた応答を「正常」として書かないための契約＝
 # coding-doc-style §4「壊れたデータを見分ける条件は書き手側の契約で書く」）。
+# 2026-10-24 改訂：Claude の必須窓（reset_credits を持たない側）は、進行中の形
+# に加えて「未開始の形」（used_percent 0・resets_at と resets_at_epoch が null）を
+# 正当な状態として受け入れる（枠が始まっていない間の応答を弾かないため。D-15 の
+# 目的＝リセット時刻の読み取りに失敗した応答を正常として書かない、は
+# resets_at に文字列がある形の拒否で守る）。Codex 側は変えない。
+# （出典＝~/Claude/usage-fetch-fix/docs/usage-idle-fix-design.md v3 §5.2）
 # ⚠️ Codex の片窓欠落は現物のまま受け入れる（§8 Q-6＝読み手側の改訂は
 # B2 の担当。取得器の振る舞いはここでは変えない）。
 
@@ -127,6 +133,16 @@ validate_usage_payload() {
     def valid_str_or_null: . == null or type == "string";
     def window_ok:
       (.used_percent == null) or ((.used_percent | valid_number) and (.resets_at_epoch | valid_epoch));
+    # 2026-10-24 改訂（使用率取得の枠未開始対応・設計 v3 §5.2）＝「未開始の形」。
+    # used_percent が数の 0 で resets_at・resets_at_epoch がどちらも null
+    # （キーが無いのも null と同じ）の 3 つすべてを満たす窓。resets_at に文字列が
+    # あるのに resets_at_epoch が null の形（読み取り失敗）は含まない。
+    # 正常とみなすのは、両窓が必須の側（reset_credits を持たない払い出し）だけ。
+    def idle_window:
+      (.used_percent | type == "number" and . == 0)
+      and (.resets_at == null) and (.resets_at_epoch == null);
+    def required_window_ok:
+      idle_window or ((.used_percent != null) and window_ok);
     # ⚠️ 検証職2巡目MAJOR-1対応: id・status・granted_at_epochは必須
     # （非null・非空文字列／有効epoch）。expires_at_epoch・titleは公式
     # protocol（v2/account.rs）がnullableのため任意（null許容）。
@@ -156,8 +172,8 @@ validate_usage_payload() {
         and ((.five_hour.used_percent != null) or (.seven_day.used_percent != null))
         and (.reset_credits | reset_credits_ok)
       else
-        (.five_hour.used_percent != null) and (.five_hour | window_ok)
-        and (.seven_day.used_percent != null) and (.seven_day | window_ok)
+        (.five_hour | required_window_ok)
+        and (.seven_day | required_window_ok)
         and (.model_weekly | window_ok)
       end
     )

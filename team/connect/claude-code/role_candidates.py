@@ -59,6 +59,10 @@ POOL_FOR_ROUTE = {
 }
 
 
+# リセット済の窓を残量として出す値（設計定数・設計 v3 §4）。
+ASSUMED_FULL_REMAINING = "100"
+
+
 def _profile_path(cli_value: Optional[str]) -> str:
     if cli_value:
         return os.path.expanduser(cli_value)
@@ -179,6 +183,18 @@ def _remaining_percent(snapshot: Optional[dict], pool_ref: str, window_name: str
     remaining = window.get("remaining_percent")
     if not isinstance(remaining, (int, float)) or isinstance(remaining, bool):
         return "-"
+    # 2026-10-24 改訂（出典＝~/Claude/usage-fetch-fix/docs/usage-idle-fix-design.md
+    # v3 §5.4）: リセット時刻が判定時刻（generated_at）以前（等号を含む）の窓は
+    # 残量 100 として扱う＝提示の「リセット済・推定」と同じ定義を、`--json` を読む
+    # この側で当てる（`--json` は事実のまま。提示を取り込まない設計）。
+    epoch = window.get("resets_at_epoch")
+    generated_at = snapshot.get("generated_at")
+    if (
+        isinstance(epoch, int) and not isinstance(epoch, bool)
+        and isinstance(generated_at, int) and not isinstance(generated_at, bool)
+        and epoch <= generated_at
+    ):
+        return ASSUMED_FULL_REMAINING
     return str(math.floor(remaining))
 
 

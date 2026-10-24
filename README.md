@@ -248,7 +248,7 @@ python3 ~/work/takumi009-ai-env/ai-brain/executor/health_judge.py ack \
 
 ### Usage Monitoring (usage_snapshot.py)
 
-**Manual check**: `python3 usage/executor/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot). Details (the `UserPromptSubmit` block, prerequisite fetcher, Codex "tickets") = the docstring of `usage/executor/usage_snapshot.py`.
+**Manual check**: `python3 usage/executor/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot). Details (the `UserPromptSubmit` block, prerequisite fetcher, Codex "tickets") = the docstring of `usage/executor/usage_snapshot.py`. While a Claude window has not started, the line shows `残100%（未開始）`; once a window's reset time has passed without a newer value it shows `残100%（リセット済・推定）` (an estimate shown only in the human-readable line — `--json` keeps the cached facts).
 
 ### Usage fetcher (usage/executor/usage-fetch.sh / usage/assembly/install-usage-fetch.sh)
 
@@ -586,7 +586,7 @@ python3 ~/work/takumi009-ai-env/ai-brain/executor/health_judge.py ack \
 
 ### 使用率の見える化（usage_snapshot.py）
 
-**手動で見る口**: `python3 usage/executor/usage_snapshot.py` を実行すると同じ3行がその場で表示されます（`--json` を付けると機械可読の1行JSONになります）。詳細＝`usage/executor/usage_snapshot.py` の docstring。
+**手動で見る口**: `python3 usage/executor/usage_snapshot.py` を実行すると同じ3行がその場で表示されます（`--json` を付けると機械可読の1行JSONになります）。詳細＝`usage/executor/usage_snapshot.py` の docstring。Claude の枠がまだ始まっていない間は `残100%（未開始）`、リセット時刻を過ぎても新しい値が取れていない間は `残100%（リセット済・推定）` と出ます（推定は人が読む行だけ。`--json` はキャッシュの値のまま）。
 
 ### 使用率取得器（usage/executor/usage-fetch.sh／usage/assembly/install-usage-fetch.sh）
 

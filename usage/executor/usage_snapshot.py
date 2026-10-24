@@ -47,6 +47,16 @@ The `UserPromptSubmit` hook injects a **【使用率・この発言時点】** b
 - **Prerequisite**: a usage fetcher (see "Usage fetcher" below) refreshes `~/.cache/claude-codex-usage/claude-cache.json` / `codex-cache.json` once a minute; `usage_snapshot.py` only reads those files and never touches the network itself.
 - **Manual check**: `python3 usage/executor/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot).
 - If the cache is missing (fetcher not installed) or stale, the block still shows exactly 3 lines with a plain-language explanation instead of failing silently.
+
+2026-10-24 改訂（枠が始まっていない間の表示・出典＝~/Claude/usage-fetch-fix/docs/usage-idle-fix-design.md v3 §5.4）:
+  - 枠の有効性: 払い出しの形（`reset_credits`）を持たないキャッシュ（Claude）で、生の値が
+    「未開始の形」（used_percent が数の 0・resets_at と resets_at_epoch がどちらも null）を
+    満たす必須窓は壊れとみなさない。型の壊れた値を丸めた後ではなく生の値で判定する。
+    払い出しの形を持つキャッシュ（Codex）は同じ 3 値でも壊れのまま。
+  - 窓ごとの文言（枠が ok か stale のとき・先勝ち）: ①未開始の形（5h・7d）→「残100%（未開始）」
+    ②リセット済（resets_at_epoch が判定時刻以前。等号を含む。取得の成否・鮮度に関係なく。
+    5h・7d・モデル別週次）→「残100%（リセット済・推定）」 ③それ以外は今までどおり。
+  - `--json` は事実（キャッシュの値）のまま。推定はどこにも保存せず、人が読む行にだけ出す。
 """
 
 from __future__ import annotations
@@ -68,6 +78,11 @@ JST = timezone(timedelta(hours=9))
 
 DEFAULT_CACHE_DIR_NAME = "claude-codex-usage"
 DEFAULT_STALE_SECONDS = 600
+
+# 窓ごとの文言の設計定数（設計 v3 §4。変える見込みの無い定義なので設定項目にしない）。
+UNSTARTED_NOTE = "未開始"
+RESET_ESTIMATED_NOTE = "リセット済・推定"
+ASSUMED_FULL_PERCENT = 100
 
 # ============================================================
 # B1-a のフィールド集合（AC-95①「集合の完全一致」の判定対象。
@@ -366,6 +381,25 @@ def _as_number(value):
     return None
 
 
+def _is_unstarted_form(data: dict, window_name: str) -> bool:
+    """窓が「未開始の形」か（設計 v3 §5.2・§5.4。書き手の共通検査と同じ定義）。
+    used_percent が数の 0 で、resets_at と resets_at_epoch がどちらも null。
+    判定はキャッシュの生の値で行う（型の壊れた値を null に丸めた後では見ない＝
+    `resets_at`＝"not-a-date" や `resets_at_epoch`＝"123" の壊れが未開始に見えるため）。
+    正常とみなすのは払い出しの形（`reset_credits`）を持たないキャッシュだけ
+    （提供元の名前では分けない。Codex は同じ 3 値でも壊れ）。
+    """
+    if "reset_credits" in data:
+        return False
+    raw = data.get(window_name)
+    return (
+        isinstance(raw, dict)
+        and _as_number(raw.get("used_percent")) == 0
+        and raw.get("resets_at") is None
+        and raw.get("resets_at_epoch") is None
+    )
+
+
 def _extract_window(data: dict, window_name: str) -> Optional[dict]:
     """1つの窓（five_hour/seven_day/model_weekly）を取り出す。使用可能な形で
     ない場合はNone（呼び出し側が「その窓は無いもの」として扱う＝
@@ -597,9 +631,18 @@ def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_secon
     # 既にこれを検証しているため通常は起きないが、旧キャッシュ・手で
     # 壊されたキャッシュに対する読み手側の多重防御として、resets_at_epoch
     # 欠落を黙ってusage_state=okへ倒さない＝coding-doc-style §4）。
+    # 2026-10-24 改訂（設計 v3 §5.4）: 生の値が未開始の形を満たす窓だけは除く。
     resets_missing = (
-        (five is not None and five.get("resets_at_epoch") is None)
-        or (seven is not None and seven.get("resets_at_epoch") is None)
+        (
+            five is not None
+            and five.get("resets_at_epoch") is None
+            and not _is_unstarted_form(data, "five_hour")
+        )
+        or (
+            seven is not None
+            and seven.get("resets_at_epoch") is None
+            and not _is_unstarted_form(data, "seven_day")
+        )
     )
     if fetched_at is None or five is None or seven is None or resets_missing:
         return {
@@ -760,12 +803,22 @@ def _format_ticket_text(pool: dict, now: int) -> str:
 
 
 def _format_window_segment(window: dict, now: int) -> str:
+    """窓 1 つの文言（設計 v3 §5.4。先勝ち）。①未開始の形（5h・7d。枠が ok／stale の
+    窓でリセット時刻が無いのは、有効性の判定を通った未開始の形だけ）→「残100%（未開始）」
+    ②リセット済（resets_at_epoch が判定時刻以前。等号を含む）→「残100%（リセット済・推定）」
+    ③それ以外は今までどおり。②は 5h・7d・モデル別週次に当てる。
+    """
+    is_weekly = window["window"] == "model_weekly"
+    label = f"{window['label']}週" if is_weekly else WINDOW_HUMAN_LABEL[window["window"]]
+    epoch = window["resets_at_epoch"]
+    if epoch is None and not is_weekly:
+        return f"{label} 残{ASSUMED_FULL_PERCENT}%（{UNSTARTED_NOTE}）"
+    if epoch is not None and epoch <= now:
+        return f"{label} 残{ASSUMED_FULL_PERCENT}%（{RESET_ESTIMATED_NOTE}）"
     remaining = _format_percent(window["remaining_percent"])
-    if window["window"] == "model_weekly":
-        label = f"{window['label']}週"
+    if is_weekly:
         return f"{label} 残{remaining}%"
-    label = WINDOW_HUMAN_LABEL[window["window"]]
-    reset, same_day = _format_reset(window["resets_at_epoch"], now)
+    reset, same_day = _format_reset(epoch, now)
     if reset is None:
         return f"{label} 残{remaining}%"
     if same_day:
