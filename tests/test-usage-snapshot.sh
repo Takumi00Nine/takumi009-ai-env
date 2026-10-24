@@ -682,6 +682,8 @@ ALLOWED = {
     ("CMP", "_valid_epoch"): 1,
     ("CMP", "_build_cache_reset_credits"): 1,
     ("CMP", "_format_ticket_text"): 1,
+    # 設計 v3 §8.2: 単一窓のリセット済判定（epoch <= now）を1比較だけ追加。
+    ("CMP", "_format_window_segment"): 1,
 }
 
 found = {k: v for k, v in counts.items() if v > 0}
@@ -1019,5 +1021,116 @@ exit 2' "2"
 }
 
 echo
+# 設計 v3 §7.6（表示-15 も含む）。各 ID を横断条件込みで1件と数える。
+IDLE_DISPLAY_TEST="$WORK/idle-display-test.py"
+cat > "$IDLE_DISPLAY_TEST" <<'PY'
+import copy
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+lib, work, now = sys.argv[1], Path(sys.argv[2]), int(sys.argv[3])
+broken = 'Claude枠: 取得できません（キャッシュが壊れています。導入手順: README §使用率取得器）'
+idle = 'Claude枠: 5h 残100%（未開始）／7d 残83%（09-09 19:06）・取得 0分前'
+reset = 'Claude枠: 5h 残100%（リセット済・推定）／7d 残83%（09-09 19:06）・取得 0分前'
+active = 'Claude枠: 5h 残75%（リセット 18:22）／7d 残83%（09-09 19:06）・取得 0分前'
+old = 'Claude枠: 5h 残100%（リセット済・推定）／7d 残83%（09-09 19:06）／Fable週 残93%・取得 654分前 ⚠️古い ⚠️取得エラー（type=parse）'
+expected = {
+    1: idle,
+    2: 'Claude枠: 5h 残100%（未開始）／7d 残100%（未開始）・取得 0分前',
+    3: idle.replace('0分前', '11分前')+' ⚠️古い',
+    4: old, 5: reset, 6: reset,
+    7: 'Claude枠: 5h 残17%（リセット 18:06）／7d 残83%（09-09 19:06）・取得 0分前',
+    8: 'Claude枠: 5h 残75%（リセット 18:22）／7d 残100%（リセット済・推定）・取得 0分前',
+    9: active.replace('・取得', '／Fable週 残100%（リセット済・推定）・取得'),
+    10: idle, 11: broken,
+    12: active.replace('残75%', '残100%'), 13: broken, 14: broken, 15: idle,
+}
+
+def window(used, epoch):
+    return dict(used_percent=used, resets_at=None, resets_at_epoch=epoch)
+
+def invoke(directory, *args):
+    env = dict(os.environ, AIENV_USAGE_CACHE_DIR=str(directory), AIENV_USAGE_NOW=str(now))
+    return subprocess.run([sys.executable, lib, '--now', str(now), *args], env=env, capture_output=True, text=True)
+
+for number in range(1, 16):
+    try:
+        directory = work / f'idle-display-{number}'
+        directory.mkdir()
+        claude = dict(schema_version=1, service='claude', fetched_at=now-30, updated_at=now-30,
+                      five_hour=window(0, None), seven_day=window(17, now+90000),
+                      model_weekly=dict(used_percent=None, resets_at=None, resets_at_epoch=None, label=None), last_error=None)
+        codex = copy.deepcopy(claude)
+        codex.update(service='codex', five_hour=window(66, now+2000),
+                     reset_credits=dict(available_count=0, reset_scope=['five_hour', 'seven_day'], credits=[]))
+        if number == 2:
+            claude['seven_day'] = window(0, None)
+        if number == 3:
+            claude['fetched_at'] = now-700
+        if number in (4, 5, 6, 7):
+            claude['five_hour'] = window(83, now+{4:-60, 5:-10, 6:0, 7:1}[number])
+        if number == 4:
+            claude.update(fetched_at=now-39240, last_error=dict(type='parse'),
+                          model_weekly=dict(window(7, now+90000), label='Fable'))
+        if number in (8, 9, 12):
+            claude['five_hour'] = window(0 if number == 12 else 25, now+1000)
+        if number == 8:
+            claude['seven_day'] = window(17, now-3600)
+        if number == 9:
+            claude['model_weekly'] = dict(window(7, now-60), label='Fable')
+        if number == 10:
+            codex['five_hour'] = window(66, now-60)
+        if number == 11:
+            claude['five_hour'] = window(10, None)
+        if number == 13:
+            claude['five_hour']['resets_at'] = 'not-a-date'
+        if number == 14:
+            claude['five_hour']['resets_at_epoch'] = '123'
+        if number == 15:
+            codex['five_hour'] = window(0, None)
+        for name, cache in [('claude', claude), ('codex', codex)]:
+            (directory / (name+'-cache.json')).write_text(json.dumps(cache))
+        human, machine = invoke(directory), invoke(directory, '--json')
+        assert human.returncode == machine.returncode == 0, 'exit'
+        lines = human.stdout.splitlines()
+        assert len(lines) == 3, '3 lines'
+        assert lines[0] == expected[number], lines[0]
+        snapshot = json.loads(machine.stdout)
+        pools = {p['pool_ref']: p for p in snapshot['pools']}
+        pool = pools['claude-subscription']
+        state = 'stale' if number in (3, 4) else 'error' if number in (11, 13, 14) else 'ok'
+        assert pool['usage_state'] == state, pool['usage_state']
+        if number in (1, 4):
+            win = next(w for w in pool['windows'] if w['window'] == 'five_hour')
+            actual = tuple(win[k] for k in ('used_percent', 'remaining_percent', 'resets_at_epoch'))
+            assert actual == ((0, 100, None) if number == 1 else (83, 17, now-60)), actual
+        if number == 10:
+            assert '5h 残100%（リセット済・推定）' in lines[1], lines[1]
+            assert pools['codex-subscription']['usage_state'] == 'ok'
+        if number == 15:
+            assert lines[1] == broken.replace('Claude枠:', 'Codex枠:'), lines[1]
+            assert pools['codex-subscription']['usage_state'] == 'error'
+        env = dict(os.environ, AIENV_USAGE_CACHE_DIR=str(directory), AIENV_USAGE_NOW=str(now))
+        injected = subprocess.run(['bash', str(Path(lib).with_name('usage-inject.sh'))],
+                                  input='{}', env=env, text=True, capture_output=True)
+        assert injected.returncode == 0
+        assert injected.stdout == '【使用率・この発言時点】\n'+human.stdout, 'injection equals heading + human'
+        print(f'ok - 表示-{number}')
+    except Exception as exc:
+        print(f'NG - 表示-{number}: {exc}')
+PY
+IDLE_COUNT=0
+while IFS= read -r result; do
+  IDLE_COUNT=$((IDLE_COUNT + 1))
+  case "$result" in
+    'ok - '*) pass "${result#ok - }" ;;
+    *) fail_case "${result#NG - }" ;;
+  esac
+done < <(python3 "$IDLE_DISPLAY_TEST" "$LIB" "$WORK" "$NOW")
+[ "$IDLE_COUNT" -eq 15 ] || fail_case "設計 v3: 表示の15 IDを実行できていない"
+
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

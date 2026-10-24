@@ -363,5 +363,77 @@ exit 2' "2"
 }
 
 echo ""
+# 設計 v3 §7.7: ID ごとに1件。境界は generated_at を固定して直接渡す。
+IDLE_CANDIDATE_TEST="$WORK/idle-candidate-test.py"
+cat > "$IDLE_CANDIDATE_TEST" <<'PY'
+import copy
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+path, work, base = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('role_candidates_idle_test', path)
+rc = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rc)
+snapshot_path = str(Path(path).parents[3] / 'usage/executor/usage_snapshot.py')
+for number in range(1, 7):
+    try:
+        if number <= 2:
+            directory = Path(work) / ('idle-candidate-' + str(number))
+            directory.mkdir()
+            r = int(time.time())
+            claude = dict(schema_version=1, service='claude', fetched_at=r-60,
+                          updated_at=r-60, last_error=None,
+                          five_hour=dict(used_percent=100, resets_at_epoch=r-60),
+                          seven_day=dict(used_percent=30, resets_at_epoch=r+90000))
+            if number == 2:
+                claude['five_hour'] = dict(used_percent=0, resets_at=None, resets_at_epoch=None)
+            codex = copy.deepcopy(claude)
+            codex.update(service='codex', five_hour=dict(used_percent=15, resets_at_epoch=r+1000),
+                         reset_credits=dict(available_count=0, reset_scope=['five_hour', 'seven_day'], credits=[]))
+            for service, cache in [('claude', claude), ('codex', codex)]:
+                (directory / (service + '-cache.json')).write_text(json.dumps(cache))
+            env = dict(os.environ, AIENV_USAGE_CACHE_DIR=str(directory))
+            proc = subprocess.run([sys.executable, path, '--profile', base+'/profile.md',
+                                   '--agents-dir', base+'/agents'], env=env, text=True, capture_output=True)
+            assert proc.returncode == 0
+            row = next(line.split('\t') for line in proc.stdout.splitlines() if line.startswith('leader\t'))
+            assert (row[5], row[4]) == ('100', 'ok'), (row[5], row[4])
+            if number == 1:
+                human = subprocess.run([sys.executable, snapshot_path], env=env, text=True, capture_output=True)
+                assert human.returncode == 0
+                line = next(line for line in human.stdout.splitlines() if line.startswith('Claude枠:'))
+                assert '5h 残100%（リセット済・推定）' in line, line
+        else:
+            g = 1788858365
+            target = 'five_hour' if number <= 4 else 'seven_day'
+            epoch = g if number in (3, 5) else g+1
+            windows = [dict(window=name, used_percent=30, remaining_percent=70, resets_at_epoch=g+90000)
+                       for name in ('five_hour', 'seven_day')]
+            next(w for w in windows if w['window'] == target).update(
+                used_percent=100, remaining_percent=0, resets_at_epoch=epoch)
+            snapshot = dict(generated_at=g, pools=[dict(pool_ref='claude-subscription', usage_state='ok', windows=windows)])
+            h5, d7 = rc._usage_pair(snapshot, 'subagent')
+            actual = h5 if target == 'five_hour' else d7
+            expected = ('100', 'ok') if epoch == g else ('0', 'no')
+            assert (actual, rc._ok_value('OK', h5, d7)) == expected, (actual, rc._ok_value('OK', h5, d7))
+        print(f'ok - 候補-{number}')
+    except Exception as exc:
+        print(f'NG - 候補-{number}: {exc}')
+PY
+IDLE_COUNT=0
+while IFS= read -r result; do
+  IDLE_COUNT=$((IDLE_COUNT + 1))
+  case "$result" in
+    'ok - '*) pass "${result#ok - }" ;;
+    *) fail_case "${result#NG - }" ;;
+  esac
+done < <(PYTHONDONTWRITEBYTECODE=1 python3 "$IDLE_CANDIDATE_TEST" "$RC" "$WORK" "$BASE")
+[ "$IDLE_COUNT" -eq 6 ] || fail_case "設計 v3: 候補の6 IDを実行できていない"
+
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="
 [ "$FAIL" -eq 0 ]

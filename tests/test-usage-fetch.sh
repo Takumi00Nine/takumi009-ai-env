@@ -1028,6 +1028,226 @@ echo "=== V-08（設計 §5.6）: 接続の列挙（台帳の鍵 usage.fetch）�
 
 echo
 echo "======================================================================"
+# 設計 v3 §7: ID ごとに1件。既存の PATH スタブと通知の記録先を使う。
+IDLE_FETCH_TEST="$STUB_STATE_DIR/idle-fetch-test.py"
+cat > "$IDLE_FETCH_TEST" <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+entry, work = sys.argv[1:]
+root = Path(entry).parents[2]
+T0, T1 = 1788850000, 1788858365
+seven = dict(utilization=13, resets_at='2026-09-14T00:00:00Z')
+active = dict(utilization=42, resets_at='2026-09-09T00:00:00Z')
+def response(window):
+    return dict(five_hour=window, seven_day=seven)
+accepted = [response(None), response(dict(utilization=None, resets_at=None)),
+            response(dict(utilization=0, resets_at=None)), dict(five_hour=active, seven_day=None),
+            dict(five_hour=None, seven_day=None), response(dict(utilization=42, resets_at=None, resetsAt=active['resets_at']))]
+rejected = [dict(seven_day=seven), dict(five_hour=dict(utilization=10, resets_at=active['resets_at'])), {}, [], '<html>SECRETVALUE</html>']
+rejected += [response(w) for w in ['idle', {}, dict(error='unavailable'),
+    dict(used_percent=10, utilization=12, resets_at=active['resets_at']), dict(utilization=0, resets_at='not-a-date'),
+    dict(utilization=0, resets_at=None, resetsAt='not-a-date'), dict(used_percent=None, utilization=12.75, resets_at=None),
+    dict(utilization='0', resets_at=None), dict(utilization=False, resets_at=None)]]
+diagnostic = dict(five_hour=dict(utilization=12.75, resets_at=None, SECRETKEY2='v'),
+                  seven_day=dict(utilization=37.25, resets_at='2031-01-02T03:04:05Z'), limits=[], SECRETKEY1=dict(note='SECRETVALUE'))
+baseline = dict(five_hour=active, seven_day=seven, limits=[dict(kind='weekly_scoped', is_active=True, percent=7,
+                resets_at='2026-09-15T00:00:00Z', scope=dict(model=dict(display_name='Fable')))])
+null_model = dict(used_percent=None, resets_at=None, resets_at_epoch=None, label=None)
+idle_window = dict(used_percent=0, resets_at=None, resets_at_epoch=None)
+
+def environment(d):
+    env = {k:v for k,v in os.environ.items() if not k.startswith('STUB_')}
+    for key in ('AIENV_LEDGER', 'AIENV_USAGE_CONFIG_FILE'):
+        env.pop(key, None)
+    env.update(HOME=str(d/'home'), XDG_CACHE_HOME=str(d/'cache'), XDG_CONFIG_HOME=str(d/'config'),
+        AIENV_USAGE_FETCH_TEST_LIB='1', AIENV_USAGE_TEST_NOTIFY_LOG=str(d/'notifications'), RESET_HOOK='', RETRY_COUNT='2',
+        STUB_SECURITY_JSON='{"claudeAiOauth":{"accessToken":"tok-abc","expiresAt":99999999999999}}', ENTRY=entry)
+    return env
+
+def fetch(d, body, clock, status=200, extra=''):
+    env = dict(environment(d), STUB_CURL_BODY=body if isinstance(body, str) else json.dumps(body),
+               STUB_CURL_STATUS=str(status), TEST_CLOCK=str(clock))
+    proc = subprocess.run(['bash', '-c', '''
+. "$ENTRY"
+now_epoch() { printf '%s\\n' "$TEST_CLOCK"; }
+# 再試行回数は変えず、待機だけを省く。
+sleep() { :; }
+'''+extra+'\nrefresh_service claude'], env=env, text=True, capture_output=True)
+    assert proc.returncode == 0, 'refresh could not record result / diagnostic formatter not found'
+    return proc.stdout+proc.stderr
+
+def cache_path(d):
+    return d/'cache/claude-codex-usage/claude-cache.json'
+def cache(d):
+    return json.loads(cache_path(d).read_text())
+def sandbox():
+    d = Path(tempfile.mkdtemp(prefix='idle-', dir=work))
+    for name in ('home', 'cache', 'config'):
+        (d/name).mkdir()
+    fetch(d, baseline, T0)
+    assert cache(d)['fetched_at'] == T0 and cache(d)['five_hour']['used_percent'] == 42, 'baseline'
+    return d
+def check_rejected(d, before):
+    data = cache(d)
+    assert data['fetched_at'] == before['fetched_at'], 'fetched_at changed on parse'
+    assert all(data[k] == before[k] for k in ('five_hour', 'seven_day', 'model_weekly')), 'windows changed on parse'
+    assert data['last_error']['type'] == 'parse', 'not parse'
+def check_accepted(d, number, clock=T1):
+    data = cache(d)
+    assert (data['fetched_at'], data['last_error'], data['schema_version']) == (clock, None, 1), 'success metadata'
+    expected5 = dict(used_percent=42, resets_at=active['resets_at'], resets_at_epoch=1788912000) if number in (4,6) else idle_window
+    expected7 = idle_window if number in (4,5) else dict(used_percent=13, resets_at=seven['resets_at'], resets_at_epoch=1789344000)
+    assert data['five_hour'] == expected5 and data['seven_day'] == expected7, 'normalized windows'
+    assert data['model_weekly'] == null_model, 'optional model window'
+def run(identifier, action):
+    try:
+        action()
+        print('ok - '+identifier)
+    except Exception as exc:
+        # 応答本文・診断ログは秘密の検査データを含むため出力しない。
+        print('NG - '+identifier+': '+str(exc).splitlines()[0])
+
+for number, body in enumerate(accepted, 1):
+    def check(number=number, body=body):
+        d = sandbox()
+        fetch(d, body, T1)
+        check_accepted(d, number)
+    run(f'受理-{number}', check)
+for number, body in enumerate(rejected, 1):
+    def check(body=body):
+        d = sandbox()
+        before = cache(d)
+        fetch(d, body, T1)
+        check_rejected(d, before)
+    run(f'拒否-{number}', check)
+for number in range(1,5):
+    def check(number=number):
+        d = sandbox()
+        payload = dict(schema_version=1, service='claude', fetched_at=1000, updated_at=1000,
+            five_hour=dict(used_percent=10 if number == 3 else 0, resets_at_epoch=None,
+                           resets_at=active['resets_at'] if number == 2 else None),
+            seven_day=dict(used_percent=20, resets_at=None, resets_at_epoch=3000), model_weekly=null_model, last_error=None)
+        if number == 4:
+            payload.pop('model_weekly')
+            payload.update(service='codex', reset_credits=dict(available_count=1, reset_scope=['five_hour','seven_day'],
+                credits=[dict(id='x',status='available',granted_at_epoch=1788539594,expires_at_epoch=1791131594,title='t')]))
+        env = dict(environment(d), PAYLOAD=json.dumps(payload), SERVICE=payload['service'])
+        proc = subprocess.run(['bash','-c','. "$ENTRY"; validate_usage_payload "$SERVICE" "$PAYLOAD"'],env=env,capture_output=True)
+        assert (proc.returncode == 0) == (number == 1), 'payload validation'
+    run(f'検査-{number}', check)
+
+def diagnostic_lines(log):
+    return [line for line in log.splitlines() if re.search(r'shape|形|JSON として読めない', line, re.I)]
+for number in range(1,6):
+    def check(number=number):
+        d = sandbox()
+        before = cache(d)
+        if number == 5:
+            for body,status in [(accepted[0],200), ({},429), ({},401)]:
+                assert not diagnostic_lines(fetch(d,body,T1,status)), 'diagnostic on success/non-2xx'
+            return
+        body = diagnostic if number in (1,4) else response(dict(utilization=100.5,resets_at=active['resets_at'])) if number == 2 else rejected[4]
+        extra = ''
+        if number == 4:
+            # 診断の組立関数だけを差し替える。分類・取得・共通検査は実物。
+            # 書式は未規定なので、shape/diagnostic 名の jq 組立関数を選ぶ。
+            extra = '''
+builders=()
+while read -r _ _ name; do
+  case "$name" in
+    *shape*|*diagnostic*)
+      definition="$(declare -f "$name")"
+      if [[ "$definition" == *jq* && "$definition" != *'log '* ]]; then builders+=("$name"); fi ;;
+  esac
+done < <(declare -F)
+[ "${#builders[@]}" -eq 1 ] || exit 90
+eval "${builders[0]}() { return 1; }"
+'''
+        log = fetch(d,body,T1,extra=extra)
+        check_rejected(d,before)
+        lines = diagnostic_lines(log)
+        assert len(lines) == 3, 'one diagnostic per rejected attempt'
+        assert all(v not in log for v in ['tok-abc','SECRETKEY1','SECRETKEY2','SECRETVALUE','12.75','37.25','2031-01-02','100.5']), 'diagnostic leaked a forbidden key/value'
+        if number == 1:
+            for line in lines:
+                for key,kind in [('five_hour','object'),('seven_day','object'),('limits','array'),('utilization','number'),('resets_at','null')]:
+                    assert re.search(re.escape(key)+r'[^A-Za-z_]*'+kind,line), 'missing allowed key/type'
+                assert re.search(r'seven_day.*resets_at[^A-Za-z_]*string',line), 'missing 7d reset string type'
+                assert re.search(r'object[^A-Za-z_0-9]*1\b',line), 'unknown top object count'
+                assert re.search(r'string[^A-Za-z_0-9]*1\b',line), 'unknown window string count'
+        if number == 3:
+            assert all('JSON として読めない' in line for line in lines), 'non-JSON fixed message'
+        if number == 4:
+            assert all('形を記録できなかった' in line for line in lines), 'formatter failure fixed message'
+    run(f'診断-{number}',check)
+
+def notification():
+    d = sandbox()
+    state = json.loads(cache_path(d).with_name('notify-state.json').read_text())
+    assert state['services']['claude']['five_hour']['previous_used_percent'] == 42, 'notification baseline is not 42'
+    fetch(d,accepted[0],T1)
+    notice = d/'notifications'
+    assert notice.exists(), 'no reset notification'
+    expected = 'Claude 5h リセット: 42% -> 0%'
+    assert notice.read_text().splitlines().count(expected) == 1, 'reset notification count'
+    fetch(d,accepted[0],T1+60)
+    assert notice.read_text().splitlines().count(expected) == 1, 'duplicate reset notification'
+run('通知-1',notification)
+
+def integration():
+    d = sandbox()
+    data = cache(d)
+    data.update(fetched_at=T1-39240,last_error=dict(type='parse'))
+    data['five_hour'].update(used_percent=83,resets_at_epoch=T1-60)
+    data['seven_day'].update(used_percent=17,resets_at_epoch=T1+90000)
+    data['model_weekly'].update(used_percent=7,resets_at_epoch=T1+90000,label='Fable')
+    cache_path(d).write_text(json.dumps(data))
+    codex = dict(schema_version=1,service='codex',fetched_at=T1,last_error=None,
+        five_hour=dict(used_percent=20,resets_at_epoch=T1+1000),seven_day=dict(used_percent=30,resets_at_epoch=T1+90000),
+        reset_credits=dict(available_count=0,reset_scope=['five_hour','seven_day'],credits=[]))
+    cache_path(d).with_name('codex-cache.json').write_text(json.dumps(codex))
+    def present(clock,expected,state):
+        env = dict(environment(d),AIENV_USAGE_CACHE_DIR=str(cache_path(d).parent))
+        cmd = [sys.executable,str(root/'usage/executor/usage_snapshot.py'),'--now',str(clock)]
+        human = subprocess.run(cmd,env=env,capture_output=True,text=True)
+        machine = subprocess.run(cmd+['--json'],env=env,capture_output=True,text=True)
+        assert human.returncode == machine.returncode == 0, 'presentation exit'
+        assert len(human.stdout.splitlines()) == 3 and human.stdout.splitlines()[0] == expected, 'transition human line'
+        assert json.loads(machine.stdout)['pools'][0]['usage_state'] == state, 'transition state'
+    present(T1,'Claude枠: 5h 残100%（リセット済・推定）／7d 残83%（09-09 19:06）／Fable週 残93%・取得 654分前 ⚠️古い ⚠️取得エラー（type=parse）','stale')
+    fetch(d,accepted[0],T1)
+    check_accepted(d,1)
+    prefix = 'Claude枠: 5h 残100%（未開始）／7d 残87%（09-14 09:00）・取得 '
+    present(T1,prefix+'0分前','ok')
+    before = cache(d)
+    fetch(d,rejected[11],T1+60)
+    check_rejected(d,before)
+    present(T1+60,prefix+'1分前 ⚠️取得エラー（type=parse）','ok')
+    present(T1+601,prefix+'10分前 ⚠️古い ⚠️取得エラー（type=parse）','stale')
+    fetch(d,response(dict(utilization=0,resets_at='2026-09-08T14:00:00Z')),T1+660)
+    data = cache(d)
+    assert (data['fetched_at'],data['last_error']) == (T1+660,None), 'transition success metadata'
+    assert data['five_hour'] == dict(used_percent=0,resets_at='2026-09-08T14:00:00Z',resets_at_epoch=1788876000), 'transition active window'
+    assert data['seven_day'] == before['seven_day'] and data['model_weekly'] == before['model_weekly'], 'transition other windows'
+    present(T1+660,'Claude枠: 5h 残100%（リセット 23:00）／7d 残87%（09-14 09:00）・取得 0分前','ok')
+run('結合-1',integration)
+PY
+IDLE_COUNT=0
+while IFS= read -r result; do
+  IDLE_COUNT=$((IDLE_COUNT + 1))
+  case "$result" in
+    'ok - '*) pass "${result#ok - }" ;;
+    *) fail_case "${result#NG - }" ;;
+  esac
+done < <(python3 "$IDLE_FETCH_TEST" "$ENTRY" "$STUB_STATE_DIR")
+[ "$IDLE_COUNT" -eq 31 ] || fail_case "設計 v3: 取得器の31 IDを実行できていない"
+
 echo "結果: PASS=$PASS FAIL=$FAIL"
 echo "======================================================================"
 if [ "$FAIL" -gt 0 ]; then
