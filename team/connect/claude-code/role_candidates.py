@@ -64,7 +64,7 @@ ASSUMED_FULL_REMAINING = "100"
 
 
 def _is_whole_epoch(value) -> bool:
-    """整数、または整数値の float（真偽値は除く）。提示（usage_snapshot.py）の
+    """整数、または整数値の float（真偽値は除く）。使用率の提示側の
     リセット済の判定と同じ型の扱い（設計 v3 §5.4）。"""
     if isinstance(value, bool):
         return False

@@ -805,7 +805,7 @@ def _format_ticket_text(pool: dict, now: int) -> str:
 def _is_whole_epoch(value) -> bool:
     """リセット済の判定に使う epoch の型（設計 v3 §5.4＝整数。真偽値は除く）。
     整数、または整数値の float（既存の `_valid_epoch` と同じ扱い）。
-    配役の候補表示（role_candidates.py）も同じ判定にそろえている。"""
+    配役の候補表示も同じ判定にそろえている（設計 v3 §5.4）。"""
     if isinstance(value, bool):
         return False
     if isinstance(value, int):
