@@ -247,7 +247,7 @@ RESUME_ARGS=()
 # `set -u` 下で「要素0個の配列」の `"${ARR[@]}"` 展開を unbound variable
 # 扱いにする既知の挙動があり、素の `"${ARR[@]}"` だと GLOBAL_OPTS/RESUME_ARGS
 # が空のときに落ちる（実測）。
-printf '%s' "$PROMPT" | codex ${GLOBAL_OPTS[@]+"${GLOBAL_OPTS[@]}"} exec "${EXEC_OPTS[@]}" ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} - \
+printf '%s' "$PROMPT" | AIENV_CODEX_WORKER=1 codex ${GLOBAL_OPTS[@]+"${GLOBAL_OPTS[@]}"} exec "${EXEC_OPTS[@]}" ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} - \
   > "$EVENTS_FILE" 2> "$STDERR_FILE"
 CODEX_EXIT=$?
 

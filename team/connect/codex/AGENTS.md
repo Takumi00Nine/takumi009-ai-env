@@ -2,6 +2,7 @@
 
 - At the beginning of every new thread, tell the user: 「作業の根は `~/Workspace` です。起動時に選択されているフォルダーで作業します。」
 - Do not assume the workspace can be changed after thread creation; clearly tell the user when a new thread must be created with that folder selected.
+- リーダーの起動時には必読5ファイルの全文が注入される。不足の表示があれば読了として扱わず、最初の応答で本人に伝える。
 
 ## Workspace Folder Rules (Finalized 2026-10-30)
 

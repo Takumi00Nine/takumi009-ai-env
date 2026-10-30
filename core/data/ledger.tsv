@@ -60,6 +60,7 @@ part	team/connect/codex/codex-exec.sh	team	connect	codex	team.codex-exec	Codex �
 part	team/connect/codex/AGENTS.md	team	connect	codex	-	Codex ワーカーの作法	-	link:$HOME/.codex/AGENTS.md
 part	team/connect/codex/config.toml	team	connect	codex	-	Codex の設定雛形	-	gen:$HOME/.codex/config.toml
 part	team/connect/codex/hooks.json	team	connect	codex	-	Codex の登録	-	link:$HOME/.codex/hooks.json
+part	team/connect/codex/session-start-read.sh	team	connect	codex	-	必読5ファイルの全文注入（SessionStart）	-	-
 
 # ===== Usage =====
 part	usage/executor/usage-fetch.sh	usage	executor	-	usage.fetch-entry	取得の入口（LaunchAgent の起動対象）	-	-
@@ -139,6 +140,7 @@ suite	tests/test-vault-write-gate.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-agent-definitions.sh	team	-	-	-	-	-	-
 suite	tests/test-agent-model-guard.sh	team	-	-	-	-	-	-
 suite	tests/test-claude-exec.sh	team	-	-	-	-	-	-
+suite	tests/test-codex-boot-read.sh	team	-	-	-	-	-	-
 suite	tests/test-codex-direct-call-gate.sh	team	-	-	-	-	-	-
 suite	tests/test-codex-exec.sh	team	-	-	-	-	-	-
 suite	tests/test-config-samples.sh	team	-	-	-	-	-	-
