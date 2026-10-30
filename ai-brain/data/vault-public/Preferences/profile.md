@@ -1,12 +1,10 @@
 ---
 date: 2026-06-14
-updated: 2026-09-05
+updated: 2026-10-30
 tags: [profile, preferences]
 project: external-brain
 aliases:
   - "応対ルール"
-  - "旧資料"
-  - "work/old"
 ---
 # プロフィール（AI向け行動ルール）
 > 個人情報は private 側（Personal）に分離済み。本ノートは応対ルールと環境情報のみ。
@@ -17,5 +15,4 @@ aliases:
 - **技術説明**: 手厚め＝Web(Astro/PixiJS/GSAP)・3D/VRM/Blender／簡潔＝インフラ・自動化・macOS・AI/LLM活用。
 - **出力は最低限・応答3種（2026-08-14）**: 内容のある回答は材料が揃ってから1本・自己完結（📌＝`📌 件名` の1行→本文2〜5行→要判断があれば末尾に `🔸要確認:` の箇条書き。「▼ 詳細」は求められた時のみ添える・2026-09-05）。作業中・待ちは⏳1行、通知起動ターンの後始末は✅1行以内。内部調整のみのターン（ワーカー後始末・中継等）は出力なし（チームメイト通知の受領は通知内容の簡潔1行のみ表示・2026-08-31）＝表示するのは要判断・完了・異常・実世界の事実のみ（詳細＝[[Decisions/2026-08-14-leader-output-format]] 追補）。詳細＝[[Decisions/2026-08-14-leader-output-format]]。
 ## 環境・厳守
-- **`~/work/old/` は退避済み旧資料置き場＝本人が明示的に参照を求めた時以外、読まない・検索対象にしない・作業の前提にしない**（2026-07-20 本人指示）。
 - macOS(zsh)。anyenv 管理・Python は venv 必須（[[Preferences/anyenv-runtime-management]]・[[Preferences/python-venv]]）。Claude+Codex 併用。アセット公開＝ライセンス基準（[[Preferences/absolute-rules]] 1・[[Preferences/vrm-license-policy]]）。委任＝[[Preferences/coding-delegation]]、git＝[[Preferences/git-workflow]]。

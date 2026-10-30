@@ -16,7 +16,7 @@ aliases:
 ---
 # Codex を実装ワーカーとして直接起動する手順（`codex exec` 背景実行）
 
-**2026-09-06 以降、Codex 呼び出しの唯一経路**（MCP 廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]）。一次レビュー委任は `~/work/takumi009-ai-env/team/connect/codex/codex-exec.sh` ラッパー経由（正本＝[[Preferences/codex-review-protocol]]）。起動はラッパー（codex-exec.sh）経由のみ＝フックが直接実行を deny する（2026-10-11）。
+**2026-09-06 以降、Codex 呼び出しの唯一経路**（MCP 廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]）。一次レビュー委任は `~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh` ラッパー経由（正本＝[[Preferences/codex-review-protocol]]）。起動はラッパー（codex-exec.sh）経由のみ＝フックが直接実行を deny する（2026-10-11）。
 
 用途＝実装を Codex に任せるとき、リーダーが**implementer 等のラッパーワーカーを挟まず** Codex を直接ワーカーとして起動する手順。既定の実装担当は引き続き Claude の implementer（[[Preferences/coding-delegation]]）。Codex に振るのは implementer が空席・上限、本人指定、Codex 枠の余剰のいずれか（[[Decisions/2026-07-23-codex-delegation-reopened]]）。
 

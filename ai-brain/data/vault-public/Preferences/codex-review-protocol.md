@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-10-10
+updated: 2026-10-31
 tags: [preference, codex, review, delegation, protocol]
 project: meta
 related:
@@ -104,4 +104,4 @@ per-deliverable の Codex 一次レビュー（コード/行レベル）とは**
 - Codex を実装ワーカーとして起動する手順（exec 背景実行・レビュー手順は本ノートのまま）＝[[Preferences/codex-exec-worker]]。
 
 ## その他
-- Vault 書込は**リーダーの Claude のみ**（Codex・ワーカーは申告→リーダー代筆＝[[Preferences/vault-operation]]）。Codex はクラウド routines 不可。
+- Vault 書込は**リーダー自身**が行う。ワーカーはツール名によらず書かず、記録候補を最終報告で申告する（[[Preferences/vault-operation]]）。Codex はクラウド routines 不可。

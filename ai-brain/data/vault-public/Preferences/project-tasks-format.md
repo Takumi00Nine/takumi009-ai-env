@@ -1,6 +1,6 @@
 ---
 date: 2026-09-22
-updated: 2026-10-05
+updated: 2026-10-31
 tags: [preference, project, tasks, cmux, dock]
 project: takumi009-ai-env
 related:
@@ -27,10 +27,10 @@ aliases:
 - **frontmatter の固定キー**＝date／updated／tags／project／status／next／aliases／related（待ちがある案件だけ wait_until）。`project` はノート名＝案件宣言の slug と同じ値。`next_action` は廃止（新規では書かない）。
 - **本文は5節・この順・見出し固定**＝①目的（2〜3行）②守ること（確定した前提・本人裁定・やらないこと＝1行1件・日付・理由は Decision へリンク。前提／裁定／不採用を分けず1本のリストにする）③今どこ・次に何を（段階・モード・委任の有無・決める人・次の一手＝書き換えて更新し追記しない）④正本の所在（要件書・設計書・作業ディレクトリ・調査へのリンク）⑤Tasks（下記）。空の節も見出しは残す。
 - **書かないもの**＝経緯・対話ログ・工程の出来事（Fragments）／判断の理由（Decisions）／ゴール像・受入条件（要件書）／アイデア台帳（Knowledge か Fragments に置いて④からリンク）／日付見出しの積み上げ。
-- **起票の手順**＝新規案件はリーダーが内容を確定し、記録職が [[Preferences/project-note-sample]] を複製して埋める（[[Preferences/core-workflow]] §1「Projects ノートは宣言の前」）。既存ノートは一斉移行せず、触ったときに型へ直す。
+- **起票の手順**＝新規案件はリーダーが内容を確定し、自分で [[Preferences/project-note-sample]] を複製して埋める（[[Preferences/core-workflow]] §1「Projects ノートは宣言の前」）。既存ノートは一斉移行せず、触ったときに型へ直す。
 - **起動時**＝案件宣言した slug の Projects ノートをリーダーが最初に読む（運用ルール。フック化は再発時に判断）。
 
-- **Projects の frontmatter**: `status:` は4値のみ＝`active`/`paused`/`completed`/`closed`。**状態が動いたら `next:`（15文字以内）も更新**（cmux Dock「Project」枠の表示元。「Project の N 番」解決＝`~/work/takumi009-ai-env/dock/executor/cmux-next-model.sh --list`。描画規則＝[[Decisions/2026-09-22-project-frame-focus-arrow-v7]]）。
+- **Projects の frontmatter**: `status:` は4値のみ＝`active`/`paused`/`completed`/`closed`。**状態が動いたら `next:`（15文字以内）も更新**（cmux Dock「Project」枠の表示元。「Project の N 番」解決＝`~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-next-model.sh --list`。描画規則＝[[Decisions/2026-09-22-project-frame-focus-arrow-v7]]）。
 - **待ち（wait_until）**: 日時まで待つ案件は、Tasks 節の**待つ版（Dock の ▶ の版）の直下**に行頭から `- wait_until: YYYY-MM-DDTHH:MM`（ローカル時刻・`YYYY-MM-DD` 可＝その日の 00:00）を 1 行書く（`status: active` のまま。過ぎた値は次にその版を触るとき消す）。**▶ の版が無い案件（Tasks 節なし・全版完了・全版タスク 0 件）だけ** frontmatter `wait_until:` が効く。字下げ・版の範囲外・秒／タイムゾーン付き・暦に無い日は無効。描画規則＝[[Decisions/2026-09-21-project-wait-by-version-v6]]。
 - **Tasks 節**（任意）: `## Tasks` → `### <版名>` → `- [ ]`/`- [/]`（進行中）/`- [x]`。cmux Dock「Task」枠の表示元。子行は**工程単位**（1 ワーカーの起動〜完了、または 1 ゲート＝リーダーの作業単位）。工程が終わるごとにリーダーが記号（と next）を即時に直筆する（締めまで後回しにしない＝[[Decisions/2026-10-04-leader-vault-light-writes-no-gate]]）。版の直下に `- 正本: <案件の docs/ の裁定録・要件書・設計書へのパス>` を 1 行置く（Dock は描かない）。経緯・巡数・commit・裁定は Projects に書かず案件の docs/（裁定録）へ＝二重管理をしない（[[Decisions/2026-10-04-project-note-tasks-docs-split]]）。
 - **Tasks の書き方**: Dock は `###` 版名と `- [ ]` 子行をそのまま描くので短く書く＝**版名は目的だけ・20 文字以内**／**子行は「動詞句」・番号なし・25 文字以内**（例: `- [ ] 検証→merge`）。`- 記録:` 行は廃止（2026-10-04）＝既存ノートの記録行は、そのノートを触ったときに案件の docs/ へ移して外す。

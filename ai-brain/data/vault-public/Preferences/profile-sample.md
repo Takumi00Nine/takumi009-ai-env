@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-10-10
+updated: 2026-10-30
 tags: [preference, core, profile, sample, role-cast]
 project: takumi009-ai-env
 related:
@@ -56,7 +56,7 @@ aliases:
 | `role.leader` | メイン機の実値（サンプルはメイン機の実運用値） | メイン機はそのまま使う。未確定・サブ機で変える場合は `core/assembly/install-main.sh`／`core/assembly/install-sub.sh`実行時の対話（設計§3.9）で確定させる |
 | `role.*`（leader以外） | `configured model=<定義名>[,<定義名>…]` | 自分のセッションで実際に起動する職種だけ`configured`にし、モデル定義ファイル（[[Preferences/model-definitions-sample]]）の定義名をカンマ区切りで1つ以上書く。使わない職種は`not_adopted`、判断保留は`unknown`のまま残す |
 | `team_mode` | `value=full` | このマシンの枠に合う既定体制を選ぶ（メイン機＝`full`・サブ機＝`lean` が目安）。迷ったら本人に確認する |
-| `no_read_paths` | `value=~/work/old` | 読まない・検索しないパスが実在するかを確認し、無ければ`unavailable`にする |
+| `no_read_paths` | `unavailable` | 読まない・検索しないパスが実在するかを確認し、無ければ`unavailable`にする |
 | `machine_role` | `configured value=main`（サンプルはメイン機の実値） | サンプルはメイン機の値のまま。**サブ機はコピー後に `configured value=sub` へ書き換える**（機構は推測しない） |
 
 未記載の職種は`unknown`（保留・本人確認待ち）として扱われる。「このマシンでは使わない」と決めている職種は、行を省略せず`not_adopted`と明示的に書くこと（§3.2）。
@@ -70,10 +70,10 @@ aliases:
 3. プロファイルをサブ機用に編集（コピー直後はメイン機の値なので必須）: `machine_role: configured value=sub`／`role.leader: configured model=opus-high`／`no_read_paths: unavailable`（該当パスが無い機）／必要なら `team_mode`
 4. `core/assembly/update-sub.sh`（引数なし。pull→`install-sub.sh`→Preferences 再同期を毎回行う）。`AGENTS: dangling` が出たら表示されたファイルを削除。
 5. 確認: `python3 team/executor/profile_resolve.py resolve ~/.config/takumi009-ai-env/profile.md` → `OK schema_version=<期待版> … MACHINE_ROLE:sub`。新セッションの開幕1行でモードを確認。
-6. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/work/takumi009-ai-env/dock/executor/`、描画側（Dock 常駐）は dotfiles の `~/work/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。
-   - `cd ~/work/takumi009-ai-env && git pull --ff-only && core/assembly/install-main.sh`（供給側の実体を配置。ai-env 未導入機は Dock 側が縮退表示）
-   - `cd ~/work/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は `core/assembly/install-sub.sh --with-dotfiles`）。install.sh が `~/.config/cmux/dock.json` の symlink・dock-guard LaunchAgent を整える。
+6. **cmux Dock の「Task」「Project」をサブ機でも出す（任意・ai-env＋dotfiles 導入機のみ）**: 表示元はその機のローカル Vault の Projects ノート（`## Tasks` 節）なので、データ同期は不要。**v3（2026-09-15）＝供給側（対応表生成・番号付け・Vault 解析・宣言 CLI）は ai-env の `~/Workspace/Tools/takumi009-ai-env/dock/executor/`、描画側（Dock 常駐）は dotfiles の `~/Workspace/Tools/dotfiles/cmux/`。symlink は使わない**（既定はどちらもリポジトリ内実体の絶対パス）。
+   - `cd ~/Workspace/Tools/takumi009-ai-env && git pull --ff-only && core/assembly/install-main.sh`（供給側の実体を配置。ai-env 未導入機は Dock 側が縮退表示）
+   - `cd ~/Workspace/Tools/dotfiles && git pull --ff-only && ./install.sh`（dotfiles 未導入の機は `core/assembly/install-sub.sh --with-dotfiles`）。install.sh が `~/.config/cmux/dock.json` の symlink・dock-guard LaunchAgent を整える。
    - cmux を再起動 → dock-guard が Usage／Project／Task／System の4枠へ再シードする。
-   - セッション中にリーダーが `~/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言はフック化しない＝[[Decisions/2026-09-09-cmux-session-todo-operation]]）。
+   - セッション中にリーダーが `~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>` で宣言したときだけ表示される（`Projects/<slug>.md` に `## Tasks` 節が要る。宣言はフック化しない＝[[Decisions/2026-09-09-cmux-session-todo-operation]]）。
 
 ⚠️ update-sub.sh の失敗文面は原因を「配役表の machine_role が sub でない」と示すが、実際の起点は「プロファイルが旧 schema で固定キーが unknown 扱い」でも同じ文面になる（resolver の stderr は捨てられる）。まず resolve を直接叩いて何が読めているかを見る。
