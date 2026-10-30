@@ -272,7 +272,7 @@ SLOT_MUST_READ="重要: 必読ノートの全文はこのメッセージには�
 $list
 
 ② 上記を読み終えるまで、ユーザー依頼の実作業（調査・検索・コード変更・委任を含む）に着手しない。
-④ 記録職＝Vault 書込を宣言した職種（例: subagent_type: vault-scribe）。"
+④ Vault への書き込みは軽重に関係なくリーダー自身が行う。ワーカーは書かず、最終報告の「Vault記録候補:」で申告する。Preferences の編集と公開スナップショットの生成・commit はメイン機（machine_role=main）のリーダーだけ。"
 SLOT_HEALTH="${HEALTH_SECTION}${HEALTH_INFO_LINE:+
 
 ${HEALTH_INFO_LINE}}"

@@ -334,7 +334,9 @@ echo "=== 4. ok_health_section_is_one_line（NFR-3・AC-4）: S-1＝ヘルス節
 echo "=== 4b. fragments_candidates_not_injected: S-1 は候補 12 件だが AI へは注入しない（現行契約・SO-8） ==="
 {
   ctx="$(run_bootstrap_fixture S-1)"
-  assert_not_contains "S-1: 「候補」を注入しない" "$ctx" "候補"
+  # 記録候補の申告指示とは区別し、Fragments の候補件数の表示を検査する。
+  assert_eq "S-1: Fragments の候補件数を注入しない" "0" \
+    "$(printf '%s\n' "$ctx" | grep -cE '候補[[:space:]]*[0-9]+[[:space:]]*件' || true)"
   assert_not_contains "S-1: fragments_candidates を注入しない" "$ctx" "fragments_candidates"
 }
 

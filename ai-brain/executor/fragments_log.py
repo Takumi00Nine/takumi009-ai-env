@@ -12,7 +12,7 @@ Vaultへ直接書き込む方式へ移行したため、本スクリプトは検
     SHA-256）を標準出力へ返す。maintenance.sh は `fragments` の件数
     （len(fragments)・`truncated` は含めない）を last-run.json の
     `fragments_candidates` に書き、Dock の週次行が「候補N件」と表示する
-    （無人昇格は 2026-09-19 に退役・昇格は在席時に vault-scribe が行う）。
+    （無人昇格は 2026-09-19 に退役・昇格は在席時にリーダーが行う）。
   - `--since` を必須化（旧実装の「前回レポート日時をレポート自身から読み返す」
     仕組みが無くなったため、呼び出し元＝maintenance.shがlast-run.jsonの
     last_success_atを渡す設計。設計書§1.2 Phase1②）。

@@ -14,7 +14,7 @@
 #            なら無出力・exit 0。寄与は鍵 ai-brain.bootstrap・team.session-status・dock.declare-state を
 #            台帳ツール lookup で引き（AIENV_LEDGER をそのまま渡す）、各 1 回 `--slots` で起動する（stdin は同じ JSON）。
 #   寄与の --slots 出力＝{"slots":{"<枠名>":"<文>",…}}（空の枠は ""・文の末尾に改行を付けない）。
-#     ai-brain.bootstrap   must-read＝「重要: 必読ノートの全文は…」から「④ 記録職＝…」の行まで／
+#     ai-brain.bootstrap   must-read＝「重要: 必読ノートの全文は…」から「④ Vault への書き込みは…」の行まで／
 #                          health＝【外部脳ヘルス】の節（ℹ️ 行があれば空行 1 つを挟んで続ける）
 #     team.session-status  opening＝「【開幕1行】…:」・🧭 行・「⚠️ この依頼に…」の 3 行／directive5＝⑤ の行／
 #                          role-hold＝保留の 1 行／profile-warning＝「【ローカル実体プロファイル】」＋改行＋警告
@@ -188,7 +188,10 @@ assert_eq "開幕の枠＝基準の 3 行（配役表の解決なし＝未確定
 assert_eq "成功時は警告行なし" "0" "$(printf '%s\n' "$CTX" | grep -c '^LEDGER: ' || true)"
 # 旧 84 の全体部分: ③は欠番・①②④⑤⑥ の順・【使用率】無し。
 assert_eq "84: ③は欠番（番号は詰めない）" "0" "$(printf '%s\n' "$CTX" | grep -c '^③ ' || true)"
-assert_eq "84: ④は vault-scribe を含むちょうど1行" "1" "$(printf '%s\n' "$CTX" | grep -cE '^④ .*vault-scribe' || true)"
+assert_eq "84: ④はリーダー直筆の規則を含むちょうど1行" "1" "$(printf '%s\n' "$CTX" | grep -cE '^④ Vault への書き込みは軽重に関係なくリーダー自身が行う。' || true)"
+assert_contains "84: ワーカーは最終報告で記録候補を申告する" "$CTX" 'ワーカーは書かず、最終報告の「Vault記録候補:」で申告する。'
+assert_contains "84: Preferences と公開スナップショットはメイン機だけ" "$CTX" 'Preferences の編集と公開スナップショットの生成・commit はメイン機（machine_role=main）のリーダーだけ。'
+assert_not_contains "84: 記録職への委任指示は出ない" "$CTX" '記録職'
 assert_contains "84: ①が残る" "$CTX" "① タスクに着手する前に"
 assert_contains "84: ②が残る" "$CTX" "② 上記を読み終えるまで"
 assert_not_contains "84: 【使用率】ブロックは出ない（発言ごとの usage-inject.sh が正）" "$CTX" "【使用率】"

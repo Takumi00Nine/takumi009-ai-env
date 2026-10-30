@@ -101,9 +101,9 @@ if [ -d "$TEAMS_DIR" ]; then
   done
 fi
 
-# 2.5) 外部脳（Vault）の AI 向け6フォルダ＝リーダー直筆可（2026-10-04 本人決定＝
-# Decisions/2026-10-04-leader-vault-light-writes-no-gate）。軽い書込は直筆・重い編集は
-# 記録職へ＝規則で守る（フックで軽重は判定しない）。判定式は vault-paths.sh の
+# 2.5) 外部脳（Vault）は軽重に関係なくリーダーが直筆する。ワーカーは記録候補を
+# 最終報告で申告する＝役割の規則で守る。AI 向け6フォルダを通す判定は維持する。
+# 判定式は vault-paths.sh の
 # guard_is_vault_ai_path（6フォルダの literal はそこだけ）。子の柵
 # ai-brain/connect/claude-code/vault-write-gate.sh は別物（子は今も deny）。
 if guard_is_vault_ai_path "$fpath"; then

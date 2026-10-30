@@ -975,7 +975,7 @@ append_fragments_summary() {
   mv "$tmp" "$day_file"
 }
 
-# 昇格候補の件数（Phase1②）。昇格そのものは在席時にvault-scribeが行う（無人では
+# 昇格候補の件数（Phase1②）。昇格そのものは在席時にリーダーが行う（無人では
 # 動かない）ため、サマリ行は件数と窓（起点以降）だけを残す。
 if [[ -n "$FRAGMENTS_CANDIDATES" ]]; then
   CANDIDATES_SEGMENT="昇格候補${FRAGMENTS_CANDIDATES}件（起点 ${SINCE_DATE} 以降・Dock の Project 枠参照）"
