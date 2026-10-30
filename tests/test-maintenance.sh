@@ -20,7 +20,7 @@
 # DT-7とは独立）は、REPO_ROOT（このテストが実際に走っている本リポジトリ・
 # 移設先のワークツリー）配下の dock/executor/cmux-task-declare.sh の実物スクリプトを
 # 読みに行く（cmux-session-todo v3で宣言CLIの実体がdotfilesからai-envへ
-# 移設されたため。実machineの ~/work/takumi009-ai-env が未マージでも
+# 移設されたため。実machineの ~/Workspace/Tools/takumi009-ai-env が未マージでも
 # ここは常に「今テストしている木」を見るので影響されない＝検証1巡目
 # MAJOR #12対応。cmux自体は隔離スタブに差し替え、宣言記録も隔離パスへ
 # 書く＝実cmuxにも実記録にも触れない）。
@@ -69,7 +69,7 @@ REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 # §16.6.2系統①（実物cmux-task-declare.shとの結合テスト）は、REPO_ROOT
 # （$TESTS_DIR/..＝本ファイルが属するリポジトリ／ワークツリー自身）配下の
 # 実物を参照する。検証1巡目 MAJOR #12: 以前は実machineの
-# ~/work/takumi009-ai-env を参照していたため、その場所が未マージ／未配置の
+# ~/Workspace/Tools/takumi009-ai-env を参照していたため、その場所が未マージ／未配置の
 # 環境（このワークツリーとは無関係な実行環境）では系統①がSKIPし続け、
 # 本来なら実行できるはずの検査を10件分黙って落としていた。REPO_ROOT基準
 # なら「今テストしている木」に常に実体があるので、実machineの状態に

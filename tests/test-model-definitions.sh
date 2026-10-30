@@ -3,7 +3,7 @@
 # （v1.7）§6のfixture27件＋実装回帰RG-1・版境界・cwd不変性・列ずれ回帰を
 # team/executor/profile_resolve.py に対して直接検証する。
 #
-# 正本: ~/work/takumi009-ai-env-private/docs/core-split/
+# 正本: ~/Workspace/Tools/takumi009-ai-env-private/docs/core-split/
 #   モデル定義ファイルと候補指定-要件-2026-09-08.md（fixture・AC定義）
 #   モデル定義ファイルと候補指定-設計-2026-09-08.md（§11 テスト戦略）
 #

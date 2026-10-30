@@ -13,7 +13,7 @@
 # 出力・安全＝run-closing-b.sh と同じ契約（AC ごとに `AC-n <ok|NG> <要点>`・最後に `closing: ok=<n> ng=<n>`・
 #   詳細は tests/closing/out/<実行時刻>-c/・使い捨て worktree・一時 HOME・PATH 先頭の偽コマンド・
 #   SKIP_LAUNCHCTL=1・LAUNCHCTL_TIMEOUT_SECS=1）。実 HOME・実 launchd・実 cmux・実 Vault（読むだけ）・
-#   実 ~/work/dotfiles・実 repo の main には書かない。
+#   実 ~/Workspace/Tools/dotfiles・実 repo の main には書かない。
 
 set -uo pipefail
 
@@ -40,7 +40,7 @@ trap 'exit 130' INT TERM
 if ! why="$(cl_check_env)"; then echo "環境が FX-6 の前提を満たさない:$why" >&2; exit 2; fi
 
 # AC-11④・FX-16（dotfiles の FR-19 commit）の事前条件（C-V08）＝未指定・commit 不在を skip にして
-# AC-11 を ok にしない。既定値は空のまま（実 ~/work/dotfiles を既定にしない＝test-runner が必ず指定する）。
+# AC-11 を ok にしない。既定値は空のまま（実 ~/Workspace/Tools/dotfiles を既定にしない＝test-runner が必ず指定する）。
 if [ -z "${CLOSING_DOTFILES_REPO:-}" ] || [ -z "${CLOSING_DOTFILES_COMMIT:-}" ]; then
   echo "事前条件エラー: CLOSING_DOTFILES_REPO・CLOSING_DOTFILES_COMMIT を指定してください（AC-11④・FR-19）" >&2
   exit 2

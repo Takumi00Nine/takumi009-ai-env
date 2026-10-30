@@ -6,7 +6,7 @@
 #
 # 環境変数（省略可・テスト用）: CODE27_CALL_BIN … 呼ぶ実行ファイル（既定は下の 1 か所）
 
-BIN="${CODE27_CALL_BIN:-$HOME/work/navi-orchestrator/code27-call/bin/code27-call-clear}"
+BIN="${CODE27_CALL_BIN:-$HOME/Workspace/Projects/navi-orchestrator/output/navi-orchestrator/code27-call/bin/code27-call-clear}"
 [ -x "$BIN" ] || exit 2
 "$BIN" </dev/null >/dev/null 2>&1 && exit 0
 exit 1

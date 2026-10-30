@@ -4,9 +4,9 @@
 > FX-3 配下の既定位置へ足したもの」の最小実装。test-writer A の担当範囲だが着手時点で無かったため、
 > B が最小を作った（委任文の指示どおり）。A が別の形で作り直すときはこの README とのずれだけ直せばよい。
 
-- `bin/code27-call-clear`＝消去の入口（本物の `~/work/navi-orchestrator/code27-call/bin/code27-call-clear` の代わり）。
+- `bin/code27-call-clear`＝消去の入口（本物の `~/Workspace/Projects/navi-orchestrator/output/navi-orchestrator/code27-call/bin/code27-call-clear` の代わり）。
   `claude/hooks/code27-call-clear.sh`（束 B 後は `core/connect/claude-code/prompt-answer.sh`）が
-  `CODE27_CALL_BIN` で指すか、既定位置 `$HOME/work/navi-orchestrator/code27-call/bin/code27-call-clear` に置く。
+  `CODE27_CALL_BIN` で指すか、既定位置 `$HOME/Workspace/Projects/navi-orchestrator/output/navi-orchestrator/code27-call/bin/code27-call-clear` に置く。
 - `bin/code27-call-say`＝発話の入口（カナリア）。本リポジトリの送り手は「応答＝消去」だけを呼ぶ契約
   （設計 §2.2＝CODE27 の送り手は消去を呼ぶ段だけ）なので、この入口の記録は常に 0 件のはず
   （AC-2①・AC-4②の判定）。呼ばれたら対応表の誤りを示す。

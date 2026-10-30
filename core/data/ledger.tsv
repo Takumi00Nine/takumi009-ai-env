@@ -179,4 +179,4 @@ suite	tests/test-with-dotfiles.sh	core	-	-	-	-	-	-
 notify	Vault:Preferences/cmux-notifications.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
 notify	Vault:Preferences/core-conduct.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
 notify	Vault:Preferences/coding-delegation.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
-notify	~/work/navi-orchestrator/code27-call	notify	-	code27	-	CODE27 発話取次（別 repo・下流の取次）	-	-
+notify	~/Workspace/Projects/navi-orchestrator/output/navi-orchestrator/code27-call	notify	-	code27	-	CODE27 発話取次（別 repo・下流の取次）	-	-

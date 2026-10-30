@@ -50,7 +50,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/personal-link-check.sh"
 
 : "${VAULT:=$HOME/Data/obsidian}"
-: "${AIENV_REPO:=$HOME/work/takumi009-ai-env}"
+: "${AIENV_REPO:=$HOME/Workspace/Tools/takumi009-ai-env}"
 # NG 語定義（私的・git 管理外）の既定の置き場は core/executor/ngwords-path.sh が解決する（audit.sh と共有・v1.2 D-7）。
 # 旧既定にだけあるときは「移す 1 コマンド」を標準エラーに出して止まる。
 # shellcheck source=core/executor/ngwords-path.sh

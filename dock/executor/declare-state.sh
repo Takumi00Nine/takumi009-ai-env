@@ -8,13 +8,13 @@
 # 宣言 CLI はどのサブコマンドも実行しない（AC-153 ③・D-v6-5）・`set` を呼ばない・記録も Vault も書かない。
 # 失敗はすべて「宣言状態 不明」に倒し、終了コードと本文は取得結果に依存しない（fail-silent）。
 # 共有部品の所在＝上書き口 BOOTSTRAP_CMUX_LIB_DIR（テスト用・DT-29）があればそれ、無ければ本寄与の実体位置
-# （固定パス $HOME/work/… にしない＝F-108・D-v6-13）。cmux 実体・記録の置き場・呼び出し上限の既定と上書き口は
+# （固定パス $HOME/Workspace/… にしない＝F-108・D-v6-13）。cmux 実体・記録の置き場・呼び出し上限の既定と上書き口は
 # 宣言 CLI と同一（CMUX_TASK_CMUX_BIN／CMUX_TASK_STATE／CMUX_TASK_CALL_TIMEOUT＝既定 5 秒）。
 : "${BOOTSTRAP_CMUX_LIB_DIR:=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 DECLARE_STATE_FILE="${CMUX_TASK_STATE:-$HOME/.config/cmux-task-watch/workspaces.json}"
 DECLARE_CMUX_BIN="${CMUX_TASK_CMUX_BIN:-cmux}"
 # 宣言コマンドの絶対パス（4 状態すべての行に含める＝D-v6-7・AC-59 の「促す行が 1 行」不変）。
-DECLARE_CMD='~/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>'
+DECLARE_CMD='~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>'
 
 # resolve_declare_state — 段 0〜3 を順に評価し最初の失敗で止まる（§41.6.2）。
 # 結果＝DECLARE_STATE（declared／undeclared／unknown／corrupt）・DECLARE_SLUG。

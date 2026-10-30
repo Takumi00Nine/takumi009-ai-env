@@ -183,7 +183,7 @@ set -uo pipefail  # -e は使わない（1項目の失敗で残りの検査が�
 : "${VAULT:=$HOME/Data/obsidian}"
 # 私的パッチ（別のprivateリポジトリ）のローカルclone先。環境変数で上書き可
 # （ユニットテスト用。本番は既定値のままでよい＝README.md「導入手順」記載のパス）。
-: "${AIENV_PRIVATE_REPO:=$HOME/work/takumi009-ai-env-private}"
+: "${AIENV_PRIVATE_REPO:=$HOME/Workspace/Tools/takumi009-ai-env-private}"
 # ローカル実体プロファイルの既定パス（⑧の案内文と①-2の失敗文言で使う）。
 # ⚠️ model/effort の既定値・resolverの直叩きはここでは持たない。①-2 は
 # core/assembly/install-main.sh --render-settings-json（生成関数そのもの）に再生成

@@ -126,8 +126,8 @@ Claude Code / Codex themselves are outside brew's management, so install them se
 #### Main environment
 
 ```sh
-git clone <URL of this repository> ~/work/takumi009-ai-env
-cd ~/work/takumi009-ai-env
+git clone <URL of this repository> ~/Workspace/Tools/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 mkdir -p ~/.config/takumi009-ai-env
 cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # Local role-cast profile (real main-machine values)
 cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # Model definitions (real main-machine values)
@@ -147,7 +147,7 @@ On the main environment, a **private patch (a separate private repository)** is 
 If this machine already has a pre-v1.1 checkout, bring it up to date in **one place**:
 
 ```sh
-cd ~/work/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 git pull --ff-only
 core/assembly/install-main.sh --with-dotfiles   # re-run the full installer (re-links every hook, registers the new codex-direct-call-gate.sh, regenerates settings.json)
 ai-brain/assembly/install-backup.sh             # re-register the Vault-backup LaunchAgent at its new target path
@@ -159,7 +159,7 @@ core/assembly/check-drift.sh                    # confirm 0 drift: every registe
 ##### Taking in v1.2 (bundle B: the notification mouth) on an existing main machine
 
 ```sh
-cd ~/work/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 git pull --ff-only
 core/assembly/install-main.sh --with-dotfiles   # re-run the full installer (the `code27-call-clear.sh` hook now points at core/connect/claude-code/prompt-answer.sh)
 core/executor/audit.sh --quick                  # if the NG-word file is still at the old scripts/ngwords.txt, this fails and prints one command — run it, then re-run this line
@@ -171,9 +171,9 @@ core/assembly/check-drift.sh                    # confirm 0 drift
 Bundle C removes the old-path forwarding symlinks. First update dotfiles and restart the Dock's Project and Task panes — they read the supply path only once, when they start — then take in this repository:
 
 ```sh
-git -C ~/work/dotfiles pull --ff-only          # dotfiles first (its v1.2 commit points the Dock supply at the new paths)
+git -C ~/Workspace/Tools/dotfiles pull --ff-only          # dotfiles first (its v1.2 commit points the Dock supply at the new paths)
 # restart the Dock's Project and Task panes now (quit cmux with Cmd+Q and open it again)
-cd ~/work/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 git pull --ff-only
 core/assembly/install-main.sh --with-dotfiles   # keeps the saved selection (none saved = everything)
 # read the end of the output: run the LaunchAgent install/unload commands it lists as needed
@@ -184,8 +184,8 @@ core/assembly/check-drift.sh --forward-refs            # retirement precheck: no
 #### Sub environment
 
 ```sh
-git clone <URL of this repository> ~/work/takumi009-ai-env
-cd ~/work/takumi009-ai-env
+git clone <URL of this repository> ~/Workspace/Tools/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 mkdir -p ~/.config/takumi009-ai-env
 cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # then edit machine_role (and role.leader if needed)
 cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # then trim/enable the model defs this machine actually uses
@@ -200,7 +200,7 @@ Details = the comments at the top of `core/assembly/install-sub.sh`, `core/assem
 2. Only if the schema changed: copy the samples over the real files (`cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md`, `cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf`; back up the existing real file first, permission `0600`) and edit the profile for this sub machine — at least `machine_role: configured value=sub` (the samples carry the main machine's values), plus `role.leader`, `no_read_paths`, `team_mode` as needed. `core/assembly/install-sub.sh --check-profile` prints the resolve result as one line with no side effects.
 3. `core/assembly/update-sub.sh` — pull → `install-sub.sh` → `ai-brain/data/vault-public/Preferences/` re-sync, every run (no flags; the old re-sync flag is gone). Confirm it ends with `done.`; a new session's mode line should then show the current version. If it prints `AGENTS: dangling`, delete the file(s) it names.
 
-Taking in v1.2 bundle C on a sub machine: (only if this machine uses dotfiles) `git -C ~/work/dotfiles pull --ff-only` and restart the Dock's Project and Task panes → `core/assembly/update-sub.sh` once → `core/assembly/check-drift.sh --forward-refs` (add `--dotfiles none` on a machine without dotfiles) exits 0 with no hit lines — with `--dotfiles none` its only output is one "対象なし" (not applicable) line on stderr.
+Taking in v1.2 bundle C on a sub machine: (only if this machine uses dotfiles) `git -C ~/Workspace/Tools/dotfiles pull --ff-only` and restart the Dock's Project and Task panes → `core/assembly/update-sub.sh` once → `core/assembly/check-drift.sh --forward-refs` (add `--dotfiles none` on a machine without dotfiles) exits 0 with no hit lines — with `--dotfiles none` its only output is one "対象なし" (not applicable) line on stderr.
 
 ⚠️ `update-sub.sh`'s failure message attributes the cause to "the role-cast profile's `machine_role` isn't `sub`", but the exact same message also appears when the real cause is an old-schema profile whose fixed keys read as `unknown` (the resolver's own `stderr` is discarded). Run `profile_resolve.py resolve` directly first to see what it's actually reading before assuming which cause applies.
 
@@ -208,14 +208,14 @@ Taking in v1.2 bundle C on a sub machine: (only if this machine uses dotfiles) `
 
 ```sh
 core/assembly/install-main.sh --with-dotfiles   # or install-sub.sh --with-dotfiles
-cd ~/work/dotfiles && git pull --ff-only && ./install.sh   # refresh an existing dotfiles checkout
+cd ~/Workspace/Tools/dotfiles && git pull --ff-only && ./install.sh   # refresh an existing dotfiles checkout
 ```
 
 cmux Dock's "Project"/"Task" panes — details = `Decisions/2026-09-15-cmux-dock-two-repo-split` in the Vault.
 
 #### Declaring the project for a cmux workspace (`dock/executor/cmux-task-declare.sh`)
 
-The "Task" pane shows the Tasks section of the project declared for the **focused cmux workspace**. Declare once per workspace with `~/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>` (the leader runs it, never the hook). The declaration is keyed by the workspace UUID, which cmux keeps across restarts: after a cmux restart the declaration is still alive in the same (restored) workspace, so nothing needs to be re-declared there. A new workspace (freshly opened, or not restored) starts undeclared — the SessionStart injection (the `declare6` line contributed by the Dock declaration-state part, shown through the `bootstrap-vault.sh`-registered composer) shows the declaration state of the calling workspace (`宣言済み: <slug>` / `未宣言` / `宣言状態 不明`, plus `宣言記録破損` when the record file is unreadable), so read that line and declare once when it says `未宣言`. `list` / `unset` / `prune` are the other subcommands (the weekly maintenance runs `prune`).
+The "Task" pane shows the Tasks section of the project declared for the **focused cmux workspace**. Declare once per workspace with `~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>` (the leader runs it, never the hook). The declaration is keyed by the workspace UUID, which cmux keeps across restarts: after a cmux restart the declaration is still alive in the same (restored) workspace, so nothing needs to be re-declared there. A new workspace (freshly opened, or not restored) starts undeclared — the SessionStart injection (the `declare6` line contributed by the Dock declaration-state part, shown through the `bootstrap-vault.sh`-registered composer) shows the declaration state of the calling workspace (`宣言済み: <slug>` / `未宣言` / `宣言状態 不明`, plus `宣言記録破損` when the record file is unreadable), so read that line and declare once when it says `未宣言`. `list` / `unset` / `prune` are the other subcommands (the weekly maintenance runs `prune`).
 
 ### Vault Backup Operations
 
@@ -239,7 +239,7 @@ The "Task" pane shows the Tasks section of the project declared for the **focuse
 **Acknowledging a finding (`health_judge.py ack`)** — the leader AI records "handled; judge on the next production run" in `last-run.json`'s `ack`:
 
 ```
-python3 ~/work/takumi009-ai-env/ai-brain/executor/health_judge.py ack \
+python3 ~/Workspace/Tools/takumi009-ai-env/ai-brain/executor/health_judge.py ack \
   --last-run <path> --note "<what was done, one line>" \
   [--session-id <sid>] [--observation <session-observation.json>]
 ```
@@ -265,7 +265,7 @@ Checks the following 5 points and lists them (**it does not exit 1 even if drift
 Two modes do return an exit code:
 
 - `core/assembly/check-drift.sh --managed-symlinks-only` — placement health check: every item of the placement list (`ledger-tool.sh placement`) is in place and every hook command registered in `~/.claude/settings.json` exists and is executable. 0 = healthy, 1 = something missing or wrong (`update-sub.sh` uses it too).
-- `core/assembly/check-drift.sh --forward-refs [--dotfiles <path|none>]` — retirement precheck (read-only): looks for the old paths marked `撤去` in `core/data/moves.tsv` in 5 places (link targets of symlinks under `~/.claude` and `~/.codex`, `~/.claude/settings.json`, `~/Library/LaunchAgents/*.plist`, the tracked files of the dotfiles checkout, the Vault's `Preferences`) and prints one `<kind><TAB><location><TAB><old path>` line per hit; 0 = none, 1 = some. The dotfiles checkout is `--dotfiles` (wins), else `DOTFILES_DIR` (default `~/work/dotfiles`); `--dotfiles none` = this machine doesn't use dotfiles (dotfiles is skipped with one "対象なし" line on stderr; with no hits the exit is still 0); a missing or unreadable checkout or Vault (`VAULT`) exits 2. A running process that read a path when it started (the Dock panes) can't be seen — hence the restart in the procedure above.
+- `core/assembly/check-drift.sh --forward-refs [--dotfiles <path|none>]` — retirement precheck (read-only): looks for the old paths marked `撤去` in `core/data/moves.tsv` in 5 places (link targets of symlinks under `~/.claude` and `~/.codex`, `~/.claude/settings.json`, `~/Library/LaunchAgents/*.plist`, the tracked files of the dotfiles checkout, the Vault's `Preferences`) and prints one `<kind><TAB><location><TAB><old path>` line per hit; 0 = none, 1 = some. The dotfiles checkout is `--dotfiles` (wins), else `DOTFILES_DIR` (default `~/Workspace/Tools/dotfiles`); `--dotfiles none` = this machine doesn't use dotfiles (dotfiles is skipped with one "対象なし" line on stderr; with no hits the exit is still 0); a missing or unreadable checkout or Vault (`VAULT`) exits 2. A running process that read a path when it started (the Dock panes) can't be seen — hence the restart in the procedure above.
 
 ### Restore Runbook (Disaster Recovery / Main Migration)
 
@@ -283,10 +283,10 @@ brew install gh && gh auth login          # GitHub auth (needed for the subseque
 git clone <URL of the Vault backup repo (private)> ~/Data/obsidian
 
 # 3. Base package + private patch
-git clone <URL of this repository> ~/work/takumi009-ai-env
-git clone <URL of the private-patch repo (private)> ~/work/takumi009-ai-env-private
-cd ~/work/takumi009-ai-env && brew bundle
-~/work/takumi009-ai-env-private/install-private.sh   # Restores docs/ and ngwords
+git clone <URL of this repository> ~/Workspace/Tools/takumi009-ai-env
+git clone <URL of the private-patch repo (private)> ~/Workspace/Tools/takumi009-ai-env-private
+cd ~/Workspace/Tools/takumi009-ai-env && brew bundle
+~/Workspace/Tools/takumi009-ai-env-private/install-private.sh   # Restores docs/ and ngwords
 
 # 4. Rebuild the environment
 mkdir -p ~/.config/takumi009-ai-env
@@ -464,8 +464,8 @@ Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイ
 #### メイン環境
 
 ```sh
-git clone <このリポジトリのURL> ~/work/takumi009-ai-env
-cd ~/work/takumi009-ai-env
+git clone <このリポジトリのURL> ~/Workspace/Tools/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 mkdir -p ~/.config/takumi009-ai-env
 cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # 配役表（メイン機の実値）
 cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # モデル定義（メイン機の実値）
@@ -485,7 +485,7 @@ usage/assembly/install-usage-fetch.sh            # 使用率取得器のLaunchAg
 この機にすでに v1.1 より前の checkout がある場合、以下を**この 1 か所**の手順でまとめて反映します:
 
 ```sh
-cd ~/work/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 git pull --ff-only
 core/assembly/install-main.sh --with-dotfiles   # 全部入りインストーラを再実行（全フックの再link・新設 codex-direct-call-gate.sh の登録・settings.json再生成）
 ai-brain/assembly/install-backup.sh             # Vaultバックアップ LaunchAgent を新しい起動対象で再導入
@@ -497,7 +497,7 @@ core/assembly/check-drift.sh                    # drift 0 件を確認（登録�
 ##### 既存メイン機の v1.2 取込み手順（束 B＝通知の口）
 
 ```sh
-cd ~/work/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 git pull --ff-only
 core/assembly/install-main.sh --with-dotfiles   # 全部入りインストーラを再実行（登録フック code27-call-clear.sh の実体が core/connect/claude-code/prompt-answer.sh へ）
 core/executor/audit.sh --quick                  # NG 語ファイルが旧 scripts/ngwords.txt のままなら失敗して 1 コマンドを表示する＝それを実行してから、この行をもう一度
@@ -509,9 +509,9 @@ core/assembly/check-drift.sh                    # drift 0 件を確認
 束 C は旧パスの転送 symlink を撤去します。先に dotfiles を更新して Dock の Project・Task の 2 枠を再起動し（供給のパスを起動時に 1 回だけ読むため）、それからこの repo を取り込みます:
 
 ```sh
-git -C ~/work/dotfiles pull --ff-only          # 先に dotfiles（v1.2 の commit で Dock の供給を新パスへ）
+git -C ~/Workspace/Tools/dotfiles pull --ff-only          # 先に dotfiles（v1.2 の commit で Dock の供給を新パスへ）
 # ここで Dock の Project・Task の 2 枠を再起動する（cmux を Cmd+Q で終了して開き直す）
-cd ~/work/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 git pull --ff-only
 core/assembly/install-main.sh --with-dotfiles   # 保存済みの選択のまま（保存なし＝全部入り）
 # 出力の末尾を読む＝示された常駐の登録・解除のコマンドを要るぶん実行する
@@ -522,8 +522,8 @@ core/assembly/check-drift.sh --forward-refs            # 撤去の前提検査�
 #### サブ環境
 
 ```sh
-git clone <このリポジトリのURL> ~/work/takumi009-ai-env
-cd ~/work/takumi009-ai-env
+git clone <このリポジトリのURL> ~/Workspace/Tools/takumi009-ai-env
+cd ~/Workspace/Tools/takumi009-ai-env
 mkdir -p ~/.config/takumi009-ai-env
 cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md    # コピー後にmachine_role（必要ならrole.leaderも）を書き換える
 cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf  # コピー後にこの機で使う定義だけ残す／有効化する
@@ -538,7 +538,7 @@ core/assembly/install-sub.sh
 2. schema が変わったときだけ: sample を実体へコピーし（`cp team/data/profile.md.sample ~/.config/takumi009-ai-env/profile.md`・`cp team/data/models.conf.sample ~/.config/takumi009-ai-env/models.conf`。既存の実体は先に退避・権限 `0600`）、プロファイルをサブ機用に編集する——最低限 `machine_role: configured value=sub`（sample はメイン機の値のため）、必要に応じて `role.leader`・`no_read_paths`・`team_mode` も。`core/assembly/install-sub.sh --check-profile` が resolve 結果を1行で返す（副作用ゼロ）。
 3. `core/assembly/update-sub.sh` — pull → `install-sub.sh` → `ai-brain/data/vault-public/Preferences/` 再同期を毎回行う（引数なし・旧・再同期フラグは廃止）。`done.` で終わることを確認し、新しいセッションの開幕1行で版を確認する。`AGENTS: dangling` が出た場合は、表示されたファイルを削除する。
 
-サブ機の v1.2 束 C の取込み: （dotfiles を使う機だけ）`git -C ~/work/dotfiles pull --ff-only` と Dock の Project・Task の 2 枠の再起動 → `core/assembly/update-sub.sh` を 1 回 → `core/assembly/check-drift.sh --forward-refs`（dotfiles を使わない機は `--dotfiles none` を足す）が該当行なし・exit 0（`--dotfiles none` のときの出力は stderr の「対象なし」1 行だけ）。
+サブ機の v1.2 束 C の取込み: （dotfiles を使う機だけ）`git -C ~/Workspace/Tools/dotfiles pull --ff-only` と Dock の Project・Task の 2 枠の再起動 → `core/assembly/update-sub.sh` を 1 回 → `core/assembly/check-drift.sh --forward-refs`（dotfiles を使わない機は `--dotfiles none` を足す）が該当行なし・exit 0（`--dotfiles none` のときの出力は stderr の「対象なし」1 行だけ）。
 
 ⚠️ `update-sub.sh` の失敗文面は原因を「配役表の `machine_role` が `sub` でない」と示しますが、実際の起点が「プロファイルが旧 schema で固定キーが `unknown` 扱いになっている」場合でも同じ文面になります（resolver 自身の `stderr` は捨てられます）。まず `profile_resolve.py resolve` を直接叩いて何が読めているかを確認してから、原因を判断してください。
 
@@ -546,14 +546,14 @@ core/assembly/install-sub.sh
 
 ```sh
 core/assembly/install-main.sh --with-dotfiles   # または install-sub.sh --with-dotfiles
-cd ~/work/dotfiles && git pull --ff-only && ./install.sh   # 既存の dotfiles を更新
+cd ~/Workspace/Tools/dotfiles && git pull --ff-only && ./install.sh   # 既存の dotfiles を更新
 ```
 
 cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-09-15-cmux-dock-two-repo-split`。
 
 #### 案件宣言の使い方（`dock/executor/cmux-task-declare.sh`）
 
-「Task」枠は、**フォーカス中の cmux ワークスペース**に宣言された案件の Tasks 節を出す。宣言はワークスペースごとに 1 回＝`~/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>`（実行はリーダー。フックは呼ばない）。宣言の鍵はワークスペースの UUID で、cmux は再起動を越えて UUID を保持する＝**cmux の再起動後も同じワークスペースでは宣言が生きている**ので、そこでは宣言し直さなくてよい。新しいワークスペース（新規に開いた・復元されなかった）は未宣言から始まる＝SessionStart の注入文（`bootstrap-vault.sh` の登録名で動く合成器が組む、Dock の宣言状態の寄与＝⑥の行）が呼び出し元ワークスペースの**宣言状態**（`宣言済み: <slug>`／`未宣言`／`宣言状態 不明`・記録が読めないときは `宣言記録破損` も）を出すので、その行を見て `未宣言` なら 1 回宣言する。他のサブコマンド＝`list`／`unset`／`prune`（週次メンテが `prune` を実行する）。
+「Task」枠は、**フォーカス中の cmux ワークスペース**に宣言された案件の Tasks 節を出す。宣言はワークスペースごとに 1 回＝`~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>`（実行はリーダー。フックは呼ばない）。宣言の鍵はワークスペースの UUID で、cmux は再起動を越えて UUID を保持する＝**cmux の再起動後も同じワークスペースでは宣言が生きている**ので、そこでは宣言し直さなくてよい。新しいワークスペース（新規に開いた・復元されなかった）は未宣言から始まる＝SessionStart の注入文（`bootstrap-vault.sh` の登録名で動く合成器が組む、Dock の宣言状態の寄与＝⑥の行）が呼び出し元ワークスペースの**宣言状態**（`宣言済み: <slug>`／`未宣言`／`宣言状態 不明`・記録が読めないときは `宣言記録破損` も）を出すので、その行を見て `未宣言` なら 1 回宣言する。他のサブコマンド＝`list`／`unset`／`prune`（週次メンテが `prune` を実行する）。
 
 ### Vault バックアップの運用
 
@@ -577,7 +577,7 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 **対処済み申告（`health_judge.py ack`）** — リーダー AI が「対処した・次回の本番実行で判定する」を `last-run.json` の `ack` に残します:
 
 ```
-python3 ~/work/takumi009-ai-env/ai-brain/executor/health_judge.py ack \
+python3 ~/Workspace/Tools/takumi009-ai-env/ai-brain/executor/health_judge.py ack \
   --last-run <path> --note "<対処内容 1 行>" \
   [--session-id <sid>] [--observation <session-observation.json>]
 ```
@@ -603,7 +603,7 @@ core/assembly/check-drift.sh
 終了コードを持つモードが 2 つあります:
 
 - `core/assembly/check-drift.sh --managed-symlinks-only` — 配置の健全性検査: 配置一覧（`ledger-tool.sh placement`）の全項目が置かれ、`~/.claude/settings.json` に登録された全フックの命令が実在して実行可能か。0＝健全・1＝欠け・誤り（`update-sub.sh` も使う）。
-- `core/assembly/check-drift.sh --forward-refs [--dotfiles <パス|none>]` — 撤去の前提検査（読むだけ）: `core/data/moves.tsv` の印 `撤去` の旧パスを 5 か所（`~/.claude`・`~/.codex` 配下の symlink のリンク先・`~/.claude/settings.json`・`~/Library/LaunchAgents/*.plist`・dotfiles の checkout の追跡ファイル・Vault の `Preferences`）から探し、1 件 1 行 `<種類><TAB><場所><TAB><旧パス>` で出します。0＝該当なし・1＝あり。dotfiles の checkout は `--dotfiles`（優先）→ `DOTFILES_DIR`（既定 `~/work/dotfiles`）。`--dotfiles none`＝この機では使わない（stderr に「対象なし」を 1 行出して飛ばす＝該当が無ければ exit 0）。checkout・Vault（`VAULT`）が無い・読めないときは exit 2。起動時にパスを読んだ実行中のプロセス（Dock の 2 枠）は見えません＝上の手順の再起動で担保します。
+- `core/assembly/check-drift.sh --forward-refs [--dotfiles <パス|none>]` — 撤去の前提検査（読むだけ）: `core/data/moves.tsv` の印 `撤去` の旧パスを 5 か所（`~/.claude`・`~/.codex` 配下の symlink のリンク先・`~/.claude/settings.json`・`~/Library/LaunchAgents/*.plist`・dotfiles の checkout の追跡ファイル・Vault の `Preferences`）から探し、1 件 1 行 `<種類><TAB><場所><TAB><旧パス>` で出します。0＝該当なし・1＝あり。dotfiles の checkout は `--dotfiles`（優先）→ `DOTFILES_DIR`（既定 `~/Workspace/Tools/dotfiles`）。`--dotfiles none`＝この機では使わない（stderr に「対象なし」を 1 行出して飛ばす＝該当が無ければ exit 0）。checkout・Vault（`VAULT`）が無い・読めないときは exit 2。起動時にパスを読んだ実行中のプロセス（Dock の 2 枠）は見えません＝上の手順の再起動で担保します。
 
 ### 復元 Runbook（災害復旧・メインの移転）
 
@@ -621,10 +621,10 @@ brew install gh && gh auth login          # GitHub 認証（以降の private cl
 git clone <Vaultバックアップrepo(private)のURL> ~/Data/obsidian
 
 # 3. 基本パッケージ＋私的パッチ
-git clone <このリポジトリのURL> ~/work/takumi009-ai-env
-git clone <私的パッチrepo(private)のURL> ~/work/takumi009-ai-env-private
-cd ~/work/takumi009-ai-env && brew bundle
-~/work/takumi009-ai-env-private/install-private.sh   # docs/・ngwords を張り戻す
+git clone <このリポジトリのURL> ~/Workspace/Tools/takumi009-ai-env
+git clone <私的パッチrepo(private)のURL> ~/Workspace/Tools/takumi009-ai-env-private
+cd ~/Workspace/Tools/takumi009-ai-env && brew bundle
+~/Workspace/Tools/takumi009-ai-env-private/install-private.sh   # docs/・ngwords を張り戻す
 
 # 4. 環境の再構築
 mkdir -p ~/.config/takumi009-ai-env

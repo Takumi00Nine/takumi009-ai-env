@@ -144,11 +144,11 @@ assert_allowed "codexに無関係なサブシェルはallow（回帰確認）" \
 
 echo "=== 6. 新設ルール③: team/connect/codex/codex-exec.sh 経由の呼び出しはallow ==="
 assert_allowed "ラッパー経由の基本呼び出しはallow" \
-  "bash ~/work/takumi009-ai-env/team/connect/codex/codex-exec.sh --cwd /tmp --sandbox read-only --out /tmp/out.md --prompt-file -"
+  "bash ~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh --cwd /tmp --sandbox read-only --out /tmp/out.md --prompt-file -"
 assert_allowed "ラッパー経由の --resume 指定もallow（内部にresumeという語を含むが対象外）" \
-  "bash ~/work/takumi009-ai-env/team/connect/codex/codex-exec.sh --cwd /tmp --sandbox read-only --out /tmp/out.md --prompt-file - --resume abc123"
+  "bash ~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh --cwd /tmp --sandbox read-only --out /tmp/out.md --prompt-file - --resume abc123"
 assert_allowed "ラッパーのパスを絶対パスで直接実行してもallow" \
-  "/Users/takumi009/work/takumi009-ai-env/team/connect/codex/codex-exec.sh --cwd /tmp --sandbox read-only --out /tmp/out.md --prompt-file -"
+  "/Users/takumi009/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh --cwd /tmp --sandbox read-only --out /tmp/out.md --prompt-file -"
 
 echo "=== 7. 新設ルール③: --help / --version 等の読み取り系はallow（同一断片内のみ有効） ==="
 assert_allowed "codex --version はallow" "codex --version"

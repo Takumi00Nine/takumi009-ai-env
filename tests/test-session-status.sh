@@ -14,7 +14,7 @@
 #               枠順（opening・directive5・role-hold・profile-warning）に空行 1 つで連結したもの。
 #   上書き口（現行名のまま）＝BOOTSTRAP_ENABLE_LOCAL_PROFILE・AIENV_LOCAL_PROFILE_PATH・AIENV_MODEL_DEFS_FILE・
 #     PROFILE_RESOLVE_LIB・AIENV_AGENTS_DIR・BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY。
-#   配役表の照会コマンドの文＝`python3 ~/work/takumi009-ai-env/team/connect/claude-code/role_candidates.py`（新パス）。
+#   配役表の照会コマンドの文＝`python3 ~/Workspace/Tools/takumi009-ai-env/team/connect/claude-code/role_candidates.py`（新パス）。
 
 set -euo pipefail
 
@@ -815,7 +815,7 @@ EOF
   cat > "$PROFILE_PATH" <<'EOF'
 ---
 team_mode: 本人
-no_read_paths: ~/work/old
+no_read_paths: ~/Workspace/Projects
 auth_token: should-not-be-here
 ---
 EOF
@@ -1573,7 +1573,7 @@ echo "=== 64. known-keysがSCHEMA_VERSION:7・FIXED:にteam_mode/machine_roleを
 # lean/full/未確定）の末尾にこの1セグメントが付く（行数は増やさない＝
 # ちょうど1行のまま）。
 mode_success_segment() {  # $1=schema_version $2=machine_role
-  printf '｜配役表＝OK schema_version=%s machine_role=%s 照会＝python3 ~/work/takumi009-ai-env/team/connect/claude-code/role_candidates.py [--role <職種>]' "$1" "$2"
+  printf '｜配役表＝OK schema_version=%s machine_role=%s 照会＝python3 ~/Workspace/Tools/takumi009-ai-env/team/connect/claude-code/role_candidates.py [--role <職種>]' "$1" "$2"
 }
 mode_failure_segment() {  # $1=区分コード（T1/SYMLINK/T5/T4-LEGACY/UNKNOWN_EXTRA等）
   printf '｜配役表＝利用不可（%s）＝最小能力として振る舞う・ワーカー起動は本人確認へ倒す' "$1"
@@ -1694,7 +1694,7 @@ echo "=== 68. §6.3縮退経路の回帰(ID無し・要件のfixture表とは別
   cat > "$V1P" <<'EOF'
 ---
 team_mode: 本人
-no_read_paths: ~/work/old
+no_read_paths: ~/Workspace/Projects
 machine_role: 本人
 ---
 EOF
@@ -1814,7 +1814,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
 {
   FXP9_73="$(mktemp -d)/fxp9.md"
   make_v2_profile "$FXP9_73" "role.leader: configured model=t-opus-high"
-  sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old,~/Data/private#" "$FXP9_73"
+  sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/Workspace/Projects,~/Data/private#" "$FXP9_73"
   rc=0; out="$(resolve_v2 "$FXP9_73")" || rc=$?
   assert_eq "FX-P9: OKで始まる（大文字を含む実パスも受理）" "1" \
     "$([[ "$out" == OK* ]] && echo 1 || echo 0)"
@@ -1822,7 +1822,7 @@ echo "=== 73. AC-4(FR-5): no_read_pathsの実パス書式の陽性1件(FX-P9)・
 
   FXP10_73="$(mktemp -d)/fxp10.md"
   make_v2_profile "$FXP10_73" "role.leader: configured model=t-opus-high"
-  sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/work/old, ~/tmp/x#" "$FXP10_73"
+  sed -i '' "s#no_read_paths:    unavailable#no_read_paths:    configured value=~/Workspace/Projects, ~/tmp/x#" "$FXP10_73"
   rc=0; out="$(resolve_v2 "$FXP10_73")" || rc=$?
   assert_contains "FX-P10: T6を含む" "$out" "T6"
   assert_contains "FX-P10: 属性の形式が不正ですを含む" "$out" "属性の形式が不正です"

@@ -70,7 +70,7 @@
 #   完全なAST到達可能性検査（v19要件書全体のスコープ）ではない
 #   （実装記録「残件」に明記）。
 #
-# 正本: ~/work/takumi009-ai-env-private/docs/core-split/
+# 正本: ~/Workspace/Tools/takumi009-ai-env-private/docs/core-split/
 #   使用率提示B1a-実装-2026-09-08.md
 #
 # 実行方法: bash tests/test-usage-snapshot.sh
@@ -1131,6 +1131,104 @@ while IFS= read -r result; do
   esac
 done < <(python3 "$IDLE_DISPLAY_TEST" "$LIB" "$WORK" "$NOW")
 [ "$IDLE_COUNT" -eq 15 ] || fail_case "設計 v3: 表示の15 IDを実行できていない"
+
+# Codex 片枠欠如（2026-10-30）。取得器の null/null を「制限なし」として扱う。
+# AC-CX-1/2: 片枠欠如でも残る枠を表示・注入。AC-CX-3〜7: 破損は取得不可。
+# AC-CX-8〜11: 両キーが存在し明示的にnullの場合だけ制限なし。キー欠落は取得不可。
+# 実キャッシュの形だけを再現する。日時・値は合成し、識別子・秘密は含めない。
+# JSON の「無い窓」の表現は固定せず、残る窓の事実を検証する。
+CODEX_ABSENT_TEST="$WORK/codex-absent-test.py"
+cat > "$CODEX_ABSENT_TEST" <<'PY'
+import copy
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+lib, work, now = sys.argv[1], Path(sys.argv[2]), int(sys.argv[3])
+base = dict(schema_version=1, service='codex', fetched_at=now-30, updated_at=now-30,
+            five_hour=dict(used_percent=25, resets_at_epoch=now+1000),
+            seven_day=dict(used_percent=0, resets_at_epoch=now+90000),
+            reset_credits=dict(available_count=0, reset_scope=['five_hour', 'seven_day'], credits=[]),
+            last_error=None)
+absent = dict(used_percent=None, resets_at_epoch=None)
+broken = 'Codex枠: 取得できません（キャッシュが壊れています。導入手順: README §使用率取得器）'
+cases = [
+    ('AC-CX-1 5h制限なし・7d通常表示', 'five_hour',
+     'Codex枠: 5h 制限なし／7d 残100%（09-09 19:06）・取得 0分前／チケット 0枚'),
+    ('AC-CX-2 7d制限なし・5h通常表示', 'seven_day',
+     'Codex枠: 5h 残75%（リセット 18:22）／7d 制限なし・取得 0分前／チケット 0枚'),
+    ('AC-CX-3 両枠欠如は取得不可', 'both', broken),
+    ('AC-CX-4 使用率あり・リセット欠落は取得不可', 'reset_missing', broken),
+    ('AC-CX-5 不正な使用率は取得不可', 'bad_percent', broken),
+    ('AC-CX-6 fetched_at欠落は取得不可', 'fetched_missing', broken),
+    ('AC-CX-7 JSON構文破損は取得不可', 'parse_error', broken),
+    ('AC-CX-8 空辞書の枠は取得不可', 'empty_window', broken),
+    ('AC-CX-9 used_percentだけnull・resets_at_epochキー欠落は取得不可', 'reset_key_missing', broken),
+    ('AC-CX-10 resets_at_epochだけnull・used_percentキー欠落は取得不可', 'percent_key_missing', broken),
+    ('AC-CX-11 枠キー自体の欠落は取得不可', 'window_key_missing', broken),
+]
+for number, (name, change, expected) in enumerate(cases, 1):
+    try:
+        directory = work / ('codex-absent-' + str(number))
+        directory.mkdir()
+        cache = copy.deepcopy(base)
+        if change in ('five_hour', 'seven_day'):
+            cache[change] = absent
+        elif change == 'both':
+            cache.update(five_hour=absent, seven_day=absent)
+        elif change == 'reset_missing':
+            cache['five_hour']['resets_at_epoch'] = None
+        elif change == 'bad_percent':
+            cache['five_hour']['used_percent'] = 'invalid'
+        elif change == 'fetched_missing':
+            del cache['fetched_at']
+        elif change == 'empty_window':
+            cache['five_hour'] = {}
+        elif change == 'reset_key_missing':
+            cache['five_hour'] = dict(used_percent=None)
+        elif change == 'percent_key_missing':
+            cache['five_hour'] = dict(resets_at_epoch=None)
+        elif change == 'window_key_missing':
+            del cache['five_hour']
+        (directory / 'codex-cache.json').write_text(
+            '{' if change == 'parse_error' else json.dumps(cache))
+        env = dict(os.environ, AIENV_USAGE_CACHE_DIR=str(directory), AIENV_USAGE_NOW=str(now))
+        human = subprocess.run([sys.executable, lib, '--now', str(now)],
+                               env=env, text=True, capture_output=True)
+        machine = subprocess.run([sys.executable, lib, '--json', '--now', str(now)],
+                                 env=env, text=True, capture_output=True)
+        injected = subprocess.run(['bash', str(Path(lib).with_name('usage-inject.sh'))],
+                                  input='{}', env=env, text=True, capture_output=True)
+        assert human.returncode == machine.returncode == injected.returncode == 0, 'exit 0'
+        assert human.stderr == machine.stderr == injected.stderr == '', 'stderr empty'
+        lines = human.stdout.splitlines()
+        assert len(lines) == 3, '3 lines'
+        assert lines[1] == expected, lines[1]
+        assert injected.stdout == '【使用率・この発言時点】\n'+human.stdout, 'hook output'
+        pool = next(p for p in json.loads(machine.stdout)['pools']
+                    if p['pool_ref'] == 'codex-subscription')
+        assert pool['usage_state'] == ('ok' if number <= 2 else 'error'), pool['usage_state']
+        if number <= 2:
+            remaining = 'seven_day' if number == 1 else 'five_hour'
+            window = next(w for w in pool['windows'] if w['window'] == remaining)
+            assert window['used_percent'] == base[remaining]['used_percent'], window
+            assert window['remaining_percent'] == 100-base[remaining]['used_percent'], window
+            assert window['resets_at_epoch'] == base[remaining]['resets_at_epoch'], window
+        print('ok - ' + name)
+    except Exception as exc:
+        print('NG - ' + name + ': ' + str(exc))
+PY
+CODEX_ABSENT_COUNT=0
+while IFS= read -r result; do
+  CODEX_ABSENT_COUNT=$((CODEX_ABSENT_COUNT + 1))
+  case "$result" in
+    'ok - '*) pass "${result#ok - }" ;;
+    *) fail_case "${result#NG - }" ;;
+  esac
+done < <(python3 "$CODEX_ABSENT_TEST" "$LIB" "$WORK" "$NOW")
+[ "$CODEX_ABSENT_COUNT" -eq 11 ] || fail_case "Codex片枠欠如: 受入条件11件を実行できていない"
 
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

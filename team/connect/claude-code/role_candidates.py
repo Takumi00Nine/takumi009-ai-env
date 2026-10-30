@@ -25,7 +25,7 @@ stderr へ1行（設計 v1.1 §5.6）。
 置き場: symlink されない場所（repo 実体パスを直接叩く）。したがって check-drift.sh の管理symlink集合にも載らない
 （設計§4.1）。
 
-呼び方（README 2026-09-19）: Any role whose `tools:` frontmatter includes `Bash` can look up its own launch candidates (definition name, resolved route, pass/fail, and remaining usage) with `python3 ~/work/takumi009-ai-env/team/connect/claude-code/role_candidates.py [--role <role>]` — an AI-facing command, not meant for interactive use.
+呼び方（README 2026-09-19）: Any role whose `tools:` frontmatter includes `Bash` can look up its own launch candidates (definition name, resolved route, pass/fail, and remaining usage) with `python3 ~/Workspace/Tools/takumi009-ai-env/team/connect/claude-code/role_candidates.py [--role <role>]` — an AI-facing command, not meant for interactive use.
 """
 
 from __future__ import annotations
@@ -193,7 +193,7 @@ def _remaining_percent(snapshot: Optional[dict], pool_ref: str, window_name: str
     remaining = window.get("remaining_percent")
     if not isinstance(remaining, (int, float)) or isinstance(remaining, bool):
         return "-"
-    # 2026-10-24 改訂（出典＝~/Claude/usage-fetch-fix/docs/usage-idle-fix-design.md
+    # 2026-10-24 改訂（出典＝~/Workspace/Projects/takumi009-ai-env/docs/usage-fetch-fix/usage-idle-fix-design.md
     # v3 §5.4）: リセット時刻が判定時刻（generated_at）以前（等号を含む）の窓は
     # 残量 100 として扱う＝提示の「リセット済・推定」と同じ定義を、`--json` を読む
     # この側で当てる（`--json` は事実のまま。提示を取り込まない設計）。

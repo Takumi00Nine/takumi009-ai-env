@@ -41,7 +41,7 @@ source "$SCRIPT_DIR/../../core/executor/status-file.sh"
 source "$SCRIPT_DIR/../../core/executor/notice.sh"
 
 : "${VAULT:=$HOME/Data/obsidian}"
-: "${AIENV_REPO:=$HOME/work/takumi009-ai-env}"
+: "${AIENV_REPO:=$HOME/Workspace/Tools/takumi009-ai-env}"
 : "${MAINTENANCE_LOG_ROOT:=$HOME/.claude/logs/maintenance}"
 : "${VAULT_WRITER_LOCK_FILE:=$MAINTENANCE_LOG_ROOT/vault-writer.lock}"
 : "${LAST_RUN_FILE:=$MAINTENANCE_LOG_ROOT/last-run.json}"

@@ -816,7 +816,7 @@ CODEX_FETCH_SH="$REPO_ROOT/usage/connect/codex/fetch.sh"
   # テスト側でjqの読み方を再実装するのではなく、拡張後のキャッシュに
   # 対して --once（1フレームだけ描画して終了）で実際に実行し、
   # exit 0・ERR非表示・Claude/Codex両行の反映を確認する。表示スクリプト
-  # の既定パスは $HOME/work/dotfiles/cmux/cmux-usage-watch.sh。worktree等
+  # の既定パスは $HOME/Workspace/Tools/dotfiles/cmux/cmux-usage-watch.sh。worktree等
   # で差し替えるときは AIENV_USAGE_DISPLAY_SCRIPT を渡す。
   E="$(new_env)"; load_entry_for "$E"; reset_stubs; valid_claude_token
   STUB_CODEX_RESULT_LINE="$(codex_success_result_line)"

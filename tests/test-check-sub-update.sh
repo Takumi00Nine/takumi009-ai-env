@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # core/assembly/check-sub-update.sh のユニットテスト。
 #
-# 実 ~/Data/obsidian・実 ~/work/takumi009-ai-env・実GitHubには一切依存しない。
+# 実 ~/Data/obsidian・実 ~/Workspace/Tools/takumi009-ai-env・実GitHubには一切依存しない。
 # ローカルの使い捨てbare repoを「origin」に見立て、cloneしたサブ相当のrepoに
 # 対してフックを実行する（tests/test-update-sub.shと同じ考え方）。
 #

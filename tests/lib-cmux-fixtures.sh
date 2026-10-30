@@ -4,7 +4,7 @@
 # T群（タイミング）・K群（機の構成）を提供する。`test-*.sh` に一致しない
 # 名前にしてある（テストランナーがこのファイル自体を実行しないため）。
 #
-# ゲート（~/Claude/cmux-session-todo/gates/gate-stage1.sh）はこのファイルを
+# ゲート（~/Workspace/Projects/cmux-session-todo/work/gates/gate-stage1.sh）はこのファイルを
 # source して 55 fixture の同値検査に使う（設計 §33.1）。両 repo の外の
 # ツールなので、どちらの repo の lib を source しても FR-87 に抵触しない。
 #

@@ -17,8 +17,8 @@
 #   枠0キャッシュ … claude-subscriptionのfive_hourだけ残率0（AC-8「枠
 #            fixture」）。
 #
-# 正本: ~/Claude/effort-per-role/docs/design-v1.2.md §4
-#       ~/Claude/effort-per-role/docs/requirements-v1.2.1.md §3.3・§4
+# 正本: ~/Workspace/Projects/takumi009-ai-env/work/effort-per-role/docs/design-v1.2.md §4
+#       ~/Workspace/Projects/takumi009-ai-env/work/effort-per-role/docs/requirements-v1.2.1.md §3.3・§4
 #
 # 実行方法: bash tests/test-role-candidates.sh
 

@@ -8,7 +8,7 @@
 #
 # 正本＝docs/v1.2-notify-install の要件 v1.3 §7 AC-4 ④・FX-25a〜c、設計 v1.3 §2.1〜§2.3。
 #
-# 実 ~/work/navi-orchestrator/code27-call・実 $HOME には一切依存しない。HOME は一時ディレクトリに
+# 実 ~/Workspace/Projects/navi-orchestrator/output/navi-orchestrator/code27-call・実 $HOME には一切依存しない。HOME は一時ディレクトリに
 # 固定し、CODE27_CALL_BIN を偽の取次（呼ばれたら印を残すだけ）へ差し替えて、本物の台帳
 # （$REPO_ROOT/core/data/ledger.tsv）＋本物の共通部品／口／CODE27 送り手を素通りさせる
 # （知らせの中身の受け渡しは tests/test-notify.sh が別途見る＝ここでは入力検知の判定条件

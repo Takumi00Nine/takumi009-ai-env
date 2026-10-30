@@ -857,7 +857,7 @@ REPO_ROOT_V6="$(cd "$SCRIPT_DIR/.." && pwd)"
 dt33_targets="$REPO_ROOT_V6/team/data $REPO_ROOT_V6/team/connect/claude-code/bedrock.env.sample $REPO_ROOT_V6/ai-brain/assembly $REPO_ROOT_V6/usage/assembly"
 assert_true "v6_dt33(静的): config/ と launchagents/ が実在する（検査の空振り防止）" "$([ -d "$REPO_ROOT_V6/team/data" ] && [ -d "$REPO_ROOT_V6/ai-brain/assembly" ] && [ -d "$REPO_ROOT_V6/usage/assembly" ] && echo 1 || echo 0)"
 for f in "$REPO_ROOT_V6"/*/assembly/install*; do [ -f "$f" ] && dt33_targets="$dt33_targets $f"; done
-[ -f "$HOME/work/dotfiles/cmux/dock.json" ] && dt33_targets="$dt33_targets $HOME/work/dotfiles/cmux/dock.json"
+[ -f "$HOME/Workspace/Tools/dotfiles/cmux/dock.json" ] && dt33_targets="$dt33_targets $HOME/Workspace/Tools/dotfiles/cmux/dock.json"
 # shellcheck disable=SC2086
 dt33_leak="$(grep -rlE -- 'CMUX_VAULT_TASKS_SANITIZE_'"FAIL"'|BOOTSTRAP_CMUX_LIB_'"DIR" $dt33_targets 2>/dev/null | grep -c . || true)"
 assert_eq "v6_dt33(静的): テスト用の口 2 つの名前が本番設定（config/・launchagents/・scripts/install*・dock.json）に 0 件" "0" "$dt33_leak"

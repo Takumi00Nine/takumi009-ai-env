@@ -20,6 +20,6 @@ role.vault-scribe-light:   configured model=haiku
 role.verifier:             configured model=opus-high,codex-sol-high,codex-terra-medium
 role.ja-doc:               unknown
 team_mode:        configured value=full
-no_read_paths:    configured value=~/work/old
+no_read_paths:    unavailable
 machine_role:     configured value=main
 ---

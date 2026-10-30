@@ -1,7 +1,13 @@
 # Global Codex Instructions
 
-- At the beginning of every new thread, tell the user: 「ワークフォルダーは `~/Codex`（ホームディレクトリ配下の Codex フォルダー）を使用します。その他のフォルダーを使用する必要がある場合は、フォルダーを指定してください。」
+- At the beginning of every new thread, tell the user: 「作業の根は `~/Workspace` です。起動時に選択されているフォルダーで作業します。」
 - Do not assume the workspace can be changed after thread creation; clearly tell the user when a new thread must be created with that folder selected.
+
+## Workspace Folder Rules (Finalized 2026-10-30)
+
+- The workspace root is `~/Workspace`; its only direct subfolders are `Projects` and `Tools`.
+- Each project uses `~/Workspace/Projects/<slug>/` with `docs`, `work`, and `output` subfolders.
+- Start Codex and Claude from `~/Workspace` (Claude uses `cct`).
 
 ## Delegated-task tooling guard (Finalized 2026-06-22)
 

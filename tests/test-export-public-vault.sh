@@ -170,7 +170,7 @@ make_dummy_ngwords() {
 # .gitignore対象（scripts/ngwords.txt）の私的資産（実運用ではprivateリポジトリ
 # へのsymlinkとして手動設置される）であり、リポジトリを新規clone/checkout・
 # git worktreeした環境には存在しない。開発者の主作業ディレクトリ
-# （~/work/takumi009-ai-env）にたまたま手動設置済みだったため、そこで実行する
+# （~/Workspace/Tools/takumi009-ai-env）にたまたま手動設置済みだったため、そこで実行する
 # 限りは気づかず全緑に見えていたが、tester環境（隔離worktree）やCI相当の
 # クリーンチェックアウトでは「ngwords.txt が見つかりません」でexport-public-
 # vault.sh自体がFAILし、ほぼ全テストが道連れで失敗していた（本体側の

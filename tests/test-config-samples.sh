@@ -4,7 +4,7 @@
 # 実際に通ること）と、AC-5（tests/ が sample の定義名・ローカル実体パスを
 # 持たない＝設定値への結合の再発防止・2026-09-19 着手順 1）を検証する。
 #
-# 正本: ~/work/takumi009-ai-env-private/docs/core-split/
+# 正本: ~/Workspace/Tools/takumi009-ai-env-private/docs/core-split/
 #   設定ファイルsample配布-実装-2026-09-08.md
 #
 # 実行方法: bash tests/test-config-samples.sh
@@ -308,7 +308,7 @@ echo "=== AC-5: tests/ が sample の定義名・ローカル実体パスを持�
   assert_eq "AC-5: 該当 0 行" "" "$hits"
   # 陽性対照: 先頭の定義名と private パスを書いた一時ファイルが両方 hit する
   first="${names%%|*}"; ctrl="$WORK/ac5-positive.sh"
-  printf 'x=%s\ny=$HOME/work/takumi009-ai-env-private/ngwords.txt\n' "$first" > "$ctrl"
+  printf 'x=%s\ny=$HOME/Workspace/Tools/takumi009-ai-env-private/ngwords.txt\n' "$first" > "$ctrl"
   assert_eq "AC-5 陽性対照: 2 行 hit" "2" "$(scan "$ctrl" | wc -l | tr -d ' ')"
 }
 

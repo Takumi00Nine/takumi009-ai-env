@@ -2,9 +2,9 @@
 """profile_resolve.py — ローカル実体プロファイル(v2)の分類・parser・validator・
 候補評価・stdout契約を1箇所に持つ共有lib（配役表解凍-設計-2026-09-01.md §4.1-g）。
 
-契約の正本: ~/work/takumi009-ai-env-private/docs/core-split/
+契約の正本: ~/Workspace/Tools/takumi009-ai-env-private/docs/core-split/
             profile-resolve-contract-2026-09-01.md
-設計の正本: ~/work/takumi009-ai-env-private/docs/core-split/
+設計の正本: ~/Workspace/Tools/takumi009-ai-env-private/docs/core-split/
             配役表解凍-設計-2026-09-01.md
 
 外部ライブラリに依存しない（標準ライブラリのみ）。セッション開始の注入・

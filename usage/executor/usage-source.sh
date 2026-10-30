@@ -111,7 +111,7 @@ run_with_timeout() {
 # 正当な状態として受け入れる（枠が始まっていない間の応答を弾かないため。D-15 の
 # 目的＝リセット時刻の読み取りに失敗した応答を正常として書かない、は
 # resets_at に文字列がある形の拒否で守る）。Codex 側は変えない。
-# （出典＝~/Claude/usage-fetch-fix/docs/usage-idle-fix-design.md v3 §5.2）
+# （出典＝~/Workspace/Projects/takumi009-ai-env/docs/usage-fetch-fix/usage-idle-fix-design.md v3 §5.2）
 # ⚠️ Codex の片窓欠落は現物のまま受け入れる（§8 Q-6＝読み手側の改訂は
 # B2 の担当。取得器の振る舞いはここでは変えない）。
 

@@ -9,7 +9,7 @@
 #   寄与     dock/executor/declare-state.sh。stdin＝hook JSON。
 #     --slots   {"slots":{"declare6":"<⑥ の 1 行>"}}（この 1 枠ちょうど・末尾に改行を付けない）。
 #     引数なし  {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"<⑥ の 1 行>"}}。
-#   ⑥ の宣言コマンドの文＝`~/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>`（新パス）。
+#   ⑥ の宣言コマンドの文＝`~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>`（新パス）。
 # v6（cmux-session-todo requirements-v6.md FR-112・AC-153・design.md §41.6）＝実装への契約（旧 bootstrap の口を引き継ぐ）:
 #   BOOTSTRAP_CMUX_LIB_DIR ＝ 寄与が宣言状態の判定のために source する共有部品（Dock の lib＝呼び出し元
 #   ワークスペースの解決・宣言記録の読み手）の置き場ディレクトリ。既定＝寄与の実体位置からの相対（同じ機能）。
@@ -77,7 +77,7 @@ echo "=== 84. 注入本文の ⑥: 宣言コマンドを含む1行・cmux 不在
   assert_not_contains "84(v6): ⑥ の行に「宣言済み」は無い（cmux 不在＝不明。旧文面の括弧書きは流用しない）" "$line6_84" "宣言済み"
   assert_contains "84(v6): ⑥ の行は「宣言状態 不明」（cmux 不在）" "$line6_84" "宣言状態 不明"
   assert_contains "84: ⑥は「実行はリーダー」を残す" "$ctx84" "実行はリーダーであってフックではない"
-  assert_contains "84: ⑥の宣言コマンドは新パス（dock/executor/cmux-task-declare.sh）" "$line6_84" "~/work/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>"
+  assert_contains "84: ⑥の宣言コマンドは新パス（dock/executor/cmux-task-declare.sh）" "$line6_84" "~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>"
 }
 
 echo "=== 85. FR-48/AC-59: 寄与は宣言コマンド(set)を実行せず、宣言記録も作らない ==="
@@ -87,7 +87,7 @@ echo "=== 85. FR-48/AC-59: 寄与は宣言コマンド(set)を実行せず、宣
   MARKER85="$MARKER_DIR85/declare-was-called.marker"
   printf '#!/bin/bash\ntouch "%s"\n' "$MARKER85" > "$SPY_DIR85/cmux-task-declare.sh"
   chmod +x "$SPY_DIR85/cmux-task-declare.sh"
-  # 注入文に書かれている固定パス（$HOME/work/takumi009-ai-env/dock/executor/）にもスパイを置く（隔離 HOME）。
+  # 注入文に書かれている固定パス（$HOME/Workspace/Tools/takumi009-ai-env/dock/executor/）にもスパイを置く（隔離 HOME）。
   FAKE_HOME85="$(safe_mktemp_d)" || exit 1
   mkdir -p "$FAKE_HOME85/work/takumi009-ai-env/dock/executor"
   MARKER_DIR85B="$(safe_mktemp_d)" || exit 1

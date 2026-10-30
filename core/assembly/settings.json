@@ -8,8 +8,8 @@
       "WebFetch(domain:*)",
       "Edit(~/Data/**)",
       "Read(~/.config/takumi009-ai-env/profile.md)",
-      "Bash(~/work/takumi009-ai-env/team/connect/codex/codex-exec.sh:*)",
-      "Bash(python3 ~/work/takumi009-ai-env/team/connect/claude-code/role_candidates.py:*)",
+      "Bash(~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh:*)",
+      "Bash(python3 ~/Workspace/Tools/takumi009-ai-env/team/connect/claude-code/role_candidates.py:*)",
       "Skill(schedule)",
       "Skill(update-config)",
       "Skill(claude-api)"
@@ -117,10 +117,10 @@
     "additionalDirectories": [
       "~/Data",
       "~/.claude",
-      "~/Claude",
-      "~/work",
+      "~/Workspace/Projects",
+      "~/Workspace",
       "~/.codex",
-      "~/Codex",
+      "~/Workspace/Projects",
       "~/Library/LaunchAgents"
     ]
   },
@@ -248,7 +248,8 @@
     ]
   },
   "enabledPlugins": {
-    "skill-creator@claude-plugins-official": true
+    "skill-creator@claude-plugins-official": true,
+    "obsidian@obsidian-skills": true
   },
   "extraKnownMarketplaces": {
     "obsidian-skills": {

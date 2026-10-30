@@ -129,7 +129,7 @@ clc_ac8_entry_same() {
 
 # clc_dock_watch_run <side> <wd:dotfiles 相対 dir> <dw> <odbase> — H-3（リーダー裁定）＝
 #   AC-11④「既定供給パス 2 本を起動」の実体は FX-16 の dotfiles 描画スクリプト
-#   （<wd>/<basename(wd)>.sh）。$HOME/work/takumi009-ai-env にその側の ai-env clone を
+#   （<wd>/<basename(wd)>.sh）。$HOME/Workspace/Tools/takumi009-ai-env にその側の ai-env clone を
 #   持つ一時 HOME（ac12_prep の tmpl12-<side> の複製）で --once 起動する。供給パスの
 #   上書き口（CMUX_DOCK_SUPPLY_*）は渡さない＝既定供給パスで解決させる（FR-19 の目的）。
 #   入力（Vault・宣言・偽 cmux）は ac12_run の dock-* と同じ（ac-12.sh）。Dock・cmux の
@@ -184,7 +184,7 @@ ac_8() {
   # 私的パッチ repo（check-drift.sh の既定 AIENV_PRIVATE_REPO）の行は、CL_SIDE_WT の前方一致
   # （<WT>-private に化ける）より先に当たるよう、長い文字列として先に積む（リーダー裁定2026-10-05）。
   # 値は CLOSING_REPO_HOME_REL（例 work/takumi009-ai-env）に "-private" を足して組む＝
-  # check-drift.sh の AIENV_PRIVATE_REPO の既定（$HOME/work/takumi009-ai-env-private）と同じ組み方。
+  # check-drift.sh の AIENV_PRIVATE_REPO の既定（$HOME/Workspace/Tools/takumi009-ai-env-private）と同じ組み方。
   local priv_rel="$(dirname "$CLOSING_REPO_HOME_REL")/$(basename "$CLOSING_REPO_HOME_REL")-private"
   CL_SUBS+=("$hA/$priv_rel=<HOME>/$priv_rel" "$hB/$priv_rel=<HOME>/$priv_rel")
   CL_SUBS+=("$hA=<HOME>" "$hB=<HOME>")
@@ -386,10 +386,10 @@ EOF
   fi
 }
 
-# clc_dotfiles_pull_fixture <home> <stubdir> <log> — README の既定経路（$HOME/work/dotfiles）に、
+# clc_dotfiles_pull_fixture <home> <stubdir> <log> — README の既定経路（$HOME/Workspace/Tools/dotfiles）に、
 #   ローカル origin（bare）から CLOSING_DOTFILES_COMMIT の 1 つ前を clone し main で追跡させる
 #   （AC-10 の origin の作り方＝ac10_origin_reset/advance と同じ型）。README の
-#   `git -C ~/work/dotfiles pull --ff-only` が実際に commit を進める形にする（C2-V02）。
+#   `git -C ~/Workspace/Tools/dotfiles pull --ff-only` が実際に commit を進める形にする（C2-V02）。
 clc_dotfiles_pull_fixture() {
   local h="$1" s="$2" log="$3" origin="$WORK/dotfiles-origin.git" parent dest
   dest="$h/$CLOSING_DOTFILES_DIR_DEFAULT"
@@ -442,7 +442,7 @@ ac_12() {
   ac10_origin_advance
   cl_mk_vault_fx4 "$h3/$CLOSING_VAULT_REL"   # 撤去の前提検査（5 本目）が読む Vault（forward-refs は VAULT 既定）
   repo3="$h3/$CLOSING_REPO_HOME_REL"
-  # dw3＝README の既定経路のまま（$HOME/work/dotfiles・C2-V01＝cl_run は env -i なので --dotfiles を
+  # dw3＝README の既定経路のまま（$HOME/Workspace/Tools/dotfiles・C2-V01＝cl_run は env -i なので --dotfiles を
   #   渡さず検査器の既定解決に任せる）。ローカル origin + 追跡 branch を 1 つ前の commit で持たせ、
   #   README どおりの pull が実際に進む形にする（C2-V02）。
   dw3="$h3/$CLOSING_DOTFILES_DIR_DEFAULT"

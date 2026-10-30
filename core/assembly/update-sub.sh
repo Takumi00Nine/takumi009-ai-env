@@ -29,7 +29,7 @@
 # 引数は受け付けない（旧 resync フラグは廃止＝毎回 Preferences を同期するので不要。
 # 計画だけ見たいときは core/assembly/install-sub.sh --dry-run）。
 # 復旧（本人が現地で打つ）:
-#   cd ~/work/takumi009-ai-env && git pull --ff-only && core/assembly/install-sub.sh
+#   cd ~/Workspace/Tools/takumi009-ai-env && git pull --ff-only && core/assembly/install-sub.sh
 #   core/assembly/update-sub.sh
 #
 # 0. の判定（README「Updating an existing sub machine」から 2026-09-19 に移設・原文。

@@ -199,7 +199,7 @@ if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
     sv_tab=$'\t'
     sv_rest="${profile_status#*schema_version=}"
     schema_version_value="${sv_rest%%"$sv_tab"*}"
-    TEAM_MODE_LINE="${TEAM_MODE_LINE}｜配役表＝OK schema_version=${schema_version_value} machine_role=${machine_role} 照会＝python3 ~/work/takumi009-ai-env/team/connect/claude-code/role_candidates.py [--role <職種>]"
+    TEAM_MODE_LINE="${TEAM_MODE_LINE}｜配役表＝OK schema_version=${schema_version_value} machine_role=${machine_role} 照会＝python3 ~/Workspace/Tools/takumi009-ai-env/team/connect/claude-code/role_candidates.py [--role <職種>]"
   else
     # 不在・symlink・validator 違反は区分コード（T1/SYMLINK/T5/…）、UNKNOWN_EXTRA は専用コード名（値は再掲しない）。
     profile_unresolved_code=""

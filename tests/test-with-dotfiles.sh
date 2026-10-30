@@ -113,7 +113,7 @@ echo "=== 1. install-main.sh: 既定（--with-dotfiles無し）ではdotfilesに
   out=$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" bash "$REPO_ROOT/core/assembly/install-main.sh")
   assert_true "出力にdotfilesという語が出ない" \
     "$(echo "$out" | grep -qi dotfiles && echo 0 || echo 1)"
-  assert_true "\$HOME/work が作られない" \
+  assert_true "\$HOME/Workspace が作られない" \
     "$([[ ! -e "$HOME_DIR/work" ]] && echo 1 || echo 0)"
 
   rm -rf "$HOME_DIR"
@@ -207,7 +207,7 @@ echo "=== 6. install-sub.sh: --with-dotfiles無しならdotfilesに一切触れ�
   out=$(SKIP_LAUNCHCTL=1 SKIP_CODEX_MCP=1 HOME="$HOME_DIR" bash "$REPO_ROOT/core/assembly/install-sub.sh")
   assert_true "出力にdotfilesという語が出ない" \
     "$(echo "$out" | grep -qi dotfiles && echo 0 || echo 1)"
-  assert_true "\$HOME/work/dotfiles が作られない" \
+  assert_true "\$HOME/Workspace/Tools/dotfiles が作られない" \
     "$([[ ! -e "$HOME_DIR/work/dotfiles" ]] && echo 1 || echo 0)"
 
   rm -rf "$HOME_DIR"

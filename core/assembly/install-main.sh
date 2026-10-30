@@ -59,7 +59,7 @@
 # --sub-delegate（内部専用・install-sub.sh がこのスクリプトへ委譲する際に付ける
 # 目印）: 受理するが settings.json の値には影響しない。
 #
-# --with-dotfiles（既定OFF・明示オプション時のみ）: $HOME/work/dotfiles が無ければ
+# --with-dotfiles（既定OFF・明示オプション時のみ）: $HOME/Workspace/Tools/dotfiles が無ければ
 # `git clone` し、その後 dotfiles/install.sh を呼ぶ（既に存在する場合は clone を
 # skipして install.sh だけ呼ぶ＝dotfiles側のinstall.shは再実行しても安全な設計）。
 #

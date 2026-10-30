@@ -46,7 +46,7 @@
 #                                $HOME/.config/takumi009-ai-env/bedrock.env）
 #   AIENV_AGENTS_DIR           … コア職種マニフェストの実体側入力（既定
 #                                ${SELF_DIR%/*/*}/team/rules/agents）
-#   CHECK_SUB_UPDATE_DIR      … リポジトリのルート（既定 $HOME/work/takumi009-ai-env。
+#   CHECK_SUB_UPDATE_DIR      … リポジトリのルート（既定 $HOME/Workspace/Tools/takumi009-ai-env。
 #                                ⚠️ lib解決には使わない＝テストではスタブrepoを指すため）
 #   CHECK_SUB_UPDATE_LOG      … 失敗ログの出力先（既定 /tmp/check-sub-update.log）
 #   CHECK_SUB_UPDATE_TIMEOUT  … git fetch のタイムアウト秒数（既定 5）
@@ -78,7 +78,7 @@ SELF_DIR="$(resolve_check_sub_update_self_dir)"
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
 : "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
 : "${AIENV_AGENTS_DIR:=${SELF_DIR%/*/*}/team/rules/agents}"
-DIR="${CHECK_SUB_UPDATE_DIR:-$HOME/work/takumi009-ai-env}"
+DIR="${CHECK_SUB_UPDATE_DIR:-$HOME/Workspace/Tools/takumi009-ai-env}"
 LOG_FILE="${CHECK_SUB_UPDATE_LOG:-/tmp/check-sub-update.log}"
 FETCH_TIMEOUT_SECONDS="${CHECK_SUB_UPDATE_TIMEOUT:-5}"
 

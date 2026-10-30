@@ -2,9 +2,9 @@
 """usage_snapshot.py — 使用率のスナップショットを機械可読(JSON 1行)・
 人可読(既定・枠あたり1行)で提示する口（B1-a「使用率の見える化」）。
 
-正本: ~/work/takumi009-ai-env-private/docs/core-split/
+正本: ~/Workspace/Tools/takumi009-ai-env-private/docs/core-split/
       使用率提示B1a-実装-2026-09-08.md
-要件の出典: ~/work/takumi009-ai-env-private/docs/core-split/
+要件の出典: ~/Workspace/Tools/takumi009-ai-env-private/docs/core-split/
       ローカルLLM段階経路-要件-2026-09-03.md（v20）FR-104・FR-108①②・FR-116・
       AC-91・AC-95。
 
@@ -47,8 +47,9 @@ The `UserPromptSubmit` hook injects a **【使用率・この発言時点】** b
 - **Prerequisite**: a usage fetcher (see "Usage fetcher" below) refreshes `~/.cache/claude-codex-usage/claude-cache.json` / `codex-cache.json` once a minute; `usage_snapshot.py` only reads those files and never touches the network itself.
 - **Manual check**: `python3 usage/executor/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot).
 - If the cache is missing (fetcher not installed) or stale, the block still shows exactly 3 lines with a plain-language explanation instead of failing silently.
+- Codex の片枠だけが欠如している場合は「5h 制限なし」／「7d 制限なし」と表示し、もう一方は通常どおり表示する。両枠欠如や不正値は取得不可とする。
 
-2026-10-24 改訂（枠が始まっていない間の表示・出典＝~/Claude/usage-fetch-fix/docs/usage-idle-fix-design.md v3 §5.4）:
+2026-10-24 改訂（枠が始まっていない間の表示・出典＝~/Workspace/Projects/takumi009-ai-env/docs/usage-fetch-fix/usage-idle-fix-design.md v3 §5.4）:
   - 枠の有効性: 払い出しの形（`reset_credits`）を持たないキャッシュ（Claude）で、生の値が
     「未開始の形」（used_percent が数の 0・resets_at と resets_at_epoch がどちらも null）を
     満たす必須窓は壊れとみなさない。型の壊れた値を丸めた後ではなく生の値で判定する。
@@ -623,7 +624,20 @@ def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_secon
     seven = _extract_window(data, "seven_day")
     error_val = _scrub_error(data.get("last_error"))
 
-    # 必須キー欠落（fetched_at・five_hour・seven_dayのいずれか、または
+    # 払い出しの形を持つキャッシュは片枠欠如を許容する。生の値で判定し、
+    # 不正値を _extract_window が None にした場合とは区別する。
+    absent_windows = {
+        name
+        for name in ("five_hour", "seven_day")
+        if "reset_credits" in data
+        and isinstance(data.get(name), dict)
+        and "used_percent" in data[name]
+        and "resets_at_epoch" in data[name]
+        and all(data[name].get(key) is None
+                for key in ("used_percent", "resets_at", "resets_at_epoch"))
+    }
+
+    # 必須キー欠落（fetched_at・欠如を許容しない窓、または
     # 必須窓のresets_at_epoch欠落）はerror（このpoolの読み取り契約における
     # 必須集合。model_weeklyは任意＝FR-96）。
     # ⚠️ 検証職1巡目MINOR-5対応: five_hour/seven_dayはused_percentがあれば
@@ -644,7 +658,13 @@ def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_secon
             and not _is_unstarted_form(data, "seven_day")
         )
     )
-    if fetched_at is None or five is None or seven is None or resets_missing:
+    if (
+        fetched_at is None
+        or (five is None and "five_hour" not in absent_windows)
+        or (seven is None and "seven_day" not in absent_windows)
+        or (five is None and seven is None)
+        or resets_missing
+    ):
         return {
             "pool_ref": pool_ref,
             "kind": "subscription",
@@ -662,7 +682,7 @@ def build_subscription_pool(pool_ref: str, cache_dir: str, now: int, stale_secon
         age_seconds = 0  # 未来のfetched_at（時計ズレ）は0扱い（負のageを出さない）
     state = "stale" if age_seconds > stale_seconds else "ok"
 
-    windows = [five, seven]
+    windows = [window for window in (five, seven) if window is not None]
     weekly = _extract_window(data, "model_weekly")
     if weekly is not None:
         windows.append(weekly)
@@ -845,7 +865,14 @@ def _human_line_for_subscription(pool: dict, now: int) -> str:
     if state == "error":
         return f"{name}: 取得できません（キャッシュが壊れています。導入手順: README §使用率取得器）"
 
-    segments = [_format_window_segment(w, now) for w in pool["windows"]]
+    windows = {w["window"]: w for w in pool["windows"]}
+    segments = [
+        _format_window_segment(windows[name], now)
+        if name in windows else f"{WINDOW_HUMAN_LABEL[name]} 制限なし"
+        for name in ("five_hour", "seven_day")
+    ]
+    segments.extend(_format_window_segment(w, now)
+                    for w in pool["windows"] if w["window"] == "model_weekly")
     age_min = pool["age_seconds"] // 60
     suffix = f"・取得 {age_min}分前"
     if state == "stale":
