@@ -211,6 +211,9 @@ echo "=== AC-3: --render-settings-json の生成物（sample 3本を入力）に
     assert_not_contains "AC-3: 生成物の env に ${cred_key} を含まない" "$env_keys" "$cred_key"
   done
   assert_contains "AC-3: 生成物の env に sample の許可キー（CLAUDE_CODE_USE_BEDROCK）が取り込まれる" "$env_keys" "CLAUDE_CODE_USE_BEDROCK"
+  # 要望8 AC-2・設計「長さの設定と反映／正本と生成先」。
+  compact_window="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env", {}).get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", ""))' "$ac3_out" 2>/dev/null)"
+  assert_eq "S8-C01: Claude生成物の共通開始値は300000" "300000" "$compact_window"
   assert_eq "AC-3: 偽 HOME に .claude が作られない（生成物以外に何も置かない）" "" "$(ls -A "$ac3_home")"
 }
 
@@ -327,5 +330,6 @@ echo "=== 変異確認: schema_version を 1 つ下げた一時コピーでAC-1�
 }
 
 echo ""
+. "$TESTS_DIR/lib-session-retired-cases.sh"
 echo "=== 結果: PASS=$PASS FAIL=$FAIL ==="
 [ "$FAIL" -eq 0 ]

@@ -1117,5 +1117,83 @@ with open('$TPL', 'w') as f:
 }
 
 echo
+# 要望8 AC-2・設計「長さの設定と反映」「Codexのフック状態を守る」。
+# 既存の本番installerをコピーして通す。実設定・常駐・cmuxには接続しない。
+. "$TESTS_DIR/lib-session-fixtures.sh"
+sf_init
+sf_check 'S8-G01: 既定値で両設定を生成できる' sf_install
+sf_check 'S8-G02: 両生成物の開始値は300000' sf_generated_values 300000
+sf_set_env CLAUDE_CODE_AUTO_COMPACT_WINDOW 400000
+sf_check 'S8-G03: 共通値だけ変更して再生成できる' sf_install
+sf_check 'S8-G04: コード変更なしで両生成物が400000へ追随' sf_generated_values 400000
+
+# 既存設定は今回の変更直前の内容で照合する（初回backupとは区別する）。
+cp "$SF_HOME/.claude/settings.json" "$SF_WORK/before-settings.json"
+cp "$SF_HOME/.codex/config.toml" "$SF_WORK/before-config.toml"
+for value in __missing__ 300k 0 -1 1.5 9999999999999999999999999999999999999999; do
+  sf_set_env CLAUDE_CODE_AUTO_COMPACT_WINDOW "$value"
+  rc=0; sf_install || rc=$?
+  sf_check "S8-G05: 共通値=$value は生成失敗" test "$rc" -ne 0
+  sf_check "S8-G06: 共通値=$value でClaude実物を保持" cmp -s "$SF_WORK/before-settings.json" "$SF_HOME/.claude/settings.json"
+  sf_check "S8-G07: 共通値=$value でCodex実物を保持" cmp -s "$SF_WORK/before-config.toml" "$SF_HOME/.codex/config.toml"
+  cp "$SF_WORK/before-settings.json" "$SF_HOME/.claude/settings.json"
+  cp "$SF_WORK/before-config.toml" "$SF_HOME/.codex/config.toml"
+done
+sf_set_env CLAUDE_CODE_AUTO_COMPACT_WINDOW 400000
+for value in __missing__ 0 -1 400000 400001 bad; do
+  sf_set_env CTX_REWARN_STEP "$value"
+  rc=0; sf_install || rc=$?
+  sf_check "S8-G08: 再警告幅=$value は正かつ共通値未満でないため失敗" test "$rc" -ne 0
+  sf_check "S8-G09: 再警告幅=$value で両設定を保持" \
+    python3 -c 'import pathlib,sys; w,h=map(pathlib.Path,sys.argv[1:]); assert (w/"before-settings.json").read_bytes()==(h/".claude/settings.json").read_bytes(); assert (w/"before-config.toml").read_bytes()==(h/".codex/config.toml").read_bytes()' "$SF_WORK" "$SF_HOME"
+  cp "$SF_WORK/before-settings.json" "$SF_HOME/.claude/settings.json"
+  cp "$SF_WORK/before-config.toml" "$SF_HOME/.codex/config.toml"
+done
+sf_set_env CTX_REWARN_STEP 50000
+
+# hooks.state の値は既存の承認を表す不透明なfixture値。無効・有効の両方。
+python3 - "$SF_HOME/.codex/config.toml" <<'PY'
+import json, sys
+with open(sys.argv[1], 'a') as f:
+    for index, enabled in enumerate(('false', 'true')):
+        key = 'user:hooks.json:session_start:'+str(index)+':0'
+        f.write('\n[hooks.state.'+json.dumps(key)+']\nenabled = '+enabled+'\ntrusted_hash = "'+'a'*64+'"\n')
+PY
+cp "$SF_HOME/.codex/config.toml" "$SF_WORK/state-before.toml"
+sf_check 'S8-H01: 同一内容のフックで再生成できる' sf_install
+sf_check 'S8-H02: 同一フックの無効・有効・信頼状態をそのまま保持' \
+  python3 - "$SF_WORK/state-before.toml" "$SF_HOME/.codex/config.toml" <<'PY'
+import pathlib, sys, tomllib
+a,b = [tomllib.loads(pathlib.Path(p).read_text()) for p in sys.argv[1:]]
+assert a['hooks']['state'] == b.get('hooks', {}).get('state')
+PY
+# 同じIDの宣言内容を変える。installerが新しい信頼値を発行してはならない。
+cp "$SF_WORK/state-before.toml" "$SF_HOME/.codex/config.toml"
+python3 - "$SF_REPO/team/connect/codex/hooks.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d['hooks']['SessionStart'][0]['hooks'][0]['command'] = 'printf changed-hook'
+with open(p, 'w') as f: json.dump(d, f)
+PY
+rc=0; sf_install || rc=$?
+# 失敗して旧設定を守る／成功して古いハッシュを保持または削除、どちらも可。
+# 古いハッシュの保持自体は変更内容の承認ではない（Codexの照合に委ねる）。
+sf_check 'S8-H03: 変更フックの新しい信頼ハッシュを自動承認しない' \
+  python3 - "$SF_HOME/.codex/config.toml" <<'PY'
+import pathlib, sys, tomllib
+d = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())
+for state in d.get('hooks', {}).get('state', {}).values():
+    assert state.get('trusted_hash') in (None, 'a'*64)
+    assert not state.get('trusted_content_hash')
+PY
+printf '\n[hooks.state."broken"\n' >> "$SF_HOME/.codex/config.toml"
+cp "$SF_HOME/.codex/config.toml" "$SF_WORK/unreadable-state.toml"
+rc=0; sf_install || rc=$?
+sf_check 'S8-H04: フック状態を解釈できなければ生成失敗' test "$rc" -ne 0
+sf_check 'S8-H05: 読めない状態を捨ててCodex設定を置き換えない' cmp -s "$SF_WORK/unreadable-state.toml" "$SF_HOME/.codex/config.toml"
+rm -rf "$SF_WORK"
+
+. "$TESTS_DIR/lib-session-warning-cases.sh"
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

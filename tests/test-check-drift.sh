@@ -114,6 +114,10 @@ make_fake_repo() {
   cp "$REPO_ROOT/team/executor/profile_resolve.py" "$repo/team/executor/profile_resolve.py"
   cat > "$repo/core/assembly/settings.json" <<'EOF'
 {
+  "env": {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000",
+    "CTX_REWARN_STEP": "50000"
+  },
   "permissions": {
     "allow": ["Bash(npm test)"]
   },
@@ -3335,5 +3339,38 @@ echo "=== 93. v1.2 FR-18 検証C2-V06: 列挙不能な \$HOME/Library/LaunchAgen
 }
 
 echo
+# 要望8 AC-2・設計「反映の契約」: 共通値から比較の期待値を求める。
+. "$TESTS_DIR/lib-session-fixtures.sh"
+sf_init
+sf_check 'S8-D01: 既存生成経路で隔離HOMEを組み立てる' sf_install
+# 生成の不具合に差分検査の不具合を隠させないため、実物側を既知の正解へ置く。
+sf_write_live_window() {
+  python3 - "$SF_HOME" "$1" <<'PY'
+import json, pathlib, re, sys
+h, value = pathlib.Path(sys.argv[1]), sys.argv[2]
+p = h/'.claude/settings.json'
+d = json.loads(p.read_text()); d.setdefault('env', {})['CLAUDE_CODE_AUTO_COMPACT_WINDOW'] = value
+p.write_text(json.dumps(d))
+p = h/'.codex/config.toml'; text = p.read_text()
+text = re.sub(r'^model_auto_compact_token_limit\s*=.*\n?', '', text, flags=re.M)
+p.write_text('model_auto_compact_token_limit = '+value+'\n'+text)
+PY
+}
+sf_drift() {
+  sf_env bash "$SF_REPO/core/assembly/check-drift.sh" 2>&1
+}
+sf_write_live_window 300000
+out="$(sf_drift)"
+assert_contains 'S8-D02: 共通値300000と同じCodex実物は一致' "$out" 'TOML三分類で一致しています'
+sf_set_env CLAUDE_CODE_AUTO_COMPACT_WINDOW 400000
+out="$(sf_drift)"
+assert_contains 'S8-D03: 共通値だけの変更で古いClaude設定を検知' "$out" "[SETTINGS-DIFF] キー 'env'"
+assert_contains 'S8-D04: 共通値だけの変更で古いCodex開始値を検知' "$out" "[DIFF] キー 'model_auto_compact_token_limit'"
+sf_write_live_window 400000
+out="$(sf_drift)"
+assert_contains 'S8-D05: 共通値400000と同じCodex実物は一致' "$out" 'TOML三分類で一致しています'
+assert_not_contains 'S8-D06: 400000へ追随したClaude実物に設定差分なし' "$out" '[SETTINGS-DIFF]'
+rm -rf "$SF_WORK"
+
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
