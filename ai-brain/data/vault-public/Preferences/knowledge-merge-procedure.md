@@ -1,12 +1,12 @@
 ---
 date: 2026-07-12
-updated: 2026-09-19
+updated: 2026-10-31
 tags: [preference, external-brain, merge, procedure]
 project: external-brain
 retired: true
 ---
 
-⚠️ 退役済み（2026-09-19・[[Decisions/2026-09-19-ai-env-optimization-rulings]]）: 週次メンテの knowledge merge（Phase1④）と無人適用（Phase2）は撤去された。本ノートは履歴として温存。Knowledge の重複統合は本人が指示したときにリーダーが記録職へ渡して手で行う。
+⚠️ 退役済み（2026-09-19・[[Decisions/2026-09-19-ai-env-optimization-rulings]]）: 週次メンテの knowledge merge（Phase1④）と無人適用（Phase2）は撤去された。本ノートは履歴として温存。Knowledge の重複統合は本人が指示したときにリーダーが手で行う。
 
 # Knowledge 自律マージの現行フロー（AI 向け・簡素化後）
 

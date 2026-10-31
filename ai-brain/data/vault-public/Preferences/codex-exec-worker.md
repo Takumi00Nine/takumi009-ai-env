@@ -1,6 +1,6 @@
 ---
 date: 2026-09-03
-updated: 2026-10-11
+updated: 2026-10-31
 tags: [preference, codex, delegation, worker, exec]
 project: meta
 related:
@@ -47,7 +47,7 @@ codex exec --skip-git-repo-check -s workspace-write -C /abs/path -o report2.md \
 ```
 - **`--ephemeral` を付けると rollout（セッション記録）が保存されず `resume` できない**。継続の予定がある起動では付けない（公式 CLI リファレンス 2026-09-06 確認）。
 - 直近スレッドの継続は `codex exec resume --last '<依頼文>'` でも可（thread_id を控え損ねたときの救済。並列起動中は取り違えるので thread_id 指定を既定にする）。
-- **依頼文に必ず入れる内容は Claude ワーカーと同じ**: ①absolute-rules を読む指示（**exec は PreToolUse フックの対象外**なので手動で明記。[[Preferences/absolute-rules]]）②承認済み設計 ③担当ファイル範囲 ④受入条件 ⑤Vault 書込禁止と「Vault記録候補:」での申告 ⑥報告形式（変更ファイル一覧→動作確認手順→受入条件との対応→未解決点）。
+- **依頼文に必ず入れる内容は Claude ワーカーと同じ**: ①absolute-rules を読む指示（**exec は PreToolUse フックの対象外**なので手動で明記。[[Preferences/absolute-rules]]）②承認済み設計 ③担当ファイル範囲（新しいファイルを足す依頼では、その repo の登録表＝ai-env なら台帳 `core/data/ledger.tsv` への行の追加も範囲に含める） ④受入条件 ⑤Vault 書込禁止と「Vault記録候補:」での申告 ⑥報告形式（変更ファイル一覧→動作確認手順→受入条件との対応→未解決点）。
 - **1呼び出し＝1工程・15分以内で返る粒度に切る**。大きい実装は resume で分割。
 - **サンドボックス＝ラッパーの `--sandbox` は `read-only|workspace-write|danger-full-access` の 3 値。2026-10-10 以降の既定は `danger-full-access`（本人決定＝[[Decisions/2026-10-10-codex-sandbox-full-access]]・理由＝サンドボックス内で Blender が起動時に落ちる等の弊害）。依頼文の「担当ファイル範囲」「Vault 書込禁止」が守りの正本。**
 - **画像を渡す＝ラッパーの `--image <path>`（繰り返し可・`--resume` 併用可）**＝`codex exec -i` へ絶対パスで渡す。存在しないファイル・カンマを含むパスは exit 2 で codex を起動しない（2026-10-10 追加・Astra の画像検品用。テスト＝`tests/test-codex-exec.sh` ケース 19〜25）。

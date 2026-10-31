@@ -1,6 +1,6 @@
 ---
 date: 2026-09-18
-updated: 2026-10-10
+updated: 2026-10-31
 tags: [preference, model, catalog, quick-reference]
 project: meta
 related:
@@ -34,8 +34,8 @@ aliases:
 | opus-low | Opus 5.5 / low | Claude サブスク | （未参照） | 並列の軽作業・枠温存 |
 | sonnet-high | Sonnet 5.5 / high | Claude サブスク | implementer・researcher・operator | 実装・調査の主力 |
 | sonnet-medium | Sonnet 5.5 / medium | Claude サブスク | implementer・researcher・operator | 通常の実装・調査（主力候補の入口） |
-| sonnet-low | Sonnet 5.5 / low | Claude サブスク | operator・vault-scribe | 探索的調査・定型の巡回・記録 |
-| haiku | Haiku 5.5 / medium | Claude サブスク | researcher・operator・vault-scribe | 分類・抽出・定型変換・短い執筆（初回は軽い案件で試す） |
+| sonnet-low | Sonnet 5.5 / low | Claude サブスク | operator | 探索的調査・定型の巡回・記録 |
+| haiku | Haiku 5.5 / medium | Claude サブスク | researcher・operator | 分類・抽出・定型変換・短い執筆（初回は軽い案件で試す） |
 | codex-astra-high／medium／low | GPT-6 Astra | Codex サブスク | astra-low＝requirements-analyst・system-designer | デザイン系案件の上流工程限定（2026-09-05） |
 | codex-sol-high／medium／low | GPT-6.1 Sol | Codex サブスク | sol-high＝verifier・sol-medium＝implementer | 一次レビューの本命・bounded task の実装 |
 | codex-terra-high／medium／low | GPT-5.6 Terra | Codex サブスク | terra-medium＝verifier | 文書・軽量1巡の検証（Sol はコード検証に温存） |
