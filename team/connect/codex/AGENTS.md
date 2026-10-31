@@ -8,7 +8,7 @@
 
 - The workspace root is `~/Workspace`; its only direct subfolders are `Projects` and `Tools`.
 - Each project uses `~/Workspace/Projects/<slug>/` with `docs`, `work`, and `output` subfolders.
-- Start Codex and Claude from `~/Workspace` (Claude uses `cct`).
+- Start leaders and workers from `~/Workspace`. Claude: use `cct`.
 
 ## Delegated-task tooling guard (Finalized 2026-06-22)
 
@@ -27,7 +27,7 @@
 
 ## Output & Reporting Conventions (Finalized 2026-06-20)
 
-When reporting back to the orchestrator (Claude) / user:
+When reporting back to the leader / user:
 
 - **Reply in Japanese** unless the task explicitly asks otherwise (deliverables like code/README follow the task's own spec).
 - **Lead with the conclusion / answer first**, then supporting detail. No long preamble, no filler, no restating the request.
