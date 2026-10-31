@@ -476,8 +476,8 @@ echo "=== 12. Bedrock最小セット: envファイルが無ければ何も変わ
 
   SKIP_LAUNCHCTL=1 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 
-  assert_true "envブロックはテンプレどおりDISABLE_AUTOUPDATERのみ" \
-    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));exit(0 if list(d['env'].keys())==['DISABLE_AUTOUPDATER'] else 1)" && echo 1 || echo 0)"
+  assert_true "envブロックはテンプレどおり（テンプレのenvと一致）" \
+    "$(python3 -c "import json;d=json.load(open('$FAKE_HOME/.claude/settings.json'));t=json.load(open('$REPO_ROOT/core/assembly/settings.json'));exit(0 if d['env']==t['env'] else 1)" && echo 1 || echo 0)"
 
   rm -rf "$FAKE_HOME"
 }
