@@ -12,7 +12,8 @@
       "Bash(python3 ~/Workspace/Tools/takumi009-ai-env/team/connect/claude-code/role_candidates.py:*)",
       "Skill(schedule)",
       "Skill(update-config)",
-      "Skill(claude-api)"
+      "Skill(claude-api)",
+    "Bash(touch /tmp/claude-direct-edit-ok-*)"
     ],
     "deny": [
       "Read(~/.ssh/**)",
