@@ -104,7 +104,6 @@ part	core/connect/claude-code/prompt-answer.sh	core	connect	claude-code	-	本人
 part	core/connect/claude-code/bash-danger-gate.sh	core	connect	claude-code	-	汎用の柵（リモート実行・保護パス rm）	-	link:$HOME/.claude/hooks/bash-danger-gate.sh
 part	core/connect/claude-code/bash-policy-gate.sh	core	connect	claude-code	-	汎用の柵	-	link:$HOME/.claude/hooks/bash-policy-gate.sh
 part	core/connect/claude-code/context-size-warn.sh	core	connect	claude-code	-	transcript 推定	-	link:$HOME/.claude/hooks/context-size-warn.sh
-part	core/connect/claude-code/session-handoff.sh	core	connect	claude-code	core.session-handoff	cct 起動	-	-
 part	core/assembly/install-main.sh	core	assembly	-	core.install	全部入りの組立	-	-
 part	core/assembly/install-sub.sh	core	assembly	-	core.sub-install	サブ機の組立	-	-
 part	core/assembly/update-sub.sh	core	assembly	-	core.update-sub	サブ機の更新	-	-
@@ -172,7 +171,6 @@ suite	tests/test-install-sub.sh	core	-	-	-	-	-	-
 suite	tests/test-integration.sh	core	-	-	-	2 機能以上の統合試験	-	-
 suite	tests/test-ledger.sh	core	-	-	-	台帳検査（FR-14）	-	-
 suite	tests/test-managed-symlink.sh	core	-	-	-	-	-	-
-suite	tests/test-session-handoff.sh	core	-	-	-	-	-	-
 suite	tests/test-session-start-compose.sh	core	-	-	-	-	-	-
 suite	tests/test-shell-lib.sh	core	-	-	-	-	-	-
 suite	tests/test-update-sub.sh	core	-	-	-	-	-	-

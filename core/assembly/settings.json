@@ -1,7 +1,9 @@
 {
   "env": {
     "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000",
+    "CTX_REWARN_STEP": "50000"
   },
   "permissions": {
     "allow": [
@@ -165,7 +167,7 @@
             "type": "command",
             "command": "$HOME/.claude/hooks/context-size-warn.sh",
             "timeout": 5,
-            "statusMessage": "セッション肥大化チェック中"
+            "statusMessage": "要約前の記録確認中"
           },
           {
             "type": "command",

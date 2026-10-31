@@ -73,7 +73,7 @@ takumi009-ai-env/
 │   │                                # ngwords-path.sh (resolves the NG-word file default for audit.sh / export-public-vault.sh)
 │   ├── connect/
 │   │   └── claude-code/            # session-start-compose.sh (the SessionStart composer; this is the hook registered as `bootstrap-vault.sh`),
-│   │                                # bash-danger-gate.sh, bash-policy-gate.sh, context-size-warn.sh, session-handoff.sh,
+│   │                                # bash-danger-gate.sh, bash-policy-gate.sh, context-size-warn.sh,
 │   │                                # prompt-answer.sh (detects the human's input and sends the answer; registered as `code27-call-clear.sh`)
 │   ├── assembly/                    # install-main.sh, install-sub.sh, update-sub.sh, check-drift.sh, check-sub-update.sh,
 │   │                                # managed-symlink.sh, settings.json template (generated), ledger-tool.sh
@@ -119,7 +119,7 @@ The 9th column, **placement**, says where the installer puts the part: `-` (not 
 brew bundle          # Reads the Brewfile and installs ripgrep, gitleaks, jq, gh, macmon
 ```
 
-Claude Code / Codex themselves are outside brew's management, so install them separately from their official sites. `install-main.sh` requires `python3` (details = the comment at the top of `core/assembly/install-main.sh`).
+Claude Code / Codex themselves are outside brew's management, so install them separately from their official sites. `install-main.sh` requires Python 3.11+ (`python3` with `tomllib`); normal and dry-run execution check this before changing any settings.
 
 `core/data/ngwords.txt` (NG-word definitions used by `export-public-vault.sh` and `audit.sh`) is **not included in this repository** because it's private data. If the file is still only at the old default `scripts/ngwords.txt`, both tools stop and print the one command that moves it. To run `export-public-vault.sh`/`audit.sh` as-is, either set `NGWORDS_FILE=/path/to/your/ngwords.txt` to point at your own file, or write your own NG-word list.
 
@@ -310,16 +310,11 @@ usage/assembly/install-usage-fetch.sh            # Resume usage tracking
 2. Run the "disaster recovery" procedure above on the new Mac
 3. Stop the old main's LaunchAgents (`launchctl bootout gui/$(id -u)/com.takumi009.<label>`) — **there is always exactly one main** (this preserves the uniqueness of edit permission / push location)
 
-### Session handoff (core/connect/claude-code/session-handoff.sh)
+### Continue in the same conversation
 
-When a session gets long, write a resume note, then use this script to open a new cmux workspace, start `cct` (Claude Code) in it, and send the follow-up request as a single line.
+Claude Code and Codex use built-in automatic compaction and continue in the same window. The shared starting value is 300k tokens, stored only as `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in `core/assembly/settings.json`. The existing warning uses that value minus `CTX_REWARN_STEP` (initially 50k) to prompt recording at 250k. Update the project note at stage boundaries and before large operations when information remains unrecorded; the warning cannot guarantee it arrives before compaction. Keep progress, next work, cautions, and links to decision reasoning in the project note and project files. Leaders do not open a new session because of length, a stage ending, or a break; idle compaction uses tool defaults. Only the user starts a new session, after checking that the previous leader and child work have stopped.
 
-```sh
-core/connect/claude-code/session-handoff.sh <path-to-resume-note> "<follow-up request>" [--cwd <dir>] [--name <title>]
-core/connect/claude-code/session-handoff.sh -h | --help
-```
-
-Arguments, exit codes, and environment variables = `core/connect/claude-code/session-handoff.sh -h`.
+To change the starting value, edit the shared value and run the existing `core/assembly/install-main.sh` yourself. It validates the integer and warning interval, generates Claude's environment and Codex's `model_auto_compact_token_limit`, and preserves this machine's Codex hook enablement and trust state. Invalid or unreadable settings fail without replacing the affected configuration; changed hooks require Codex's normal trust check. Run `core/assembly/check-drift.sh` to compare against the shared value. Verify both generated settings and effective behavior in a test window you open: generation alone does not prove 300k is active, since model windows and higher-priority settings may constrain it. Restore the immediately preceding settings if application is incomplete. After compaction, confirm the startup rules were injected in full and read any missing text before continuing from the project note.
 
 ### Tests
 
@@ -404,7 +399,7 @@ takumi009-ai-env/
 │   │                                # ngwords-path.sh（audit.sh・export-public-vault.sh の NG 語ファイルの既定の解決）
 │   ├── connect/
 │   │   └── claude-code/            # session-start-compose.sh（SessionStart 合成器。`bootstrap-vault.sh` の登録名で動く）・
-│   │                                # bash-danger-gate.sh・bash-policy-gate.sh・context-size-warn.sh・session-handoff.sh・
+│   │                                # bash-danger-gate.sh・bash-policy-gate.sh・context-size-warn.sh・
 │   │                                # prompt-answer.sh（本人の入力の検知→応答。`code27-call-clear.sh` の登録名で動く）
 │   ├── assembly/                    # install-main.sh・install-sub.sh・update-sub.sh・check-drift.sh・check-sub-update.sh・
 │   │                                # managed-symlink.sh・settings.json テンプレ（生成）・ledger-tool.sh
@@ -459,7 +454,7 @@ takumi009-ai-env/
 brew bundle          # Brewfile を見て ripgrep・gitleaks・jq・gh・macmon を導入
 ```
 
-Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイトから別途インストールしてください。`install-main.sh` は `python3` を必要とします（詳細＝`core/assembly/install-main.sh` 冒頭のコメント）。
+Claude Code / Codex 本体アプリは brew 管理外のため、各公式サイトから別途インストールしてください。`install-main.sh` は Python 3.11 以上（`tomllib` が使える `python3`）を必要とし、通常実行・dry-run とも設定変更前に検査します。
 
 `core/data/ngwords.txt`（`export-public-vault.sh`・`audit.sh` が使うNGワード定義）は私的データのため**このリポジトリには含まれません**。旧既定 `scripts/ngwords.txt` にだけある場合、両ツールは止まって移す 1 コマンドを表示します。`export-public-vault.sh`/`audit.sh` をそのまま実行するには、`NGWORDS_FILE=/path/to/your/ngwords.txt` で自分のファイルを指定するか、自分のNGワード定義を作成してください。
 
@@ -650,16 +645,11 @@ usage/assembly/install-usage-fetch.sh            # 使用率取得を再開
 2. 新 Mac で上記「災害復旧」手順を実行
 3. 旧メインの LaunchAgent を停止（`launchctl bootout gui/$(id -u)/com.takumi009.<label>`）— **メインは常に1台**（編集権限・push 地点の一意性を守る）
 
-### セッション引き継ぎ（core/connect/claude-code/session-handoff.sh）
+### 同じ画面で要約して続ける
 
-セッションが長くなったとき、再開メモを書いたあと本スクリプトで新しい cmux ワークスペースを開き、`cct`（Claude Code）を起動して続きの依頼を1行で投入する。
+Claude Code・Codexの内蔵の自動要約を使い、同じ画面で続けます。共通の開始目安は300kトークンで、正本は `core/assembly/settings.json` の `CLAUDE_CODE_AUTO_COMPACT_WINDOW` だけです。既存の警告は共通値から `CTX_REWARN_STEP`（初期50k）を引いた250kで記録を促します。警告が要約に先行する保証はないため、工程の節目と、未記録情報がある状態で大きな処理へ進む前にも、案件ノートへ進捗・次の作業・留意事項と検討経緯への参照を残します。リーダーは長さ・工程終了・休憩を理由に新セッションを作らず、放置時の自動要約はツールの既定に任せます。新セッションを始めるのは本人だけとし、旧リーダーと子の作業が止まったことを確認します。
 
-```sh
-core/connect/claude-code/session-handoff.sh <再開メモのパス> "<続きの依頼>" [--cwd <dir>] [--name <題>]
-core/connect/claude-code/session-handoff.sh -h | --help
-```
-
-引数・終了コード・環境変数＝`core/connect/claude-code/session-handoff.sh -h`。
+開始値を変える場合は正本を変更し、本人が既存の `core/assembly/install-main.sh` を実行します。整数と再警告幅の検査後、Claudeの環境変数とCodexの `model_auto_compact_token_limit` を生成し、この機のCodexフックの有効・無効と信頼状態を保持します。不正・読み取り失敗なら該当設定を置換せず失敗し、変更フックの信頼確認はCodexの正規の確認に委ねます。`core/assembly/check-drift.sh` も共通値から比較します。本人が開く試し用の画面で両生成物と実効動作を確認してください。モデルの窓や優先設定の制約があるため、生成済みだけで300kが有効とは扱いません。片方だけの反映なら、両方を整えるか変更直前の設定へ戻します。要約後は起動規則の全文注入を確かめ、不足分を読んでから案件ノートと案件のファイルから続けます。
 
 ### テスト
 

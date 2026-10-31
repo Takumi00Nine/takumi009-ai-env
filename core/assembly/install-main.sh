@@ -70,7 +70,7 @@
 # 非0で終了する（対話で確定させる経路と既定モデルへの縮退は 2026-09-19 に
 # 退役した＝profile.md を直接編集して再実行する）。
 #
-# python3 requirement (moved from README "Setup" 2026-09-19; paths updated for the v1.1 component split 2026-10-03): `install-main.sh` requires `python3` (used to generate `core/assembly/settings.json`; also required separately by `check-drift.sh`'s `config.toml`/`settings.json` comparisons). macOS normally ships one via Xcode Command Line Tools, so this usually isn't an issue — if it's missing, `install-main.sh` fails fast at startup with a clear message (run `xcode-select --install`).
+# Python requirement: `install-main.sh` requires Python 3.11+ with `tomllib` for TOML parsing and `json` for settings generation. Both normal and dry-run execution check these modules before changing any settings; the Python supplied by Xcode Command Line Tools may be too old.
 # Language runtimes including Python itself aren't managed via brew in this environment (see `anyenv-runtime-management` in the Vault), so it's intentionally not listed in the Brewfile.
 #
 # Role definitions (moved from README "About vault-public/" 2026-09-19, verbatim; paths updated for the v1.1 component split 2026-10-03): Role definitions (`~/.claude/agents/<role>.md`, one per role under `team/rules/agents/*.md` in the repo) are symlinks straight into the repo, like the other symlinked destinations above — there is no per-role frontmatter generation.
@@ -448,6 +448,8 @@ fi
 # から中途半端な状態でpython3不在に気付くより、着手前に明確な指示を出す。
 # --dry-run も対象（A0 の雛形の検証＝check_settings_template() が python3 を使う＝v1.2 設計 §3.3 A0）。
 command -v python3 >/dev/null 2>&1 || fail_settings_generation "python3 が見つかりません（core/assembly/settings.json の生成に必要です）。Xcode Command Line Tools（xcode-select --install）等でpython3を導入してから再実行してください。"
+python3 -c 'import json, tomllib; tomllib.loads("check = true")' >/dev/null 2>&1 || \
+  fail_settings_generation "TOML 読み取り機能（tomllib）が使えません。Python 3.11 以上の python3 が必要です。設定は変更していません。"
 # バックアップは「.pre-aienv.bak がまだ無いときだけ」作る（何度実行しても
 # 常にインストール前オリジナルを保持する。symlink化後は dest が symlink に
 # なるため自然と対象外になるが、generate_config_toml() のように毎回実ファイルを
@@ -518,11 +520,9 @@ link() {
 # generate_config_toml <source（実体の絶対パス）> <destination>
 # symlink ではなく「プレースホルダ置換した実ファイル」を配置する
 # （config.toml は plain TOML でシェル変数展開されないため）。
-# 置換は sed のメタ文字（& \ その他区切り文字）を $HOME 側でエスケープしてから行い、
-# 生成は mktemp への書き込み→mv で原子的に行う（Codexレビュー指摘・Minor：
-# $HOME に & や \ が含まれる環境での置換破損、書き込み中断時の破損を防ぐ）。
+# 共通値を展開し、機固有のフック状態を保持する。検査後に mktemp→mv で配置する。
 generate_config_toml() {
-  local src="$1" dest="$2" escaped_home tmp
+  local src="$1" dest="$2" tmp
   [ -e "$src" ] || fail "リポジトリのファイルが見つかりません（checkout破損の可能性）: $src"
   if [ "$DRY_RUN" = "1" ]; then
     would_backup "$dest" && log "[dry-run] would back up: $dest -> $dest.pre-aienv.bak"
@@ -531,7 +531,6 @@ generate_config_toml() {
   fi
   mkdir -p "$(dirname "$dest")"
   backup_once "$dest"
-  escaped_home=$(printf '%s' "$HOME" | sed -e 's/[&\]/\\&/g' -e 's/#/\\#/g')
   # dest と同じディレクトリに一時ファイルを作る（mv が同一ファイルシステム内の
   # atomic rename になることを保証するため。$TMPDIR が別ボリュームだと
   # atomicにならない可能性があるとのCodexレビュー指摘・Nit）。異常終了時は
@@ -539,7 +538,42 @@ generate_config_toml() {
   # そのときに tmp が見えなくても set -u で落ちない形にする）。
   tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").aienv-tmp.XXXXXX")"
   trap 'rm -f "${tmp:-}"' RETURN
-  sed "s#__AIENV_HOME__#${escaped_home}#g" "$src" > "$tmp"
+  if ! python3 - "$src" "$dest" "$tmp" "$HOME" "$AIENV_AUTO_COMPACT_WINDOW" <<'PY'
+import json, pathlib, sys, tomllib
+
+src, dest, tmp, home, window = sys.argv[1:]
+try:
+    text = pathlib.Path(src).read_text().replace('__AIENV_HOME__', home)
+    text = text.replace('__AIENV_AUTO_COMPACT_WINDOW__', window)
+    tomllib.loads(text)
+    live_path = pathlib.Path(dest)
+    if live_path.exists() or live_path.is_symlink():
+        live = tomllib.loads(live_path.read_text())
+        state = live.get('hooks', {}).get('state', {})
+        if not isinstance(state, dict):
+            raise ValueError('invalid hooks.state')
+        # 機固有の状態は意味を変えずに保持する。信頼値を計算・更新しない。
+        def toml_value(value):
+            if isinstance(value, str):
+                return json.dumps(value, ensure_ascii=False)
+            if isinstance(value, bool):
+                return str(value).lower()
+            if isinstance(value, dict):
+                return '{' + ', '.join(json.dumps(k) + ' = ' + toml_value(v)
+                                       for k, v in value.items()) + '}'
+            raise ValueError('unsupported hooks.state value')
+        if state:
+            text += '\n[hooks.state]\n'
+            text += '\n'.join(json.dumps(k) + ' = ' + toml_value(v)
+                              for k, v in state.items()) + '\n'
+    tomllib.loads(text)
+    pathlib.Path(tmp).write_text(text)
+except Exception:
+    sys.exit('config.toml generation failed: template or existing hooks.state is unreadable; existing config retained')
+PY
+  then
+    fail "config.toml の生成・フック状態の保持に失敗しました。既存設定を保持します: $dest"
+  fi
   mv "$tmp" "$dest"
   log "generated: $dest <- $src （__AIENV_HOME__ を $HOME へ置換）"
 }
@@ -547,16 +581,11 @@ generate_config_toml() {
 # generate_settings_json <repo-relative-source> <destination> <model-value> [bedrock-env-file] [effort] [places]
 # claude/settings.json も config.toml と同じ理由（JSONはシェル変数展開されない・
 # symlinkだとClaude Code自身の `/model` 書込がリポジトリ側ファイルへ直接及んでしまう）
-# で symlink ではなく実ファイルとして生成する。ただし置換方式は config.toml の
-# sedプレースホルダ置換とは異なりpython3のjson moduleでトップレベル"model"キーへ
-# 直接代入する（Codex一次レビュー指摘・Minor対応: sedのメタ文字エスケープは
-# `&`・`\`・sed区切り文字のみを想定しており、JSON側の引用符・バックスラッシュ
-# エスケープには対応していない＝環境変数上書き値に`"`や`\`が含まれると不正JSONを
-# 生成しうる欠陥があった。json moduleでの直接代入ならエスケープ処理自体が不要で
-# 構造的に安全）。テンプレの"model"値（__AIENV_MODEL__）は置換対象の目印・
-# ドキュメントとして残すのみで、実際の置換はテキストマッチではなくキー代入で行う
-# （core/assembly/check-drift.sh の①-2はテンプレの__AIENV_MODEL__を期待値へ文字列置換して
-# 比較するため、テンプレ側のプレースホルダ表記自体は維持すること）。
+# で symlink ではなく実ファイルとして生成する。config.toml は Python で共通値・
+# ホームを展開し、既存の hooks.state を保持して TOML を検査する。
+# settings.json は json module で model・effortLevel 等のキーへ直接代入する。
+# テンプレの __AIENV_MODEL__ 等は生成対象の目印として残し、check-drift.sh の
+# ①-2 は --render-settings-json の生成物と比較する。
 # Bedrock env取り込みの許可リスト（AIENV_ALLOWED_BEDROCK_ENV_KEYS）は
 # スクリプト冒頭（引数解析より前）で既に宣言済み——ここでは再宣言しない
 # （値表を複数箇所に増やさないため。2026-08-30 工程横断レビュー指摘・MAJOR-5
@@ -595,15 +624,32 @@ if not isinstance(data, dict):
 for key, mark in (("model", "__AIENV_MODEL__"), ("effortLevel", "__AIENV_EFFORT__")):
     if data.get(key) != mark:
         sys.exit("template %s field is not the %s placeholder (got: %r)" % (key, mark, data.get(key)))
+import re
+env = data.get("env", {})
+def positive_integer(key):
+    value = env.get(key)
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value):
+        sys.exit("invalid template env: " + key)
+    return int(value)
+compact_window = positive_integer("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+rewarn_step = positive_integer("CTX_REWARN_STEP")
+# Claudeの対応範囲内の整数のみ。欠落や範囲外を別の既定値で補わない。
+if not 100000 <= compact_window <= 1000000:
+    sys.exit("CLAUDE_CODE_AUTO_COMPACT_WINDOW outside supported range")
+if not 0 < rewarn_step < compact_window:
+    sys.exit("CTX_REWARN_STEP must be positive and below the compact window")
 '
 
 # check_settings_template <雛形の repo 相対パス> — A0（何も変える前）に雛形を検証する。不正なら理由 1 行で非0終了
 # （選択の保存・配置・既存 settings.json はどれも変えていない＝v1.2 設計 §3.3 F0）。
 check_settings_template() {
   local err
-  if ! err="$(python3 -c "$SETTINGS_TPL_CHECK_PY" "$DIR/$1" 2>&1)"; then
+  if ! err="$(python3 -c "$SETTINGS_TPL_CHECK_PY
+print(compact_window)
+" "$DIR/$1" 2>&1)"; then
     fail_settings_generation "settings.json の雛形が不正です。何も変えていません: $DIR/$1（${err##*$'\n'}）"
   fi
+  AIENV_AUTO_COMPACT_WINDOW="$err"
 }
 
 generate_settings_json() {
@@ -921,6 +967,42 @@ if [ -n "$RENDER_SETTINGS_JSON" ]; then
   exit 0
 fi
 
+# 初回の .pre-aienv.bak とは別に、今回の両設定の直前状態を守る。
+# 生成区間で失敗した場合は両方を復元する。不在と symlink も保持する。
+restore_generated_configs() {
+  local rc=${1:-$?} name dest restore_failed=0
+  if [ "$rc" != "0" ]; then
+    for name in .claude/settings.json .codex/config.toml; do
+      dest="$HOME/$name"
+      if [ -e "$CONFIG_SNAPSHOT/$name" ] || [ -L "$CONFIG_SNAPSHOT/$name" ]; then
+        mv -f "$CONFIG_SNAPSHOT/$name" "$dest" || restore_failed=1
+      else
+        rm -f "$dest" || restore_failed=1
+      fi
+    done
+    if [ "$restore_failed" != "0" ]; then
+      warn "両設定の復元に失敗しました。直前の退避を保持します: $CONFIG_SNAPSHOT"
+      return 1
+    fi
+    warn "両設定を今回の実行直前の状態へ戻しました。"
+  fi
+  rm -rf "$CONFIG_SNAPSHOT"
+  return 0
+}
+if [ "$DRY_RUN" != "1" ]; then
+  CONFIG_SNAPSHOT="$(mktemp -d)" || fail "両設定の直前退避を作成できません"
+  mkdir -p "$CONFIG_SNAPSHOT/.claude" "$CONFIG_SNAPSHOT/.codex"
+  for name in .claude/settings.json .codex/config.toml; do
+    if [ -e "$HOME/$name" ] || [ -L "$HOME/$name" ]; then
+      if ! cp -pP "$HOME/$name" "$CONFIG_SNAPSHOT/$name"; then
+        rm -rf "$CONFIG_SNAPSHOT"
+        fail "設定の直前退避に失敗しました。両設定は変更していません: $HOME/$name"
+      fi
+    fi
+  done
+  trap restore_generated_configs EXIT
+fi
+
 # --- ローカル実体プロファイルの雛形配置（2026-08-30 共通コア分離 §9.0 A-1 P1機構） ---
 # サンプル（team/data/profile.md.sample・repo管理下）から $AIENV_LOCAL_PROFILE_PATH
 # の雛形を作る。メイン/サブ共通（--sub-delegate経由でも実行する＝Claude Code／
@@ -1081,8 +1163,8 @@ fi
 # AC-10 ③）。v1.2 では A2（導出の一覧の全配置）が終わったこの位置で初めて決定・生成
 # する＝配置の途中で失敗したら旧 settings.json が残ったまま A2 の末尾で止まり、ここへ到達しない。
 # 部品の実行ビットは組立が付け直さない（git が記録する mode・台帳の検査 ⑦ の live と run の実体の検査で担保）。
-# --dry-run では resolver を呼ばない（「--dry-run は python3 を要求しない」保証を
-# 崩さない。計画表示は generate_settings_json() の dry-run 分岐が行う）。
+# --dry-run では resolver を呼ばず、generate_settings_json() の dry-run 分岐で
+# 計画を表示する。Python の機能と雛形の検査は A0 より前・A0 で行う。
 AIENV_SETTINGS_MODEL=""
 AIENV_SETTINGS_EFFORT=""
 AIENV_SKIP_SETTINGS_GENERATION=0
@@ -1111,6 +1193,16 @@ fi
 # 済ませている）。
 if [ "$AIENV_SKIP_SETTINGS_GENERATION" != "1" ]; then
   generate_settings_json core/assembly/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT" "$SEL_PLACES"
+fi
+
+# 掃除前に生成区間を閉じる。生成成功後の別件の非0終了では巻き戻さない。
+if [ "$DRY_RUN" != "1" ]; then
+  if [ "$AIENV_SETTINGS_WRITTEN" = "1" ]; then
+    restore_generated_configs 0
+  else
+    restore_generated_configs 1
+  fi
+  trap - EXIT
 fi
 
 # ============================================================

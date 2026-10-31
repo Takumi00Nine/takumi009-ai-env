@@ -85,7 +85,7 @@ scripts/codex-exec.sh	team/connect/codex/codex-exec.sh	移動	-
 scripts/usage-fetch.sh	usage/executor/usage-fetch.sh	移動	撤去
 scripts/install-usage-fetch.sh	usage/assembly/install-usage-fetch.sh	移動	-
 scripts/audit.sh	core/executor/audit.sh	移動	-
-scripts/session-handoff.sh	core/connect/claude-code/session-handoff.sh	移動	-
+scripts/session-handoff.sh	core/connect/claude-code/session-handoff.sh	移動	撤去
 scripts/install-main.sh	core/assembly/install-main.sh	移動	-
 scripts/install-sub.sh	core/assembly/install-sub.sh	移動	撤去
 scripts/update-sub.sh	core/assembly/update-sub.sh	移動	-
@@ -163,7 +163,7 @@ tests/test-managed-symlink.sh	tests/test-managed-symlink.sh	移動	-
 tests/test-model-definitions.sh	tests/test-model-definitions.sh	移動	-
 tests/test-personal-link-check.sh	tests/test-personal-link-check.sh	移動	-
 tests/test-role-candidates.sh	tests/test-role-candidates.sh	移動	-
-tests/test-session-handoff.sh	tests/test-session-handoff.sh	移動	-
+tests/test-session-handoff.sh	tests/test-session-handoff.sh	移動	撤去
 tests/test-shell-lib.sh	tests/test-shell-lib.sh	移動	-
 tests/test-update-sub.sh	tests/test-update-sub.sh	移動	-
 tests/test-usage-fetch.sh	tests/test-usage-fetch.sh	移動	-

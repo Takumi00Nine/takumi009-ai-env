@@ -535,7 +535,7 @@ fi
 assert_true "AC-78: 孤児ゼロ" "$orphan_free"
 rm -f "$STUB_STATE/hang_identify" "$STUB_STATE/hang_pids"
 
-echo "=== AC-78補強: TERMを無視する子孫がいてもタイムアウト予算内で終了し、子孫も生存しない（dock/executor/lib-model-view.sh run_with_timeout・scripts/session-handoff.sh側の同型回帰の写し） ==="
+echo "=== AC-78補強: TERMを無視する子孫がいてもタイムアウト予算内で終了し、子孫も生存しない（dock/executor/lib-model-view.sh run_with_timeout） ==="
 # TERM無視の子孫（trap '' TERM）が標準出力のパイプ書き込み端を握ったまま
 # 残ると、wait後にKILLで掃除しない実装ではcmd_pid自体がTERMで終了しても
 # 呼び出し元の command substitution（$(...)）がEOF待ちで子孫のsleep終了

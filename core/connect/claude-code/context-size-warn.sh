@@ -1,17 +1,10 @@
 #!/bin/bash
 # context-size-warn.sh — UserPromptSubmit フック
-# 現セッションのコンテキストサイズを transcript から推定し、しきい値超過で
-# リーダーに「切れ目の3条件がそろった最寄りの切れ目で自分の判断でセッションを区切れ」という合図をコンテキスト注入する。
-# （2026-10-03 本人決定: 警告は引き金でなく合図＝3条件は Preferences/session-handoff。2026-09-22: 本人への提案は廃止＝リーダーが確認なしで区切る。）
-# 背景: Fable 週次枠の主消費源は「長大セッション×多ターンの cache 読み」
-# （実測 2026-08-10・Fragments/2026-08/2026-08-10.md「Fable 週次枠の消費実測」）。
+# transcript から長さを推定し、要約前に案件ノートの未記録分を書く合図を出す。
 #
-# 環境変数（settings.json の env か plist で上書き可）:
-#   CTX_WARN_AT      初回警告しきい値（トークン。既定 300000＝2026-09-03 本人決定。
-#                    200k は 2026-08-10 本人決定（120k 起点だと直近14日の62%が警告対象で
-#                    過剰なため引き上げた値）だったが、200k 運用では切替頻度が高すぎたため
-#                    300k へ再度引き上げ。再警告の増分（+50k）は据え置き）
-#   CTX_REWARN_STEP  再警告の増分（既定 50000）
+# 環境変数（値の正本は core/assembly/settings.json の env）:
+#   CLAUDE_CODE_AUTO_COMPACT_WINDOW  共通の要約開始値
+#   CTX_REWARN_STEP  再警告の増分。警告長＝要約開始値−この幅
 #   CTX_WARN_MODELS  対象モデルの grep 正規表現（既定 . ＝全モデル）
 # リーダー判定はモデルでなく transcript の agentName で行う（2026-08-10 実測:
 # ワーカー/チームメイトのセッションは全行に agentName が付き、リーダーには付かない。
@@ -22,15 +15,18 @@
 set -u
 INPUT=$(cat) || exit 0
 
-WARN_AT="${CTX_WARN_AT:-300000}"
-REWARN_STEP="${CTX_REWARN_STEP:-50000}"
+COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}"
+REWARN_STEP="${CTX_REWARN_STEP:-}"
 WARN_MODELS="${CTX_WARN_MODELS:-.}"
 STATE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/context-size-warn"
 
-CTX_HOOK_INPUT="$INPUT" python3 - "$WARN_AT" "$REWARN_STEP" "$WARN_MODELS" "$STATE_DIR" <<'PYEOF' 2>/dev/null || exit 0
+CTX_HOOK_INPUT="$INPUT" python3 - "$COMPACT_WINDOW" "$REWARN_STEP" "$WARN_MODELS" "$STATE_DIR" <<'PYEOF' 2>/dev/null || exit 0
 import json, os, re, subprocess, sys
 
-warn_at, step = int(sys.argv[1]), int(sys.argv[2])
+window, step = int(sys.argv[1]), int(sys.argv[2])
+if not 0 < step < window:
+    sys.exit(0)
+warn_at = window - step
 model_re, state_dir = sys.argv[3], sys.argv[4]
 
 try:
@@ -49,17 +45,24 @@ with open(tp, "rb") as f:
     if size > 2_000_000:
         f.seek(size - 2_000_000)
         f.readline()  # 途中行を捨てる
-    tail = f.read().decode("utf-8", "replace")
+    tail_start = f.tell()
+    tail = f.read()
 
 ctx = 0
 model = ""
 agent_name = None
-for line in tail.splitlines():
-    if '"usage"' not in line:
-        continue
+boundary = 0
+decrease = 0
+position = tail_start
+for line in tail.splitlines(keepends=True):
+    position += len(line)
     try:
         o = json.loads(line)
     except Exception:
+        continue
+    if o.get("type") == "system" and o.get("subtype") == "compact_boundary":
+        boundary = position
+        ctx = 0
         continue
     if o.get("type") != "assistant":
         continue
@@ -68,6 +71,8 @@ for line in tail.splitlines():
         + (u.get("cache_read_input_tokens", 0) or 0) \
         + (u.get("cache_creation_input_tokens", 0) or 0)
     if c > 0:
+        if c < ctx:
+            decrease = position
         ctx = c
         model = (o.get("message") or {}).get("model") or model
         agent_name = o.get("agentName")
@@ -76,22 +81,26 @@ for line in tail.splitlines():
 if agent_name:
     sys.exit(0)
 
-if ctx < warn_at or not re.search(model_re, model, re.I):
+if not ctx or not re.search(model_re, model, re.I):
     sys.exit(0)
 
 # 再警告制御: 前回警告時のコンテキストから step 以上増えるまで沈黙
 os.makedirs(state_dir, exist_ok=True)
 state_file = os.path.join(state_dir, sid)
 last = 0
+cycle = [boundary, decrease]
 try:
     with open(state_file) as f:
-        last = int(f.read().strip() or 0)
+        state = json.load(f)
+    if state.get("cycle") == cycle and ctx >= state.get("ctx", 0):
+        last = state.get("last", 0)
 except Exception:
     pass
-if last and ctx < last + step:
-    sys.exit(0)
+notify = ctx >= warn_at and (not last or ctx >= last + step)
 with open(state_file, "w") as f:
-    f.write(str(ctx))
+    json.dump(dict(cycle=cycle, ctx=ctx, last=ctx if notify else last), f)
+if not notify:
+    sys.exit(0)
 
 # ターン数（参考表示・grep は高速）
 try:
@@ -103,12 +112,10 @@ except Exception:
     turns = "?"
 
 print(
-    f"⚠️【セッション肥大化警告】現在のコンテキスト推定 ~{ctx//1000}k トークン"
+    f"⚠️【要約前の記録確認】現在のコンテキスト推定 ~{ctx//1000}k トークン"
     f"（しきい値 {warn_at//1000}k 超・model={model}・assistant応答 {turns} 回）。"
-    "cache読み消費はターン数×コンテキスト長に比例して膨らむ（Fable週次枠の主消費源・実測 2026-08-10）。"
-    "この警告は「3条件を満たす最寄りの切れ目を予定する合図」であって引き金ではない＝切れ目の3条件（①成果物が確定し本人確認済み ②対話で出た意図・捨てた案と理由・未決の論点と傾きが全部ファイルにある ③次のセッションが本人に聞き直さない）が全部そろった最寄りの切れ目で、本人に確認せずリーダーの判断でセッションを区切ること。超過を理由に3条件を緩めない。強制上限（値＝Preferences/session-handoff）に推定値が達したときだけ未達でも切る"
-    "（手順＝Preferences/session-handoff・本人へは新セッション起動後に1行報告）。"
-    "作業の中断はしない（強制上限到達時を除く）。この警告への言及は区切る時のみでよい。"
+    "案件ノートの進捗・次の作業・留意事項と検討経緯への参照を更新し、同じ画面で続ける。"
+    "警告は記録完了の証拠ではない。工程の節目と大きな処理の前にも未記録分を保存する。"
 )
 PYEOF
 exit 0

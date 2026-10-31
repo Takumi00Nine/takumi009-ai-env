@@ -766,7 +766,7 @@ echo "======================================================================"
 # 除外）の2種類。
 KNOWN_APP_MANAGED_TOML_TABLE_PREFIXES=(
   "marketplaces"            # プラグインのキャッシュパス・last_updated。次回起動時にCodexが再スキャンする
-  "hooks.state"              # hooks.json の信頼ハッシュキャッシュ（新Macでは初回に一度だけ再確認されるだけ）
+  "hooks.state"              # 機固有の有効・無効と信頼状態（installer が保持する）
   "projects"                 # フォルダごとのtrust_level履歴
   "tui"                      # オンボーディング通知の既読カウンタ等（実質的な設定ではない）
   "shell_environment_policy" # Codex.appがファイル末尾の機械管理領域に自動追記するセクション。ビルド毎に変わるNODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S等を含む。2026-08-03のアプリ書換で出現・2026-08-05実測確認
@@ -815,7 +815,7 @@ else
     # 出す（値はrepr()経由なので改行・タブ自体はエスケープされ、この
     # タブ区切りパースを壊さない）。
     TOML_CLASSIFY_OUT="$(python3 -c "
-import sys, tomllib
+import json, sys, tomllib
 
 def flatten(d, prefix=''):
     out = {}
@@ -831,8 +831,15 @@ def flatten(d, prefix=''):
     return out
 
 def load(path):
-    with open(path, 'rb') as f:
-        return tomllib.load(f)
+    with open(path) as f:
+        text = f.read()
+    if path == sys.argv[2] and '__AIENV_AUTO_COMPACT_WINDOW__' in text:
+        with open(sys.argv[5]) as f:
+            value = json.load(f)['env']['CLAUDE_CODE_AUTO_COMPACT_WINDOW']
+        if not isinstance(value, str) or not value.isascii() or not value.isdigit():
+            raise ValueError('invalid shared compact window')
+        text = text.replace('__AIENV_AUTO_COMPACT_WINDOW__', str(int(value)))
+    return tomllib.loads(text)
 
 table_prefixes = [p for p in sys.argv[3].split(chr(0x1f)) if p]
 leaf_keys = set(k for k in sys.argv[4].split(chr(0x1f)) if k)
@@ -892,7 +899,7 @@ for key in sorted(set(live) | set(template)):
             print(f'DRIFT\tDIFF\t{key}\t{template[key]!r}\t{live[key]!r}')
     else:
         print(f'WARN\t{key}\t{live[key]!r}')
-" "$LIVE_NORMALIZED_TMP" "$CONFIG_TOML_TEMPLATE" "$table_prefixes_joined" "$leaf_keys_joined" 2>&1)"
+" "$LIVE_NORMALIZED_TMP" "$CONFIG_TOML_TEMPLATE" "$table_prefixes_joined" "$leaf_keys_joined" "$SETTINGS_JSON_TEMPLATE" 2>&1)"
     TOML_CLASSIFY_RC=$?
     rm -f "$LIVE_NORMALIZED_TMP"
     if [ "$TOML_CLASSIFY_RC" -ne 0 ]; then
