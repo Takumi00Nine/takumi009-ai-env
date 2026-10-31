@@ -1194,6 +1194,121 @@ sf_check 'S8-H04: フック状態を解釈できなければ生成失敗' test "
 sf_check 'S8-H05: 読めない状態を捨ててCodex設定を置き換えない' cmp -s "$SF_WORK/unreadable-state.toml" "$SF_HOME/.codex/config.toml"
 rm -rf "$SF_WORK"
 
+# 要望8・点検BLOCKING: 初回backupではなく、再実行の直前へ両設定を戻す。
+# この区間だけを抽出して実行できるよう、fixtureと前提を独立させる。
+# S8-G10-BEGIN
+. "$TESTS_DIR/lib-session-fixtures.sh"
+for failed_side in claude codex; do
+  sf_init
+  mkdir -p "$SF_HOME/.claude" "$SF_HOME/.codex"
+  printf '{"initial_backup":true}\n' > "$SF_HOME/.claude/settings.json"
+  printf '# initial backup\n' > "$SF_HOME/.codex/config.toml"
+  sf_check "S8-G10 ($failed_side): 初回インストール成功" sf_install
+  sf_set_env CLAUDE_CODE_AUTO_COMPACT_WINDOW 400000
+  sf_check "S8-G11 ($failed_side): 再インストール成功・直前状態を作る" sf_install
+  for config in .claude/settings.json .codex/config.toml; do
+    sf_check "S8-G12 ($failed_side): $config の初回backupと直前状態は異なる" \
+      test "$(cmp -s "$SF_HOME/$config.pre-aienv.bak" "$SF_HOME/$config"; echo $?)" -eq 1
+  done
+  cp "$SF_HOME/.claude/settings.json" "$SF_WORK/before-settings.json"
+  cp "$SF_HOME/.codex/config.toml" "$SF_WORK/before-config.toml"
+  sf_set_env CLAUDE_CODE_AUTO_COMPACT_WINDOW 500000
+
+  # Python自体は動かし、対象生成の出力段階だけ失敗させる。
+  # 本番installerの変更や、実設定・実gitへの接続は行わない。
+  real_python="$(command -v python3)"
+  printf '#!/bin/bash\nexec "%s" "$@"\n' "$real_python" > "$SF_WORK/bin/python-real"
+  cat > "$SF_WORK/bin/python3" <<'SH'
+#!/bin/bash
+case "$S8_FAILED_SIDE:$1:${4:-}" in
+  claude:-c:*/.settings.json.aienv-tmp.*) ;;
+  codex:-:*/.config.toml.aienv-tmp.*) ;;
+  *) exec "$(dirname "$0")/python-real" "$@" ;;
+esac
+printf 'injected generation failure\n' > "$HOME/../failure-reached"
+exit 1
+SH
+  chmod +x "$SF_WORK/bin/python3" "$SF_WORK/bin/python-real"
+  rc=0
+  sf_env env S8_FAILED_SIDE="$failed_side" bash "$SF_REPO/core/assembly/install-main.sh" \
+    --select core,team > "$SF_WORK/install.log" 2>&1 || rc=$?
+  sf_check "S8-G13 ($failed_side): 対象の生成失敗に到達" test -f "$SF_WORK/failure-reached"
+  sf_check "S8-G14 ($failed_side): 片側の生成失敗を非0で報告" test "$rc" -ne 0
+  sf_check "S8-G15 ($failed_side): Claude設定は今回の実行直前とbyte一致" \
+    cmp -s "$SF_WORK/before-settings.json" "$SF_HOME/.claude/settings.json"
+  sf_check "S8-G16 ($failed_side): Codex設定は今回の実行直前とbyte一致" \
+    cmp -s "$SF_WORK/before-config.toml" "$SF_HOME/.codex/config.toml"
+  rm -rf "$SF_WORK"
+done
+
+# 要望8・点検MAJOR: Pythonは存在するがTOML読み取り機能が無い環境。
+for mode in apply dry-run; do
+  sf_init
+  mkdir -p "$SF_HOME/.claude" "$SF_HOME/.codex" "$SF_WORK/no-toml"
+  printf '{"keep":"claude"}\n' > "$SF_HOME/.claude/settings.json"
+  printf '# keep codex\n' > "$SF_HOME/.codex/config.toml"
+  cp -R "$SF_HOME" "$SF_WORK/before-home"
+  cat > "$SF_WORK/no-toml/sitecustomize.py" <<'PY'
+import sys
+
+class NoToml:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in ('tomllib', 'tomli'):
+            raise ModuleNotFoundError("No module named '" + fullname + "'")
+
+sys.meta_path.insert(0, NoToml())
+PY
+  args=(--select core,team)
+  [ "$mode" != dry-run ] || args+=(--dry-run)
+  rc=0
+  sf_env env PYTHONPATH="$SF_WORK/no-toml" bash "$SF_REPO/core/assembly/install-main.sh" \
+    "${args[@]}" > "$SF_WORK/install.log" 2>&1 || rc=$?
+  sf_check "S8-G17 ($mode): TOML読み取り機能不足で非0終了" test "$rc" -ne 0
+  sf_check "S8-G18 ($mode): TOMLまたは必要Python版の理由を表示" \
+    grep -qiE 'toml|Python[^[:cntrl:]]*3[.]11' "$SF_WORK/install.log"
+  sf_check "S8-G19 ($mode): 設定変更開始前に失敗・偽HOME全体が不変" \
+    diff -r "$SF_WORK/before-home" "$SF_HOME"
+  rm -rf "$SF_WORK"
+done
+# S8-G19-END
+
+# 要望8・点検2巡目BLOCKING: 生成成功後の別件の非0終了では旧登録を復活させない。
+# S8-G20-BEGIN
+. "$TESTS_DIR/lib-session-fixtures.sh"
+sf_init
+printf '# temporary role\n' > "$SF_REPO/team/rules/agents/test-s8-retired.md"
+rc=0
+sf_env bash "$SF_REPO/core/assembly/install-main.sh" --select all \
+  > "$SF_WORK/install.log" 2>&1 || rc=$?
+sf_check 'S8-G20: 全部入りの初回インストール成功' test "$rc" -eq 0
+sf_check 'S8-G21: 縮小前に選択外となるフックの実体が存在' \
+  test -f "$SF_HOME/.claude/hooks/vault-recall.sh"
+# 配布済みの職種定義だけをrepoから消し、古いリンクを残す。
+rm "$SF_REPO/team/rules/agents/test-s8-retired.md"
+rc=0; sf_install || rc=$?
+sf_check 'S8-G22: core,teamへの縮小は古い職種リンクにより非0終了' test "$rc" -ne 0
+sf_check 'S8-G23: danglingの対象職種を報告' \
+  grep -qE 'AGENTS: dangling .*test-s8-retired' "$SF_WORK/install.log"
+sf_check 'S8-G24: 非0終了でも選択外フックの掃除に到達' \
+  test ! -L "$SF_HOME/.claude/hooks/vault-recall.sh"
+sf_check 'S8-G25: 終了後のClaude設定が参照する全フックの実体が存在' \
+  python3 - "$SF_HOME" <<'PY'
+import json, pathlib, shlex, sys
+home = pathlib.Path(sys.argv[1])
+settings = json.loads((home / '.claude/settings.json').read_text())
+commands = [hook['command']
+            for groups in settings['hooks'].values()
+            for group in groups for hook in group['hooks']
+            if hook.get('type') == 'command']
+assert commands, '登録フックが空'
+paths = [pathlib.Path(shlex.split(command)[0].replace('$HOME', str(home)))
+         for command in commands]
+missing = [str(path) for path in paths if not path.is_file()]
+assert not missing, '参照先の実体が存在しない: ' + ', '.join(missing)
+PY
+rm -rf "$SF_WORK"
+# S8-G25-END
+
 . "$TESTS_DIR/lib-session-warning-cases.sh"
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
