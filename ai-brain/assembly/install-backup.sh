@@ -12,7 +12,7 @@
 # dotfiles/install.sh の install_launchagent() との違い（意図的）: あちらは
 # bootstrap直後に `launchctl kickstart -k` で即時1回実行するが、本スクリプトは
 # **bootstrap+enableのみ**で即時実行はしない（plist側もRunAtLoad=false）。
-# 初回実行は次のStartInterval（最大6時間後）を待つか、準備が整ってから
+# 初回実行は次のStartInterval（最大24時間後）を待つか、準備が整ってから
 # `launchctl kickstart -k gui/$(id -u)/com.takumi009.backup-vault` を手動実行する。
 # (README "Setup" 2026-09-19) Both `install-backup.sh` and `install-maintenance.sh` only place the LaunchAgents (bootstrap+enable) — they do **not** trigger an immediate run (kickstart) (because initializing the Vault as a Git repository for the first time is meant to be a staged rollout. Either wait for the next scheduled run, or once you're ready, run `launchctl kickstart -k` manually).
 #

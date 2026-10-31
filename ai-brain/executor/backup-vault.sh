@@ -5,8 +5,8 @@
 # （2026-09-19: README 側は 1 文に縮小＝運用の詳細の正本は本ヘッダの「処理順序」。
 #   remote の作成・設定は本人が行う＝下記 5.）
 #
-# ai-brain/assembly/com.takumi009.backup-vault.plist から6時間おき（2026-07-24に
-# 毎時から変更）に無人実行される
+# ai-brain/assembly/com.takumi009.backup-vault.plist から24時間おき（2026-07-24に
+# 毎時→6時間、2026-10-31に6時間→24時間へ変更）に無人実行される
 # 前提のスクリプト（ai-brain/assembly/install-backup.sh が配置する。旧ラベル名
 # com.takumi009.vault-backupは2026-07-16簡素化で改名済み＝設計書§5）。
 #
@@ -82,8 +82,8 @@ done
 : "${VAULT_BACKUP_BRANCH:=main}"
 # stale判定の閾値。バックアップ実行自体は数秒〜数分で終わるため、1時間
 # （3600秒）を超えて残っているロックは「前回実行がクラッシュして片付けられ
-# なかったロック」とみなせる。LaunchAgentの実行間隔（2026-07-24に毎時→6時間
-# =21600秒へ変更）より短い値なら、次回発火時に確実にstale回収される。
+# なかったロック」とみなせる。LaunchAgentの実行間隔（2026-10-31から24時間
+# =86400秒）より短い値なら、次回発火時に確実にstale回収される。
 STALE_LOCK_SECONDS="${STALE_LOCK_SECONDS:-3600}"
 # maintenance.sh（週次ランナー・PR2・未実装）がPhase0〜Phase3の間保持するVault
 # 書込ロック。本スクリプトは自分では取得・作成しない（is_pid_lock_heldによる
