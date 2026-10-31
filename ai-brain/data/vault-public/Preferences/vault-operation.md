@@ -27,6 +27,7 @@ aliases:
 ## 書き方の鉄則
 - 該当が出たら**リーダーがその場で自分で書く**。既存ノートへの追記・状態記号・frontmatter・置換から、新規ノート・Preferences の編集・本文の書き換え・複数ノートの整合まで、軽重に関係なくリーダーが内容を決定して直接書く。**ワーカーは Vault（人間向け領域の Blogs/・Explorations/ を含む）へ書かず**、記録候補を最終報告の「Vault記録候補:」で申告する。この役割の決まりはモード・呼び出し経路によらず守り、書き込みを止める仕組みは追加しない。
 - **Preferences の編集と公開スナップショットの生成・commit**はメイン機のリーダーだけが行う。実行前に `~/.config/takumi009-ai-env/profile.md` の `machine_role` が `configured value=main` であることを確認する（[[Preferences/core-workflow]] §5）。
+- **共有フォルダの書き方**（リーダーが同時に複数いても消さない）: `Fragments/` の日次ファイルは末尾への追記で書き、ファイル全体を読み込んで書き戻さない。既存の行を書き換えるとき（昇格の印など）は書く直前に読み直す。`Preferences/`・`Knowledge/`・`Decisions/`・`Personal/` の既存ノートを書き換えるときは、書く直前に読み直してから書く。`Projects/` は担当リーダーが書く（[[Decisions/2026-10-31-shared-folder-write-rule]]）。
 - 長くなったら分割（目安8,000字・Decisions は対象外）＝詳細を別ノートへ分離し相互リンク。
 - フロントマター必須（date/tags/project）・本文編集で `updated` 更新。wiki link はフォルダ付き `[[Folder/note]]`・関連ノートは**相互に**リンク。
 - aliases 必須（README 除く）＝想起フックの検索キー。実際に打ちそうな語（目安5個・他ノートと重ならない固有語・汎用語禁止・迷ったら付けない）で、**うち1個以上は「その知識を使う場面で口にする語」**（技法名・カタログ名だけにしない＝[[Decisions/2026-09-23-situational-aliases-and-milestone-recall]]）。外部情報系は `review_by:`（任意）。
