@@ -148,6 +148,7 @@ suite	tests/test-delegation-gate-v2.sh	team	-	-	-	-	-	-
 suite	tests/test-inprocess-gate.sh	team	-	-	-	-	-	-
 suite	tests/test-model-definitions.sh	team	-	-	-	-	-	-
 suite	tests/test-role-candidates.sh	team	-	-	-	-	-	-
+suite	tests/test-scribe-retired.sh	team	-	-	-	-	-	-
 suite	tests/test-session-status.sh	team	-	-	-	-	-	-
 suite	tests/test-install-usage-fetch.sh	usage	-	-	-	-	-	-
 suite	tests/test-usage-fetch.sh	usage	-	-	-	-	-	-

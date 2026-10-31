@@ -85,7 +85,7 @@ team_mode:        configured value=full
 no_read_paths:    unavailable
 machine_role:     configured value=main
 role.implementer: configured model=t-sonnet-high,t-sonnet-low,t-opus-high
-role.vault-scribe: configured model=sonnet-noeffort
+role.operator: configured model=sonnet-noeffort
 role.verifier:    configured model=t-sonnet-medium
 role.system-designer: configured model=sonnet-legacy
 role.researcher:  not_adopted
@@ -322,7 +322,7 @@ echo "=== AC-6: effort_present / effort_absent_no_flag / effort_differs_between_
   assert_eq "effort_present: --effort high" "high" "$(stub_arg_after --effort)"
 
   new_fixture
-  run_wrapper --role vault-scribe --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-ac6b --model-def sonnet-noeffort
+  run_wrapper --role operator --prompt-file "$PROMPT" --out "$WORK/o2.json" --task-id t-ac6b --model-def sonnet-noeffort
   assert_true "effort_absent_no_flag: --effortが引数に現れない" "$([ "$(stub_argv_has --effort)" = "0" ] && echo 1 || echo 0)"
   argv_json="$(python3 -c 'import json,sys; print(json.dumps([json.loads(l)["argv"] for l in open(sys.argv[1]) if l.strip()][-1]))' "$STUBLOG")"
   assert_not_contains "effort_absent_no_flag: effortLevelも現れない" "$argv_json" "effortLevel"
@@ -486,19 +486,21 @@ EOF
   assert_eq "柵が0本(全部リーダー専用): exit8" "8" "$RC"
   assert_eq "柵が0本: stub 0行" "0" "$(stub_lines)"
 
-  # 裁定A: child_settings_has_vault_gate_for_non_scribe /
-  # child_settings_omits_vault_gate_for_vault_scribe
+  # 裁定A: child_settings_has_vault_gate_for_implementer /
+  # child_settings_has_vault_gate_for_operator
   new_fixture
   run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g1 --model-def t-sonnet-high
   s_impl="$(stub_settings_json)"
-  if key_absent ai-brain.write-gate; then skip_case "child_settings_has_vault_gate_for_non_scribe（AI Brain の鍵 ai-brain.write-gate なし）"; else
-    assert_contains "child_settings_has_vault_gate_for_non_scribe" "$s_impl" "vault-write-gate.sh"
+  if key_absent ai-brain.write-gate; then skip_case "child_settings_has_vault_gate_for_implementer（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_contains "child_settings_has_vault_gate_for_implementer" "$s_impl" "vault-write-gate.sh"
   fi
 
   new_fixture
-  run_wrapper --role vault-scribe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g2 --model-def sonnet-noeffort
-  s_scribe="$(stub_settings_json)"
-  assert_not_contains "child_settings_omits_vault_gate_for_vault_scribe" "$s_scribe" "vault-write-gate.sh"
+  run_wrapper --role operator --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g2 --model-def sonnet-noeffort
+  s_operator="$(stub_settings_json)"
+  if key_absent ai-brain.write-gate; then skip_case "child_settings_has_vault_gate_for_operator（AI Brain の鍵 ai-brain.write-gate なし）"; else
+    assert_contains "child_settings_has_vault_gate_for_operator" "$s_operator" "vault-write-gate.sh"
+  fi
 
   # child_settings_drops_empty_entry (DR1-m5): ^Agent$エントリ(command1本=
   # agent-model-guard.shのみ)が丸ごと落ちること（=matcher "^Agent$" が
@@ -869,8 +871,8 @@ print("1" if (len(ids) == len(set(ids)) and fmt_ok) else "0")
 echo "=== 新設①: allowed_tools_matches_role_tools ==="
 {
   new_fixture
-  run_wrapper --role vault-scribe --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-newac1 --model-def sonnet-noeffort
-  expect_tools="$(python3 "$REPO_ROOT/team/connect/claude-code/agent_def.py" allowed-tools --dir "$AGENTS_DIR" --role vault-scribe)"
+  run_wrapper --role operator --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-newac1 --model-def sonnet-noeffort
+  expect_tools="$(python3 "$REPO_ROOT/team/connect/claude-code/agent_def.py" allowed-tools --dir "$AGENTS_DIR" --role operator)"
   actual_tools="$(stub_arg_after --allowedTools)"
   assert_eq "allowed_tools_matches_role_tools: agent_def.pyの出力と一致" "$expect_tools" "$actual_tools"
 }
@@ -1007,7 +1009,7 @@ fi
 
 # ============================================================
 # RC-X（職種の追加・削除を設定だけで完結させる設計 2026-09-20 §3・§4.5）:
-# Vault 書込宣言（frontmatter `aienv-vault-write: allowed`）で柵の有無を決める。
+# 全職種へ柵を載せる。退役した宣言を無視する検査は専用の受入テストへ集約。
 # 職種名の名指し・件数の固定はしない（定義集合はディレクトリの中身そのもの）。
 # ============================================================
 
@@ -1062,56 +1064,6 @@ run_child_settings() {
   CS_STDERR="$(cat "$WORK/cs-stderr.log" 2>/dev/null || true)"
 }
 
-echo "=== RC-X1. child-settings 直叩き: 宣言の 4 状態（なし／有効／不正／重複）＋未知 aienv- キー（AC-3(a)(b)(c)） ==="
-{
-  new_fixture
-  RCX_DIR="$WORK/decl-agents"
-  mkdir -p "$RCX_DIR"
-  write_probe_def "$RCX_DIR/decl-ok.md"   decl-ok   "aienv-vault-write: allowed"
-  write_probe_def "$RCX_DIR/decl-none.md" decl-none
-  write_probe_def "$RCX_DIR/decl-bad.md"  decl-bad  "aienv-vault-write: yes"
-  write_probe_def "$RCX_DIR/decl-dup.md"  decl-dup  "aienv-vault-write: yes" "aienv-vault-write: allowed"
-  write_probe_def "$RCX_DIR/decl-typo.md" decl-typo "aienv-vault-writ: allowed"
-
-  run_child_settings decl-ok "$RCX_DIR"
-  assert_eq "RC-X1 decl-ok: exit 0" "0" "$CS_RC"
-  assert_eq "RC-X1 decl-ok: vault-write-gate エントリ 0 件" "0" "$(count_vault_gate_entries "$CS_STDOUT")"
-
-  run_child_settings decl-none "$RCX_DIR"
-  assert_eq "RC-X1 decl-none: exit 0" "0" "$CS_RC"
-  if key_absent ai-brain.write-gate; then skip_case "RC-X1 decl-none: vault-write-gate エントリ 1 件（AI Brain の鍵 ai-brain.write-gate なし）"; else
-    assert_eq "RC-X1 decl-none: vault-write-gate エントリ 1 件" "1" "$(count_vault_gate_entries "$CS_STDOUT")"
-  fi
-
-  for pair in "decl-bad:VAULT_WRITE_DECLARATION_INVALID" \
-              "decl-dup:VAULT_WRITE_DECLARATION_DUPLICATE" \
-              "decl-typo:AIENV_KEY_UNKNOWN"; do
-    r="${pair%%:*}"; code="${pair#*:}"
-    run_child_settings "$r" "$RCX_DIR"
-    assert_eq "RC-X1 $r: exit 1" "1" "$CS_RC"
-    assert_eq "RC-X1 $r: stdout 空" "" "$CS_STDOUT"
-    assert_eq "RC-X1 $r: stderr がちょうど 1 行（traceback でない）" "1" "$(wc -l < "$WORK/cs-stderr.log" | tr -d ' ')"
-    assert_true "RC-X1 $r: stderr が $code で始まる" "$([[ "$CS_STDERR" == "$code"* ]] && echo 1 || echo 0)"
-  done
-  # 後勝ちで 0 件にならない＝重複は DUPLICATE であって INVALID/成功ではない。
-  run_child_settings decl-dup "$RCX_DIR"
-  assert_not_contains "RC-X1 decl-dup: INVALID ではなく DUPLICATE" "$CS_STDERR" "VAULT_WRITE_DECLARATION_INVALID"
-}
-
-echo "=== RC-X2. ラッパー経由: 宣言が不正な職種は子を起動せず exit 8（AC-3(c)） ==="
-{
-  new_fixture
-  RCX2_DIR="$WORK/decl-agents"
-  mkdir -p "$RCX2_DIR"
-  write_probe_def "$RCX2_DIR/decl-bad.md" decl-bad "aienv-vault-write: yes"
-  profile_add_role_line "role.decl-bad: configured model=t-sonnet-high"
-  export AIENV_AGENT_SOURCE_DIR="$RCX2_DIR"
-  run_wrapper --role decl-bad --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-rcx2 --model-def t-sonnet-high
-  assert_eq "RC-X2: exit 8" "8" "$RC"
-  assert_eq "RC-X2: stub 0 行（子は起動しない）" "0" "$(stub_lines)"
-  assert_contains "RC-X2: stderr に原因コード" "$RUN_STDERR" "VAULT_WRITE_DECLARATION_INVALID"
-}
-
 echo "=== RC-X3. ラッパー経由: 実定義の複製＋probe（宣言なし）で起動・--agents は probe・柵 1 件・--allowedTools=Read（AC-1④⑥） ==="
 {
   new_fixture
@@ -1148,7 +1100,7 @@ echo "=== RC-X4. ラッパー経由: probe を zz-probe-b へ改名（削除＋�
   assert_eq "RC-X4: --allowedTools=Read" "Read" "$(stub_arg_after --allowedTools)"
 }
 
-echo "=== RC-X5. 実定義の全件: vault_declared_writable の真偽と child-settings の柵の件数が 1:1（AC-3 回帰） ==="
+echo "=== RC-X5. 実定義の全件: child-settings に全職種共通の柵が 1 件（AC-3 回帰） ==="
 {
   new_fixture
   rcx5_n=0
@@ -1156,16 +1108,11 @@ echo "=== RC-X5. 実定義の全件: vault_declared_writable の真偽と child-
     [ -f "$f" ] || continue
     rcx5_n=$((rcx5_n + 1))
     role="${f##*/}"; role="${role%.md}"
-    declared="$(PYTHONPATH="$REPO_ROOT/team/connect/claude-code" python3 -c 'import sys, agent_def; print(agent_def.vault_declared_writable(sys.argv[1], sys.argv[2]))' "$REAL_AGENTS_DIR" "$role" 2>&1)"
     run_child_settings "$role" "$REAL_AGENTS_DIR"
     assert_eq "RC-X5 $role: child-settings exit 0" "0" "$CS_RC"
-    case "$declared" in
-      True)  want=0 ;;
-      False) want=1 ;;
-      *)     want="(vault_declared_writable failed: $declared)" ;;
-    esac
-    if [ "$want" = "1" ] && key_absent ai-brain.write-gate; then skip_case "RC-X5 $role: 宣言と vault-write-gate エントリの件数（AI Brain の鍵 ai-brain.write-gate なし）"; else
-      assert_eq "RC-X5 $role: 宣言=$declared ↔ vault-write-gate エントリ $want 件" "$want" "$(count_vault_gate_entries "$CS_STDOUT")"
+    want=1
+    if [ "$want" = "1" ] && key_absent ai-brain.write-gate; then skip_case "RC-X5 $role: vault-write-gate エントリの件数（AI Brain の鍵 ai-brain.write-gate なし）"; else
+      assert_eq "RC-X5 $role: vault-write-gate エントリ $want 件" "$want" "$(count_vault_gate_entries "$CS_STDOUT")"
     fi
   done
   assert_true "RC-X5: 実定義が 1 件以上ある（空虚な真の禁止）" "$([ "$rcx5_n" -ge 1 ] && echo 1 || echo 0)"

@@ -438,7 +438,7 @@ fi
 # （§2.5）。 -------------------------------------------------------------
 CHILD_SETTINGS_JSON="$(python3 "$CLAUDE_EXEC_PY" child-settings --src "$CHILD_SETTINGS_SRC" --role "$ROLE" --child-cwd "$OUT_DIR" --agents-dir "$AGENTS_DIR")"
 if [ -z "$CHILD_SETTINGS_JSON" ]; then
-  echo "[$SCRIPT_NAME] FAIL: 子へ届ける柵を組み立てられません（抽出元が読めない、柵が0本、または Vault 書込宣言が不正です）: $CHILD_SETTINGS_SRC" >&2
+  echo "[$SCRIPT_NAME] FAIL: 子へ届ける柵を組み立てられません（抽出元が読めない、柵が0本、または Vault 保護の台帳・実体が異常です）: $CHILD_SETTINGS_SRC" >&2
   fail_exit 8 child_settings_unavailable
 fi
 

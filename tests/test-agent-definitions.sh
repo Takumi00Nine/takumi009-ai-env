@@ -60,7 +60,7 @@ assert_contains_file() {
 }
 
 # ------------------------------------------------------------------
-# 定義ファイル契約 (a)〜(g) の検査（職種の追加・削除を設定だけで完結させる
+# 定義ファイル契約 (a)〜(f) の検査（職種の追加・削除を設定だけで完結させる
 # 設計 2026-09-20 §4.3・§6.1・FR-12）。<dir>/*.md のうち Path.is_file()
 # （symlink を辿る＝ガードの `-f` と同じ集合）の各ファイルについて契約を
 # **全部**評価し、違反を `<ファイル名>: <CODE>` で 1 行ずつ出力する（短絡
@@ -69,9 +69,6 @@ assert_contains_file() {
 #   (a)(b)(d) … agent_def.load_agent_def の例外コードで判定
 #               （ROLE_INVALID→NAME_FORMAT_INVALID・ROLE_NAME_MISMATCH→
 #               NAME_FILENAME_MISMATCH・FRONTMATTER_FIELD_*／BODY_EMPTY はそのまま）
-#   (g)       … agent_def.vault_declared_writable の例外コードをそのまま
-#               （VAULT_WRITE_DECLARATION_INVALID／VAULT_WRITE_DECLARATION_DUPLICATE
-#               ／AIENV_KEY_UNKNOWN）。宣言の解析ロジックはテスト側に持たない
 #   (c)(e)(f) … このヘルパ内で直接見る（BUILTIN_NAME_COLLISION・
 #               MODEL_KEY_FORBIDDEN・EFFORT_KEY_FORBIDDEN・
 #               PERMISSION_HEADING_COUNT・LEGACY_REFERENCE_PRESENT）
@@ -161,13 +158,6 @@ for path in files:
     if "worker-role-prompts" in text:
         add("LEGACY_REFERENCE_PRESENT")
 
-    # (g)
-    try:
-        agent_def.vault_declared_writable(agents_dir, stem)
-    except agent_def.AgentDefError as exc:
-        c = code_of(exc)
-        add(CODE_MAP.get(c, c))
-
     for c in codes:
         violations.append(f"{path.name}: {c}")
 
@@ -177,7 +167,7 @@ sys.exit(1 if violations else 0)
 PYCONTRACT
 }
 
-# 要件 §7 の probe 定義（契約 (a)〜(g) だけを満たす最小形・宣言なし）を書く。
+# 要件 §7 の probe 定義（契約 (a)〜(f) だけを満たす最小形）を書く。
 # 引数: <出力パス> <name> [<frontmatter に足す行>...]（陰性 fixture 用）
 write_probe_def() {
   local out="$1" name="$2" extra
@@ -196,7 +186,7 @@ write_probe_def() {
   } > "$out"
 }
 
-echo "=== AD-C1. 定義ファイル契約 (a)〜(g): 検査対象ディレクトリの全定義が違反 0 件（AC-9①・FR-12） ==="
+echo "=== AD-C1. 定義ファイル契約 (a)〜(f): 検査対象ディレクトリの全定義が違反 0 件（AC-9①・FR-12） ==="
 {
   adc1_out="$(contract_check "$AGENTS_DIR")"
   adc1_rc=$?
@@ -302,23 +292,6 @@ probe body without the heading
 EOF
   adc3_assert_violation "## 権限 が 0 件" "$ADC3_DIR" "zz-probe.md: PERMISSION_HEADING_COUNT"
 
-  # (g) 値が不正
-  adc3_new_dir
-  write_probe_def "$ADC3_DIR/zz-probe.md" zz-probe "aienv-vault-write: yes"
-  adc3_assert_violation "宣言の値が yes" "$ADC3_DIR" "zz-probe.md: VAULT_WRITE_DECLARATION_INVALID"
-
-  # (g) 重複（不正値の後に allowed＝後勝ちで有効にならない・INVALID を出さない）
-  adc3_new_dir
-  write_probe_def "$ADC3_DIR/zz-probe.md" zz-probe "aienv-vault-write: yes" "aienv-vault-write: allowed"
-  adc3_assert_violation "宣言が 2 行" "$ADC3_DIR" "zz-probe.md: VAULT_WRITE_DECLARATION_DUPLICATE"
-  adc3_dup_out="$(contract_check "$ADC3_DIR")"
-  assert_true "宣言が 2 行: VAULT_WRITE_DECLARATION_INVALID は出さない" "$(printf '%s\n' "$adc3_dup_out" | grep -qF 'VAULT_WRITE_DECLARATION_INVALID' && echo 0 || echo 1)"
-
-  # (g) 未知の aienv- キー
-  adc3_new_dir
-  write_probe_def "$ADC3_DIR/zz-probe.md" zz-probe "aienv-vault-writ: allowed"
-  adc3_assert_violation "aienv-vault-writ（打ち間違い）" "$ADC3_DIR" "zz-probe.md: AIENV_KEY_UNKNOWN"
-
   # (b) 生きた symlink `zz-alias.md → implementer.md`（ファイルを作らず symlink
   # だけで違反になる＝ガードの `-f` と同じく辿って数える）
   adc3_new_dir
@@ -358,7 +331,7 @@ echo "=== 2. AC-12②: verifier.md の tools: に SendMessage・Edit・Write・B
   done
 }
 
-echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）のagents/*.mdにsandboxの値が書かれ、§5.2の権限表の値と一致する ==="
+echo "=== 4. AC-12④: Codexが演じうる職種のagents/*.mdにsandboxの値が書かれ、§5.2の権限表の値と一致する ==="
 {
   # 期待値をハードコードする（正本＝agents の権限行（2026-09-19 段3-4）。
   # Vault の worker-role-prompts.md の表はリーダー向け一覧＝テストは読まない）。
@@ -379,8 +352,6 @@ echo "=== 4. AC-12④: Codexが演じうる職種（vault-scribe以外の7本）
   # verifierは指摘のみ（テスト実行は test-runner・2026-09-21 テスト3職分割）
   # ＝Codex 経路は read-only 一律。verifier.mdはCLIフラグ形式（--sandbox <値>）で記述している。
   assert_contains_file "verifier.md にread-only経路が境界つきで書かれている" "$AGENTS_DIR/verifier.md" "\`--sandbox read-only\`"
-  # vault-scribeはCodexが演じない＝「対象外」の1行があればよい。
-  assert_contains_file "vault-scribe.md は「Codexは演じない/対象外」と書かれている" "$AGENTS_DIR/vault-scribe.md" "Codex はこの職種を演じない"
 }
 
 # （旧 4b「## 権限 見出し 1 件・worker-role-prompts 参照 0 件」と旧 10「effort:
@@ -428,7 +399,7 @@ echo "=== 6. 廃止したMCP経路のexecution値がtests/内に1件も無い ==
   assert_eq "tests/内に廃止したMCP経路のexecution値が0件（意図的な陰性fixtureは現状無い・自己ファイルも除外なしで走査）" "" "$tests_mcp_hits"
 }
 
-echo "=== 7. AC-25: FR-40の1行が対象5職種の各1件に現れ、verifier・operator・vault-scribeには0件 ==="
+echo "=== 7. AC-25: FR-40の1行が対象5職種の各1件に現れ、verifier・operatorには0件 ==="
 {
   FR40_LINE='自分ではレビューを起動しない。リーダーが起動する検証に応じ、指摘の反映は自分が行う。'
   # ⚠️ `grep -c`は0件一致のとき"0"を出力しつつ非0終了するため、
@@ -439,7 +410,7 @@ echo "=== 7. AC-25: FR-40の1行が対象5職種の各1件に現れ、verifier�
     if [ -f "$f" ]; then n="$(grep -cF "$FR40_LINE" "$f")"; else n="(file missing)"; fi
     assert_eq "${role}.md: FR-40の1行がちょうど1件" "1" "$n"
   done
-  for role in verifier operator vault-scribe; do
+  for role in verifier operator; do
     f="$AGENTS_DIR/${role}.md"
     if [ -f "$f" ]; then n="$(grep -cF "$FR40_LINE" "$f")"; else n="(file missing)"; fi
     assert_eq "${role}.md: FR-40の1行は0件（対象外）" "0" "$n"

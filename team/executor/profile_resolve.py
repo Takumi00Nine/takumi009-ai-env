@@ -151,16 +151,7 @@ CAPABILITY_VALUE_PATTERNS = {
 
 # コア職種マニフェスト（V1-a）: team/rules/agents/*.md を持たない職種の固定リスト。
 # ⚠️ 職種名＝team/rules/agents/配下のファイル名（拡張子除く）＝Task tool spawn時に
-# subagent_typeへ渡す値、という不変条件をここでも維持する（2026-09-03本人裁定:
-# scribe職種は「配役表のキーはrole.scribeのままファイル名だけvault-scribe.md」
-# という不一致を対応表で吸収する方式を試みたが、サブ機で実際に
-# 「role.scribeを見てsubagent_type=scribeでspawn→定義ファイルが無く失敗」が
-# 起きたため撤回。対応表〈旧AGENT_FILE_TO_ROLE〉は削除し、配役表側のキーを
-# role.vault-scribeへ改名して名前を一致させる方式に統一した）。
-# scribeは2026-09-03より team/rules/agents/vault-scribe.md としてrepoへ収録され
-# サブ機へも配布されるようになったため、このリストには含めない（ファイル名
-# 走査で自動的に職種名"vault-scribe"としてマニフェストへ入る＝下記
-# role_and_core_manifest_diff()参照）。
+# subagent_typeへ渡す値、という不変条件をここでも維持する。
 CORE_ROLES_WITHOUT_REPO_AGENT_FILE = frozenset(
     {"leader", "navi", "ja-doc"}
 )
@@ -866,9 +857,7 @@ def role_definition_exists(name: str, execution: str, agents_dir: Optional[str])
     if agents_dir is None:
         return True  # agents_dir未指定＝判定材料が無い＝判定不能を"存在する"側へ倒す
     # 職種名＝ファイル名（拡張子除く）の不変条件どおり、常にagents_dir配下を
-    # 職種名そのままで引く（2026-09-03本人裁定: scribe職種の機体ローカル
-    # 定義への専用写像〈旧ROLE_LOCAL_AGENT_FILE〉は撤回した。vault-scribe.mdは
-    # repo収録済みでagents_dir配下にあるため、他の職種と同じ経路で判定できる）。
+    # 職種名そのままで引く。
     return os.path.isfile(os.path.join(agents_dir, f"{name}.md"))
 
 

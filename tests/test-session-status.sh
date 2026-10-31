@@ -1341,7 +1341,7 @@ echo "=== 56. BOOTSTRAP_ENABLE_LOCAL_PROFILE を指定しなければコード�
   rm -rf "$VAULT_DIR"
 }
 
-echo "=== 57. V1-aマニフェスト: team/rules/agents/vault-scribe.mdは職種名'vault-scribe'としてファイル名そのままマニフェストへ数えられ、旧職種名'scribe'は入らない（2026-09-03本人裁定・方針変更: 対応表〈旧AGENT_FILE_TO_ROLE〉でファイル名と職種名の不一致を吸収する方式は、サブ機で『role.scribeを見てsubagent_type=scribeでspawn→定義ファイルが無く失敗』という実害が起きたため撤回し、配役表側のキーをrole.vault-scribeへ改名して職種名＝ファイル名の不変条件に揃える方式へ変更した） ==="
+echo "=== 57. V1-aマニフェスト: 職種名は定義ファイル名と一致し、別名は含まない ==="
 {
   # role_and_core_manifest_diff()本体を直接呼ぶ（マニフェスト計算ロジックの
   # 再実装ではなく、実装コードそのものを検証する）。role表は空にし、
@@ -1357,15 +1357,15 @@ class FakeParsed:
 
 agents_dir = sys.argv[1]
 _, only_in_manifest = pr.role_and_core_manifest_diff(FakeParsed(), agents_dir)
-print("vault_scribe_count=" + str(only_in_manifest.count("vault-scribe")))
-print("scribe_present=" + str("scribe" in only_in_manifest))
+print("system_designer_count=" + str(only_in_manifest.count("system-designer")))
+print("designer_present=" + str("designer" in only_in_manifest))
 PYEOF
 )"
-  assert_contains "マニフェストに'vault-scribe'が1回だけ入る（ファイル名そのまま）" "$result" "vault_scribe_count=1"
-  assert_contains "旧職種名'scribe'はマニフェストに入らない" "$result" "scribe_present=False"
+  assert_contains "マニフェストに'system-designer'が1回だけ入る（ファイル名そのまま）" "$result" "system_designer_count=1"
+  assert_contains "未定義の別名'designer'はマニフェストに入らない" "$result" "designer_present=False"
 }
 
-echo "=== 58. V1-aマニフェスト(結合): role.vault-scribeを含む現行の全ロール構成でresolve()を通してもADVISORY:V1-aが出ない（57.の単体確認をCLI経由でも裏付け。2026-09-03本人裁定・方針変更対応） ==="
+echo "=== 58. V1-aマニフェスト(結合): 完全ロースターでADVISORY:V1-aが出ない ==="
 {
   # 実AGENTS_DIR（team/rules/agents/）を使い、現行のコア職種マニフェスト全件
   # （CORE_ROLES_WITHOUT_REPO_AGENT_FILE + team/rules/agents/*.md＝ファイル名
@@ -1417,31 +1417,31 @@ ROSTER_EOF
     OK*) head_ok=1 ;;
   esac
   assert_eq "先頭フィールドはOK（プロファイル自体は妥当）" "1" "$head_ok"
-  assert_not_contains "role.vault-scribeで揃えればADVISORY:V1-aが出ない" "$out" "ADVISORY:V1-a"
+  assert_not_contains "role.system-designerで揃えればADVISORY:V1-aが出ない" "$out" "ADVISORY:V1-a"
 }
 
-echo "=== 58b. V1-aマニフェスト(結合・回帰防止・対照実験): 完全ロースターのうち'role.vault-scribe'の1行だけを旧キー'role.scribe'へ差し替えると、他は一切変えていないのにADVISORY:V1-aが出るようになる（受入条件どおり・2026-09-03本人裁定: 特別な互換処理は入れない＝'行を書かなかった職種はunknown'の既存規則に従い、vault-scribeはVACANT_UNKNOWN・scribeはマニフェストに無いキーとしてV1-a advisoryに出る。Codexレビュー指摘・Minor対応: 当初はleaderとscribeの2行だけの疎なプロファイルで検証しており、他の10職種が欠けていること自体でもV1-aが出てしまうため『role.scribeへの置換だけが原因』というこの受入条件を厳密に隔離できていなかった。58.の完全ロースターから1行だけ差し替える対照実験にすることで、原因を旧キーの使用だけに絞り込む） ==="
+echo "=== 58b. V1-aマニフェスト(対照実験): 1職種を未定義の別名へ替えるとADVISORY:V1-aが出る ==="
 {
-  # 58.で生成した完全ロースター（ROSTER_LINES）から、'role.vault-scribe'の
-  # 行だけを'role.scribe'（旧キー）へ差し替える。他の行（leader含む）は58.と
-  # 完全に同一。vault-scribeは固定職種なのでここでの名指しは可。
+  # 58.で生成した完全ロースター（ROSTER_LINES）から、'role.system-designer'の
+  # 行だけを'role.designer'（未定義の別名）へ差し替える。他の行（leader含む）は58.と
+  # 完全に同一。system-designerを対照実験の対象にする。
   OLD_KEY_LINES=()
   replaced=0
   for line in "${ROSTER_LINES[@]}"; do
-    if [ "$line" = "role.vault-scribe: unknown" ]; then
-      OLD_KEY_LINES+=("role.scribe: unknown"); replaced=1
+    if [ "$line" = "role.system-designer: unknown" ]; then
+      OLD_KEY_LINES+=("role.designer: unknown"); replaced=1
     else
       OLD_KEY_LINES+=("$line")
     fi
   done
-  assert_true "対照実験の前提: 58.のロースターに role.vault-scribe の行がある（差し替え対象が存在する）" "$replaced"
+  assert_true "対照実験の前提: 58.のロースターに role.system-designer の行がある（差し替え対象が存在する）" "$replaced"
 
   OLD_KEY_ROSTER="$(mktemp -d)/old-key-roster.md"
   make_v2_profile "$OLD_KEY_ROSTER" "${OLD_KEY_LINES[@]}"
 
   out="$(resolve_v2 "$OLD_KEY_ROSTER")"  || true
-  assert_contains "58.の完全ロースターと1行しか違わないのに、旧キー'role.scribe'のままではADVISORY:V1-aが出る（改名を促す）" "$out" "ADVISORY:V1-a"
-  assert_contains "vault-scribeはマニフェストにあるがrole表に無いためVACANT_UNKNOWNに出る" "$out" "vault-scribe"
+  assert_contains "58.の完全ロースターと1行しか違わないのに、旧キー'role.designer'のままではADVISORY:V1-aが出る（改名を促す）" "$out" "ADVISORY:V1-a"
+  assert_contains "system-designerはマニフェストにあるがrole表に無いためVACANT_UNKNOWNに出る" "$out" "system-designer"
 }
 
 echo "=== 59. 方針変更の反映確認: 旧方式の対応表（AGENT_FILE_TO_ROLE・ROLE_LOCAL_AGENT_FILE）がコードから完全に撤去されている（2026-09-03本人裁定・方針変更。将来誰かが対応表方式を再導入する回帰を検知する） ==="
@@ -1457,19 +1457,19 @@ PYEOF
   assert_contains "ROLE_LOCAL_AGENT_FILE対応表は存在しない" "$result" "has_role_local_agent_file=False"
 }
 
-echo "=== 60. V1-b直接検証: role_definition_exists('vault-scribe', 'subagent', agents_dir)が対応表を介さずagents_dir配下を職種名そのままで引いて実在有無を正しく判定する（'scribe'という旧職種名では定義ファイルが無いと判定される＝職種名＝ファイル名の不変条件の直接確認） ==="
+echo "=== 60. V1-b直接検証: 職種名そのままで定義の実在有無を判定する ==="
 {
   result="$(PYTHONPATH="$REPO_ROOT/team/executor" python3 - "$AGENTS_DIR" <<'PYEOF'
 import sys
 import profile_resolve as pr
 
 agents_dir = sys.argv[1]
-print("vault_scribe=" + str(pr.role_definition_exists("vault-scribe", "subagent", agents_dir)))
-print("scribe=" + str(pr.role_definition_exists("scribe", "subagent", agents_dir)))
+print("system_designer=" + str(pr.role_definition_exists("system-designer", "subagent", agents_dir)))
+print("designer=" + str(pr.role_definition_exists("designer", "subagent", agents_dir)))
 PYEOF
 )"
-  assert_contains "'vault-scribe'はagents_dir配下にvault-scribe.mdがあるためTrue" "$result" "vault_scribe=True"
-  assert_contains "旧職種名'scribe'はscribe.mdが無いためFalse（対応表による救済はしない）" "$result" "scribe=False"
+  assert_contains "'system-designer'はagents_dir配下にsystem-designer.mdがあるためTrue" "$result" "system_designer=True"
+  assert_contains "未定義の別名'designer'はdesigner.mdが無いためFalse（対応表による救済はしない）" "$result" "designer=False"
 }
 
 # ============================================================================

@@ -9,7 +9,7 @@
 # が誤って効き、ワーカーの正当な編集まで拒否される（設計 notes §2.1）。
 # そこで「Vault の AI 向け6フォルダへの書き込みを拒否する」判定だけを、この
 # 専用フックへ切り出し、ラッパーが職種ごとの `--settings` に足す
-# （Vault 書込を宣言した職種＝frontmatter `aienv-vault-write: allowed` の子には載せない＝記録職の正規の書き込み経路）。
+# 職種を問わず、ラッパー起動のすべての子ワーカーに載せる。
 #
 # 判定式は Core の `core/executor/vault-paths.sh` の `guard_is_vault_ai_path` を使う
 # （6フォルダの literal はそこにしか書かない＝NFR-7・AC-10②。親側の委任の柵も
