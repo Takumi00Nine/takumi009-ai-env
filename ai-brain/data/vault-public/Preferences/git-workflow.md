@@ -2,7 +2,7 @@
 date: 2026-06-14
 tags: [preference, git, github, security]
 project: meta
-updated: 2026-10-05
+updated: 2026-10-31
 related:
   - "[[Preferences/readme-bilingual]]"
   - "[[Decisions/2026-09-19-commit-free-push-by-visibility]]"
@@ -66,7 +66,7 @@ GitHub への commit/push の運用ルールと権限モデル。
 
 ## フックによる機械的な強制
 
-`~/.claude/settings.json` の PreToolUse(Bash) フックで public 化系を **deny でブロック**:
+Claude Code のとき：`~/.claude/settings.json` の PreToolUse(Bash) フックで public 化系を **deny でブロック**:
 - `gh repo create --public` / `gh repo edit --visibility public`（`=public` 含む）
 - `gh repo create` で `--private` が無いもの（private既定に依存させない）
 - `gh api` ＋ `visibility` ＋ `public`（REST/GraphQL 経由の公開化）

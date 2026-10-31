@@ -23,8 +23,8 @@ note 記事を書くとき、いきなり本文を書かず **JSON Canvas で構
 
 ## 進め方の決め事
 - **マインドマップと章構成は別ファイルで残す**（`<slug>-mindmap.canvas` と `<slug>-outline.canvas`）。発想用と設計図用を両方残すと次回の編集がしやすい。
-- **Claude × Codex の合議で作ってよい**：リーダーが論点を設定し、ワーカーが対案・レビューに参加する。**Vault への書込はリーダー自身**。ワーカーは記録候補を最終報告で申告する（[[Preferences/vault-operation]]）。レビュアー専任と `Blogs/` の書込許可の経緯＝[[Decisions/2026-07-05-codex-reviewer-only]]・[[Decisions/2026-06-28-codex-blogs-explorations-write]]。
-- **「下書きは見ない」で作る指定があり得る**：既存下書きに引っ張られずテーマから起こしたい時は、Codexにも下書きパスを読ませない指示を明示する。
+- **リーダーとワーカーの合議で作ってよい**：リーダーが論点を設定し、ワーカーが対案・レビューに参加する。**Vault への書込はリーダー自身**。ワーカーは記録候補を最終報告で申告する（[[Preferences/vault-operation]]）。レビュアー専任と `Blogs/` の書込許可の経緯＝[[Decisions/2026-07-05-codex-reviewer-only]]・[[Decisions/2026-06-28-codex-blogs-explorations-write]]。
+- **「下書きは見ない」で作る指定があり得る**：既存下書きに引っ張られずテーマから起こしたい時は、ワーカーにも下書きパスを読ませない指示を明示する。
 - 使う skill は **`kepano/obsidian-skills` の `json-canvas`**（導入済み。詳細 [[Knowledge/obsidian-canvas-to-note]]）。
 
 ## 実装上の注意（ハマりどころ）

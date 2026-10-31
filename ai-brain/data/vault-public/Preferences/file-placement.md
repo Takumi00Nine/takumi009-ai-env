@@ -15,7 +15,7 @@ aliases:
 
 # 作業フォルダと成果物の置き場所ルール
 
-- 作業はすべて `~/Workspace` の下で行う。直下は `Projects` と `Tools` だけにする。Claude（cct）・Codex とも `~/Workspace` で起動する。
+- 作業はすべて `~/Workspace` の下で行う。直下は `Projects` と `Tools` だけにする。リーダー・ワーカーとも `~/Workspace` で起動する。Claude のとき：起動は `cct`。
 - 案件は「目的があり、終わる取り組み」。`Projects/<案件ノート名>/` に1つのフォルダを作る。中は `docs`（現行版だけ）・`work`・`output`。
 - 成果物は、生まれた案件の `output` に置き、完成しても動かさない。案件の状態は案件ノート（Vault の Projects）で見分ける。
 - プログラムは `output/<名前>/` に一式で置く。git 保管庫なら、そこが保管庫のいちばん上になる。

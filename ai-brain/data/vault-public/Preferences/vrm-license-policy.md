@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-07-10
+updated: 2026-10-31
 tags: [preference, strict, vrm, license, security]
 project: meta
 related:
@@ -22,4 +22,4 @@ aliases:
 
 **Why:** 現行アバター素体は **VN3 ライセンスで原本・改変版とも再配布禁止**＝データを外部に出すと規約違反。3Dアバター素体は流用・改変リスクもある。
 
-**How to apply:** Web サイト等で 3D キャラ素材に VRM を使う際は、①レンダリングはローカル（オフライン）で行う ②VRM をビルド/CI に渡さない ③`.gitignore` で除外しコミットしない ④public に出すのは派生物（動画/連番画像）だけ、を徹底する。コーディング等を Claude ワーカーへ委任する場合や Codex にレビューさせる場合（[[Preferences/coding-delegation]]）も、この制約を必ず伝える。
+**How to apply:** Web サイト等で 3D キャラ素材に VRM を使う際は、①レンダリングはローカル（オフライン）で行う ②VRM をビルド/CI に渡さない ③`.gitignore` で除外しコミットしない ④public に出すのは派生物（動画/連番画像）だけ、を徹底する。コーディング等をワーカーへ委任する場合や検証職にレビューさせる場合（[[Preferences/coding-delegation]]）も、この制約を必ず伝える。

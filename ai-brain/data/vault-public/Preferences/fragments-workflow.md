@@ -20,10 +20,10 @@ aliases:
 
 # Fragments：未確定の断片を溜める入口層の運用
 
-`Fragments/` は **AI（Claude）向けの append-only な時系列入口層**。雑多な作業の副産物・気づき・出来事・未確定の断片を漠然と溜める。Vault の3層構造の入口：**Fragments（未確定）→ 確定したら Knowledge/Decisions/Projects/Preferences へ昇格／記事の種は Blog へ**。基本削除しない。
+`Fragments/` は **AI向けの append-only な時系列入口層**。雑多な作業の副産物・気づき・出来事・未確定の断片を漠然と溜める。Vault の3層構造の入口：**Fragments（未確定）→ 確定したら Knowledge/Decisions/Projects/Preferences へ昇格／記事の種は Blog へ**。基本削除しない。
 
 ## 1. 何を記録するか（基準）
-「全部」ではなく「**後で Claude が使う可能性がある作業上の断片**」に絞る（over-capture は情報過多で逆に使えなくなる）。該当例：
+「全部」ではなく「**後でリーダー・ワーカーが使う可能性がある作業上の断片**」に絞る（over-capture は情報過多で逆に使えなくなる）。該当例：
 - バグ/トラブルの原因・決定の理由・ユーザーの嗜好/気づき・作業上の発見・失敗/つまずき・未確定アイデア・Blog の種・既存4フォルダへ昇格しそうな断片。
 
 ## 2. いつ・誰が（リーダー主導・2段構え）
