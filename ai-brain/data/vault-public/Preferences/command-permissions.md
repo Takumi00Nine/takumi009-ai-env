@@ -1,6 +1,6 @@
 ---
 date: 2026-06-15
-updated: 2026-10-03
+updated: 2026-11-01
 tags: [preference, permissions, commands, security, claude-code]
 project: meta
 related:
@@ -13,39 +13,39 @@ aliases:
   - "additionalDirectories"
 ---
 
-# コマンド許可の方針（Claude Code）
+# コマンド許可の方針（共通の本人ゲートと Claude 固有設定）
 
-**原則：リード（読み取り）系コマンドは自動許可してよい。ライト（書き込み・変更・外部通信）系コマンドは必ずユーザーの承認を得る。**
+**共通の本人ゲート**：[[Preferences/core-conduct]] §3 と [[Preferences/absolute-rules]] に従う。git の commit・push は [[Preferences/git-workflow]]。ツールが自動許可しても、規則上必要な本人同意を省略しない。Codex の `approval_policy=never` も本人同意を省略してよい意味ではない。
 
-**Why:** 読み取りは実害がなく、毎回の承認が作業のストレスになる。一方で書き込み・破壊・外部送信は取り返しがつかない/影響が大きいので、ユーザーが都度判断したい。
+以下の権限設定とプロンプトの説明は Claude 固有。許可設定の正本は `~/.claude/settings.json` で確認し（適用先の `settings.local.json` に上書きがあれば併せて確認する）。現行の列挙や件数を本ノートへ複写しない。
 
 **How to apply:**
 - 自動許可してよい例：`ls` `pwd` `cd` `cat` `which` `file` `stat`、git の参照系（`git status` `git diff` `git log` `git branch` `git show` `git fetch` `git rev-list`）、`log show`、`system_profiler` など状態確認系。
 - **read-only 組込みは allow 不要**：Claude Code は `ls cat echo pwd head tail grep find wc which diff stat du cd` と git 参照系を「read-only 組込み」として全モードで無確認実行する。よって settings.json の `Bash(cat *)` 等の allow は実質冗長（あっても無害）。出典: [Configure permissions](https://code.claude.com/docs/en/permissions)。
 
-## 承認モデル — Auto mode、OSサンドボックスは無効
+## Claude の承認モデル
 
-- **`permissions.defaultMode: "auto"`**：新規セッションは Claude Code の **Auto mode** が既定。ツール実行ごとに分類モデルが「安全＝自動承認／危険＝ブロック」を判定する。判定順は `deny → ask → allow → 分類器`。
-- **OSサンドボックス無効**：Bash 経由の Codex/cloud 別モデル起動などで摩擦が出るため、`sandbox` 設定は使わない（Auto mode の分類判定に一本化）。
-- **`allow` は最小7件**：`Bash(~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh:*)`（Codex 呼び出しの唯一の口＝2026-09-06 MCP 廃止）、`WebSearch` / `WebFetch(domain:*)`（Claude 直取得=定常操作）、`Edit(~/Data/**)`（Vault 書込=最高頻度の中核操作を決定的に無プロンプト化。**Edit ルールが Write/NotebookEdit 含む全ファイル編集ツールをカバー**）、`Skill(schedule/update-config/claude-api)`。それ以外（読取系 Bash・読取/書込 MCP・git 系・launchctl/plutil・workdir 編集・`Read(~/**)`）は Auto mode 分類器が判定（読取/作業ディレクトリ編集は自動承認、書込/外部・git push 等は確認が出る方が安全）。bare `Bash` allow も置かない（無境界の全 Bash 自動許可は穴になるため）。
-- **残すもの（Auto mode は肩代わりしない）**：`permissions.deny`（機密 Read/Edit・外部投稿系＝最優先ハードガード）、`ask`（個人ディレクトリ）、全 hooks（gh public 禁止・pip venv・brew runtime・codex absolute-rules・bootstrap・delegation-gate-v2＝直接実装ゲート）、`WebFetch(domain:*)`。
-- **残留リスクを承知の上で Auto mode に一本化している**。リスクの分析・限界・再検討トリガーは private の運用ノートで管理する（公開しない）。
+- Claude の承認モード・`deny`／`ask`／`allow`・sandbox の現行値は上記設定ファイルで確認する。Auto mode の自動判定は共通の本人ゲートの代わりにしない。
+- `allow` は定常操作の必要な範囲に絞り、bare `Bash` のような無境界の許可を置かない。Vault の書き手は [[Preferences/vault-operation]] に従う。
+- **Auto mode に肩代わりさせないもの**：機密・外部投稿の `deny`、個人ディレクトリの `ask`、公開化禁止・危険コマンドの安全ゲート、必読供給・委任経路のフック。公開化は [[Preferences/git-workflow]]、pip・ランタイムは [[Preferences/python-venv]]・[[Preferences/anyenv-runtime-management]] の規則として守る。
+- Claude の `bash-danger-gate` はリモートパイプと HOME／ルートの一括削除を止める。保護パス（Vault・`.claude`・`.codex`・`.cmuxterm`）は、コマンドに再帰 `rm`（`-r` 等）と保護パス名が両方あれば止める（同じコマンドの別の箇所に名前が出ただけでも止まる＝そのときはコマンドを分ける）。`cat` がファイルへ書くだけの heredoc の本文は照合から除く。
+- Claude の Agent 起動・委任マーカーは [[Preferences/worker-role-prompts]]「起動形態の既定」を参照する。
+- Auto mode のリスク分析・限界・再検討トリガーは private の運用ノートで管理する。
 - **注意（実挙動）**：settings.json の **allow（権限付与部分）の自己改変は Auto mode 分類器がブロック**する。allow 変更はユーザー手動か明示承認が要る。
 
-## フォルダ読み書きの権限モデル
+## Claude のフォルダ読み書きの権限モデル
 
 **Bash 読取が無確認になる条件＝パスが `additionalDirectories`（または作業ディレクトリ）内にあること。** `Read(/Users/...**)` の allow は **Bash 読取には効かない**（Read/Glob/Grep ツール専用）。作業ディレクトリ外を Bash で読むと「allow reading from X?」の承認プロンプトが出る。
 
 **deny / ask の効き方は Read/Glob/Grep ツールと Bash とで非対称**（`ask` は Read ツール専用で Bash には効かない、等）。「Bash でも承認付きで読ませたい」フォルダは ask ではなく **additionalDirectories から外す**ことで実現する。評価順は deny → ask → allow で、`Edit(...)` deny は allow より優先（`.claude` 書込許可下でも `.credentials.json` を守れる）。詳細な効き方の表と限界は private の運用ノートで管理する。
 
 **採用した3ティア構成（`~/.claude/settings.json`）：**
-- `additionalDirectories` = 作業6フォルダのみ（`Data`(Vault含む)/`.claude`/`Claude`/`work`/`.codex`/`Codex`）＝Bash無確認読取＋書込allow。
+- `additionalDirectories` の対象は設定ファイルを正本とする。作業場所の規則は [[Preferences/file-placement]] を参照し、許可対象の一覧と混同しない。
 - それ以外のホーム配下＝additionalDirectories外なので **Bash読取は承認プロンプト**、Readツールは `ask` でプロンプト（＝承認すれば読める）。
-- secrets（`~/.ssh .aws .gnupg .config .kube .docker Library .zsh_sessions`、`.netrc .npmrc .pypirc .claude/.credentials.json`、`**/.env`）は **Read+Edit を deny**（読み書き遮断）。
+- 機密の Read/Edit 拒否は設定ファイルの `permissions.deny` を正本とする。allow や additionalDirectories に含まれていても拒否を優先する。
 
 **その他の承認要因**：複合コマンドは `&& || ; | |& & 改行` で分割され各サブコマンドが独立にマッチ要（cd+git は常に承認）。`for`/`while`ループや多文は分解しきれず承認。
-- 承認を得るべき例（自動許可しない）：`rm`、`mv`（既存の上書き）、`chmod`、`curl`/`wget` など外部通信、`pip install` などインストール系、その他ファイルを変更・生成・削除するコマンド。
-  - 例外：git の `add`/`commit`/`push` は本人が CLI で Git を回す方針のため個別に許可済み（[[Preferences/file-placement]] とは別管理）。
+- 破壊的操作・公開・金銭・契約・認証の本人同意は冒頭の共通規則に従う。それ以外の承認プロンプトの有無は Claude の権限設定と承認モードによる。
 - `find` は `-exec`/`-delete` で破壊的になり得るため自動許可に含めない（読み取り用途でも都度承認）。
 - 広すぎる指定（`bash *` `python3 *` 等）は禁止。必要な範囲だけを具体的に許可する。
 

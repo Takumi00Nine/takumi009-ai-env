@@ -18,11 +18,11 @@ aliases:
 ---
 # Codex を実装ワーカーとして直接起動する手順（`codex exec` 背景実行）
 
-**2026-09-06 以降、Codex 呼び出しの唯一経路**（MCP 廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]）。一次レビュー委任は `~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh` ラッパー経由（正本＝[[Preferences/codex-review-protocol]]）。起動はラッパー（codex-exec.sh）経由のみ＝フックが直接実行を deny する（2026-10-11）。
+**Codex 子の起動は `~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh` 経由のみ**（MCP 廃止＝[[Decisions/2026-09-06-codex-mcp-retire]]）。呼び出し経路は規則として守る。一次レビューの割り当ては [[Preferences/codex-review-protocol]]。
 
-用途＝実装を Codex に任せるとき、リーダーが**implementer 等のラッパーワーカーを挟まず** Codex を直接ワーカーとして起動する手順。担当・起動条件は配役表に従う（[[Preferences/coding-delegation]]）。再開の経緯＝[[Decisions/2026-07-23-codex-delegation-reopened]]。
+用途＝リーダーが Codex を implementer 等の職種ワーカーとして起動する手順。担当・起動条件は [[Preferences/coding-delegation]] に従う。
 
-経路は **`codex exec` を Bash の `run_in_background: true` で起動**する。終了時にリーダーへ完了通知が届き、チームメイトの idle 通知と同じ受け取り方になる。
+親の種類による非同期起動・完了の受け取りは [[Preferences/worker-role-prompts]]「起動形態の既定」を参照する。
 
 本ノートは委任のたびに Codex に読ませるため**最小サイズを維持**する（起動手順のみ。背景・経緯・他経路の説明は書かない）。レビューの割り当ては正本＝[[Preferences/codex-review-protocol]]。
 
@@ -30,8 +30,8 @@ aliases:
 
 > **消す作業は任せない（2026-11-01 実測）**＝Codex の実行環境からはゴミ箱（`/usr/bin/trash`）が権限エラー（NSCocoaErrorDomain 513）になる。ワーカーには「消す一覧（絶対パス）」を作らせ、ゴミ箱への移動はリーダーが行う。
 
-## 起動の型（`--role` 対応後）
-`--role` はこれから実装する。以下は移行後の呼び方。対応と読込確認が済んでから切り替える。
+## 起動の型
+`--role` は初回・継続とも必須。以下のラッパー呼び出しを、上記の非同期起動手順で実行する。
 
 ```bash
 ~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh \
@@ -44,7 +44,7 @@ aliases:
   2> /abs/path/report.wrapper.log
 ```
 
-- Bash の `run_in_background: true` で起動し、完了通知を受けて `--out` を読む。events の全文は読まない。
+- 完了後は `--out` を読む。events の全文は読まない。
 - `--cwd` は担当範囲の絶対パスに最小化し、ホーム全体は渡さない。出力先の親ディレクトリを用意する。
 - 初回・`--resume <thread_id>` の継続とも `--role <職種名>` を指定する。継続は同じ職種、改役は新規起動にする。thread_id と終了値はラッパーの出力で確認する。
 - ラッパーは新規起動・継続とも、`~/Data/obsidian/Preferences/absolute-rules.md`・`core-worker.md`・`worker-role-<職種名>.md` を全文読む指示を自動で付ける。依頼文へ absolute-rules の参照を手で書く必要はない。

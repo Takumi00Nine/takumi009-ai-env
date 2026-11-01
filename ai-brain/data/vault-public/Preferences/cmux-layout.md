@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-08-07
+updated: 2026-11-01
 tags: [preference, cmux, layout, agent-teams]
 project: meta
 related:
@@ -24,7 +24,7 @@ claude-teams 運用時のワークスペースは**左＝リーダー／右＝�
 | 左 | オーケストレーター（リーダーの claude 端末） |
 | 右 | 成果物表示（`show-review.sh` が開く markdown プレビュー／ブラウザ。タブで束ねる） |
 
-- **チームメイトはペインを持たない**: 起動関数 `cct` が `--teammate-mode in-process` を既定注入し、エージェントパネル内で動作する（↑↓選択・Enter でトランスクリプト表示&直接メッセージ・x で停止）。ペイン分割に戻すときのみ `cct --teammate-mode auto`。
+- ワーカーの通常の起動・報告は [[Preferences/worker-role-prompts]]「起動形態の既定」に従う。名前付きチームメイトの表示・起動設定は、同節の例外を明示的に使うときだけ参照する。
 - **初期状態はリーダー1ペインのみ**。成果物を見せるときだけ右列を増やす。2列を超える列は作らない。
 - **幅は cmux の素の分割比率に任せる**（カスタム幅矯正はしない）: リーダーのみ 100% → 成果物表示で 50/50。手動リサイズも自由（何も戻さない）。
 - 成果物列の配置は実行時に `~` 展開される dotfiles 内 `cmux/show-review.sh` が担当（表示ルール本体＝[[Preferences/coding-delegation]]「ユーザーへの提示」節。Vault 内ノートは表示対象外）。

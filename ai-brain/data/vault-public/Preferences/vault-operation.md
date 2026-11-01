@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, meta, external-brain, routing]
 project: external-brain
 aliases:
@@ -17,13 +17,13 @@ aliases:
 2. ユーザーの呼び名を書かない。「ユーザー」「本人」等の中立表現を使う（ID「takumi009」は可）。
 3. Personal 配下への wiki link・Personal ノート名を書かない（他フォルダへのリンクは可）。
 4. ホーム配下の絶対パスを書かない（`~/` 表記＝Vault 全域の掟）。
-- Preferences 編集セッションの締めに `~/Workspace/Tools/takumi009-ai-env/ai-brain/executor/export-public-vault.sh` を実行（commit 自動・push は別途明示）。⚠️ 編集も export・commit もメイン機だけ（[[Preferences/core-workflow]] §5）。
+- 公開スナップショットの export の実行時機・実行者・公開 push の扱いは [[Preferences/core-workflow]] §5 を参照する。
 ## SSOT の役割分担（ドリフト防止）
 - **Preferences＝今どう動くか／Decisions＝なぜ／Knowledge＝背景。** 判断は Preferences と Decisions を**ペアで**書く。現行値（設定値・状態）は Projects のみ。
 - 体制を変える Decision を書いたら影響語を grep して現在形ノート（Preferences/Projects/Knowledge）を**通し読み**して同時修正し、grep 語と修正ファイルを Decision の「適用」欄に記録。
 - 同じルールは SSOT 1つ＋他はリンクのみ。旧方針は `deprecated YYYY-MM-DD` で現行より下に隔離。
 - **部品追加の掟**: 実行部品（スクリプト・フック・LaunchAgent）を追加するときは、対応する Decision に**分類（A=常時/B=定期/C=手動）・テスト増分・廃止条件**を書く。
-- **Projects の frontmatter と Tasks 節**: `status:` 4 値（active/paused/completed/closed）・状態が動いたら `next:`（15 文字以内）も更新・Tasks 節と待ち（wait_until）の書式＝[[Preferences/project-tasks-format]]（Dock の表示元）。
+- **Projects の frontmatter と Tasks 節**: 書式と工程完了時の更新は [[Preferences/project-tasks-format]]、`status` を決める権限は本ノート「停滞による状態判断は本人の領域」を参照する。
 ## 書き方の鉄則
 - 該当が出たら**リーダーがその場で自分で書く**。既存ノートへの追記・状態記号・frontmatter・置換から、新規ノート・Preferences の編集・本文の書き換え・複数ノートの整合まで、軽重に関係なくリーダーが内容を決定して直接書く。**ワーカーは Vault（人間向け領域の Blogs/・Explorations/ を含む）へ書かず**、記録候補を最終報告の「Vault記録候補:」で申告する。この役割の決まりはモード・呼び出し経路によらず守り、書き込みを止める仕組みは追加しない。
 - **Preferences の編集と公開スナップショットの生成・commit**はメイン機のリーダーだけが行う。実行前に `~/.config/takumi009-ai-env/profile.md` の `machine_role` が `configured value=main` であることを確認する（[[Preferences/core-workflow]] §5）。
@@ -41,4 +41,4 @@ aliases:
 - **綻びは読み時に直す**: 鮮度（`review_by` 超過・古い外部可変情報＝一次情報で再確認→`updated` 引き直し。内部の決定ノートは対象外）／リンク切れ（張り直す or 除去）／alias（欠落・汎用/短すぎ＝想起に効く語へ）。⚠️ サブ機で Preferences 内のリンク先が無いのは常態＝リンク切れに数えない（[[Preferences/core-workflow]] §4）。
 - **撤回・白紙化バナー**: 失効ノート（Decisions 含む）は冒頭に「⚠️白紙化済み/撤回済み（日付＋出典）」バナー（本文は書き換えない）。**バナー付きノートを新文脈の材料に使わない**（再採用は本人の明示指示のみ）。
 - **撤去済みシステムの退役**: 撤去したら関連 Knowledge ノートを想起から退役させる＝aliases・review_by を除去し `retired: true`＋冒頭に退役バナー（本文は温存）。判定は読み時・棚卸し時に個別（ルールの根拠ノートは対象外）。
-- **停滞は本人の領域**: project の status は本人が棚卸しで判断＝**AI は書き換えない**（気づいたら一言添える）。棚卸しレポートは検出のみ＝**読んだノートの綻びは読むたびに直す**。
+- **停滞による状態判断は本人の領域**: AI は停滞を理由に project の `status` を自動で変更しない（気づいたら一言添える）。本人が決めた状態はリーダーが記録へ反映する。工程完了時の Tasks・`next` 更新は [[Preferences/project-tasks-format]] に従う。棚卸しレポートは検出のみ。読んだノートの綻びは読み時に直す。
