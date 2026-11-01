@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 # team/connect/claude-code/delegation-gate-v2.sh のユニットテスト（前提修正 P-4・設計§4）。
 #
-# ⚠️ team/connect/claude-code/delegation-gate-v2.sh の判定ロジックは、
-# 2026-10-04 決定（リーダーのVault軽書込は直筆可）で rule 2.5 が「Vault の
-# AI向け6フォルダ＝通過」に変わる以外は変えない（deny 文面は 2026-09-19 に短縮）。
-# 本ファイルは、rule 2.5 以外の判定が「変えていないこと」を守る回帰ガードである
-# （フックにテストが1本も無かった＝要件§15-2）。
+# 通過条件1・2.5・3・4m・5と、撤去したチーム判定で通らないことを確認する。
 #
 # 隔離: HOME（許可パスと Vault 接頭辞の両方が追随する）・GATE_TEAMS_DIR・
 # GATE_MARKER_DIR の3つを一時ディレクトリへ差し替えるだけでよい（破壊的操作を
@@ -15,7 +11,7 @@
 # cwd）。判定: exit 0 かつ標準出力が空なら通過／permissionDecision: "deny"
 # を含めば deny（フックは deny の場合も含め常に exit 0 を返す契約）。
 #
-# 判定順序（現物）＝1→2→2.5→3→4→4m→5（設計v1.2 §3.3・FR-38で旧4bは撤去）。
+# 判定順序（現物）＝1→2.5→3→4m→5（設計v1.2 §3.3・FR-38で旧4bは撤去）。
 # 2.5＝Vault の AI 向け6フォルダ（guard_is_vault_ai_path）なら通過
 # （2026-10-04決定・リーダー直筆可。Vault専用マーカーの分岐は撤去済み）。
 # 各 fixture は「狙った判定より前の条件がすべて偽」であることを保証する
@@ -119,7 +115,7 @@ echo "=== 1. PA-13: 判定1（agent_type あり）→ 通過 ==="
   rm -rf "$WORK"
 }
 
-echo "=== 3. PA-15: 判定2（他チームのconfigに自session_id）→ 通過 ==="
+echo "=== 3. PA-15: 旧判定2（他チームのconfigに自session_id）→ deny ==="
 {
   WORK="$(mktemp -d)"
   HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
@@ -128,7 +124,7 @@ echo "=== 3. PA-15: 判定2（他チームのconfigに自session_id）→ 通過
   write_team_config_with_sid "$TEAMS_D/session-OTHERTEAM/config.json" "$SID"
   json="$(make_input "$SID" "" "" "$WORK/project/file.md" "$WORK/project")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
-  assert_pass "PA-15: 他チームconfigに自session_idがあれば通過"
+  assert_deny "PA-15: チームメイト登録だけでは通過しない"
   rm -rf "$WORK"
 }
 
@@ -162,7 +158,7 @@ echo "=== 6. PA-18: 判定3（許可パス）→ 通過（前提=a〜e＋許可�
   rm -rf "$WORK"
 }
 
-echo "=== 7. PA-19: 判定4（自チームにリーダー以外のメンバーあり）→ 通過（共通前提a〜g） ==="
+echo "=== 7. PA-19: 旧判定4（自チームにリーダー以外のメンバーあり）→ deny（共通前提a〜g） ==="
 {
   WORK="$(mktemp -d)"
   HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"
@@ -176,11 +172,11 @@ echo "=== 7. PA-19: 判定4（自チームにリーダー以外のメンバー�
 
   json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
-  assert_pass "PA-19: 自チームに委任実績があれば通過"
+  assert_deny "PA-19: 自チームの非リーダーだけでは通過しない"
   rm -rf "$WORK"
 }
 
-echo "=== 8b. D2-M1(AC-9前半・FR-25): 判定4m（自チームconfigに非リーダー0件・このセッションの委任マーカーあり＝agent-model-guard.shのPASSを模す）→ 通過 ==="
+echo "=== 8b. D2-M1(AC-9前半・FR-25): 判定4m（自チームconfigに非リーダー0件・このセッションの委任マーカーあり＝inprocess-gate.shのPASSを模す）→ 通過 ==="
 {
   WORK="$(mktemp -d)"
   HOME_D="$WORK/home"; TEAMS_D="$WORK/teams"; MARK_D="$WORK/markers"

@@ -3,8 +3,7 @@
 # PreToolUse: in-process Agent 起動の境界（ラッパー起動-設計-v1.1.1.md
 # §4.2・要件FR-21・FR-22・D-3）。配役表に職種行がある職種のin-process
 # 起動（Agentツール）を拒否し、team/connect/claude-code/claude-exec.sh 経由へ誘導する。
-# agent-model-guard.sh と同じ event（PreToolUse・matcher "^Agent$"）に
-# 2本並ぶ（どちらかがdenyすればdeny＝core/assembly/settings.json）。
+# 通過時はセッション固有の委任マーカーを付ける。
 #
 # ⚠️ 配役表を自前で解析しない（AC-18⑤）。判定・監査の根拠は
 # `profile_resolve.py check-inprocess` の口が返す6フィールドのJSONだけを
@@ -82,6 +81,8 @@ fail_close() {
   write_audit_line "${1:-}" "denied" "$UNRESOLVED_PORT_JSON"
   deny 'IN_PROCESS_BLOCKED: PROFILE_UNRESOLVED・判定不能。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md'
 }
+
+source "$SELF_DIR/guard_common.sh" 2>/dev/null || fail_close ""
 
 command -v jq >/dev/null 2>&1 || fail_close ""
 
@@ -161,6 +162,8 @@ allowed="$(printf '%s' "$port_json" | jq -r '.allowed' 2>/dev/null)"
 
 if [ "$allowed" = "true" ]; then
   if write_audit_line "$role" "allowed" "$port_json"; then
+    sid=$(printf '%s' "$input" | jq -r '.session_id // ""')
+    guard_mark_delegation "$sid"
     exit 0
   fi
   # 記録できない許可は出さない（FR-23②が恒真になるのを防ぐ＝設計§4.3）。

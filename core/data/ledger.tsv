@@ -31,7 +31,6 @@ part	ai-brain/executor/vault_lib.py	ai-brain	executor	-	-	検出器群の共有 
 part	ai-brain/data/generic-aliases.txt	ai-brain	data	-	-	語彙表	-	-
 part	ai-brain/data/templates/	ai-brain	data	-	-	private 骨格フォルダの README 雛形	-	-
 part	ai-brain/data/vault-public/	ai-brain	data	-	-	公開スナップショット	-	-
-part	ai-brain/connect/claude-code/vault-write-gate.sh	ai-brain	connect	claude-code	ai-brain.write-gate	柵（子向け Vault 保護・Team の子起動が照会）	-	link:$HOME/.claude/hooks/vault-write-gate.sh
 part	ai-brain/assembly/install-backup.sh	ai-brain	assembly	-	ai-brain.install-backup	バックアップの常駐の登録	-	-
 part	ai-brain/assembly/install-maintenance.sh	ai-brain	assembly	-	ai-brain.install-maintenance	メンテの常駐の登録	-	-
 part	ai-brain/assembly/com.takumi009.backup-vault.plist	ai-brain	assembly	-	-	LaunchAgent 定義	-	-
@@ -46,14 +45,11 @@ part	team/connect/claude-code/role_candidates.py	team	connect	claude-code	team.r
 part	team/connect/claude-code/claude-exec.sh	team	connect	claude-code	team.claude-exec	職種の起動（claude -p）	-	-
 part	team/connect/claude-code/claude_exec.py	team	connect	claude-code	-	職種の起動の lib	-	-
 part	team/connect/claude-code/agent_def.py	team	connect	claude-code	-	職種定義の lib（claude_exec と同居）	-	-
-part	team/connect/claude-code/guard_common.sh	team	connect	claude-code	-	委任の柵の共有 lib（許容モデル別名・委任マーカー）	-	-
-part	team/connect/claude-code/agent-model-guard.sh	team	connect	claude-code	-	委任の柵	-	link:$HOME/.claude/hooks/agent-model-guard.sh
+part	team/connect/claude-code/guard_common.sh	team	connect	claude-code	-	委任の柵の共有 lib（ラッパーのモデル別名・委任マーカー）	-	-
 part	team/connect/claude-code/inprocess-gate.sh	team	connect	claude-code	-	委任の柵	-	link:$HOME/.claude/hooks/inprocess-gate.sh
 part	team/connect/claude-code/delegation-gate-v2.sh	team	connect	claude-code	-	委任の柵	-	link:$HOME/.claude/hooks/delegation-gate-v2.sh
-part	team/connect/claude-code/codex_direct_call_check.py	team	connect	claude-code	-	Codex 直叩き判定	-	-
-part	team/connect/claude-code/codex-direct-call-gate.sh	team	connect	claude-code	-	Codex 直叩き柵（PreToolUse Bash）	-	link:$HOME/.claude/hooks/codex-direct-call-gate.sh
 part	team/connect/claude-code/profile-status.sh	team	connect	claude-code	team.session-status	合成器の寄与（枠 opening・directive5・machine_role 保留・profile-warning）	-	-
-part	team/connect/codex/codex-exec.sh	team	connect	codex	team.codex-exec	Codex の口（Codex 直叩き柵が照会）	-	-
+part	team/connect/codex/codex-exec.sh	team	connect	codex	team.codex-exec	Codex の口	-	-
 part	team/connect/codex/AGENTS.md	team	connect	codex	-	Codex ワーカーの作法	-	link:$HOME/.codex/AGENTS.md
 part	team/connect/codex/config.toml	team	connect	codex	-	Codex の設定雛形	-	gen:$HOME/.codex/config.toml
 part	team/connect/codex/hooks.json	team	connect	codex	-	Codex の登録	-	link:$HOME/.codex/hooks.json
@@ -131,12 +127,9 @@ suite	tests/test-vault-inventory.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-vault-lib.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-vault-read-log.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-vault-recall.sh	ai-brain	-	-	-	-	-	-
-suite	tests/test-vault-write-gate.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-agent-definitions.sh	team	-	-	-	-	-	-
-suite	tests/test-agent-model-guard.sh	team	-	-	-	-	-	-
 suite	tests/test-claude-exec.sh	team	-	-	-	-	-	-
 suite	tests/test-codex-boot-read.sh	team	-	-	-	-	-	-
-suite	tests/test-codex-direct-call-gate.sh	team	-	-	-	-	-	-
 suite	tests/test-codex-exec.sh	team	-	-	-	-	-	-
 suite	tests/test-config-samples.sh	team	-	-	-	-	-	-
 suite	tests/test-delegation-gate-v2.sh	team	-	-	-	-	-	-

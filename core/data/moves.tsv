@@ -16,12 +16,9 @@ claude/hooks/bootstrap-vault.sh	team/connect/claude-code/profile-status.sh	分�
 claude/hooks/bootstrap-vault.sh	dock/executor/declare-state.sh	分割	-
 claude/hooks/vault-recall.sh	ai-brain/executor/vault-recall.sh	移動	撤去
 claude/hooks/vault-read-log.sh	ai-brain/executor/vault-read-log.sh	移動	撤去
-claude/hooks/vault-write-gate.sh	ai-brain/connect/claude-code/vault-write-gate.sh	移動	撤去
-claude/hooks/agent-model-guard.sh	team/connect/claude-code/agent-model-guard.sh	移動	撤去
 claude/hooks/inprocess-gate.sh	team/connect/claude-code/inprocess-gate.sh	移動	撤去
 claude/hooks/delegation-gate-v2.sh	team/connect/claude-code/delegation-gate-v2.sh	移動	撤去
 claude/hooks/bash-danger-gate.sh	core/connect/claude-code/bash-danger-gate.sh	分割	撤去
-claude/hooks/bash-danger-gate.sh	team/connect/claude-code/codex-direct-call-gate.sh	分割	-
 claude/hooks/usage-inject.sh	usage/executor/usage-inject.sh	移動	撤去
 claude/hooks/code27-call-clear.sh	core/connect/claude-code/prompt-answer.sh	移動	撤去
 claude/hooks/dock-pane-resolve.sh	dock/executor/dock-pane-resolve.sh	移動	撤去
@@ -38,7 +35,6 @@ claude/hooks/lib/claude_exec.py	team/connect/claude-code/claude_exec.py	移動	-
 claude/hooks/lib/agent_def.py	team/connect/claude-code/agent_def.py	移動	-
 claude/hooks/lib/guard_common.sh	team/connect/claude-code/guard_common.sh	分割	-
 claude/hooks/lib/guard_common.sh	core/executor/vault-paths.sh	分割	-
-claude/hooks/lib/codex_direct_call_check.py	team/connect/claude-code/codex_direct_call_check.py	移動	-
 claude/hooks/lib/usage_snapshot.py	usage/executor/usage_snapshot.py	分割	-
 claude/hooks/lib/usage_snapshot.py	usage/connect/claude-code/usage.env	分割	-
 claude/hooks/lib/usage_snapshot.py	usage/connect/codex/usage.env	分割	-
@@ -118,7 +114,6 @@ tests/test-bootstrap-vault.sh	tests/test-session-start-compose.sh	分割	-
 tests/test-bootstrap-vault.sh	tests/test-session-status.sh	分割	-
 tests/test-bootstrap-vault.sh	tests/test-declare-state.sh	分割	-
 tests/test-bash-danger-gate.sh	tests/test-bash-danger-gate.sh	分割	-
-tests/test-bash-danger-gate.sh	tests/test-codex-direct-call-gate.sh	分割	-
 tests/test-cmux-next-model.sh	tests/test-cmux-next-model.sh	分割	-
 tests/test-cmux-next-model.sh	tests/test-integration.sh	分割	-
 -	tests/test-ledger.sh	新規	-
@@ -126,7 +121,6 @@ tests/test-cmux-next-model.sh	tests/test-integration.sh	分割	-
 
 # --- 変更の無いスイート（旧＝新＝本人裁定 Q5 tests/ は残す） ---
 tests/test-agent-definitions.sh	tests/test-agent-definitions.sh	移動	-
-tests/test-agent-model-guard.sh	tests/test-agent-model-guard.sh	移動	-
 tests/test-audit.sh	tests/test-audit.sh	移動	-
 tests/test-backup-vault.sh	tests/test-backup-vault.sh	移動	-
 tests/test-bash-policy-gate.sh	tests/test-bash-policy-gate.sh	移動	-
@@ -169,5 +163,4 @@ tests/test-vault-inventory.sh	tests/test-vault-inventory.sh	移動	-
 tests/test-vault-lib.sh	tests/test-vault-lib.sh	移動	-
 tests/test-vault-read-log.sh	tests/test-vault-read-log.sh	移動	-
 tests/test-vault-recall.sh	tests/test-vault-recall.sh	移動	-
-tests/test-vault-write-gate.sh	tests/test-vault-write-gate.sh	移動	-
 tests/test-with-dotfiles.sh	tests/test-with-dotfiles.sh	移動	-

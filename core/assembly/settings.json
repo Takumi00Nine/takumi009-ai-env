@@ -13,10 +13,9 @@
       "Read(~/.config/takumi009-ai-env/profile.md)",
       "Bash(~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh:*)",
       "Bash(python3 ~/Workspace/Tools/takumi009-ai-env/team/connect/claude-code/role_candidates.py:*)",
-      "Skill(schedule)",
       "Skill(update-config)",
       "Skill(claude-api)",
-    "Bash(touch /tmp/claude-direct-edit-ok-*)"
+      "Bash(touch /tmp/claude-direct-edit-ok-*)"
     ],
     "deny": [
       "Read(~/.ssh/**)",
@@ -121,11 +120,9 @@
     "additionalDirectories": [
       "~/Data",
       "~/.claude",
-      "~/Workspace/Projects",
       "~/Workspace",
       "~/.codex",
-      "~/Workspace/Projects",
-      "~/Library/LaunchAgents"
+      "~/Workspace/Projects"
     ]
   },
   "model": "__AIENV_MODEL__",
@@ -212,12 +209,6 @@
             "command": "$HOME/.claude/hooks/bash-danger-gate.sh",
             "timeout": 5,
             "statusMessage": "危険コマンドガード確認中"
-          },
-          {
-            "type": "command",
-            "command": "$HOME/.claude/hooks/codex-direct-call-gate.sh",
-            "timeout": 5,
-            "statusMessage": "Codex直叩きガード確認中"
           }
         ]
       },
@@ -240,12 +231,6 @@
             "command": "$HOME/.claude/hooks/inprocess-gate.sh",
             "timeout": 35,
             "statusMessage": "in-process起動の境界を確認中"
-          },
-          {
-            "type": "command",
-            "command": "$HOME/.claude/hooks/agent-model-guard.sh",
-            "timeout": 5,
-            "statusMessage": "ワーカーモデル指定を確認中"
           }
         ]
       }

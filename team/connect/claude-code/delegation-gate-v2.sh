@@ -7,13 +7,11 @@
 # Knowledge/mistakes の一般則「テキストで効かない再発はツール境界でフック化する」を適用。
 # 経緯: Decisions/2026-07-05-delegation-gate-v2 / 運用: Preferences/coding-delegation
 #
-# 判定順序（1→2→2.5→3→4→4m→5）:
+# 判定順序（1→2.5→3→4m→5）:
 #   1) サブエージェント/ワーカー内の編集（agent_id/agent_type あり）＝ワーカーの仕事は正当 → 通過
-#   2) チームメイトセッション（他チームの config.json に自 session_id が載る） → 通過
 #   2.5) 外部脳（Vault）の AI 向け6フォルダ＝通過（リーダー直筆可・2026-10-04 本人決定）
 #   3) 許可パス（~/.claude / tmp / 例外プロジェクト） → 通過
-#   4) 自チームにリーダー以外のメンバーが存在（＝委任実績あり。名前付きチームメイトの例外運用のため残す） → 通過
-#   4m) このセッションの委任マーカーが存在する（agent-model-guard.shがAgent起動のPASS時にtouch。
+#   4m) このセッションの委任マーカーが存在する（inprocess-gate.shがAgent起動のPASS時にtouch。
 #       名前無しsubagentだけで運用するセッションでの委任実績＝設計v1.2 D-2・FR-25〜28） → 通過
 #   5) 直接作業宣言マーカー（直接編集の理由をユーザーに明示してから touch） → 通過
 #
@@ -60,7 +58,6 @@ SELF_DIR="$(resolve_delegation_gate_self_dir 2>/dev/null)" || guard_common_load_
 # shellcheck source=../../../core/executor/vault-paths.sh
 source "$SELF_DIR/../../../core/executor/vault-paths.sh" 2>/dev/null || guard_common_load_error GUARD_COMMON_UNREADABLE
 
-TEAMS_DIR="${GATE_TEAMS_DIR:-$HOME/.claude/teams}"
 MARKER_DIR="${GATE_MARKER_DIR:-/tmp}"
 ALLOW_PREFIXES=(
   # Vault はここへ足さない（AI 向け6フォルダは 2.5 で通過・それ以外は 3〜5 で判定）。
@@ -91,21 +88,10 @@ case "$fpath" in
   *) fpath="${cwd%/}/$fpath" ;;
 esac
 
-# 2) チームメイトセッション（他チームの config に自 session_id）
-if [ -d "$TEAMS_DIR" ]; then
-  own_team="session-${sid:0:8}"
-  for cfg in "$TEAMS_DIR"/*/config.json; do
-    [ -f "$cfg" ] || continue
-    [ "$(basename "$(dirname "$cfg")")" = "$own_team" ] && continue
-    grep -q "$sid" "$cfg" 2>/dev/null && exit 0
-  done
-fi
-
 # 2.5) 外部脳（Vault）は軽重に関係なくリーダーが直筆する。ワーカーは記録候補を
 # 最終報告で申告する＝役割の規則で守る。AI 向け6フォルダを通す判定は維持する。
 # 判定式は vault-paths.sh の
-# guard_is_vault_ai_path（6フォルダの literal はそこだけ）。子の柵
-# ai-brain/connect/claude-code/vault-write-gate.sh は別物（子は今も deny）。
+# guard_is_vault_ai_path（6フォルダの literal はそこだけ）。
 if guard_is_vault_ai_path "$fpath"; then
   exit 0
 fi
@@ -115,22 +101,7 @@ for p in "${ALLOW_PREFIXES[@]}"; do
   case "$fpath" in "$p"/*|"$p") exit 0 ;; esac
 done
 
-# 4) 自チームにリーダー以外のメンバーがいる＝委任実績あり
-own_cfg="$TEAMS_DIR/session-${sid:0:8}/config.json"
-if [ -f "$own_cfg" ]; then
-  n_workers=$(jq '[.members[]? | select((.agentType // .agent_type // "") != "team-lead")] | length' "$own_cfg" 2>/dev/null)
-  [ "${n_workers:-0}" -gt 0 ] 2>/dev/null && exit 0
-fi
-
-# 4m) このセッションの委任マーカーが存在する（FR-25〜28・FM-1対応）。
-# 名前無し subagent だけで運用しているセッションでは 4) の自チーム config
-# 照合（team-lead以外のmembers）が常に空振りする（名前無しsubagentは
-# ~/.claude/teams/*/config.jsonにメンバーとして載らないため）。
-# agent-model-guard.shがPreToolUse(Agent)のPASS時にセッション固有の
-# マーカーをtouchする（OQ-4案B）ので、それが存在すれば「このセッションで
-# 少なくとも1回委任が起きた」実績として通す。sidは既にL34で取得済み。
-# FM-3: /resumeでsession_idが変わるとマーカー名も変わり実績は一旦空振りする
-# が、そのセッションで最初にAgentを起動した時点で立ち直る（仕様）。
+# 4m) inprocess-gate またはラッパーが付けた、このセッションの委任マーカー。
 [ -f "$MARKER_DIR/claude-delegated-ok-$sid" ] && exit 0
 
 # 5) 直接作業宣言マーカー

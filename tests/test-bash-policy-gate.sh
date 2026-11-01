@@ -8,9 +8,7 @@
 # 含め常に `exit 0` を返す契約＝bash-danger-gate と同じ。exit code では判定
 # できない）。様式は tests/test-bash-danger-gate.sh に合わせる。
 #
-# 2026-09-19 段3-5 τ: settings.json の inline 3 本（公開ガード・pip 仮想環境・
-# brew ランタイム）を 1 ファイルへ移した際に新設。判定式と deny 文面は inline
-# から verbatim＝ここで固定するのは「規則が発火する／しない」の形だけ。
+# 公開ガードの拒否と通過を確認する。
 #
 # 実行方法: bash tests/test-bash-policy-gate.sh
 
@@ -26,12 +24,11 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 
-# フックへ JSON 入力を渡して標準出力を返す。R2 は環境変数 VIRTUAL_ENV／
-# CONDA_PREFIX で許可側へ倒れるため、テスト実行元のシェルの値を外して渡す。
+# フックへ JSON 入力を渡す。
 run_hook() {
   local cmd="$1"
   jq -n --arg cmd "$cmd" '{tool_input:{command:$cmd}}' \
-    | env -u VIRTUAL_ENV -u CONDA_PREFIX bash "$HOOK"
+    | bash "$HOOK"
 }
 
 assert_allowed() {
@@ -67,12 +64,8 @@ echo "=== 1. R1 公開ガード: gh repo create --public は deny・--private �
 assert_denied "gh repo create foo --public は deny・正本参照" "gh repo create foo --public" "~/Data/obsidian/Preferences/absolute-rules.md"
 assert_allowed "gh repo create foo --private は allow" "gh repo create foo --private"
 
-assert_denied "pip install requests は deny・正本参照" "pip install requests" "~/Data/obsidian/Preferences/python-venv.md"
-assert_allowed ".venv/bin/pip install requests は allow（明示パス）" ".venv/bin/pip install requests"
-echo "=== 3. R3 brew ランタイム: brew install python@3.12 は deny・brew install jq は allow ==="
-assert_denied "brew install python@3.12 は deny・正本参照" "brew install python@3.12" "~/Data/obsidian/Preferences/anyenv-runtime-management.md"
 echo "=== 4. 不正入力: 空 stdin・tool_input 欠落 → 無出力 exit 0（fail-silent） ==="
-out="$(printf '' | env -u VIRTUAL_ENV -u CONDA_PREFIX bash "$HOOK")"; rc=$?
+out="$(printf '' | bash "$HOOK")"; rc=$?
 if [ -z "$out" ] && [ "$rc" -eq 0 ]; then
   pass "空 stdin は無出力 exit 0"
 else

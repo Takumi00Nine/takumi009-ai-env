@@ -111,13 +111,10 @@ EOF
   echo '#!/bin/bash' > "$repo/dock/executor/dock-pane-resolve.sh"
   echo '#!/bin/bash' > "$repo/core/assembly/check-sub-update.sh"
   echo '#!/bin/bash' > "$repo/core/connect/claude-code/context-size-warn.sh"
-  echo '#!/bin/bash' > "$repo/team/connect/claude-code/agent-model-guard.sh"
   echo '#!/bin/bash' > "$repo/team/connect/claude-code/inprocess-gate.sh"
-  echo '#!/bin/bash' > "$repo/ai-brain/connect/claude-code/vault-write-gate.sh"
   echo '#!/bin/bash' > "$repo/usage/executor/usage-inject.sh"
   # 実台帳の配置行（9列目）にある残り2本＝real ledger.tsv に合わせて追加
   # （本体は実装と無関係のstub。正本はコピーした台帳側）。
-  echo '#!/bin/bash' > "$repo/team/connect/claude-code/codex-direct-call-gate.sh"
   echo '#!/bin/bash' > "$repo/core/connect/claude-code/prompt-answer.sh"
   chmod +x "$repo"/*/executor/*.sh "$repo"/*/connect/*/*.sh "$repo"/core/assembly/check-sub-update.sh
   echo '# agent' > "$repo/team/rules/agents/sample-agent.md"
@@ -154,11 +151,8 @@ install_fake_home() {
   ln -s "$repo/dock/executor/dock-pane-resolve.sh" "$home/.claude/hooks/dock-pane-resolve.sh"
   ln -s "$repo/core/assembly/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
   ln -s "$repo/core/connect/claude-code/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"
-  ln -s "$repo/team/connect/claude-code/agent-model-guard.sh" "$home/.claude/hooks/agent-model-guard.sh"
   ln -s "$repo/team/connect/claude-code/inprocess-gate.sh" "$home/.claude/hooks/inprocess-gate.sh"
-  ln -s "$repo/ai-brain/connect/claude-code/vault-write-gate.sh" "$home/.claude/hooks/vault-write-gate.sh"
   ln -s "$repo/usage/executor/usage-inject.sh" "$home/.claude/hooks/usage-inject.sh"
-  ln -s "$repo/team/connect/claude-code/codex-direct-call-gate.sh" "$home/.claude/hooks/codex-direct-call-gate.sh"
   ln -s "$repo/core/connect/claude-code/prompt-answer.sh" "$home/.claude/hooks/code27-call-clear.sh"
   ln -s "$repo/team/rules/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/team/connect/codex/AGENTS.md" "$home/.codex/AGENTS.md"

@@ -510,8 +510,8 @@ if [ -n "$PARENT_SID" ]; then
   guard_mark_delegation "$PARENT_SID"
   MARKER_PATH="$(guard_marker_path "$PARENT_SID")"
   if [ ! -e "$MARKER_PATH" ]; then
-    # F2: マーカーの書き込みに失敗（子は止めない＝既存agent-model-guard.sh
-    # と同じ流儀）。
+    # F2: マーカーの書き込みに失敗（子は止めない＝guard_common.sh の
+    # 委任マーカー処理と同じ流儀）。
     echo "[$SCRIPT_NAME] WARN: 委任実績マーカーの書き込みに失敗しました: $MARKER_PATH" >&2
   fi
 else

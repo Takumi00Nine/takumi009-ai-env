@@ -1,9 +1,8 @@
 #!/bin/bash
 # guard_common.sh — ガードの共有部品（設計-v1.1.1.md §3・D-2・裁定A）。
 #
-# 目的: `team/connect/claude-code/claude-exec.sh`（ラッパー）と `team/connect/claude-code/agent-model-guard.sh`
-# が同じ判定（許容モデル別名の集合・委任実績マーカーの置き方）を持たないよう、
-# 正本をここ1箇所に集約する（FR-24・FR-25・NFR-7）。Bash 3.2 互換（連想配列を使わない）。
+# ラッパーの許容モデル別名と、ラッパー・inprocess-gate が使う委任マーカー。
+# Bash 3.2 互換。
 # Vault の AI 向け6フォルダの判定は Core の core/executor/vault-paths.sh へ分けた（v1.1）。
 #
 # `source` して使う（実行可能属性は付けるが、直接実行する用途は想定しない）。
@@ -35,8 +34,7 @@ guard_marker_path() {
 }
 
 # guard_mark_delegation <sid>: マーカーを touch する。sid が空なら何もしない。
-# 書き込み失敗は握り潰して0を返す（呼び出し側のspawn/起動を止めない＝既存
-# agent-model-guard.sh と同じ流儀）。
+# 書き込み失敗は握り潰して0を返す（呼び出し側のspawn/起動を止めない＝既存のラッパーと同じ流儀）。
 guard_mark_delegation() {
   local sid="$1"
   [ -n "$sid" ] || return 0

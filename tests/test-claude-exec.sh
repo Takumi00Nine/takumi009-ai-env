@@ -95,12 +95,10 @@ EOF
     "PreToolUse": [
       {"matcher":"Bash","hooks":[
         {"type":"command","command":"echo public-guard"},
-        {"type":"command","command":"echo pip-guard"},
-        {"type":"command","command":"echo brew-guard"},
         {"type":"command","command":"\$HOME/.claude/hooks/bash-danger-gate.sh"}
       ]},
       {"matcher":"Edit|Write|NotebookEdit","hooks":[{"type":"command","command":"\$HOME/.claude/hooks/delegation-gate-v2.sh"}]},
-      {"matcher":"^Agent\$","hooks":[{"type":"command","command":"\$HOME/.claude/hooks/agent-model-guard.sh"}]}
+      {"matcher":"^Agent\$","hooks":[{"type":"command","command":"\$HOME/.claude/hooks/inprocess-gate.sh"}]}
     ],
     "SessionStart":[{"hooks":[{"type":"command","command":"echo should-not-appear"}]}],
     "UserPromptSubmit":[{"hooks":[{"type":"command","command":"echo should-not-appear-either"}]}]
@@ -275,7 +273,7 @@ s = json.loads(sys.argv[1])
 pre = s.get("hooks", {}).get("PreToolUse", [])
 nonempty = len(pre) > 0
 excludes_leader = not any(
-    "delegation-gate-v2.sh" in h.get("command","") or "agent-model-guard.sh" in h.get("command","")
+    "delegation-gate-v2.sh" in h.get("command","")
     for e in pre for h in e.get("hooks", [])
 )
 print("1" if (nonempty and excludes_leader) else "0")
@@ -289,17 +287,9 @@ print("1" if (nonempty and excludes_leader) else "0")
   assert_true "子設定を読めなければ起動を止める" \
     "$([ "$RC" -eq 8 ] && [ "$(stub_lines)" = 0 ] && echo 1 || echo 0)"
 
-  # 裁定A: child_settings_has_vault_gate_for_implementer /
-  # child_settings_has_vault_gate_for_operator
-  new_fixture
-  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-ac8g1 --model-def t-sonnet-high
-  s_impl="$(stub_settings_json)"
-  assert_contains "子設定にVault保護柵がある" "$s_impl" "vault-write-gate.sh"
+  assert_contains "子設定のlayer1に危険コマンド柵が残る" "$settings1" "bash-danger-gate.sh"
+  assert_true "子設定にVault書込柵を付与しない" "$([[ "$settings1" != *vault-write-gate.sh* ]] && echo 1 || echo 0)"
 
-  new_fixture
-  AIENV_LEDGER="$WORK/no-such-dir/ledger.tsv" run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-v08b --model-def t-sonnet-high
-  assert_true "台帳異常なら起動を止める" \
-    "$([ "$RC" -eq 8 ] && [ "$(stub_lines)" = 0 ] && echo 1 || echo 0)"
 }
 
 echo "=== AC-9: marker_uses_parent_sid / child_sid_marker_does_not_pass / vault_passes ==="

@@ -34,12 +34,10 @@ The repository is split into 6 **functions** (what a human would choose to take 
 
 ```
 takumi009-ai-env/
-├── ai-brain/                   # Vault bootstrap, recall, read-log, write-gate, backup, weekly maintenance, public export
+├── ai-brain/                   # Vault bootstrap, recall, read-log, backup, weekly maintenance, public export
 │   ├── executor/               # vault-recall.sh, vault-read-log.sh, bootstrap-vault.sh (SessionStart contribution), backup-vault.sh,
 │   │                           # maintenance.sh / maintenance-kick.sh, export-public-vault.sh, fragments-reviewed.sh, health_judge.py,
 │   │                           # the Vault detectors (fragments_log.py, maintenance_run_step.py, vault_inventory.py, vault_lib.py)
-│   ├── connect/
-│   │   └── claude-code/        # vault-write-gate.sh (Vault-write guard loaded into a worker's child settings)
 │   ├── assembly/                # install-backup.sh, install-maintenance.sh, the 2 LaunchAgent plists (backup-vault / maintenance)
 │   └── data/
 │       ├── templates/           # README templates for the private skeleton folders
@@ -50,8 +48,8 @@ takumi009-ai-env/
 │   ├── data/                     # profile.md.sample, models.conf.sample
 │   ├── executor/                 # profile_resolve.py (cast/model resolver)
 │   └── connect/
-│       ├── claude-code/          # claude-exec.sh, delegation-gate-v2.sh, inprocess-gate.sh, agent-model-guard.sh,
-│       │                         # codex-direct-call-gate.sh, role_candidates.py, guard_common.sh
+│       ├── claude-code/          # claude-exec.sh, delegation-gate-v2.sh, inprocess-gate.sh,
+│       │                         # role_candidates.py, guard_common.sh
 │       └── codex/                # codex-exec.sh, AGENTS.md, hooks.json, config.toml template (generated)
 ├── usage/                        # Usage fetch, cache, injection into prompts
 │   ├── executor/                 # usage-fetch.sh, usage-source.sh, usage-inject.sh, usage-block.sh, usage_snapshot.py,
@@ -149,7 +147,7 @@ If this machine already has a pre-v1.1 checkout, bring it up to date in **one pl
 ```sh
 cd ~/Workspace/Tools/takumi009-ai-env
 git pull --ff-only
-core/assembly/install-main.sh --with-dotfiles   # re-run the full installer (re-links every hook, registers the new codex-direct-call-gate.sh, regenerates settings.json)
+core/assembly/install-main.sh --with-dotfiles   # re-run the full installer (re-links every hook, regenerates settings.json)
 ai-brain/assembly/install-backup.sh             # re-register the Vault-backup LaunchAgent at its new target path
 ai-brain/assembly/install-maintenance.sh        # re-register the weekly maintenance LaunchAgent at its new target path
 usage/assembly/install-usage-fetch.sh           # re-register the usage-fetch LaunchAgent at its new target path
@@ -359,13 +357,11 @@ repo は人が取る単位＝**機能** 6 つに分かれ、各機能の内側�
 
 ```
 takumi009-ai-env/
-├── ai-brain/                   # Vault の読込・想起・読取記録・書込の柵・バックアップ・週次メンテ・公開出力
+├── ai-brain/                   # Vault の読込・想起・読取記録・バックアップ・週次メンテ・公開出力
 │   ├── executor/               # vault-recall.sh・vault-read-log.sh・bootstrap-vault.sh（SessionStart 合成器への寄与）・
 │   │                           # backup-vault.sh・maintenance.sh／maintenance-kick.sh・export-public-vault.sh・
 │   │                           # fragments-reviewed.sh・health_judge.py・Vault の検出器群
 │   │                           # （fragments_log.py・maintenance_run_step.py・vault_inventory.py・vault_lib.py）
-│   ├── connect/
-│   │   └── claude-code/        # vault-write-gate.sh（子向け Vault 保護柵）
 │   ├── assembly/                # install-backup.sh・install-maintenance.sh・LaunchAgent plist 2 本（backup-vault／maintenance）
 │   └── data/
 │       ├── templates/           # private 骨格フォルダの README 雛形
@@ -376,8 +372,8 @@ takumi009-ai-env/
 │   ├── data/                     # profile.md.sample・models.conf.sample
 │   ├── executor/                 # profile_resolve.py（配役表・モデル定義の解決器）
 │   └── connect/
-│       ├── claude-code/          # claude-exec.sh・delegation-gate-v2.sh・inprocess-gate.sh・agent-model-guard.sh・
-│       │                         # codex-direct-call-gate.sh・role_candidates.py・guard_common.sh
+│       ├── claude-code/          # claude-exec.sh・delegation-gate-v2.sh・inprocess-gate.sh・
+│       │                         # role_candidates.py・guard_common.sh
 │       └── codex/                # codex-exec.sh・AGENTS.md・hooks.json・config.toml テンプレ（生成）
 ├── usage/                        # 使用率の取得・保存・発言への注入
 │   ├── executor/                 # usage-fetch.sh・usage-source.sh・usage-inject.sh・usage-block.sh・usage_snapshot.py・
@@ -428,7 +424,7 @@ takumi009-ai-env/
 **職種定義の契約**（`team/rules/agents/<職種>.md` 1 本の中で全部満たせる。検査＝`bash tests/test-agent-definitions.sh`）
 (a) 職種名（ファイル名＝`name`）は `^[a-z][a-z-]*$`（英小文字とハイフンのみ・先頭は英字・数字と `:` は不可。⚠️ 配役表 resolver の禁止キー部分一致語＝`auth`・`token`・`secret`・`password`・`credential`・`cookie`・`passphrase`・`access_key`・`api_key`・`private_key` を含む名前は `role.<職種>` 行が MINIMAL で拒否される＝例 `test-author` は不可） (b) frontmatter `name:` がファイル名（拡張子除く）と一致 (c) 組込み種別名（Explore・Plan・general-purpose・claude・statusline-setup・claude-code-guide）と衝突しない (d) `description:`・`tools:` が非空・本文が非空 (e) frontmatter に `model:`・`effort:` を書かない (f) 本文に `## 権限` 見出しがちょうど 1 件・`worker-role-prompts` への参照 0 件。
 
-ラッパー起動の子ワーカーは、職種を問わず Vault 保護の柵（`vault-write-gate.sh`）の対象となる。Vault への記録はすべてリーダー自身が行う。
+Vault への記録はすべてリーダー自身が行う。
 
 **設定変更の手順**（追加・削除・改名とも）: ① `team/rules/agents/<職種>.md` を書く／消す ② `~/.config/takumi009-ai-env/profile.md` の `role.<職種>: …` 行を足す／消す（`team/data/profile.md.sample` が当該職種を参照していればそちらも） ③ `bash tests/test-agent-definitions.sh` が exit 0（数秒） ④ 追加は `bash core/assembly/install-main.sh` を再実行して `~/.claude/agents/<職種>.md` を配置・削除は `rm ~/.claude/agents/<職種>.md`（dangling symlink の除去）。Agent 経路は次に起動するセッションから有効（起動中のセッションは追随しない）。ラッパー経路は即時。改名＝削除＋追加。コア規範が名指す職種（工程 9 職）の削除・改名は規範改訂を伴う通常の変更。
 
@@ -484,7 +480,7 @@ usage/assembly/install-usage-fetch.sh            # 使用率取得器のLaunchAg
 ```sh
 cd ~/Workspace/Tools/takumi009-ai-env
 git pull --ff-only
-core/assembly/install-main.sh --with-dotfiles   # 全部入りインストーラを再実行（全フックの再link・新設 codex-direct-call-gate.sh の登録・settings.json再生成）
+core/assembly/install-main.sh --with-dotfiles   # 全部入りインストーラを再実行（全フックの再link・settings.json再生成）
 ai-brain/assembly/install-backup.sh             # Vaultバックアップ LaunchAgent を新しい起動対象で再導入
 ai-brain/assembly/install-maintenance.sh        # 週次メンテナンス LaunchAgent を新しい起動対象で再導入
 usage/assembly/install-usage-fetch.sh           # 使用率取得器 LaunchAgent を新しい起動対象で再導入

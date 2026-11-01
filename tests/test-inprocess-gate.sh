@@ -28,6 +28,7 @@ assert_eq() {
 }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-inprocess-gate.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+export GATE_MARKER_DIR="$WORK"
 
 # ============================================================
 # fixture: 配役表 + モデル定義（4状態＋在り/無しの両方をカバーする）
@@ -87,12 +88,13 @@ echo "=== AC-14①: allow_not_in_cast_table（陽性・監査1行） ==="
   AUDIT="$WORK/audit-allow.jsonl"
   out_file="$WORK/allow.out"
   err_file="$WORK/allow.err"
-  printf '%s' '{"tool_name":"Agent","tool_input":{"subagent_type":"general-purpose"}}' \
+  printf '%s' '{"tool_name":"Agent","tool_input":{"subagent_type":"general-purpose"},"session_id":"allow-session"}' \
     | env -u AIENV_PYTHON_BIN AIENV_MODEL_DEFS_FILE="$BASE/models.conf" \
         AIENV_LOCAL_PROFILE_PATH="$BASE/profile.md" AIENV_INPROCESS_AUDIT_LOG="$AUDIT" \
         /bin/bash "$GATE" >"$out_file" 2>"$err_file"
   rc=$?
   assert_eq "allow_not_in_cast_table: stdout空（干渉しない）" "" "$(cat "$out_file")"
+  assert_eq "通過したAgentに委任マーカーを付与" "yes" "$([ -f "$WORK/claude-delegated-ok-allow-session" ] && echo yes)"
 }
 
 echo "=== AC-14②: deny_four_states（陰性4通り・各1行の監査） ==="
@@ -101,7 +103,7 @@ echo "=== AC-14②: deny_four_states（陰性4通り・各1行の監査） ==="
     role="${pair%%:*}"
     AUDIT="$WORK/audit-deny-$role.jsonl"
     out_file="$WORK/deny-$role.out"
-    printf '%s' "{\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"$role\"}}" \
+    printf '%s' "{\"tool_name\":\"Agent\",\"tool_input\":{\"subagent_type\":\"$role\"},\"session_id\":\"denied-session\"}" \
       | env -u AIENV_PYTHON_BIN AIENV_MODEL_DEFS_FILE="$BASE/models.conf" \
           AIENV_LOCAL_PROFILE_PATH="$BASE/profile.md" AIENV_INPROCESS_AUDIT_LOG="$AUDIT" \
           /bin/bash "$GATE" >"$out_file" 2>/dev/null
@@ -109,6 +111,7 @@ echo "=== AC-14②: deny_four_states（陰性4通り・各1行の監査） ==="
     assert_eq "deny_four_states($role): permissionDecision=deny" "deny" "$(permission_decision_of "$(cat "$out_file")")"
     assert_eq "in-process拒否の正本参照" "true" "$(jq '.hookSpecificOutput.permissionDecisionReason | contains("~/Data/obsidian/Preferences/worker-role-prompts.md")' "$out_file")"
   done
+  assert_eq "拒否したAgentには委任マーカーを付けない" "no" "$([ -f "$WORK/claude-delegated-ok-denied-session" ] && echo yes || echo no)"
 }
 echo "=== AC-14③: fail_close_on_port_failure（口が非0／不正JSON→ともにdenied・fail-close） ==="
 {
