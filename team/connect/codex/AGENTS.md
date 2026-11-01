@@ -1,40 +1,40 @@
-# Global Codex Instructions
+# Codex 全体の指示
 
-- At the beginning of every new thread, tell the user: 「作業の根は `~/Workspace` です。起動時に選択されているフォルダーで作業します。」
-- Do not assume the workspace can be changed after thread creation; clearly tell the user when a new thread must be created with that folder selected.
+- 新しいスレッドの最初に、本人へ次のとおり伝える：「作業の根は `~/Workspace` です。起動時に選択されているフォルダーで作業します。」
+- スレッドを作ったあとで作業フォルダーを変えられるとは考えない。そのフォルダーを選んで新しいスレッドを作る必要があるときは、本人にはっきり伝える。
 - リーダーの起動時には必読5ファイルの全文が注入される。不足の表示があれば読了として扱わず、最初の応答で本人に伝える。
 
-## Workspace Folder Rules (Finalized 2026-10-30)
+## 作業フォルダーの決まり（確定 2026-10-30）
 
-- The folder rules live in one place: `~/Data/obsidian/Preferences/file-placement.md`. Read it before placing new files. Do not copy its contents here.
-- Start leaders and workers from `~/Workspace`.
+- フォルダーの決まりは `~/Data/obsidian/Preferences/file-placement.md` の1か所だけにある。新しくファイルを置く前に読む。ここに中身を写さない。
+- リーダーもワーカーも `~/Workspace` から起動する。
 
-## Delegated-task tooling guard (Finalized 2026-06-22)
+## 任された作業での道具の制限（確定 2026-06-22）
 
-- Delegated tasks: do not use Computer Use / browser-UI automation; get web information via `web_search`. If UI control is unavoidable, stop and report back instead of driving the UI.
+- 任された作業では Computer Use やブラウザー画面の自動操作を使わない。Web の情報は `web_search` で取る。画面操作がどうしても要るときは、操作せずに止めて報告する。
 
-## Obsidian External Brain Role Assignment (Finalized 2026-10-31)
+## Obsidian 外部脳の役割分担（確定 2026-10-31）
 
-- The user shares an Obsidian Vault as an "external brain" among multiple assistants.
-  - Vault path: `~/Data/obsidian`
-  - Access method: **Direct filesystem access** (read/grep files directly; the leader also writes directly). **Do NOT use obsidian-mcp** — its ConnectionMonitor has a known bug that hangs requests (incl. reads); it is unmaintained (v1.0.6).
-- **Only the leader writes to the Vault**, regardless of the size of the edit. Before writing, read `Preferences/vault-operation.md` in full and follow its writing and publication rules.
-- **Workers never write to the Vault** (create, edit, delete, move, rename, or tag changes). This also applies when invoked as a worker through `codex-exec.sh`. Report knowledge to retain (resolved bug, decision, project-state change, preference) in the final report under `Vault記録候補:`; the leader writes it. Enforce this through role instructions; do not add a write-blocking mechanism.
-- **Preferences edits and public snapshot generation/commits are main-machine-only**. Before doing either, check that `~/.config/takumi009-ai-env/profile.md` has `machine_role` configured with `value=main`.
-- Do NOT broadly read or search the Vault on your own. Read ONLY the specific Vault notes the leader or user points you to for the task, given as folder-qualified paths (e.g. `Preferences/vrm-license-policy.md`), plus the writing rules required above before a Vault write.
-- You MUST read `Preferences/absolute-rules.md` in full when directed to it and obey every rule in it without exception.
+- 本人は Obsidian の Vault を、複数のアシスタントで共有する「外部脳」として使っている。
+  - Vault の場所：`~/Data/obsidian`
+  - 読み書きの方法：**ファイルを直接読む**（ファイルを直接読み・検索する。リーダーは直接書く）。**obsidian-mcp は使わない**。ConnectionMonitor に、読み取りを含む要求が止まる既知の不具合があり、保守もされていない（v1.0.6）。
+- **Vault に書くのはリーダーだけ**。編集の大小は問わない。書く前に `Preferences/vault-operation.md` を全文読み、書き方と公開の決まりに従う。
+- **ワーカーは Vault に書かない**（作成・編集・削除・移動・名前の変更・タグの変更のすべて）。`codex-exec.sh` からワーカーとして呼ばれたときも同じ。残すべき知識（解決した不具合・決定・案件の状態の変化・好み）は、最終報告の `Vault記録候補:` に書き、リーダーが書き込む。これは役割の指示で守らせる。書き込みを止める仕組みは足さない。
+- **Preferences の編集と、公開スナップショットの生成・commit はメイン機だけ**。どちらかをする前に、`~/.config/takumi009-ai-env/profile.md` の `machine_role` が `value=main` になっていることを確かめる。
+- Vault を自分の判断で広く読んだり検索したりしない。読むのは、その作業のためにリーダーか本人が示したノート（`Preferences/vrm-license-policy.md` のようにフォルダー付きのパスで示される）と、Vault に書く前に必要な上の書き方の決まりだけ。
+- `Preferences/absolute-rules.md` を読むよう指示されたら、必ず全文を読み、例外なくすべての決まりに従う。
 
-## Output & Reporting Conventions (Finalized 2026-06-20)
+## 出力と報告の決まり（確定 2026-06-20）
 
-When reporting back to the leader / user:
+リーダーや本人に報告するとき：
 
-- **Reply in Japanese** unless the task explicitly asks otherwise (deliverables like code/README follow the task's own spec).
-- **Lead with the conclusion / answer first**, then supporting detail. No long preamble, no filler, no restating the request.
-- **Use concise bullet points.** Keep it as short as the task allows.
-- **Cite sources / file paths** when relevant (e.g. `path/to/file.ts:42`, or a URL for web findings).
+- 作業で別の指定がない限り、**日本語で返す**（コードや README などの成果物は、その作業の指定に従う）。
+- **結論・答えを先に書き**、根拠や詳細はそのあとに書く。長い前置き・埋め草・依頼の言い直しはしない。
+- **短い箇条書きにする**。作業が許す限り短くする。
+- 関係するときは**出典やファイルのパスを示す**（例：`path/to/file.ts:42`、Web で調べたものは URL）。
 
-### Context economy (important — keep the orchestrator's context small)
+### 文脈を節約する（大事：まとめ役の文脈を小さく保つ）
 
-- **Do NOT paste large file contents, full logs, or raw dumps back.** Return the conclusion / summary only.
-- For explore / investigate / "read and summarize" tasks: return the finding plus the relevant `file:line` references, NOT the file bodies. The orchestrator will open specifics if needed.
-- If output would be long, summarize and offer to expand on request rather than dumping everything.
+- **大きなファイルの中身・ログ全体・生の出力を貼り返さない。** 結論か要約だけを返す。
+- 探す・調べる・「読んで要約して」の作業では、見つけたことと関係する `ファイル:行` を返す。ファイルの中身は返さない。必要ならまとめ役が開く。
+- 出力が長くなりそうなら、全部出さずに要約し、求められたら詳しく出すと申し出る。
