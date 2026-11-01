@@ -1,9 +1,10 @@
 ---
 date: 2026-06-22
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, blog, note, canvas, workflow]
 project: blog-platform
 related:
+  - "[[Decisions/2026-11-01-rule-relaxation]]"
   - "[[Projects/blog-platform]]"
   - "[[Knowledge/obsidian-canvas-to-note]]"
   - "[[Preferences/coding-delegation]]"
@@ -28,9 +29,9 @@ note 記事を書くとき、いきなり本文を書かず **JSON Canvas で構
 - 使う skill は **`kepano/obsidian-skills` の `json-canvas`**（導入済み。詳細 [[Knowledge/obsidian-canvas-to-note]]）。
 
 ## 実装上の注意（ハマりどころ）
-- **`.canvas` の text に straight double quote (`"`) を入れない**（JSONが壊れる）。強調は `「」` を使う。改行は `\n`。
+- `.canvas` は JSON エンコーダで生成し、引用符・改行を JSON として正しく符号化する。
 - 作成後は必ず検証：JSON妥当・node/edgeのID重複なし・dangling edgeなし・`file` 参照先が実在するか（`jq` でチェック）。
-- ノードIDは16桁hex。`file` パスは Vault ルートからの相対。
+- ノードIDは一意であればよい。`file` パスは Vault ルートからの相対。
 
 **Why:** いきなり本文だと構成がぶれる。Canvas で「広げる→流れに直す→書く」と段階を踏むと、切り口が固まり手戻りが減る。設計図(Canvas)が残るので次回の改稿も速い。
 **How to apply:** note記事の依頼が来たら、まずマインドマップCanvas→章構成Canvas→md下書き の順で進める。各Canvasは別ファイルで残し、合議を使ってよいが Vault への書込はリーダー自身。

@@ -4,6 +4,7 @@ updated: 2026-11-01
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 related:
+  - "[[Decisions/2026-11-01-rule-relaxation]]"
   - "[[Decisions/2026-09-22-leader-decides-session-split]]"
   - "[[Projects/navi-orchestrator]]"
   - "[[Preferences/core-workflow]]"
@@ -43,4 +44,4 @@ aliases:
 - 合議＝後戻りコスト高の設計・技術選定のみ: リーダーが論点定義→複数のワーカー（system-designer）が案+根拠+リスク→リーダー統合・決定（委任除外は設けない）。
 ## コード作成の前提（トリアージ・共通化ファースト）
 - **書く前のトリアージ（2026-08-01 本人指示・恒久）**: コード作成が必要になった時点で（都度スクリプトも対象）①**既存確認**（[[Knowledge/tools-inventory]]・`~/Workspace/Tools/`）→②**三択を本人に提案**（既存拡張/新規/使い捨て）→③本人不在時のみ使い捨て暫定可・**帰還時に必ず報告**（[[Decisions/2026-08-01-code-writing-triage]]）。
-- **共通化ファースト分解（2026-07-21 本人発案・恒久）**: プロジェクト専用ツールは原則作らない＝**「汎用エンジン（tools/）＋プロジェクト固有設定（projects/）」に分解**・委任前に共通部分を部品化（Rule of two）・ワーカースクリプトは終業時退避（正本＝[[Preferences/common-first-decomposition]]）。
+- **共通化のタイミング**：最初は案件内で必要な形で作り、実際に同じ処理が2回目に現れたら共通部分と固有の設定・データに分ける。先回りした汎用化はしない（正本＝[[Preferences/common-first-decomposition]]）。

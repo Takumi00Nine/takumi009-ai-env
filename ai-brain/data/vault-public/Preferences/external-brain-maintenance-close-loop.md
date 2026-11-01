@@ -1,9 +1,10 @@
 ---
 date: 2026-09-21
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, external-brain, maintenance, health, fragments, procedure]
 project: external-brain
 related:
+  - "[[Decisions/2026-11-01-rule-relaxation]]"
   - "[[Preferences/vault-operation]]"
   - "[[Preferences/fragments-workflow]]"
   - "[[Decisions/2026-09-20-health-self-explain-error-only-autofix]]"
@@ -44,7 +45,7 @@ aliases:
 - **完了**＝Dock の外部脳行が `OK 候補0件`。完了報告にはその実測値を添える。これ以外を「完了」と言わない。
 - **未完了停止（上限到達）**＝2 周の後も要対処か候補が残る。3 周目はせず、「未完了」と明記して残件と原因の見立てを 🔸要確認 で本人へ出す。
 - **未完了停止（本人待ち）**＝主体 `本人` の項目だけが残る、または昇格の指示が無いまま候補が残る。「未完了・残＝本人主体 N 件／昇格判断 N 件」と明記し、要判断を 🔸要確認 で出して終える（0 件扱い・完了扱いにしない）。
-- いずれかの終端報告を出すまで、別の話題へ移らない。
+- 未完了なら、未完了であること・残件・再開に必要な事項を記録して残す。
 
 ## 5. やらないこと
 - 再実行を省いて「次回の週次で消える」と報告する。

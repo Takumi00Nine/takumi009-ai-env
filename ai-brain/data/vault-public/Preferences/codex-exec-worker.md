@@ -4,6 +4,8 @@ updated: 2026-11-01
 tags: [preference, codex, delegation, worker, exec]
 project: meta
 related:
+  - "[[Decisions/2026-11-01-agents-md-no-rules]]"
+  - "[[Decisions/2026-11-01-rule-relaxation]]"
   - "[[Preferences/coding-delegation]]"
   - "[[Preferences/codex-review-protocol]]"
   - "[[Preferences/absolute-rules]]"
@@ -28,31 +30,28 @@ aliases:
 
 > **消す作業は任せない（2026-11-01 実測）**＝Codex の実行環境からはゴミ箱（`/usr/bin/trash`）が権限エラー（NSCocoaErrorDomain 513）になる。ワーカーには「消す一覧（絶対パス）」を作らせ、ゴミ箱への移動はリーダーが行う。
 
-## 起動の型（実測済み）
+## 起動の型（`--role` 対応後）
+`--role` はこれから実装する。以下は移行後の呼び方。対応と読込確認が済んでから切り替える。
+
 ```bash
-codex exec --skip-git-repo-check -s workspace-write -C /abs/path/to/target \
-  --json -o /abs/path/report.md \
-  -c 'developer_instructions="<agents/implementer.md の本文をそのまま貼る>"' \
-  '<依頼文>' </dev/null > /abs/path/events.jsonl 2> /abs/path/stderr.log
+~/Workspace/Tools/takumi009-ai-env/team/connect/codex/codex-exec.sh \
+  --role <職種名> \
+  --sandbox danger-full-access \
+  --cwd /abs/path/to/target \
+  --prompt-file /abs/path/request.md \
+  --out /abs/path/report.md \
+  --model <選んだモデル> --effort <選んだeffort> \
+  2> /abs/path/report.wrapper.log
 ```
-- **`</dev/null` は必須**。無いと Codex が stdin の追加入力を待ち続けて止まる（実測＝5分タイムアウト。Bash ツールは stdin が開いたままのため）。
-- **`run_in_background: true`** で起動し、完了通知で受け取る。結果は `-o` のファイルだけ読む（events.jsonl は読まない＝リーダーの文脈を小さく保つ）。
-- **`-C` は変更対象ディレクトリの絶対パスに最小化**。ホーム全体は渡さない。`--skip-git-repo-check` は git 外の cwd で必須。
-- **依頼文は argv でなく stdin 経由で渡し、positional は `-` 固定にする**（先頭がハイフンの依頼文の誤解釈と ARG_MAX を避ける。ラッパー `team/connect/codex/codex-exec.sh` はこの型を実装済み）。
-- **`-c key=value` は codex がまず TOML として解析し、失敗したときだけ文字列にフォールバックする**。`developer_instructions` のように本文を渡す値は JSON 文字列としてエンコードして渡す（ラッパーが `jq -Rs`／python3 で処理。生で渡すと TOML 型に誤解釈される実バグを 2026-09-06 に実測）。
-- ワークスペース外の Vault ノート（例 `absolute-rules.md`）は**exec 経路では読める**（実測）。absolute-rules は貼らずにパス指定で読ませればよい。
-- **職種定義の注入＝`-c developer_instructions="..."`**（公式設定キー。実測で報告形式の指示が守られた）。`agents/implementer.md` の本文（frontmatter を除く）をそのまま渡す。開発指示は**毎回、現行の職種定義から生成する**（`tail -n +7 ~/.claude/agents/<職種>.md`＝frontmatter を除いた本文）＝過去案件の `verifier-dev.md` 等の複写を使わない（職種定義の改訂が届かない）。
-- **`--json` の1行目 `{"type":"thread.started","thread_id":"..."}` に thread_id が出る**。継続は次の形（共通オプションは `resume` より前に置く。`--skip-git-repo-check` も再指定が必要＝無いと "Not inside a trusted directory" で失敗）:
-```bash
-codex exec --skip-git-repo-check -s workspace-write -C /abs/path -o report2.md \
-  resume <thread_id> '<続きの依頼文>' </dev/null
-```
-- **`--ephemeral` を付けると rollout（セッション記録）が保存されず `resume` できない**。継続の予定がある起動では付けない（公式 CLI リファレンス 2026-09-06 確認）。
-- 直近スレッドの継続は `codex exec resume --last '<依頼文>'` でも可（thread_id を控え損ねたときの救済。並列起動中は取り違えるので thread_id 指定を既定にする）。
-- **依頼文に必ず入れる内容は Claude ワーカーと同じ**: ①absolute-rules を読む指示（**exec は PreToolUse フックの対象外**なので手動で明記。[[Preferences/absolute-rules]]）②承認済み設計 ③担当ファイル範囲（新しいファイルを足す依頼では、その repo の登録表＝ai-env なら台帳 `core/data/ledger.tsv` への行の追加も範囲に含める） ④受入条件 ⑤Vault 書込禁止と「Vault記録候補:」での申告 ⑥報告形式（変更ファイル一覧→動作確認手順→受入条件との対応→未解決点）。
-- **1呼び出し＝1工程・15分以内で返る粒度に切る**。大きい実装は resume で分割。
-- **サンドボックス＝ラッパーの `--sandbox` は `read-only|workspace-write|danger-full-access` の 3 値。2026-10-10 以降の既定は `danger-full-access`（本人決定＝[[Decisions/2026-10-10-codex-sandbox-full-access]]・理由＝サンドボックス内で Blender が起動時に落ちる等の弊害）。依頼文の「担当ファイル範囲」「Vault 書込禁止」が守りの正本。**
-- **画像を渡す＝ラッパーの `--image <path>`（繰り返し可・`--resume` 併用可）**＝`codex exec -i` へ絶対パスで渡す。存在しないファイル・カンマを含むパスは exit 2 で codex を起動しない（2026-10-10 追加・Astra の画像検品用。テスト＝`tests/test-codex-exec.sh` ケース 19〜25）。
-- **背景起動した exec は Bash の10分上限に縛られず走り切る**（公式仕様）。止まるのは①前景サブエージェントから起動した場合（その最終応答時）②セッション終了 ③`</dev/null` 忘れ、の3つだけ。
-- モデルと effort は `~/.codex/config.toml` の既定（sol・medium）。変えるときは `-m` と `-c model_reasoning_effort=`。xhigh は使わない（[[Decisions/2026-08-07-avoid-xhigh-effort]]）。
-- stderr に "Reading additional input from stdin..." が出るのは `</dev/null` の EOF 読みで、正常。
+
+- Bash の `run_in_background: true` で起動し、完了通知を受けて `--out` を読む。events の全文は読まない。
+- `--cwd` は担当範囲の絶対パスに最小化し、ホーム全体は渡さない。出力先の親ディレクトリを用意する。
+- 初回・`--resume <thread_id>` の継続とも `--role <職種名>` を指定する。継続は同じ職種、改役は新規起動にする。thread_id と終了値はラッパーの出力で確認する。
+- ラッパーは新規起動・継続とも、`~/Data/obsidian/Preferences/absolute-rules.md`・`core-worker.md`・`worker-role-<職種名>.md` を全文読む指示を自動で付ける。依頼文へ absolute-rules の参照を手で書く必要はない。
+- 職種の本文・権限・出力形式は各 [[Preferences/worker-role-prompts|職種ノート]] を参照する。`--developer-instructions` へ職種本文を切り出して渡す運用は終了する。このオプションは個別案件の入力用に残す。
+- 依頼文には承認済み設計・担当ファイル範囲・受入条件・Vault 書込禁止を示す。新しいファイルを追加するときは、その repo の登録表（ai-env なら `core/data/ledger.tsv`）の更新も担当範囲に含める。報告の固有指定があれば添える。
+- 大きい作業は工程や成果物の区切りで分ける。継続するときはリーダーが `--resume` を明示する。
+- `--sandbox` は必須なので、`--sandbox danger-full-access` を明示する。既定方針は `danger-full-access`（[[Decisions/2026-10-10-codex-sandbox-full-access]]）。担当範囲は依頼文で指定する。
+- 画像は `--image <path>`（繰り返し可・`--resume` 併用可）で渡す。Web裏取りが要るときは `--search` を付ける。
+- モデル・effort は配役表から選んだ候補を `--model`・`--effort` で渡す。
+- 依頼文の stdin 送信、開発指示の文字列符号化、ログ保存はラッパーが行う。

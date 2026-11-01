@@ -1,9 +1,10 @@
 ---
 date: 2026-09-22
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, core, roles, vacancy]
 project: takumi009-ai-env
 related:
+  - "[[Decisions/2026-11-01-rule-relaxation]]"
   - "[[Preferences/core-workflow]]"
   - "[[Decisions/2026-09-07-profile-axes-consolidation]]"
   - "[[Decisions/2026-09-20-roles-config-only]]"
@@ -23,7 +24,7 @@ aliases:
   - `vacant_unavailable`＝採用済みだが動かせない（利用上限・認証失敗・定義不在など）。ワーカー職は spawn の失敗で判明＝本節の代替を発火（別候補の再試行は1行報告してから）。プロファイル側＝`unavailable`
   - `vacant_unknown`＝配役が未確定。プロファイル側＝`unknown`（保留して本人へ）
 - 空席の2状態（`not_adopted`／`vacant_unavailable`）で以下の代替が発火する。**空席は品質ゲートの消滅ではない**＝①リーダー職が実施するか ②未実施を成果物に明記する。黙って省略しない。
-- **検証職が空席** → リーダー職が受入条件と1対1の最小検証を行い「独立検証なし・リーダー検証のみ」を成果物と報告に明記する**か**、「検証未実施（理由）」を明記して本人判断へ上げる。
+- **検証職が空席** → リーダー職が受入条件を代表例で検証し（複数条件をまとめて確かめてもよい）、「独立検証なし・リーダー検証のみ」を成果物と報告に明記する**か**、「検証未実施（理由）」を明記して本人判断へ上げる。
 - **記録** → 記録の職種は無い。リーダーが軽重を問わず自分で書く（[[Preferences/vault-operation]]）。
 - **ナビ職が空席** → 工程ごとのセッション移動は本人が行う。AI が勝手に代替しない。
 - **requirements-analyst / system-designer / adoption-critic が空席** → 工程を飛ばさず、リーダー職が最小限の判定を行い「専任なし」を明記する。

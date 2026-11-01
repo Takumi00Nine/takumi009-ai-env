@@ -1,9 +1,10 @@
 ---
 date: 2026-06-16
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, python, venv]
 project: meta
 related:
+  - "[[Decisions/2026-11-01-rule-relaxation]]"
   - "[[Knowledge/venv-breaks-on-folder-rename]]"
   - "[[Preferences/mcp-global-install]]"
 aliases:
@@ -12,19 +13,19 @@ aliases:
   - "Python"
 ---
 
-# Python は必ず仮想環境で実行する
+# Python の仮想環境
 
-**Python を実行・パッケージ導入するときは、必ず先に仮想環境（venv）を作ってその中で行う。グローバル環境への直接 `pip install` はしない。**
+標準ライブラリだけで行う一回の読み取り・集計は venv 不要。パッケージを導入するときや外部依存がある作業は venv を使う。グローバル環境へ直接 `pip install` しない。
 
-- 新しい Python 作業を始めるときは、まず `python -m venv .venv` で仮想環境を作成し、`source .venv/bin/activate` してから作業する。
+- venv が必要な作業では、まず `python -m venv .venv` で作成し、`source .venv/bin/activate` してから作業する。
 - **`uv venv` は pip を含まない**（2026-10-10 実測・uv 0.13.0）＝pip が要るときは `uv venv --seed` で作るか、`uv pip install --python <venv>/bin/python <pkg>` で venv を直接指定して入れる。
 - 依存パッケージは **venv を有効化した状態で** `pip install`（または `pip install -r requirements.txt`）する。**システム/グローバルの pip に直接入れない。**
-- スクリプト実行も venv の python（`.venv/bin/python` など）を使う。`run.sh` のように `source .venv/bin/activate` してから実行する形にしてもよい。
+- venv が必要なスクリプトは、その venv の Python（`.venv/bin/python` など）で実行する。
 - `.venv/` は `.gitignore` に入れてコミットしない。
 
 **Why:** グローバルに直接入れると、プロジェクト間で依存が衝突したり、システムPythonを汚染して壊す原因になる。仮想環境ごとに隔離すれば再現性・安全性が保てる。
 
-**How to apply:** Python タスクの最初に venv を用意 → activate → その中で pip / 実行。requirements.txt があるものは venv 内で `pip install -r`。フォルダ名変更で venv が壊れる点は [[Knowledge/venv-breaks-on-folder-rename]] 参照。
+**How to apply:** 標準ライブラリだけの一回の読み取り・集計かを先に見る。それ以外は venv を用意して実行する。requirements.txt があるものは venv 内で `pip install -r`。フォルダ名変更で venv が壊れる点は [[Knowledge/venv-breaks-on-folder-rename]] を参照する。
 
 **既知の環境課題（2026-07-21 実測）:** この環境の pyenv 管理 Python 3.12 は **`_lzma` モジュール欠落**でビルドされており、`librosa` が import 失敗する（pooch 経由）。システム Python の改変はしない方針＝**音声解析は scipy/soundfile/numpy 構成で代替可**（BPM 既知ならテンポ推定不要・BGM ループ抽出はこの構成で実用十分だった）。根本解決するなら xz 導入後に pyenv で Python を再ビルド。
 

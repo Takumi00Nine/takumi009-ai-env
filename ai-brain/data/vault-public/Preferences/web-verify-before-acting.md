@@ -1,6 +1,6 @@
 ---
 date: 2026-06-21
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, rule, strict, absolute, web-research, verification]
 project: meta
 related:
@@ -29,6 +29,7 @@ aliases:
 
 ## やり方（共通）
 - 一次情報（公式 man/docs・ソース・著名記事）で確認し、根拠（URL）を押さえてから実装・回答する。
+- 裏取りの手段は対象で分ける：外の変わりうる情報は Web、内部（Vault の決まり・リポジトリの実装・手元の設定）は正本を読むか実測する。内部の事実のために Web を引かない（[[Decisions/2026-11-01-rule-relaxation]]）。
 - 実機で1コマンド〜数十秒で確かめられる挙動は、Web に加えて**実測でも確認**する（推測で断言しない＝[[Knowledge/mistakes]]）。
 - 「自明だから」「些細だから」を裏取り**省略**の理由にしない。**毎回**裏取りする（軽くてもリーダーが取りに行く）。
 - **YouTube 動画の調査は必ず yt-dlp を第一手段にする**（本人指示 2026-07-20）。字幕＝`yt-dlp --skip-download --write-auto-subs --sub-langs ja --sub-format vtt`、メタ情報（タイトル/公開日/長さ/再生数/概要欄）＝`--print` 系。VTT はタグ・タイムスタンプ除去＋連続重複行の dedupe で本文化してから読む。理由＝watch ページの WebFetch は本文が截断されタイトル程度しか取れない（2026-07-20 実測）。oEmbed はタイトル/チャンネル名のみの補助。yt-dlp はインストール済み（brew）・字幕とメタ取得のみなら動画DLなしで軽い。ワーカー委任時もこの手順をプロンプトに含める。
