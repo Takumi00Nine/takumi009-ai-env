@@ -1,6 +1,6 @@
 ---
 date: 2026-09-03
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, codex, delegation, worker, exec]
 project: meta
 related:
@@ -25,6 +25,8 @@ aliases:
 本ノートは委任のたびに Codex に読ませるため**最小サイズを維持**する（起動手順のみ。背景・経緯・他経路の説明は書かない）。レビューの割り当ては正本＝[[Preferences/codex-review-protocol]]。
 
 実測環境＝codex-cli 0.144.6・2026-09-03・メイン機。
+
+> **消す作業は任せない（2026-11-01 実測）**＝Codex の実行環境からはゴミ箱（`/usr/bin/trash`）が権限エラー（NSCocoaErrorDomain 513）になる。ワーカーには「消す一覧（絶対パス）」を作らせ、ゴミ箱への移動はリーダーが行う。
 
 ## 起動の型（実測済み）
 ```bash

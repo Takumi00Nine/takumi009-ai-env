@@ -1,6 +1,6 @@
 ---
 date: 2026-08-30
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, core, workflow, roles, quality-gate]
 project: takumi009-ai-env
 aliases:
@@ -56,6 +56,7 @@ aliases:
 
 > ⚠️ 置き場は依頼のたびにリーダーが指定する。
 > 文書成果物（要件書・設計書級）の既定の置き場＝メイン機ローカル `~/Workspace/Projects/<案件slug>/docs/`（他機へ配布しない）。案件を独立 private repo で管理するときはその repo の `docs/` でよい（ai-env の repo には入れない）。
+> 残す資料は3つだけ＝外部脳の案件ノート・`docs/` の4本（`requirements.md`・`requirements-notes.md`・`design.md`・`design-notes.md`＝版で増やさず書き直す）・`output/`（成果物そのもの）。調査・検証・テスト結果などの途中の資料は `work/` に置き、要点を案件ノートへ書いて締めで消す（[[Decisions/2026-11-01-doc-management]]）。
 ## 4. 記録（外部脳）
 - フォルダの意味論＝[[Preferences/vault-operation]]。どの機でも6フォルダを持つ（中身は機ごとに独立・Preferences だけメイン機から配布）。
 - 書き込みの決定と実施はリーダー職が担い、モードや編集の軽重に関係なく自分で書く。ワーカーは Vault へ書かず、最終報告の「Vault記録候補:」で申告する（[[Preferences/vault-operation]]）。
