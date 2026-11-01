@@ -1,6 +1,6 @@
 ---
 date: 2026-09-07
-updated: 2026-10-04
+updated: 2026-11-01
 tags: [preference, core, profile, sample, bedrock]
 project: takumi009-ai-env
 related:
@@ -10,12 +10,9 @@ related:
   - "[[Decisions/2026-09-01-role-cast-table-unfreeze]]"
   - "[[Decisions/2026-09-08-model-definitions-file]]"
   - "[[Decisions/2026-09-19-ai-env-optimization-rulings]]"
-aliases:
-  - "bedrock.env サンプル"
-  - "Bedrockピン留めファイル"
-  - "ピン留めenvの書き方"
-  - "bedrock.env案内"
+retired: true
 ---
+> ⚠️ 退役（2026-11-01）: Bedrock 経路は ai-env から撤去した（[[Decisions/2026-11-01-remove-bedrock]]）。本文は当時の記録として温存。
 # bedrock.env サンプル（Bedrock 機のピン留め値）
 
 ## 要点

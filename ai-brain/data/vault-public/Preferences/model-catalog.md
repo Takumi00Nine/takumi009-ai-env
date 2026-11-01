@@ -1,7 +1,7 @@
 ---
 date: 2026-09-09
-updated: 2026-10-10
-tags: [preference, model, catalog, claude, codex, routing, quota, bedrock, vllm]
+updated: 2026-11-01
+tags: [preference, model, catalog, claude, codex, routing, quota, vllm]
 project: meta
 related:
   - "[[Preferences/model-definitions-usage]]"
@@ -15,8 +15,6 @@ related:
   - "[[Knowledge/claude-codex-usage]]"
   - "[[Knowledge/anthropic-claude-models-2026-06]]"
   - "[[Knowledge/gpt-5-6-and-gpt-live]]"
-  - "[[Knowledge/bedrock-claude-code-pitfalls]]"
-  - "[[Knowledge/bedrock-bearer-token]]"
   - "[[Decisions/2026-09-08-usage-fetcher-migration]]"
   - "[[Decisions/2026-09-10-leader-free-model-choice]]"
   - "[[Decisions/2026-09-10-models-conf-comprehensive]]"
@@ -34,7 +32,7 @@ aliases:
 
 各マシンのローカルカタログ（配役表の隣に置くマシン固有ファイル）は経路ごとの実測メモを持つ。**本ノートはその手前にある共通の背景知識**で、Preferences に置くのは全マシンへ配布するため（本人決定 2026-09-09）。**リーダーが spawn ごとに候補（配役表 `model=` の定義名）から1つ選ぶときの判断材料は本ノート**（機構は読まない。選ぶのは人間相当のリーダーである）。**今後は使えるモデル・経路が増えるたびに本ノートへ追記していく運用**（更新の手順は末尾の「更新の掟」）。**各機での採用の有無は配役表（`role.*`／models.conf）と Projects を見る**（本ノートは性質だけを書き、どの機がどれを使っているかは書かない）。
 
-**2軸で見る**＝①モデルの特性の違い（Claude 各モデル・Codex 側モデル・ローカル LLM）②サービス（経路）の違い（同じモデルでも「サブスクで呼ぶか」「Bedrock で呼ぶか」「ローカルで動かすか」で認証・枠・リセット・機能差・費用の性質が変わる）。**性能は定性の散文で書き、順位・数値スコアにしない**（数値化すると精度の要件になり、本人が求める「適切な配分」から外れるため）。
+**2軸で見る**＝①モデルの特性の違い（Claude 各モデル・Codex 側モデル・ローカル LLM）②サービス（経路）の違い（同じモデルでも「サブスクで呼ぶか」「ローカルで動かすか」で認証・枠・リセット・機能差・費用の性質が変わる）。**性能は定性の散文で書き、順位・数値スコアにしない**（数値化すると精度の要件になり、本人が求める「適切な配分」から外れるため）。
 
 ## ①モデルの特性
 
@@ -53,26 +51,24 @@ aliases:
 | **Gemma 4 12B**（Google DeepMind・オープンウェイト。"12B Unified"） | 約11.95B パラメータ・エンコーダ不要のマルチモーダル（テキスト・画像・音声を1つのデコーダで直接処理）。ローカル／ハイブリッド注意機構（局所+全体）で256Kトークンの長文脈に対応。**ツール利用（function calling）をネイティブサポート**、エージェント的ワークフロー向け | 向く＝長文脈が要る要約・ドキュメント処理、画像を含むマルチモーダル入力が要る軽作業、関数呼び出しを使うエージェント処理。向かない＝皮肉・比喩など機微なニュアンスの読み取り、最新事実の参照（学習データ依存で知識が古くなりうる） | ライセンス＝**Apache 2.0**（Google公式ページ・Hugging Face の両方で確認。旧世代 Gemma の Gemma 利用規約から変わっている点に注意＝再配布時は現行ライセンス文言を都度確認）。35以上の言語に対応し**日本語を含む**（公式サポート言語として明記） |
 
 ## ②サービス（経路）の違い
+> Bedrock 経路（Claude・Codex）は 2026-11-01 に ai-env から撤去（[[Decisions/2026-11-01-remove-bedrock]]）。
 
-同じ「Claude」「Codex」でも、**サブスクで呼ぶか・Bedrock で呼ぶか・ローカルで動かすか**で性質が変わる。
+同じ「Claude」「Codex」でも、**サブスクで呼ぶか・ローカルで動かすか**で性質が変わる。
 
 | サービス | 認証 | 枠・窓 | リセットの仕組み | 使用率の取れ方 | 機能差 | 費用の性質 | 向く・向かない |
 |---|---|---|---|---|---|---|---|
 | **Claude サブスク** | claude.ai ログイン（キーチェーン保存の OAuth） | `claude-subscription`。`five_hour`・`seven_day`（＋Fable 専用の週次上限＝全体7日枠の内側。Fable 利用は両方を進める） | `/limit-reset`＝**未公開**の CLI コマンド。**5時間窓だけ**リセット、週次には効かない。残数の機械取得は未確認。2026-09-22 の Opus 5.5 発表文がサブスク利用者向けの公式 rate limit reset（保存して任意時に使用）を明記＝取得方法・機械取得・`/limit-reset` との関係は未確認 | **【使用率】ブロックに出る**（3枠の1つ） | 組み込み WebSearch 等フル機能 | 定額（契約プラン） | 向く＝通常運用・判断の重い上流工程。向かない＝枠が切迫した状況での大量消費 |
-| **Claude Bedrock**（現行＝`models.conf` の Bedrock 定義（`provider=bedrock`）＋`bedrock.env` のピン留め（配役表の role 行に provider は無い）。設計中の統合経路名は要件書側） | AWS プロファイル→短期ベアラートークン（presigned URL 方式・実効期限は指定値と AWS 認証情報の残り期限の短い方）。使用側に IAM の明示 Allow（`bedrock:CallWithBearerToken`）が要る | `unlimited`（枠の概念なし） | 無し（上限の概念が無いためリセットという操作が意味を持たない） | 出ない（`unlimited` は使用率を読まない） | **WebSearch は利用可**（2026-08 時点の「不可」という公式注記は 2026-09-01 実測で訂正済み＝[[Knowledge/bedrock-claude-code-pitfalls]]） | 従量課金（AWS 側でトークン量課金） | 向く＝サブスク枠を使い切りたくない場面の保険的経路、費用を許容できる場面。向かない＝定額枠で足りている状況（従量課金が無駄になる）。注意＝短期トークンの実効期限・SSO 再ログインが要る場合がある |
 | **Codex サブスク**（ChatGPT ログイン） | ChatGPT の OAuth ログイン | `codex-subscription`。`five_hour`・`seven_day` | **公式の「rate-limit reset credit」**（本人の呼び方＝チケット）。**5時間窓と週次窓の両方**を一度にリセット、付与から30日で失効 | **【使用率】ブロックに出る**。チケットの枚数・期限も `account/rateLimits/read` から機械取得できる（確度高＝[[Knowledge/codex-rate-limit-reset-banking]]） | フル機能（WebSearch 含む） | 定額（契約プラン） | 向く＝一次レビュー・bounded task の実装委任・画像生成一気通貫。向かない＝枠切迫時の大量投入（チケットで回復できるが枚数に限りがある） |
-| **Codex Bedrock**（`amazon-bedrock` model provider） | Bedrock API キー（`AWS_BEARER_TOKEN_BEDROCK`）または AWS SDK の資格情報チェーン（前者を優先。ChatGPT ログインとは別建て） | ChatGPT サブスクの枠とは別建て（従量課金）。⚠️ **rate-limit reset credit の対象になるかは未確認**（公式ドキュメントに記載なし＝推定で「対象外」とは断定しない） | 記載なし（サブスクの窓の概念自体が無いため無いと推定。確度中） | 出ない想定（Codex サブスクの `usage` とは別系統） | **WebSearch 不可**（公式ドキュメントが機能表で明記＝「OpenAI がホストするクラウド機能に依存する機能は非対応」）。利用可能モデルは `gpt-5.6-sol`／`terra`／`luna` と旧世代 `gpt-5.5`／`gpt-5.4`（リージョン依存、公式確認済み） | 従量課金（トークン単位、シート契約なし＝AWS 公式ブログの表現） | 向く＝Codex サブスク枠が枯渇していて費用を許容できる保険。向かない＝WebSearch が要る裏取り系タスク（researcher 等） |
 | **ローカル LLM（vLLM）** | API キー認証（管理方式は設計中） | `unlimited`（枠の概念なし＝「何を任せても持ち時間が減らない」） | 無し | 出ない（そもそも使用率を読まない設計） | Claude Code の組み込みツール（WebSearch 等）が使えるかはモデル・呼び出し元次第で個別確認が要る。vLLM 自体はモデルを提供するだけでツール実行機構を持たない | 電気代・機材維持費（従量課金でも定額でもない自己ホスト） | 向く＝枠を気にせず量をこなしたい定型・反復作業。向かない＝高度な判断・複雑な設計（モデル規模が小さく性能が下位）。注意＝Claude Code 側の経路統合（認証ヘッダの要否等）は要確認事項 |
 
-⚠️ **Codex の Bedrock 経路は公式に存在する**（確度：高。OpenAI ヘルプセンターと AWS 公式ブログ・`learn.chatgpt.com` の設定ドキュメントで確認）。「gpt-oss 等」ではなく、**GPT-5.6 系がそのまま Bedrock 上で動き**、ローカル LLM とは別物である。
 
 ## ③組み合わせの向き不向き（役割 × サービス）
 
-- **検証職（Codex 一次レビュー）**＝Codex サブスクが既定。枠が切迫してもチケット（reset credit）で回復できる余地があり、Bedrock へ落とす前に確認する価値が高い。
-- **researcher・裏取りが要る調査**＝Claude サブスクか Codex サブスク（どちらも WebSearch 可）。**Bedrock（Claude・Codex とも）は Codex 側で WebSearch 不可、Claude 側は 2026-09-01 以降は可**——Codex を Bedrock 経由で裏取り系に使わない。
+- **検証職（Codex 一次レビュー）**＝Codex サブスクが既定。枠が切迫してもチケット（reset credit）で回復できる余地がある。
+- **researcher・裏取りが要る調査**＝Claude サブスクか Codex サブスク（どちらも WebSearch 可）。
 - **上流工程（要件定義・設計・採否判定）**＝Claude の Opus 5.5（Opus 5 は Legacy）／Fable 5.1（判断の質が重要・枠消費は許容）。ローカル LLM は不向き（性能が下位）。
 - **量産・定型（分類・抽出・軽い実装の反復）**＝ローカル LLM か Claude Haiku 5.5。サブスク枠を温存できる。
-- **サブスク枠が枯渇している状況**＝まずローカル LLM（費用ゼロに近い）→ 次に Bedrock（従量課金だが確実に動く）→ サブスクの `/limit-reset`（Claude）やチケット（Codex）は温存策であって代替経路ではない。
+- **サブスク枠が枯渇している状況**＝まずローカル LLM（費用ゼロに近い）→ サブスクの `/limit-reset`（Claude）やチケット（Codex）は温存策であって代替経路ではない。
 
 ## ④選ぶときの目安（職種→モデル固定ではない）
 - 上流工程（要件定義・設計・採用判定）は思考の深い定義（例: opus-high）が向く（経緯＝[[Decisions/2026-07-25-opus5-upstream-roles]]）。
@@ -80,8 +76,6 @@ aliases:
 - 検証は作成者と別系統が推奨（経緯＝[[Decisions/2026-09-10-verifier-lineage-recommended]]）。
 
 ## 出典・確認日
-- Codex on Amazon Bedrock（対応モデル・認証方式・WebSearch 非対応）＝ https://learn.chatgpt.com/docs/amazon-bedrock （2026-09-09 取得）／AWS 公式ブログ https://aws.amazon.com/blogs/aws/get-started-with-openai-gpt-5-5-gpt-5-4-models-and-codex-on-amazon-bedrock/ （2026-09-09 取得・従量課金の記述）／PR openai/codex#18744（`amazon-bedrock` provider 実装）。
-- Claude Bedrock の WebSearch 訂正＝[[Knowledge/bedrock-claude-code-pitfalls]]（2026-09-01 実測訂正）。短期トークンの実効期限＝[[Knowledge/bedrock-bearer-token]]。
 - Codex の rate-limit reset credit＝[[Knowledge/codex-rate-limit-reset-banking]]・[[Knowledge/claude-codex-usage]]（2026-09-09 実測節）。
 - Claude `/limit-reset` の性質＝[[Knowledge/claude-codex-usage]]（2026-09-09 節）。
 - vLLM の稼働実態（gpt-oss-20b・Gemma 4 12B・ポート8000）＝`ローカルLLM段階経路-要件-2026-09-03.md` §1。枠・窓・`kind` 4値の定義＝同書 §2.1・§2.2・§4.4・§4.14。
@@ -97,7 +91,6 @@ aliases:
 - Sonnet 5.5／Haiku 5.5／GPT-6.1 Sol の採用と実測＝[[Decisions/2026-10-10-sonnet-haiku-5-5-gpt-6-1-sol-adoption]]（2026-10-10）。
 
 ## 未裏取り・要確認
-- **Codex Bedrock 経路がチケット（rate-limit reset credit）の対象になるかは未確認**（公式ドキュメントに記載なし。サブスクとは別建てなので対象外の可能性が高いが、断定はしていない）。
 - GPT-6 Astra の詳細な特徴・ベンチマークは [[Knowledge/gpt-6-astra]] を直接読んでいない（用途限定の事実のみ `Decisions/2026-09-05-astra-for-design-upstream-only` から確認）。
 - vLLM の Claude Code 側属性（`attribution_header` の要否・`auth_header` の種別）は EXP-4・EXP-5 の実測待ち（要件書 §2.2 注記）。Codex CLI から同じ vLLM サーバーへ独自 `model_providers` 定義で接続できる可能性は技術的に確認したが（Codex は任意の OpenAI 互換エンドポイントを `base_url`＋`wire_api` で受け付ける）。採用の有無は各機の記録による。
 - gpt-oss-20b のブラウジング／Python ツールが**実際のデプロイで有効化されているか**は未確認（モデル側の訓練済み能力と、サーバー側のツール実装は別物）。

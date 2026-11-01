@@ -1,6 +1,6 @@
 ---
 date: 2026-09-18
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, model, catalog, quick-reference]
 project: meta
 related:
@@ -41,7 +41,7 @@ aliases:
 | codex-terra-high／medium／low | GPT-5.6 Terra | Codex サブスク | terra-medium＝verifier | 文書・軽量1巡の検証（Sol はコード検証に温存） |
 | codex-luna-high／medium／low | GPT-6 Luna | Codex サブスク | （未参照） | 抽出・分類・構造化要約の高頻度タスク |
 
-legacy／bedrock-*／mantle-* 定義は 2026-09-19 に models.conf から削除（Bedrock・mantle のコードは休眠・将来サブ機で復活＝[[Decisions/2026-09-19-ai-env-optimization-rulings]]）。
+legacy／bedrock-*／mantle-* 定義は 2026-09-19 に models.conf から削除し、Bedrock・mantle のコードも 2026-11-01 に撤去（[[Decisions/2026-11-01-remove-bedrock]]）。
 
 候補列の現行値は配役表（`team/data/profile.md.sample`）が正本。見直しの経緯＝[[Decisions/2026-09-18-cast-candidates-revision]]
 更新の掟＝配役表か models.conf を変えたら本ノートの該当行も同じ案件で直す。
