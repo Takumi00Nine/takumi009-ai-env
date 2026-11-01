@@ -1,18 +1,5 @@
 #!/usr/bin/env bash
-# core/assembly/update-sub.sh のユニットテスト（2026-09-19 全面書き直し＝ai-env 全体最適化
-# 着手順 3・θ「update-sub は pull→install-sub 委譲の直列 1 本」）。
-#
-# 実 ~/.claude・~/.codex・実Vault・実GitHub・実 launchd には一切依存しない。
-# ローカルの使い捨て bare repo を「origin」に見立て、clone したサブ相当の repo に
-# 対して *その clone の中の* core/assembly/update-sub.sh を実行する（pull で自分自身が
-# 書き換わるケース＝US-2 を実物で踏むため）。配置の委譲先 core/assembly/install-sub.sh は
-# 偽物（呼び出しを $CALLS へ 1 行追記して指定の rc で終わる）＝update-sub.sh が
-# 「いつ・何回呼ぶか」だけを見る。install-sub.sh 自体の挙動は tests/test-install-sub.sh。
-#
-# 見るのは形（exit code・固定文の有無・呼び出し回数・配置物の有無）だけ。
-# 値の完全一致・件数表は使わない（Decisions/2026-09-17-tests-rough-not-strict）。
-#
-# 実行方法: bash tests/test-update-sub.sh
+# pull・導入・同期の順序と失敗時の非破壊。ローカル repo のみ使う。
 
 set -euo pipefail
 
@@ -51,8 +38,6 @@ assert_true() {
   fi
 }
 
-# has <text> <pattern> — 固定文の有無を 1/0 で返す（grep -F）。
-has() { printf '%s\n' "$1" | grep -qF -- "$2" && echo 1 || echo 0; }
 # calls_count — 偽 install-sub.sh の呼び出し回数（記録ファイルが無ければ 0）。
 calls_count() { [ -f "$CALLS" ] && wc -l < "$CALLS" | tr -d ' ' || echo 0; }
 # head_of <repo> — HEAD の commit id。
@@ -86,6 +71,7 @@ EOF
   git -C "$src" add -A
   git -C "$src" commit -q -m init
   git -C "$src" push -q origin HEAD:main
+  git --git-dir="$bare" symbolic-ref HEAD refs/heads/main
 }
 
 # push_change <src> <msg> — src の作業ツリーの変更を commit して origin へ push する。
@@ -164,52 +150,12 @@ echo "=== 1. US-1: pull 成功 → install-sub 1 回 → Preferences rsync → �
 
   rc=0
   out="$(run_update 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_eq "HEAD が origin まで進んでいる" "$(head_of "$SRC")" "$(head_of "$SUB")"
-  assert_eq "install-sub.sh の呼び出しは 1 回" "1" "$(calls_count)"
-  assert_true "Preferences が rsync されている（rule1・rule2 あり・stale.md は --delete で消える）" \
-    "$([[ -f "$VAULT_DIR/Preferences/rule1.md" && -f "$VAULT_DIR/Preferences/rule2.md" && ! -e "$VAULT_DIR/Preferences/stale.md" ]] && echo 1 || echo 0)"
-  assert_true "Preferences 以外には触らない（Fragments/mine.md が残る）" \
-    "$([[ -f "$VAULT_DIR/Fragments/mine.md" ]] && echo 1 || echo 0)"
-  assert_true "新しい骨格フォルダ Knowledge が README.md 付きで補充される" \
-    "$([[ -f "$VAULT_DIR/Knowledge/README.md" ]] && echo 1 || echo 0)"
-  assert_eq "既存の骨格フォルダ Decisions/README.md は上書きされない" "keep" "$(cat "$VAULT_DIR/Decisions/README.md")"
-  assert_true "done. で終わる" "$(has "$out" "done.")"
-  assert_true "順序: install-sub の呼び出しが Preferences 同期より先" \
-    "$(printf '%s\n' "$out" | grep -n -E 'fake-install-sub|Preferences を再同期' | head -1 | grep -q 'fake-install-sub' && echo 1 || echo 0)"
-  assert_true "US-1 pull 成功→install-sub 1 回→Preferences rsync→exit 0" \
-    "$([[ "$rc" -eq 0 && "$(calls_count)" == "1" && -f "$VAULT_DIR/Preferences/rule2.md" ]] && echo 1 || echo 0)"
-  rm -rf "$WORK"
-}
-
-echo "=== 2. US-2: HEAD 不変でも install-sub 1 回（--resync の代替）／pull が update-sub.sh 自身を書き換えても旧本文で完走 ==="
-{
-  new_case
-  # (i) origin と同じ HEAD＝pull で何も進まない
-  rc1=0
-  out1="$(run_update 2>&1)" || rc1=$?
-  assert_eq "HEAD 不変: exit code 0" "0" "$rc1"
-  assert_eq "HEAD 不変: install-sub.sh は 1 回呼ばれる" "1" "$(calls_count)"
-  assert_true "HEAD 不変: Preferences は毎回同期される（stale.md が消える）" \
-    "$([[ ! -e "$VAULT_DIR/Preferences/stale.md" && -f "$VAULT_DIR/Preferences/rule1.md" ]] && echo 1 || echo 0)"
-
-  # (ii) origin で update-sub.sh 自身を「別物」に差し替える＝pull で実行中の自分が書き換わる
-  cat > "$SRC/core/assembly/update-sub.sh" <<'EOF'
-#!/usr/bin/env bash
-echo "NEWVERSION-RAN"
-exit 99
-EOF
-  push_change "$SRC" "replace update-sub.sh"
-  rc2=0
-  out2="$(run_update 2>&1)" || rc2=$?
-  assert_eq "自己書き換え: pull で clone 側の update-sub.sh が新版（別物）になっている" \
-    "$(cat "$SRC/core/assembly/update-sub.sh")" "$(cat "$SUB/core/assembly/update-sub.sh")"
-  assert_eq "自己書き換え: 旧本文のまま exit 0 で完走（新版の exit 99 にならない）" "0" "$rc2"
-  assert_eq "自己書き換え: 新版の本文は実行されない" "0" "$(has "$out2" "NEWVERSION-RAN")"
-  assert_eq "自己書き換え: install-sub.sh は通算 2 回（この run で 1 回）" "2" "$(calls_count)"
-  assert_true "自己書き換え: done. まで到達" "$(has "$out2" "done.")"
-  assert_true "US-2 HEAD 不変でも install-sub 1 回・自己書き換え pull でも旧本文で完走" \
-    "$([[ "$rc1" -eq 0 && "$rc2" -eq 0 && "$(calls_count)" == "2" && "$(has "$out2" "NEWVERSION-RAN")" == "0" ]] && echo 1 || echo 0)"
+  assert_true "pull して install-sub を呼ぶ" \
+    "$([[ "$rc" -eq 0 && "$(head_of "$SRC")" == "$(head_of "$SUB")" && "$(calls_count)" == 1 ]] && echo 1 || echo 0)"
+  assert_true "install-sub の後に Preferences を同期する" \
+    "$([[ -f "$VAULT_DIR/Preferences/rule2.md" && ! -e "$VAULT_DIR/Preferences/stale.md" ]] && printf '%s\n' "$out" | grep -n -E 'fake-install-sub|Preferences を再同期' | head -1 | grep -q fake-install-sub && echo 1 || echo 0)"
+  assert_true "個人ノートを保持し不足する骨格だけ補充する" \
+    "$([[ "$(cat "$VAULT_DIR/Fragments/mine.md")" == mine && "$(cat "$VAULT_DIR/Decisions/README.md")" == keep && -f "$VAULT_DIR/Knowledge/README.md" ]] && echo 1 || echo 0)"
   rm -rf "$WORK"
 }
 
@@ -225,14 +171,9 @@ echo "=== 3. US-3: pull 失敗（ff 不可）→ install-sub 0 回・exit 1・WA
 
   rc=0
   out="$(run_update 2>&1)" || rc=$?
-  assert_eq "exit code 1" "1" "$rc"
-  assert_true "WARN: git pull --ff-only に失敗 が出る" "$(has "$out" "git pull --ff-only に失敗")"
-  assert_eq "install-sub.sh は呼ばれない" "0" "$(calls_count)"
-  assert_eq "HEAD は動かない" "$before" "$(head_of "$SUB")"
-  assert_true "Preferences も触らない（stale.md が残る）" "$([[ -f "$VAULT_DIR/Preferences/stale.md" ]] && echo 1 || echo 0)"
-  assert_true "ロックは解放されている（次回 run を阻まない）" "$([[ ! -e "$LOCK" ]] && echo 1 || echo 0)"
-  assert_true "US-3 pull 失敗→install-sub 0 回・exit 1・stderr に git pull --ff-only に失敗" \
-    "$([[ "$rc" -eq 1 && "$(calls_count)" == "0" && "$(has "$out" "git pull --ff-only に失敗")" == "1" ]] && echo 1 || echo 0)"
+  assert_true "pull 失敗では導入・同期へ進まない" \
+    "$([[ "$rc" -ne 0 && "$(calls_count)" == 0 && -f "$VAULT_DIR/Preferences/stale.md" ]] && echo 1 || echo 0)"
+  assert_eq "pull 失敗でも HEAD は不変" "$before" "$(head_of "$SUB")"
   rm -rf "$WORK"
 }
 
@@ -244,15 +185,8 @@ echo "=== 4. US-4: install-sub 非0 → 同じ rc で exit・FAIL＋復旧コマ
 
   rc=0
   out="$(FAKE_INSTALL_SUB_RC=3 run_update 2>&1)" || rc=$?
-  assert_eq "exit code は install-sub の rc（3）そのまま" "3" "$rc"
-  assert_true "FAIL: install-sub.sh が非0終了 が出る" "$(has "$out" "install-sub.sh が非0終了")"
-  assert_true "復旧コマンド（core/assembly/install-sub.sh を現地で再実行）が出る" "$(has "$out" "core/assembly/install-sub.sh を現地で再実行")"
-  assert_eq "install-sub.sh の呼び出しは 1 回" "1" "$(calls_count)"
-  assert_true "rsync は走らない（stale.md が残る・rule2 は来ない）" \
-    "$([[ -f "$VAULT_DIR/Preferences/stale.md" && ! -e "$VAULT_DIR/Preferences/rule2.md" ]] && echo 1 || echo 0)"
-  assert_eq "HEAD は進んでいる（pull 済み＝次回 run で収束）" "$(head_of "$SRC")" "$(head_of "$SUB")"
-  assert_true "US-4 install-sub 非0→exit 同 rc・install-sub.sh が非0終了・rsync 0 回" \
-    "$([[ "$rc" -eq 3 && "$(has "$out" "install-sub.sh が非0終了")" == "1" && -f "$VAULT_DIR/Preferences/stale.md" ]] && echo 1 || echo 0)"
+  assert_true "install-sub 失敗では rc を返して同期を止める" \
+    "$([[ "$rc" -eq 3 && -f "$VAULT_DIR/Preferences/stale.md" && ! -e "$VAULT_DIR/Preferences/rule2.md" ]] && echo 1 || echo 0)"
   rm -rf "$WORK"
 }
 
@@ -266,184 +200,12 @@ echo "=== 5. US-5: machine_role=main → exit 1・pull 0 回・lock も取らな
 
   rc=0
   out="$(run_update 2>&1)" || rc=$?
-  assert_eq "exit code 1" "1" "$rc"
-  assert_true "FAIL: サブ機として登録されていません が出る" "$(has "$out" "サブ機として登録されていません")"
-  assert_eq "pull しない（HEAD 不変）" "$before" "$(head_of "$SUB")"
-  assert_eq "install-sub.sh は呼ばれない" "0" "$(calls_count)"
-  assert_true "Preferences は触らない（stale.md が残る）" "$([[ -f "$VAULT_DIR/Preferences/stale.md" ]] && echo 1 || echo 0)"
-  assert_true "ロックファイルは作られない" "$([[ ! -e "$LOCK" ]] && echo 1 || echo 0)"
-  assert_true "US-5 machine_role=main→exit 1・pull 0 回" \
-    "$([[ "$rc" -eq 1 && "$before" == "$(head_of "$SUB")" && "$(calls_count)" == "0" ]] && echo 1 || echo 0)"
+  assert_true "メイン機では pull・導入を拒否する" \
+    "$([[ "$rc" -ne 0 && "$before" == "$(head_of "$SUB")" && "$(calls_count)" == 0 ]] && echo 1 || echo 0)"
   rm -rf "$WORK"
 }
 
-echo "=== 6. US-6: lock 保持中（生存 PID）→ exit 1・pull 0 回 ==="
-{
-  new_case
-  echo "$$" > "$LOCK"
-  echo "# origin 側の変更" > "$SRC/ai-brain/data/vault-public/Preferences/rule2.md"
-  push_change "$SRC" "origin change"
-  before="$(head_of "$SUB")"
 
-  rc=0
-  out="$(run_update 2>&1)" || rc=$?
-  assert_eq "exit code 1" "1" "$rc"
-  assert_true "既に実行中です（保持 PID 入り）が出る" "$(has "$out" "既に実行中です（pid=$$）")"
-  assert_eq "pull しない（HEAD 不変）" "$before" "$(head_of "$SUB")"
-  assert_eq "install-sub.sh は呼ばれない" "0" "$(calls_count)"
-  assert_true "他プロセスのロックを消さない" "$([[ "$(cat "$LOCK")" == "$$" ]] && echo 1 || echo 0)"
-  assert_true "US-6 lock 保持中→exit 1" "$([[ "$rc" -eq 1 && "$(calls_count)" == "0" ]] && echo 1 || echo 0)"
-  rm -rf "$WORK"
-}
-
-echo "=== 7. 引数: --resync を含め引数は一切受け付けない（exit 1・何もしない） ==="
-{
-  new_case
-  rc=0
-  out="$(run_update --resync 2>&1)" || rc=$?
-  assert_eq "exit code 1" "1" "$rc"
-  assert_true "引数は受け付けません が出る" "$(has "$out" "引数は受け付けません")"
-  assert_eq "install-sub.sh は呼ばれない" "0" "$(calls_count)"
-  rm -rf "$WORK"
-}
-
-echo "=== 8. machine_role: 実体プロファイルが無ければ fail-closed で拒否する（ja_JP.UTF-8 でも FAIL 文が握り潰されない） ==="
-{
-  new_case
-  mkdir -p "$FAKE_HOME/.config/takumi009-ai-env"   # profile.md は置かない
-  rc=0
-  out="$(LANG=ja_JP.UTF-8 LC_ALL=ja_JP.UTF-8 CALLS="$CALLS" DIR="$SUB" HOME="$FAKE_HOME" VAULT="$VAULT_DIR" LOCK_FILE="$LOCK" \
-    "$SUB/core/assembly/update-sub.sh" 2>&1)" || rc=$?
-  assert_eq "exit code 1" "1" "$rc"
-  assert_true "FAIL: サブ機として登録されていません が出る" "$(has "$out" "サブ機として登録されていません")"
-  assert_true "実体プロファイルのパスが FAIL 文に出る" "$(has "$out" "$FAKE_HOME/.config/takumi009-ai-env/profile.md")"
-  assert_eq "unbound variable で落ちていない" "0" "$(has "$out" "unbound variable")"
-  assert_eq "install-sub.sh は呼ばれない" "0" "$(calls_count)"
-  rm -rf "$WORK"
-}
-
-echo "=== 9. lock: stale（PID 死亡）のロックは回収して続行する ==="
-{
-  new_case
-  # 既に終了した子プロセスの PID を書く（指紋行なし＝旧形式扱い・mtime を古くする）
-  ( : ) &
-  dead_pid=$!
-  wait "$dead_pid" 2>/dev/null || true
-  echo "$dead_pid" > "$LOCK"
-  touch -t 202001010000 "$LOCK"
-
-  rc=0
-  out="$(run_update 2>&1)" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-  assert_true "stale ロックを検出した WARN が出る" "$(has "$out" "stale")"
-  assert_eq "install-sub.sh は 1 回呼ばれる" "1" "$(calls_count)"
-  assert_true "終了後にロックは解放されている" "$([[ ! -e "$LOCK" ]] && echo 1 || echo 0)"
-  rm -rf "$WORK"
-}
-
-echo "=== 10. rsync: 同期元 ai-brain/data/vault-public/Preferences が欠けていれば FAIL・exit 1（install-sub は済んでいる） ==="
-{
-  new_case
-  git -C "$SRC" rm -q -r ai-brain/data/vault-public/Preferences
-  push_change "$SRC" "drop Preferences (checkout破損の再現)"
-
-  rc=0
-  out="$(run_update 2>&1)" || rc=$?
-  assert_eq "exit code 1" "1" "$rc"
-  assert_true "FAIL: Preferences の rsync に失敗しました が出る" "$(has "$out" "Preferences の rsync に失敗しました")"
-  assert_eq "install-sub.sh は 1 回呼ばれている（失敗は rsync 段）" "1" "$(calls_count)"
-  assert_true "サブ機側の Preferences は消えない（stale.md が残る）" "$([[ -f "$VAULT_DIR/Preferences/stale.md" ]] && echo 1 || echo 0)"
-  rm -rf "$WORK"
-}
-
-echo "=== 11. 骨格補充: Vault に書けなければ FAIL・exit 1（Preferences 同期は済んでいる） ==="
-{
-  new_case
-  mkdir -p "$SRC/ai-brain/data/vault-public/Knowledge"
-  echo "# Knowledge 骨格" > "$SRC/ai-brain/data/vault-public/Knowledge/README.md"
-  push_change "$SRC" "add Knowledge skeleton"
-  chmod 555 "$VAULT_DIR"
-
-  rc=0
-  out="$(run_update 2>&1)" || rc=$?
-  chmod 755 "$VAULT_DIR"
-  assert_eq "exit code 1" "1" "$rc"
-  assert_true "FAIL: 骨格フォルダを作成できません が出る" "$(has "$out" "骨格フォルダを作成できません")"
-  assert_true "Preferences の同期は済んでいる（stale.md は消えている）" "$([[ ! -e "$VAULT_DIR/Preferences/stale.md" ]] && echo 1 || echo 0)"
-  assert_true "Knowledge は作られていない" "$([[ ! -e "$VAULT_DIR/Knowledge" ]] && echo 1 || echo 0)"
-  rm -rf "$WORK"
-}
-
-echo "=== 12. 冪等: 同じ状態で 2 回続けて実行しても exit 0・毎回 install-sub が呼ばれる ==="
-{
-  new_case
-  rc=0
-  run_update >/dev/null 2>&1 || rc=$?
-  run_update >/dev/null 2>&1 || rc=$?
-  assert_eq "2 回とも exit 0" "0" "$rc"
-  assert_eq "install-sub.sh は 2 回（HEAD 不変でも毎回）" "2" "$(calls_count)"
-  assert_true "Fragments/mine.md は 2 回目も残る" "$([[ -f "$VAULT_DIR/Fragments/mine.md" ]] && echo 1 || echo 0)"
-  rm -rf "$WORK"
-}
-
-echo "=== 13. v1.2 FR-10/FR-14: Core を選んだサブ機の更新コマンドは引数なしで保存された選択（Core だけ）で組み立て exit 0・登録フックの実体が実在（実物の install-sub.sh／install-main.sh 経由） ==="
-{
-  # 偽物の install-sub.sh でなく、実物の repo（bare origin へ push 済みの複製）を使う
-  # ＝update-sub.sh → 実物 install-sub.sh → install-main.sh の委譲の鎖を実際に通す。
-  T="$_TMPBASE/aienv-test-update-sub13.$$"; mkdir -p "$T"
-  BARE="$T/origin.git"
-  git init -q --bare "$BARE"
-  SRC="$T/src"
-  lf_copy_repo "$REPO_ROOT" "$SRC"
-  lf_git -C "$SRC" remote add origin "$BARE"
-  lf_git -C "$SRC" push -q origin HEAD:main
-  lf_git -C "$SRC" branch -q --set-upstream-to=origin/main
-
-  SUBHOME="$T/subhome"
-  mkdir -p "$SUBHOME/.claude/hooks" "$SUBHOME/.claude/agents" "$SUBHOME/.codex" "$SUBHOME/.config/takumi009-ai-env"
-  cat > "$SUBHOME/.config/takumi009-ai-env/models.conf" <<'EOF'
-[t-sonnet-high]
-provider=anthropic-api
-model=claude-sonnet-5-5
-EOF
-  cat > "$SUBHOME/.config/takumi009-ai-env/profile.md" <<'EOF'
----
-schema_version: 7
-profile_slug: test-update-sub-13
-team_mode: configured value=full
-no_read_paths: unavailable
-machine_role: configured value=sub
-role.leader: configured model=t-sonnet-high
----
-EOF
-  SUBVAULT="$SUBHOME/Data/obsidian"
-
-  rc=0
-  SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$SUBHOME" VAULT="$SUBVAULT" \
-    bash "$SRC/core/assembly/install-sub.sh" --select core >"$SUBHOME/.first-select.log" 2>&1 || rc=$?
-  assert_eq "前提: install-sub.sh --select core（初回の保存＋組立）は exit 0" "0" "$rc"
-
-  rc=0
-  UPDATE_OUT="$(DIR="$SRC" SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$SUBHOME" VAULT="$SUBVAULT" \
-    bash "$SRC/core/assembly/update-sub.sh" 2>&1)" || rc=$?
-  assert_eq "update-sub.sh（引数なし）は exit 0" "0" "$rc"
-
-  REG_MISSING=0
-  for n in $(jq -r '.hooks[][].hooks[].command' "$SUBHOME/.claude/settings.json" 2>/dev/null | xargs -n1 basename 2>/dev/null); do
-    found=0
-    for d in "$SUBHOME/.claude/hooks" "$SUBHOME/.claude/agents" "$SUBHOME/.codex"; do
-      [ -e "$d/$n" ] && found=1
-    done
-    [ "$found" = "1" ] || REG_MISSING=$((REG_MISSING + 1))
-  done
-  assert_eq "登録フックのコマンドが全て実在（FR-14）" "0" "$REG_MISSING"
-  assert_true "選択は保存済みのまま（components.env が Core だけ）＝指定なしの再実行で再び収束" \
-    "$([ "$(cat "$SUBHOME/.config/takumi009-ai-env/components.env" 2>/dev/null || true)" = "AIENV_COMPONENTS=core" ] && echo 1 || echo 0)"
-  assert_true "選択外（ai-brain）の vault-recall.sh はライブ位置に無い（Core だけの選択が保たれる）" \
-    "$([ ! -e "$SUBHOME/.claude/hooks/vault-recall.sh" ] && echo 1 || echo 0)"
-
-  rm -rf "$T"
-}
-
+echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

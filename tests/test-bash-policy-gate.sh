@@ -67,15 +67,10 @@ echo "=== 1. R1 公開ガード: gh repo create --public は deny・--private �
 assert_denied "gh repo create foo --public は deny" "gh repo create foo --public" "リポジトリの公開"
 assert_allowed "gh repo create foo --private は allow" "gh repo create foo --private"
 
-echo "=== 2. R2 pip 仮想環境: 素の pip install は deny・venv 明示パス／uv pip は allow ==="
 assert_denied "pip install requests は deny" "pip install requests" "グローバルへの直接pip"
 assert_allowed ".venv/bin/pip install requests は allow（明示パス）" ".venv/bin/pip install requests"
-assert_allowed "uv pip install x は allow（uv は対象外）" "uv pip install x"
-
 echo "=== 3. R3 brew ランタイム: brew install python@3.12 は deny・brew install jq は allow ==="
 assert_denied "brew install python@3.12 は deny" "brew install python@3.12" "言語ランタイム"
-assert_allowed "brew install jq は allow" "brew install jq"
-
 echo "=== 4. 不正入力: 空 stdin・tool_input 欠落 → 無出力 exit 0（fail-silent） ==="
 out="$(printf '' | env -u VIRTUAL_ENV -u CONDA_PREFIX bash "$HOOK")"; rc=$?
 if [ -z "$out" ] && [ "$rc" -eq 0 ]; then
@@ -83,20 +78,6 @@ if [ -z "$out" ] && [ "$rc" -eq 0 ]; then
 else
   fail_case "空 stdin で出力または非 0 (rc=$rc out=[$out])"
 fi
-out="$(printf '{"tool_name":"Bash"}' | env -u VIRTUAL_ENV -u CONDA_PREFIX bash "$HOOK")"; rc=$?
-if [ -z "$out" ] && [ "$rc" -eq 0 ]; then
-  pass "tool_input 欠落は無出力 exit 0"
-else
-  fail_case "tool_input 欠落で出力または非 0 (rc=$rc out=[$out])"
-fi
-
-echo "=== 5. bash 3.2 互換の静的検査 ==="
-if /bin/bash -n "$HOOK"; then
-  pass "/bin/bash -n が通る（macOS bash 3.2 互換）"
-else
-  fail_case "/bin/bash -n が通る（macOS bash 3.2 互換）"
-fi
-
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

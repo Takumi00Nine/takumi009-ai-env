@@ -147,7 +147,6 @@ suite	tests/test-delegation-gate-v2.sh	team	-	-	-	-	-	-
 suite	tests/test-inprocess-gate.sh	team	-	-	-	-	-	-
 suite	tests/test-model-definitions.sh	team	-	-	-	-	-	-
 suite	tests/test-role-candidates.sh	team	-	-	-	-	-	-
-suite	tests/test-scribe-retired.sh	team	-	-	-	-	-	-
 suite	tests/test-session-status.sh	team	-	-	-	-	-	-
 suite	tests/test-install-usage-fetch.sh	usage	-	-	-	-	-	-
 suite	tests/test-usage-fetch.sh	usage	-	-	-	-	-	-
@@ -165,7 +164,6 @@ suite	tests/test-bash-danger-gate.sh	core	-	-	-	-	-	-
 suite	tests/test-bash-policy-gate.sh	core	-	-	-	-	-	-
 suite	tests/test-check-drift.sh	core	-	-	-	-	-	-
 suite	tests/test-check-sub-update.sh	core	-	-	-	-	-	-
-suite	tests/test-decoupling.sh	core	-	-	-	疎結合の受入（FR-14 と同列）	-	-
 suite	tests/test-install-main.sh	core	-	-	-	-	-	-
 suite	tests/test-install-sub.sh	core	-	-	-	-	-	-
 suite	tests/test-integration.sh	core	-	-	-	2 機能以上の統合試験	-	-

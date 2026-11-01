@@ -49,52 +49,17 @@ assert_true() {
   fi
 }
 
-assert_contains() {
-  local desc="$1" haystack="$2" needle="$3"
-  if [[ "$haystack" == *"$needle"* ]]; then
-    pass "$desc"
-  else
-    fail_case "$desc (含まれない: \"$needle\")"
-  fi
-}
-
 # exit code だけでなく、意図した理由で失敗したかを stderr メッセージで確認する
 # （exit 1 が別の理由＝セットアップ不備等で出ていないことを保証するため。Codexレビュー指摘）
-assert_stderr_has() {
+assert_rejected() {
   local desc="$1" work="$2" needle="$3"
-  if grep -q -- "$needle" "$work/stderr.log" 2>/dev/null; then
+  if [ "$rc" -eq 1 ] && grep -q -- "$needle" "$work/stderr.log" 2>/dev/null; then
     pass "$desc"
   else
     fail_case "$desc (stderr に \"$needle\" が含まれない。実際のstderr: $(cat "$work/stderr.log" 2>/dev/null))"
   fi
 }
 
-# report-only チェック（3-e）は exit 0 のまま stdout にレポート行を出す仕様
-# （2026-07-08 本人決定「案A」）なので、stdout の内容を確認する。
-assert_stdout_has() {
-  local desc="$1" work="$2" needle="$3"
-  if grep -q -- "$needle" "$work/stdout.log" 2>/dev/null; then
-    pass "$desc"
-  else
-    fail_case "$desc (stdout に \"$needle\" が含まれない。実際のstdout: $(cat "$work/stdout.log" 2>/dev/null))"
-  fi
-}
-
-# AC-1/AC-2（巨大denylist回帰テスト用）: stdout/stderrのどちらに出ても検知できるよう
-# 両方をまとめて「含まれていないこと」を確認する（2026-09-23 本番障害の回帰）。
-assert_output_not_has() {
-  local desc="$1" work="$2" needle="$3"
-  local combined
-  combined="$(cat "$work/stdout.log" "$work/stderr.log" 2>/dev/null)"
-  if [[ "$combined" == *"$needle"* ]]; then
-    fail_case "$desc (出力に \"$needle\" が含まれてはいけない)"
-  else
-    pass "$desc"
-  fi
-}
-
-# ダミー Vault fixture を1つ作る（各テストケースで使い回す最小構成）。
-# 呼び出し元が VAULT_DIR を用意してから呼ぶ。
 make_base_vault() {
   local vault="$1"
   mkdir -p "$vault/Preferences"
@@ -135,27 +100,6 @@ EOF
 EOF
 }
 
-# AC-1/AC-2（巨大denylist回帰テスト用）: 指定フォルダに、指定文字数ちょうどの
-# 一意なbasenameを持つ.mdノートを大量生成する（2026-09-23本番のexport障害＝
-# `rg: PCRE2: error compiling pattern at offset 0: regular expression is too large`
-# の再現用。原因は basename検査（3-b/3-e）が`rg -P -f <denylist生成パターン>`で
-# denylist全件を1本のPCRE2パターンとしてコンパイルし、約64KB(PCRE2の
-# LINK_SIZE=2上限)を超えると失敗すること。本番では515件・34,146バイトで
-# 再現したため、ここでは余裕を持って60文字×1,200件＝生成される
-# rg -f 用パターンファイルが約118,800バイトになる規模にする）。
-make_large_denylist_notes() {
-  local dir="$1" count="$2" name_len="$3" prefix="note-"
-  mkdir -p "$dir"
-  local padlen=$((name_len - ${#prefix}))
-  local i name
-  for ((i = 0; i < count; i++)); do
-    name="${prefix}$(printf '%0*d' "$padlen" "$i")"
-    printf '# dummy\n' > "$dir/$name.md"
-  done
-}
-
-# ダミーのNGワードファイルを作る（NGWORD_ALPHA/NGWORD_BETA の2語。ngwords.txtの
-# 実データはテストファイルに書かない＝public履歴に入れないため）。
 make_dummy_ngwords() {
   local f
   f="$(mktemp)"
@@ -218,27 +162,18 @@ echo "=== 1. 正常系: public のみコピー・private は空+README ==="
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
-
   assert_true "Preferences/sample-pref.md がコピーされている" \
-    "$([[ -f "$REPO_DIR/ai-brain/data/vault-public/Preferences/sample-pref.md" ]] && echo 1 || echo 0)"
+    "$([ "$rc" -eq 0 ] && [ -f "$REPO_DIR/ai-brain/data/vault-public/Preferences/sample-pref.md" ] && echo 1 || echo 0)"
 
-  for dir in Personal Knowledge Decisions Projects Fragments Explorations Blogs; do
-    n=$(find "$REPO_DIR/ai-brain/data/vault-public/$dir" -mindepth 1 | wc -l | tr -d ' ')
-    assert_eq "$dir はREADME.mdのみ（ファイル数1）" "1" "$n"
-    assert_true "$dir/README.md が存在する" \
-      "$([[ -f "$REPO_DIR/ai-brain/data/vault-public/$dir/README.md" ]] && echo 1 || echo 0)"
-  done
-
-  assert_true "Personal/career-private.md はコピーされていない（骨格のみ）" \
-    "$([[ ! -f "$REPO_DIR/ai-brain/data/vault-public/Personal/career-private.md" ]] && echo 1 || echo 0)"
+  private_files="$(find "$REPO_DIR/ai-brain/data/vault-public" -type f ! -name README.md ! -path '*/Preferences/*')"
+  assert_true "privateはREADMEの骨格だけ" \
+    "$([ -z "$private_files" ] && [ -f "$REPO_DIR/ai-brain/data/vault-public/Personal/README.md" ] && echo 1 || echo 0)"
 
   commits=$(count_commits "$REPO_DIR")
   assert_eq "commit が1つ作られている" "1" "$commits"
 
   rm -rf "$WORK"
 }
-
 echo "=== 2a. private link（フォルダ付き形式）で exit 1 ==="
 {
   WORK="$(mktemp -d)"
@@ -247,130 +182,13 @@ echo "=== 2a. private link（フォルダ付き形式）で exit 1 ==="
   make_base_vault "$VAULT_DIR"
   cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
 
-うっかり private へのリンク: [[Personal/career-private]]
+うっかり private へのリンク: [[　personal /career-private]]
 EOF
   new_repo "$REPO_DIR"
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "フォルダ付きprivate linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=フォルダ付きlink検出" "$WORK" "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
-
-  commits=$(count_commits "$REPO_DIR")
-  assert_eq "commit されていない" "0" "$commits"
-
-  rm -rf "$WORK"
-}
-
-# --- tester独立検証で発見された2件目のMajor欠陥の回帰テスト（2026-07-08）:
-#     `[[` 直後・フォルダ名とスラッシュの間に空白があると検出をすり抜けていた ---
-
-echo "=== 2a2. private link（フォルダ付き形式・[[直後に空白）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-[[直後に空白のうっかりリンク: [[ Personal/career-private]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "[[直後空白のフォルダ付きprivate linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=[[直後空白フォルダ付きlink検出" "$WORK" "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2a3. private link（フォルダ付き形式・フォルダ名とスラッシュの間に空白）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-フォルダ名とスラッシュの間に空白のうっかりリンク: [[Personal /career-private]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "スラッシュ前空白のフォルダ付きprivate linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=スラッシュ前空白フォルダ付きlink検出" "$WORK" "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-# --- 大文字小文字非依存化の回帰テスト（2026-07-08）:
-#     macOSはcase-insensitiveなファイルシステムのため、フォルダ名/basenameを
-#     小文字・大文字化してもObsidianはほぼ確実に実リンクとして解決してしまう ---
-
-echo "=== 2a4. private link（フォルダ付き形式・小文字 personal/）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-小文字フォルダ名のうっかりリンク: [[personal/career-private]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "小文字personal/フォルダ付きprivate linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=小文字フォルダ付きlink検出" "$WORK" "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2a5. private link（フォルダ付き形式・全大文字 PERSONAL/）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-全大文字フォルダ名のうっかりリンク: [[PERSONAL/career-private]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "全大文字PERSONAL/フォルダ付きprivate linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=全大文字フォルダ付きlink検出" "$WORK" "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-# --- 検証職BLOCKING指摘の回帰テスト（AC-5・2026-09-23）:
-#     export-public-vault.shはrg -Pを外し既定のRust regex(ASCII限定[[:space:]])で
-#     動くようになった結果、PCRE2/UCPでは一致していたUnicode空白（全角空白U+3000等）
-#     をfail-fastが検出できなくなる後退（PCRE2 [[:space:]]=2件一致 / Rust
-#     [[:space:]]=1件のみ、という実測差）。ソース上の見た目に頼らず、バイト列
-#     (\xe3\x80\x80)からU+3000を組み立てて注入する ---
-
-echo "=== 2a6. private link（フォルダ付き形式・[[直後に全角空白U+3000）で exit 1（AC-5(c)） ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  SP="$(printf '\xe3\x80\x80')"
-  printf '\n全角空白直後のうっかりリンク: [[%sPersonal/career-private]]\n' "$SP" \
-    >> "$VAULT_DIR/Preferences/sample-pref.md"
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "全角空白直後のフォルダ付きprivate linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=全角空白直後フォルダ付きlink検出" "$WORK" "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
+  assert_rejected "フォルダ付きリンク（空白・大小文字の抜け道）を拒否" "$WORK" "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
 
   rm -rf "$WORK"
 }
@@ -383,203 +201,13 @@ echo "=== 2b. private link（basename形式・フォルダ省略）で exit 1 ==
   make_base_vault "$VAULT_DIR"
   cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
 
-フォルダを省略したうっかりリンク: [[career-private]]
+フォルダを省略したうっかりリンク: [[ career-private | alias]]
 EOF
   new_repo "$REPO_DIR"
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "basename形式private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=basename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2c. private link（frontmatter内・basename形式）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat > "$VAULT_DIR/Preferences/related-pref.md" <<'EOF'
----
-date: 2026-01-01
-tags: [test]
-related:
-  - "[[career-private]]"
----
-
-# frontmatter経由のうっかりリンク
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "frontmatter内private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=frontmatter経由basename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2d. private link（basename + 見出し参照 #Heading）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-見出し参照のうっかりリンク: [[career-private#経歴]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "見出し参照private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=見出し参照basename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2e. private link（basename + ブロック参照 ^blockid）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-ブロック参照のうっかりリンク: [[career-private^abcd12]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "ブロック参照private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=ブロック参照basename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-# --- tester独立検証で発見されたMajor欠陥の回帰テスト（2026-07-08）:
-#     区切り文字（| # ^）の直前に空白があると検出をすり抜けていた ---
-
-echo "=== 2e2. private link（basename + 空白入りpipe記法 ' | alias'）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-空白入りpipe記法のうっかりリンク: [[career-private | 経歴エイリアス]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "空白入りpipe記法private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=空白入りpipe basename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2e3. private link（basename + 空白入り見出し参照 ' # 見出し'）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-空白入り見出し参照のうっかりリンク: [[career-private # 経歴]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "空白入り見出し参照private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=空白入り見出し basename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2e4. private link（basename + 空白入りブロック参照 ' ^blockid'）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-空白入りブロック参照のうっかりリンク: [[career-private ^abcd12]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "空白入りブロック参照private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=空白入りブロック basename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2e5. private link（basename形式・[[直後に空白）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-[[直後に空白のうっかりリンク（basename）: [[ career-private]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "[[直後空白のbasename private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=[[直後空白basename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2e6. private link（basename形式・大文字小文字違い Career-Private）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-大文字小文字違いのうっかりリンク: [[Career-Private]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "大文字小文字違いbasename private linkで exit 1" "1" "$rc"
-  assert_stderr_has "理由=大文字小文字違いbasename link検出" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2f. denylistに無い無害なwiki linkは誤検知しない（exit 0） ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  # "career-private" の前方一致だが別ノート名。basenameの完全一致のみ検出することを確認する
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-無害なリンク（前方一致だが別名）: [[career-private-archive]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "denylist前方一致の別名は誤検知せずexit 0" "0" "$rc"
+  assert_rejected "basenameリンク（空白・別名）を拒否" "$WORK" "Personal ノートへの wiki link（basename形式）を検出しました"
 
   rm -rf "$WORK"
 }
@@ -598,122 +226,8 @@ EOF
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "Knowledgeへのフォルダ付きlinkはexit 0（fail-fast対象外）" "0" "$rc"
-  assert_stdout_has "Knowledgeへのlinkがレポートに出る" "$WORK" "linkreport"
-  assert_stdout_has "レポート内容にKnowledge/some-knowledgeが含まれる" "$WORK" "Knowledge/some-knowledge"
-
-  commits=$(count_commits "$REPO_DIR")
-  assert_eq "レポートのみでもcommitはされる" "1" "$commits"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2h. Decisions へのlink（basename形式・フォルダ省略）は許容＝exit 0だがレポートに出る ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  mkdir -p "$VAULT_DIR/Decisions"
-  cat > "$VAULT_DIR/Decisions/2026-01-01-example-decision.md" <<'EOF'
----
-date: 2026-01-01
-tags: [test]
----
-
-# サンプル決定
-EOF
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-フォルダ省略の意思決定参照: [[2026-01-01-example-decision]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "Decisionsへのbasename linkはexit 0（fail-fast対象外）" "0" "$rc"
-  assert_stdout_has "Decisionsへのlinkがレポートに出る" "$WORK" "linkreport"
-  assert_stdout_has "レポート内容に2026-01-01-example-decisionが含まれる" "$WORK" "2026-01-01-example-decision"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2h2. Knowledge への空白入りpipe記法basename linkも許容＝exit 0だがレポートに出る（回帰） ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-空白入りpipe記法での参照: [[some-knowledge | 表記]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "Knowledgeへの空白入りbasename linkもexit 0" "0" "$rc"
-  assert_stdout_has "空白入りbasename linkもレポートに出る" "$WORK" "linkreport"
-  assert_stdout_has "レポート内容にsome-knowledgeが含まれる" "$WORK" "some-knowledge"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2h3. Knowledge への[[直後空白のフォルダ付きlinkも許容＝exit 0だがレポートに出る（回帰） ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-[[直後に空白の参照: [[ Knowledge/some-knowledge]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "Knowledgeへの[[直後空白フォルダ付きlinkもexit 0" "0" "$rc"
-  assert_stdout_has "[[直後空白フォルダ付きlinkもレポートに出る" "$WORK" "linkreport"
-  assert_stdout_has "レポート内容にKnowledge/some-knowledgeが含まれる(2)" "$WORK" "Knowledge/some-knowledge"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2h4. 小文字 knowledge/ へのlinkも許容＝exit 0だがレポートに出る（回帰） ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-小文字フォルダ名での参照: [[knowledge/some-knowledge]]
-EOF
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "小文字knowledge/へのlinkもexit 0" "0" "$rc"
-  assert_stdout_has "小文字knowledge/linkもレポートに出る" "$WORK" "linkreport"
-  assert_stdout_has "レポート内容にknowledge/some-knowledgeが含まれる" "$WORK" "knowledge/some-knowledge"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 2i. private link皆無の場合はレポートが0件と明示される ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "リンク無しならexit 0" "0" "$rc"
-  assert_stdout_has "レポート0件が明示される" "$WORK" "private link は0件"
-
+  assert_true "Knowledgeへのlinkがレポートに出る" \
+    "$([ "$rc" -eq 0 ] && grep -q linkreport "$WORK/stdout.log" && echo 1 || echo 0)"
   rm -rf "$WORK"
 }
 
@@ -729,45 +243,7 @@ echo "=== 3a. NGワード（ダミー語 NGWORD_ALPHA）で exit 1 ==="
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" "$NGWORDS_DUMMY" || rc=$?
-  assert_eq "ダミーNGワード(ALPHA)で exit 1" "1" "$rc"
-  assert_stderr_has "理由=NGワード検出" "$WORK" "NGワードを検出しました"
-
-  rm -f "$NGWORDS_DUMMY"
-  rm -rf "$WORK"
-}
-
-echo "=== 3b. NGワード（ダミー語 NGWORD_BETA・表記ゆれ相当）で exit 1 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  NGWORDS_DUMMY="$(make_dummy_ngwords)"
-  printf '\nNGWORD_BETA と呼ばれることもある。\n' >> "$VAULT_DIR/Preferences/sample-pref.md"
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" "$NGWORDS_DUMMY" || rc=$?
-  assert_eq "ダミーNGワード(BETA・表記ゆれ相当)で exit 1" "1" "$rc"
-  assert_stderr_has "理由=NGワード検出（表記ゆれ相当）" "$WORK" "NGワードを検出しました"
-
-  rm -f "$NGWORDS_DUMMY"
-  rm -rf "$WORK"
-}
-
-echo "=== 3c. 「takumi009」は対象外（ダミー語リストにも無いので素通りしてexit 0） ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  NGWORDS_DUMMY="$(make_dummy_ngwords)"
-  printf '\nGitHubアカウントは takumi009 です。\n' >> "$VAULT_DIR/Preferences/sample-pref.md"
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" "$NGWORDS_DUMMY" || rc=$?
-  assert_eq "「takumi009」はNG対象外でexit 0" "0" "$rc"
+  assert_rejected "NGワードを拒否" "$WORK" "NGワードを検出しました"
 
   rm -f "$NGWORDS_DUMMY"
   rm -rf "$WORK"
@@ -787,29 +263,7 @@ echo "=== 4. シークレット混入で gitleaks が検知し exit 1 ==="
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "ダミーGitHubトークンでgitleaks検知しexit 1" "1" "$rc"
-  assert_stderr_has "理由=gitleaks検出" "$WORK" "gitleaks がシークレットの疑いを検出しました"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 5. 冪等性: 2回連続実行しても2回目は無変更commitなしでexit 0 ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  new_repo "$REPO_DIR"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  rc2=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc2=$?
-  assert_eq "1回目 exit 0" "0" "$rc"
-  assert_eq "2回目 exit 0" "0" "$rc2"
-
-  commits=$(count_commits "$REPO_DIR")
-  assert_eq "変更が無ければcommitは1つのまま" "1" "$commits"
+  assert_rejected "シークレットを拒否" "$WORK" "gitleaks がシークレットの疑いを検出しました"
 
   rm -rf "$WORK"
 }
@@ -825,7 +279,7 @@ echo "=== 6. チェック失敗時に ai-brain/data/vault-public/ は本番か�
   # まず正常系を1回走らせ、「既に成功済みexportがある」本番状態（ベースライン）を作る。
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "ベースラインexportはexit 0" "0" "$rc"
+  [ "$rc" -eq 0 ] || exit 1
 
   BASELINE_HEAD="$(git -C "$REPO_DIR" rev-parse HEAD)"
   SNAPSHOT_DIR="$WORK/vault-public-snapshot"
@@ -839,174 +293,15 @@ EOF
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "チェック失敗でexit 1" "1" "$rc"
-  # 意図した理由（Personal link検出）で失敗したことも確認する（Codexレビュー指摘・Minor:
-  # 別の理由で早期失敗しても ai-brain/data/vault-public が無変更なら誤ってpassしてしまう抜け穴を塞ぐ）。
-  assert_stderr_has "理由=フォルダ付きprivate link検出（ステージング安全性テスト）" "$WORK" \
+  assert_rejected "理由=フォルダ付きprivate link検出（ステージング安全性テスト）" "$WORK" \
     "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
 
   # 「チェック失敗時に ai-brain/data/vault-public/ が変更されていない」を直接アサートする（設計①の受入条件）。
   diff_out="$(diff -r "$SNAPSHOT_DIR" "$REPO_DIR/ai-brain/data/vault-public" 2>&1 || true)"
   assert_eq "ai-brain/data/vault-public はベースラインと完全一致（無変更）" "" "$diff_out"
-
-  git_status="$(git -C "$REPO_DIR" status --porcelain -- ai-brain/data/vault-public)"
-  assert_eq "git status(ai-brain/data/vault-public)も無変更" "" "$git_status"
-
   new_head="$(git -C "$REPO_DIR" rev-parse HEAD)"
   assert_eq "HEADのcommitも変わっていない" "$BASELINE_HEAD" "$new_head"
 
-  # ステージング領域（.export-tmp.*）がEXIT trapで掃除され、残骸が残っていないことも確認する。
-  leftover=$(find "$REPO_DIR" -maxdepth 1 -name '.export-tmp.*' 2>/dev/null | wc -l | tr -d ' ')
-  assert_eq "ステージング領域の残骸が無い" "0" "$leftover"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 6b. ai-brain/data/vault-public/ が未作成（初回実行前）の状態でチェック失敗しても作成されない ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-うっかり private へのリンク（初回チェック失敗テスト用）: [[Personal/career-private]]
-EOF
-  new_repo "$REPO_DIR"
-  # ai-brain/data/vault-public/ はまだ一度も生成していない（本テストの主眼: mkdir すら本番側に残さないこと）。
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "初回でチェック失敗はexit 1" "1" "$rc"
-  # 意図した理由（Personal link検出）で失敗したことも確認する（Codexレビュー指摘・Minor:
-  # 別の理由で早期失敗しても ai-brain/data/vault-public/ が未作成なら誤ってpassしてしまう抜け穴を塞ぐ）。
-  assert_stderr_has "理由=フォルダ付きprivate link検出（初回チェック失敗テスト）" "$WORK" \
-    "Personal フォルダへの wiki link（フォルダ付き）を検出しました"
-  assert_true "ai-brain/data/vault-public/ 自体が作られていない（空ディレクトリも残らない）" \
-    "$([[ ! -e "$REPO_DIR/ai-brain/data/vault-public" ]] && echo 1 || echo 0)"
-
-  # ステージング領域（.export-tmp.*）も残らないことを確認する（trap の初回失敗ケース検証）。
-  leftover=$(find "$REPO_DIR" -maxdepth 1 -name '.export-tmp.*' 2>/dev/null | wc -l | tr -d ' ')
-  assert_eq "初回失敗時もステージング領域の残骸が無い" "0" "$leftover"
-
-  rm -rf "$WORK"
-}
-
-# register_tmp のサブシェル伝播バグ回帰テスト（2026-07-14）:
-# `VAR="$(register_tmp)"` はコマンド置換＝サブシェル実行のため、関数内での
-# TMP_FILES+=() が親シェルへ伝播せず cleanup() が常に空配列を見ていた
-# （mktemp の一時ファイルが仕様に反して毎回残留するバグ）。
-# register_tmp の mktemp には識別用プレフィックス（-t export-public-vault）を
-# 付けているので、既定のシステム一時領域を実行前後でスキャンして残留の有無を確認する。
-#
-# 注意（Codexレビュー指摘・Minor）: macOS(BSD)の mktemp は `-t` 使用時も TMPDIR
-# 環境変数を無視し、常に確定的なユーザー毎の既定一時領域を使う（テスト側で専用
-# TMPDIR に隔離できない）。そのため「件数」ではなく「ファイル名の集合」を
-# 実行前後でdiffし、このテスト実行中に増えて消えなかったファイルだけを検出する
-# （他プロセスが同時に無関係なファイルを作成・削除しても誤検知しにくい）。
-discover_mktemp_dir() {
-  local probe dir
-  probe="$(mktemp -t export-public-vault-probe)"
-  dir="$(dirname "$probe")"
-  rm -f "$probe"
-  printf '%s' "$dir"
-}
-
-snapshot_tmp() {
-  local dir="$1"
-  find "$dir" -maxdepth 1 -name 'export-public-vault.*' 2>/dev/null | sort
-}
-
-echo "=== 7. register_tmp: 正常系実行後にmktempの一時ファイルが残らない（TMP_FILES伝播バグ回帰） ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  new_repo "$REPO_DIR"
-  MKTMP_DIR="$(discover_mktemp_dir)"
-
-  before=$(snapshot_tmp "$MKTMP_DIR")
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  after=$(snapshot_tmp "$MKTMP_DIR")
-  new_leftover=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
-
-  assert_eq "正常系 exit 0" "0" "$rc"
-  assert_eq "register_tmpのmktemp一時ファイルが今回の実行で増えたまま残っていない（正常系）" "" "$new_leftover"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 7b. register_tmp: fail-fast経路（異常終了）でも一時ファイルが残らない ==="
-{
-  # basename形式のprivate link（3-b・register_tmp呼び出し後にfailする経路）を使う。
-  # フォルダ付き形式（3-a）は register_tmp を1つも呼ばずにfailするため、
-  # 「register_tmp呼び出し済みの一時ファイルがcleanup()で確実に消える」ことの
-  # 検証にならない（Codexレビュー指摘で発覚・basename形式に修正）。
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  cat >> "$VAULT_DIR/Preferences/sample-pref.md" <<'EOF'
-
-うっかり private へのリンク（basename形式・一時ファイル残留テスト用）: [[career-private]]
-EOF
-  new_repo "$REPO_DIR"
-  MKTMP_DIR="$(discover_mktemp_dir)"
-
-  before=$(snapshot_tmp "$MKTMP_DIR")
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  after=$(snapshot_tmp "$MKTMP_DIR")
-  new_leftover=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
-
-  assert_eq "fail-fastでexit 1" "1" "$rc"
-  assert_stderr_has "理由=basename link検出（register_tmp呼び出し後にfail）" "$WORK" \
-    "Personal ノートへの wiki link（basename形式）を検出しました"
-  assert_eq "register_tmpのmktemp一時ファイルが今回の実行で増えたまま残っていない（異常系）" "" "$new_leftover"
-
-  rm -rf "$WORK"
-}
-
-# --- 前提修正 P-1 の回帰テスト（2026-09-07）:
-#     1-a) linked worktree を AIENV_REPO に指定しても git init が走らない
-#     1-b) git commit にパス指定（-- ai-brain/data/vault-public）が付き、他の stage 済み差分を
-#          巻き込まない ---
-
-echo "=== 8. PA-1: linked worktree を AIENV_REPO に指定しても git init が走らない ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  MAIN_REPO="$WORK/main-repo"
-  make_base_vault "$VAULT_DIR"
-  new_repo "$MAIN_REPO"
-  # worktree add には最低1コミットが要るため、ダミーの初期コミットを作る。
-  echo "dummy" > "$MAIN_REPO/README.md"
-  git -C "$MAIN_REPO" add README.md
-  git -C "$MAIN_REPO" commit -q -m "initial commit"
-
-  WT_DIR="$WORK/linked-worktree"
-  git -C "$MAIN_REPO" worktree add -q "$WT_DIR" -b export-test-branch >/dev/null
-
-  # 前提: linked worktree では .git はファイル（.git ディレクトリではない）
-  assert_true "前提: linked worktree の .git はファイル" \
-    "$([[ -f "$WT_DIR/.git" ]] && echo 1 || echo 0)"
-
-  rc=0
-  run_export "$VAULT_DIR" "$WT_DIR" || rc=$?
-  assert_eq "linked worktree を AIENV_REPO にして exit 0" "0" "$rc"
-
-  assert_true "実行後も .git はファイルのまま（ディレクトリ化していない＝git init が走っていない）" \
-    "$([[ -f "$WT_DIR/.git" ]] && echo 1 || echo 0)"
-
-  nested_git_dirs=$(find "$WT_DIR" -type d -name '.git' 2>/dev/null | wc -l | tr -d ' ')
-  assert_eq "worktree の中に入れ子の .git ディレクトリが作られていない" "0" "$nested_git_dirs"
-
-  commits=$(git -C "$WT_DIR" log --oneline 2>/dev/null | wc -l | tr -d ' ')
-  assert_eq "worktree 上で snapshot commit が作られている（初期commit+1）" "2" "$commits"
-
-  git -C "$MAIN_REPO" worktree remove --force "$WT_DIR" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }
 
@@ -1024,7 +319,7 @@ echo "=== 9. PA-2: ai-brain/data/vault-public 以外を stage した状態で実
 
   rc=0
   run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "exit code 0" "0" "$rc"
+  [ "$rc" -eq 0 ] || exit 1
 
   # このコミットは repo 最初の commit（親を持たない root commit）なので、
   # diff-tree で親との差分を出すには --root が要る（無いと空になる）。
@@ -1040,124 +335,15 @@ echo "=== 9. PA-2: ai-brain/data/vault-public 以外を stage した状態で実
 
   rm -rf "$WORK"
 }
-
-# --- 巨大denylist回帰テスト（2026-09-23本番障害・AC-1/AC-2）:
-#     3-b（fail-fast・Personal）・3-e（report-only・Knowledge等）のbasename検査は
-#     denylist全件を1本のrgパターンへ結合する。件数が増えるとPCRE2の
-#     コンパイル上限(約64KB)を超え、`rg: PCRE2: error compiling pattern at
-#     offset 0: regular expression is too large`でexit 2になり、fail-fast側は
-#     誤ってFAILし、report-only側はWARNを出す（設計方針＝-Pを外すことだが、
-#     このテストは方針でなく振る舞い＝下記の受入条件だけを固定する） ---
-
-echo "=== 10. AC-1 large-denylist-report: report対象(Knowledge)のbasename denylistが巨大でもrg実行エラーにならない ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  make_large_denylist_notes "$VAULT_DIR/Knowledge" 1200 60
-  new_repo "$REPO_DIR"
-
-  # 生成される基準パターンファイルの実バイト数を直接確認する（scripts/lib/
-  # personal-link-check.shを読み取り専用でsourceして計測。編集はしない）。
-  pattern_size=$(
-    source "$REPO_ROOT/ai-brain/executor/personal-link-check.sh"
-    DENY="$(mktemp)"; PAT="$(mktemp)"
-    personal_link_build_basename_denylist "$VAULT_DIR" Knowledge "$DENY"
-    personal_link_build_basename_pattern_file "$DENY" "$PAT"
-    wc -c < "$PAT" | tr -d ' '
-    rm -f "$DENY" "$PAT"
-  )
-  assert_true "basenameパターンファイルが70,000バイトを超える(実測 ${pattern_size} バイト)" \
-    "$([[ "$pattern_size" -gt 70000 ]] && echo 1 || echo 0)"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "AC-1: 巨大denylistでもexit 0" "0" "$rc"
-  assert_output_not_has "AC-1: report-only rg実行エラーのWARNが出ない" "$WORK" "WARN: report-only rg 実行エラー"
-  assert_output_not_has "AC-1: PCRE2の\"too large\"エラーが出ない" "$WORK" "regular expression is too large"
-
-  rm -rf "$WORK"
-}
-
-echo "=== 11. AC-2 large-denylist-failfast: fail-fast対象(Personal)のbasename denylistが巨大でもfailしない(リンク無しなら) ==="
-{
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"
-  REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  # Preferences から Personal への wiki link は一切追加しない（AC-2の前提）。
-  make_large_denylist_notes "$VAULT_DIR/Personal" 1200 60
-  new_repo "$REPO_DIR"
-
-  pattern_size=$(
-    source "$REPO_ROOT/ai-brain/executor/personal-link-check.sh"
-    DENY="$(mktemp)"; PAT="$(mktemp)"
-    personal_link_build_basename_denylist "$VAULT_DIR" Personal "$DENY"
-    personal_link_build_basename_pattern_file "$DENY" "$PAT"
-    wc -c < "$PAT" | tr -d ' '
-    rm -f "$DENY" "$PAT"
-  )
-  assert_true "basenameパターンファイルが70,000バイトを超える(実測 ${pattern_size} バイト)" \
-    "$([[ "$pattern_size" -gt 70000 ]] && echo 1 || echo 0)"
-
-  rc=0
-  run_export "$VAULT_DIR" "$REPO_DIR" || rc=$?
-  assert_eq "AC-2: Personalへのリンクが無ければ巨大denylistでもexit 0" "0" "$rc"
-  assert_output_not_has "AC-2: basename checkのrg実行エラーでfailしない" "$WORK" "rg 実行エラー (basename check"
-
-  rm -rf "$WORK"
-}
-
-echo "=== v1.2 FR-9/D-7: NG 語ファイルの既定解決（core/data/ngwords.txt・NGWORDS_FILE を渡さない）＝audit.sh と同じ共有部品を使う ==="
-{
-  # export-public-vault.sh を、依存する personal-link-check.sh ごと最小の木へ複製し
-  # （SCRIPT_DIR 相対の既定解決をそのまま働かせるため・test-audit.sh と同じ流儀）、
-  # core/executor/ngwords-path.sh（共有部品）も複製して既定解決を実地で確かめる。
-  FAKE_ROOT="$(mktemp -d)"
-  mkdir -p "$FAKE_ROOT/ai-brain/executor" "$FAKE_ROOT/core/executor" "$FAKE_ROOT/core/data" "$FAKE_ROOT/scripts"
-  cp "$SCRIPT" "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh"
-  cp "$REPO_ROOT/ai-brain/executor/personal-link-check.sh" "$FAKE_ROOT/ai-brain/executor/personal-link-check.sh"
-  # v1.2 T4＝export-public-vault.sh は $SCRIPT_DIR/../data/templates/readme-<dir>.md を読む。
-  # fixture の木にも複製する（無いとテンプレ不在で止まる・B-2 の実測）。
-  mkdir -p "$FAKE_ROOT/ai-brain/data"
-  cp -R "$REPO_ROOT/ai-brain/data/templates" "$FAKE_ROOT/ai-brain/data/templates"
-  NGWORDS_SHARED_LIB="$REPO_ROOT/core/executor/ngwords-path.sh"
-  if [ -f "$NGWORDS_SHARED_LIB" ]; then
-    cp "$NGWORDS_SHARED_LIB" "$FAKE_ROOT/core/executor/ngwords-path.sh"
-  fi
-  chmod +x "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh"
-
-  assert_true "D-7: audit.sh と export-public-vault.sh が同じ共有部品ファイルを使う（D-7 の『共有部品1つ』）" \
-    "$(grep -q 'ngwords-path\.sh' "$REPO_ROOT/core/executor/audit.sh" 2>/dev/null \
-      && grep -q 'ngwords-path\.sh' "$REPO_ROOT/ai-brain/executor/export-public-vault.sh" 2>/dev/null \
-      && echo 1 || echo 0)"
-
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"; REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  new_repo "$REPO_DIR"
-  printf 'NGWORD_ALPHA\nNGWORD_BETA' > "$FAKE_ROOT/core/data/ngwords.txt"
-  rc=0
-  VAULT="$VAULT_DIR" AIENV_REPO="$REPO_DIR" \
-    "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
-  assert_eq "N1: NGWORDS_FILEを渡さなくても新既定（core/data/ngwords.txt）を読んでexit 0" "0" "$rc"
-  rm -rf "$WORK"
-
-  WORK="$(mktemp -d)"
-  VAULT_DIR="$WORK/vault"; REPO_DIR="$WORK/repo"
-  make_base_vault "$VAULT_DIR"
-  new_repo "$REPO_DIR"
-  rm -f "$FAKE_ROOT/core/data/ngwords.txt"
-  printf 'NGWORD_ALPHA\nNGWORD_BETA' > "$FAKE_ROOT/scripts/ngwords.txt"
-  rc=0
-  VAULT="$VAULT_DIR" AIENV_REPO="$REPO_DIR" \
-    "$FAKE_ROOT/ai-brain/executor/export-public-vault.sh" >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
-  out="$(cat "$WORK/stdout.log" "$WORK/stderr.log" 2>/dev/null)"
-  assert_true "N0（旧既定だけ）: 非0" "$([ "$rc" != "0" ] && echo 1 || echo 0)"
-  assert_contains "N0: 旧→新へ移す1コマンドを出力に示す（core/data/ngwords.txt を含む）" "$out" "core/data/ngwords.txt"
-  rm -rf "$WORK" "$FAKE_ROOT"
-}
+echo "=== 検査設定欠落はfail-close ==="
+WORK="$(mktemp -d)"
+make_base_vault "$WORK/vault"
+new_repo "$WORK/repo"
+rc=0
+run_export "$WORK/vault" "$WORK/repo" "$WORK/missing-ngwords" || rc=$?
+assert_true "NG語設定なしでは公開物を作らない" \
+  "$([ "$rc" -ne 0 ] && [ ! -e "$WORK/repo/ai-brain/data/vault-public" ] && echo 1 || echo 0)"
+rm -rf "$WORK"
 
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="

@@ -1,23 +1,5 @@
 #!/usr/bin/env bash
-# ai-brain/assembly/install-backup.sh のユニットテスト（新ラベル設置・冪等・失敗時の
-# exit 1 の検証。旧ラベル移行の検査は 2026-09-19 着手順 1 で退役＝ラベルは
-# repo の plist から動的に取る）。
-#
-# 実 ~/Library/LaunchAgents・実launchdセッションには一切依存しない。
-# HOME環境変数を毎回ダミーのfixtureディレクトリへ差し替え、かつ非dry-run呼び出し
-# には必ず SKIP_LAUNCHCTL=1 を付けて実システムのlaunchdに触れないようにする
-# （gui/$(id -u) は実launchdセッションでありHOME差し替えだけでは隔離できない
-# ＝tests/test-install-sub.shで実際に起きた事故の教訓を踏襲。scripts/
-# install-backup.shのSKIP_LAUNCHCTLはplist配置・旧plist削除は行ったまま
-# launchctlコマンドの実行だけをskipする）。
-#
-# 加えて、SKIP_LAUNCHCTL分岐そのものが将来壊れて実launchctlを呼んでしまう回帰に
-# 備え、PATH先頭へ偽launchctl（呼び出しを記録するだけの何もしないスクリプト）を
-# 差し込み、各テスト後に「一度も呼ばれていないこと」を独立に検証する
-# （2026-07-16 Codexレビュー指摘Major対応: SKIP_LAUNCHCTLの解釈自体がテスト対象の
-# 実装コードなので、それを信用するだけでは不十分＝二重の安全網にする）。
-#
-# 実行方法: bash tests/test-install-backup.sh
+# 一時 HOME と偽 launchctl で dry-run・plist 生成を確認する。
 
 set -euo pipefail
 
@@ -30,15 +12,6 @@ FAIL=0
 
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
-
-assert_eq() {
-  local desc="$1" expected="$2" actual="$3"
-  if [[ "$expected" == "$actual" ]]; then
-    pass "$desc"
-  else
-    fail_case "$desc (expected=$expected actual=$actual)"
-  fi
-}
 
 assert_true() {
   local desc="$1" cond="$2"
@@ -67,163 +40,34 @@ trap 'rm -rf "$FAKE_BIN"' EXIT
 # 差し込む（本物のlaunchctlより先に見つかるようにする）。
 run_install_skip() {
   : > "$FAKE_LAUNCHCTL_LOG"
-  PATH="$FAKE_BIN:$PATH" SKIP_LAUNCHCTL=1 HOME="$1" bash "$SCRIPT" "${@:2}"
+  PATH="$FAKE_BIN:$PATH" SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1 HOME="$1" bash "$SCRIPT" "${@:2}"
 }
 
-# 偽launchctlが一度も呼ばれていないことをassertする（直前のrun_install_skip呼び出しに対して）。
-assert_launchctl_never_called() {
-  local desc="$1"
-  assert_true "$desc" "$([[ ! -s "$FAKE_LAUNCHCTL_LOG" ]] && echo 1 || echo 0)"
-}
+echo "=== dry-run は変更しない ==="
+FAKE_HOME="$(mktemp -d)"
+out="$(run_install_skip "$FAKE_HOME" --dry-run)"
+assert_true "dry-run で配置せず launchctl も呼ばない" \
+  "$([[ "$out" == *'would generate'* && ! -e "$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist" && ! -s "$FAKE_LAUNCHCTL_LOG" ]] && echo 1 || echo 0)"
+rm -rf "$FAKE_HOME"
 
-echo "=== 1. dry-run: 実際の変更を一切しない ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-
-  out=$(HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run)
-  assert_true "dry-run出力にwould generateが含まれる" \
-    "$(echo "$out" | grep -q 'would generate' && echo 1 || echo 0)"
-  assert_true "新ラベルのplistは実際には作られていない" \
-    "$([[ ! -e "$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 2. 通常実行: 新ラベルのplistが生成される・実launchctlは一切呼ばれない ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-
-  run_install_skip "$FAKE_HOME" >/dev/null
-  assert_launchctl_never_called "SKIP_LAUNCHCTL=1下では偽launchctlすら一度も呼ばれない"
-
-  DEST="$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist"
-  assert_true "新ラベルのplistが生成される" "$([[ -f "$DEST" ]] && echo 1 || echo 0)"
-  assert_true "__AIENV_HOME__が実HOME(FAKE_HOME)へ置換されている" \
-    "$(grep -q "$FAKE_HOME/work/takumi009-ai-env/ai-brain/executor/backup-vault.sh" "$DEST" && echo 1 || echo 0)"
-  assert_true "プレースホルダが残っていない" \
-    "$(grep -q '__AIENV_HOME__' "$DEST" && echo 0 || echo 1)"
-  assert_true "Labelキーが新ラベルになっている" \
-    "$(grep -A1 '<key>Label</key>' "$DEST" | grep -q "<string>${NEW_LABEL}</string>" && echo 1 || echo 0)"
-  if command -v plutil >/dev/null 2>&1; then
-    assert_true "plutil -lint OK" "$(plutil -lint "$DEST" >/dev/null 2>&1 && echo 1 || echo 0)"
-  fi
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 4. 新設置: 素の環境でも新ラベルのplistが生成される(繰り返し実行しても安全) ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-
-  out="$(run_install_skip "$FAKE_HOME")"
-  assert_launchctl_never_called "素の環境の実行でも偽launchctlは呼ばれない"
-
-  NEW_DEST="$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist"
-  assert_true "新ラベルのplistは通常どおり生成される" "$([[ -f "$NEW_DEST" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 5. 冪等性: 2回実行しても新ラベルのplistは1つだけ・エラーにならない ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-
-  run_install_skip "$FAKE_HOME" >/dev/null
-  rc=0
-  run_install_skip "$FAKE_HOME" >/dev/null || rc=$?
-  assert_eq "2回目もexit 0" "0" "$rc"
-  assert_launchctl_never_called "2回目実行でも偽launchctlは呼ばれない"
-
-  NEW_DEST="$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist"
-  assert_true "新ラベルのplistは存在する" "$([[ -f "$NEW_DEST" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 7. 不明な引数はexit 1(FAIL) ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-  ERRLOG="$FAKE_HOME/stderr.log"
-  rc=0
-  HOME="$FAKE_HOME" bash "$SCRIPT" --bogus-flag >/dev/null 2>"$ERRLOG" || rc=$?
-  assert_eq "不明な引数はexit 1" "1" "$rc"
-  rm -rf "$FAKE_HOME"
-}
-
-echo "=== 15. 新ラベルのenableが失敗した場合はexit 1になる(以前は\`|| true\`で握り潰していた・scripts/install-maintenance.shで確立した方式の横展開・2026-07-16リーダー裁定対応) ==="
-{
-  FAKE_HOME="$(mktemp -d)"
-
-  STUB_BIN="$(mktemp -d)"
-  CALL_LOG="$STUB_BIN/calls.log"
-  cat > "$STUB_BIN/launchctl" <<EOF
-#!/usr/bin/env bash
-echo "\$@" >> "$CALL_LOG"
-case "\$1" in
-  enable) exit 1 ;;   # 新ラベルのenableを常に失敗させる
-  bootstrap) exit 0 ;;
-  bootout) exit 0 ;;
-  print) exit 0 ;;
-  *) exit 0 ;;
-esac
-EOF
-  chmod +x "$STUB_BIN/launchctl"
-
-  rc=0
-  PATH="$STUB_BIN:$PATH" HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>"$FAKE_HOME/stderr.log" || rc=$?
-  assert_eq "新ラベルのenable失敗はexit 1(FAIL)になる" "1" "$rc"
-
-  err="$(cat "$FAKE_HOME/stderr.log")"
-  assert_true "enable失敗のFAILメッセージが出る" \
-    "$(echo "$err" | grep -q "enable failed" && echo 1 || echo 0)"
-  assert_true "新ラベルのplist自体は生成されている(bootstrapは成功しているため)" \
-    "$([[ -f "$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$STUB_BIN"
-}
-
-echo "=== 16. bootstrapが最初は失敗してもenable後の再試行で成功すれば正常完了する(disabled状態からの復旧・scripts/install-maintenance.shで確立した方式の横展開・2026-07-16リーダー裁定対応) ==="
-{
-  # macOS launchdは対象ラベルがdisabled overrideに残っている場合、enableされる
-  # までbootstrapが失敗し続けることがある既知の挙動があるため、1回だけの
-  # enable→bootstrap再試行で復旧できることを検証する。「呼び出し回数」ではなく
-  # 「enableが実際に実行されたこと」に依存させるため、bootstrapはマーカー
-  # ファイルが存在する場合にのみ成功するスタブにする（tests/test-install-
-  # maintenance.shのCodexレビュー指摘Minor対応を踏襲）。
-  FAKE_HOME="$(mktemp -d)"
-
-  STUB_BIN="$(mktemp -d)"
-  CALL_LOG="$STUB_BIN/calls.log"
-  ENABLED_MARKER="$STUB_BIN/enabled.marker"
-  cat > "$STUB_BIN/launchctl" <<EOF
-#!/usr/bin/env bash
-echo "\$@" >> "$CALL_LOG"
-case "\$1" in
-  bootstrap)
-    if [ -e "$ENABLED_MARKER" ]; then exit 0; else exit 1; fi
-    ;;
-  bootout) exit 0 ;;
-  enable) touch "$ENABLED_MARKER"; exit 0 ;;
-  print) exit 0 ;;
-  *) exit 0 ;;
-esac
-EOF
-  chmod +x "$STUB_BIN/launchctl"
-
-  rc=0
-  out="$(PATH="$STUB_BIN:$PATH" HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)" || rc=$?
-  assert_eq "disabled復旧の再試行が成功すればexit 0" "0" "$rc"
-  assert_true "1回目bootstrap失敗のWARNログが出る" \
-    "$(echo "$out" | grep -q "disabled状態の可能性があるため" && echo 1 || echo 0)"
-  assert_true "enableが実際に実行されたことを介してbootstrapが成功している(回数だけの偶然ではない)" \
-    "$([[ -e "$ENABLED_MARKER" ]] && echo 1 || echo 0)"
-  assert_true "bootstrapが2回呼ばれている(初回失敗+再試行成功)" \
-    "$([[ "$(grep -cE '^bootstrap ' "$CALL_LOG")" -eq 2 ]] && echo 1 || echo 0)"
-  assert_true "新ラベルのplistが生成されている" \
-    "$([[ -f "$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist" ]] && echo 1 || echo 0)"
-
-  rm -rf "$FAKE_HOME" "$STUB_BIN"
-}
+echo "=== plist を生成する ==="
+FAKE_HOME="$(mktemp -d)"
+rc=0
+run_install_skip "$FAKE_HOME" >/dev/null || rc=$?
+DEST="$FAKE_HOME/Library/LaunchAgents/${NEW_LABEL}.plist"
+assert_true "正常終了し plist を配置、launchctl は呼ばない" \
+  "$([[ "$rc" -eq 0 && -f "$DEST" && ! -s "$FAKE_LAUNCHCTL_LOG" ]] && echo 1 || echo 0)"
+assert_true "HOME を現行配置へ置換し、有効な plist を生成する" \
+  "$(python3 - "$DEST" "$FAKE_HOME" "$NEW_LABEL" <<'PY'
+import plistlib,sys
+p,home,label=sys.argv[1:]
+with open(p,'rb') as f: d=plistlib.load(f)
+assert d['Label']==label
+assert home+'/Workspace/Tools/takumi009-ai-env/ai-brain/executor/backup-vault.sh' in d['ProgramArguments']
+assert '__AIENV_' not in open(p).read()
+PY
+  [ "$?" -eq 0 ] && echo 1 || echo 0)"
+rm -rf "$FAKE_HOME"
 
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="

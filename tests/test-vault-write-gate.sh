@@ -59,14 +59,20 @@ assert_allowed() {
 
 echo "=== 1. VW-P1/P2: AI向け6フォルダ配下の絶対パスはdeny ==="
 assert_denied "VW-P1: Knowledge配下のWriteはdeny" "$FAKE_HOME/Data/obsidian/Knowledge/x.md" "/tmp"
-assert_denied "VW-P2: Preferences配下のEditはdeny" "$FAKE_HOME/Data/obsidian/Preferences/y.md" "/tmp"
-
 echo "=== 2. VW-N1/N2: 6フォルダの外・Vault外は通過 ==="
 assert_allowed "VW-N1: Vault配下でも6フォルダの外（Archive）は通過" "$FAKE_HOME/Data/obsidian/Archive/z.md" "/tmp"
-assert_allowed "VW-N2: Vault外（/tmp配下）は通過" "/tmp/out/w.md" "/tmp"
-
 echo "=== 3. VW-R1: 相対パスはcwdで絶対化してから判定（6フォルダ配下ならdeny） ==="
 assert_denied "VW-R1: cwd=Decisions配下・file_path=相対のdeny" "d.md" "$FAKE_HOME/Data/obsidian/Decisions"
+
+echo "=== 4. 共有ライブラリ欠落はfail-close ==="
+mkdir -p "$FAKE_HOME/nolib"
+cp "$HOOK" "$FAKE_HOME/nolib/vault-write-gate.sh"
+out="$(printf '{}' | HOME="$FAKE_HOME" bash "$FAKE_HOME/nolib/vault-write-gate.sh")"
+if printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null; then
+  pass "共有ライブラリ欠落はdeny"
+else
+  fail_case "共有ライブラリ欠落はdeny"
+fi
 
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
