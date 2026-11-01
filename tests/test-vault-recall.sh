@@ -88,6 +88,20 @@ echo "=== 必読ノートを想起から除外する ==="
   rm -rf "$VAULT_DIR" "$(dirname "$LOG")"
 }
 
+echo "=== 短文は無出力でハートビートだけ記録する ==="
+{
+  VAULT_DIR="$(mktemp -d)"
+  LOG="$(mktemp -d)/vault-recall.tsv"
+
+  out="$(run_recall "$VAULT_DIR" "$LOG" "こんにちは")"
+  assert_eq "短文の標準出力は空" "" "$out"
+  assert_eq "同じセッションのハートビートが1行残る" "1" \
+    "$(awk -F '\t' 'NF == 3 && $2 == "sess-1" && $3 == "(heartbeat)" {n++} END {print n+0}' "$LOG")"
+  assert_eq "ログはハートビートの1行だけ" "1" "$(wc -l < "$LOG" | tr -d ' ')"
+
+  rm -rf "$VAULT_DIR" "$(dirname "$LOG")"
+}
+
 echo "=== 入力破損でもプロンプト処理を止めない ==="
 {
   VAULT_DIR="$(mktemp -d)"
