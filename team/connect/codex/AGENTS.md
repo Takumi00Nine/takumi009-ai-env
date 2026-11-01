@@ -6,9 +6,8 @@
 
 ## Workspace Folder Rules (Finalized 2026-10-30)
 
-- The workspace root is `~/Workspace`; its only direct subfolders are `Projects` and `Tools`.
-- Each project uses `~/Workspace/Projects/<slug>/` with `docs`, `work`, and `output` subfolders.
-- Start leaders and workers from `~/Workspace`. Claude: use `cct`.
+- The folder rules live in one place: `~/Data/obsidian/Preferences/file-placement.md`. Read it before placing new files. Do not copy its contents here.
+- Start leaders and workers from `~/Workspace`.
 
 ## Delegated-task tooling guard (Finalized 2026-06-22)
 
