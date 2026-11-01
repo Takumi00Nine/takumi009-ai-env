@@ -29,6 +29,7 @@ aliases:
 - **書かないもの**＝経緯・対話ログ・工程の出来事（Fragments）／判断の理由（Decisions）／ゴール像・受入条件（要件書）／アイデア台帳（Knowledge か Fragments に置いて④からリンク）／日付見出しの積み上げ。
 - **起票の手順**＝新規案件はリーダーが内容を確定し、自分で [[Preferences/project-note-sample]] を複製して埋める（[[Preferences/core-workflow]] §1「Projects ノートは宣言の前」）。既存ノートは一斉移行せず、触ったときに型へ直す。
 - **起動時**＝案件宣言した slug の Projects ノートをリーダーが最初に読む（運用ルール。フック化は再発時に判断）。
+- **書く時機**＝工程の節目に加え、本人の意図・決定・留意事項がまだ書かれていない状態で大きな読み込み・長い処理へ進む前と、要約が近いとき。続きの正本はこのノート＝要約・本人による新しいセッションの開始のどちらからでも続けられるようにする（中身の対応表＝[[Preferences/session-handoff]]「先に書く」）。
 
 - **Projects の frontmatter**: `status:` は4値のみ＝`active`/`paused`/`completed`/`closed`。**状態が動いたら `next:`（15文字以内）も更新**（cmux Dock「Project」枠の表示元。「Project の N 番」解決＝`~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-next-model.sh --list`。描画規則＝[[Decisions/2026-09-22-project-frame-focus-arrow-v7]]）。
 - **待ち（wait_until）**: 日時まで待つ案件は、Tasks 節の**待つ版（Dock の ▶ の版）の直下**に行頭から `- wait_until: YYYY-MM-DDTHH:MM`（ローカル時刻・`YYYY-MM-DD` 可＝その日の 00:00）を 1 行書く（`status: active` のまま。過ぎた値は次にその版を触るとき消す）。**▶ の版が無い案件（Tasks 節なし・全版完了・全版タスク 0 件）だけ** frontmatter `wait_until:` が効く。字下げ・版の範囲外・秒／タイムゾーン付き・暦に無い日は無効。描画規則＝[[Decisions/2026-09-21-project-wait-by-version-v6]]。
