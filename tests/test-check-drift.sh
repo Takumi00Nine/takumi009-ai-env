@@ -72,6 +72,7 @@ make_fake_repo() {
   # を読む＝正本は台帳1か所なので実物を複製する（stubは書かない）。
   cp "$REPO_ROOT/core/data/ledger.tsv" "$repo/core/data/ledger.tsv"
   cp "$REPO_ROOT/core/data/moves.tsv" "$repo/core/data/moves.tsv"
+  cp "$REPO_ROOT/core/data/codex-app-managed.sh" "$repo/core/data/codex-app-managed.sh"
   cp "$REPO_ROOT/core/assembly/ledger-tool.sh" "$repo/core/assembly/ledger-tool.sh"
   chmod +x "$repo/core/assembly/ledger-tool.sh"
   cp "$REPO_ROOT/core/executor/vault-paths.sh" "$repo/core/executor/vault-paths.sh"

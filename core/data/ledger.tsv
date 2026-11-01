@@ -107,6 +107,7 @@ part	core/assembly/settings.json	core	assembly	-	-	Claude Code の登録の雛�
 part	core/assembly/ledger-tool.sh	core	assembly	-	core.ledger	台帳ツール（検査＋照会）	-	-
 part	core/data/ledger.tsv	core	data	-	-	台帳（本ファイル）	-	-
 part	core/data/moves.tsv	core	data	-	-	移動表	-	-
+part	core/data/codex-app-managed.sh	core	data	-	-	Codex TOML のアプリ管理分類（生成・差分検査で共用）	-	-
 
 # ===== スイート（tests/test-*.sh・1 本 1 機能） =====
 suite	tests/test-backup-vault.sh	ai-brain	-	-	-	-	-	-

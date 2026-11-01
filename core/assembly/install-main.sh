@@ -316,7 +316,7 @@ link() {
 # generate_config_toml <source（実体の絶対パス）> <destination>
 # symlink ではなく「プレースホルダ置換した実ファイル」を配置する
 # （config.toml は plain TOML でシェル変数展開されないため）。
-# 共通値を展開し、機固有のフック状態を保持する。検査後に mktemp→mv で配置する。
+# 共通値を展開し、アプリ管理値・未知キーを保持する。検査後に mktemp→mv で配置する。
 generate_config_toml() {
   local src="$1" dest="$2" tmp
   [ -e "$src" ] || fail "リポジトリのファイルが見つかりません（checkout破損の可能性）: $src"
@@ -334,41 +334,65 @@ generate_config_toml() {
   # そのときに tmp が見えなくても set -u で落ちない形にする）。
   tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").aienv-tmp.XXXXXX")"
   trap 'rm -f "${tmp:-}"' RETURN
-  if ! python3 - "$src" "$dest" "$tmp" "$HOME" "$AIENV_AUTO_COMPACT_WINDOW" <<'PY'
-import json, pathlib, sys, tomllib
+  source "$DIR/core/data/codex-app-managed.sh"
+  local table_prefixes leaf_keys
+  table_prefixes="$(printf '%s\x1f' "${KNOWN_APP_MANAGED_TOML_TABLE_PREFIXES[@]}")"
+  leaf_keys="$(printf '%s\x1f' "${KNOWN_APP_MANAGED_TOML_LEAF_KEYS[@]}")"
+  if ! python3 - "$src" "$dest" "$tmp" "$HOME" "$AIENV_AUTO_COMPACT_WINDOW" "$table_prefixes" "$leaf_keys" <<'PY'
+import datetime, json, pathlib, sys, tomllib
 
-src, dest, tmp, home, window = sys.argv[1:]
+src, dest, tmp, home, window, prefixes, leaves = sys.argv[1:]
+table_prefixes = [p for p in prefixes.split(chr(0x1f)) if p]
+leaf_keys = set(k for k in leaves.split(chr(0x1f)) if k)
+
+def is_app_managed(path):
+    return (path.rsplit('.', 1)[-1] in leaf_keys or
+            any(path == p or path.startswith(p + '.') for p in table_prefixes))
+
+def merge(template, live, prefix=''):
+    result = dict(live)  # テンプレにも分類にも無いキーは既存を残す。
+    for key, value in template.items():
+        path = f'{prefix}.{key}' if prefix else key
+        if key in live and isinstance(value, dict) and isinstance(live[key], dict):
+            result[key] = merge(value, live[key], path)
+        elif key not in live or not is_app_managed(path):
+            result[key] = value
+    return result
+
+def toml_value(value):
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False).replace(chr(0x7f), '\\u007f')
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return '[' + ', '.join(toml_value(v) for v in value) + ']'
+    if isinstance(value, dict):
+        return '{' + ', '.join(toml_value(k) + ' = ' + toml_value(v)
+                               for k, v in value.items()) + '}'
+    raise ValueError('unsupported TOML value')
+
 try:
     text = pathlib.Path(src).read_text().replace('__AIENV_HOME__', home)
     text = text.replace('__AIENV_AUTO_COMPACT_WINDOW__', window)
-    tomllib.loads(text)
+    template = tomllib.loads(text)
     live_path = pathlib.Path(dest)
     if live_path.exists() or live_path.is_symlink():
         live = tomllib.loads(live_path.read_text())
-        state = live.get('hooks', {}).get('state', {})
-        if not isinstance(state, dict):
-            raise ValueError('invalid hooks.state')
-        # 機固有の状態は意味を変えずに保持する。信頼値を計算・更新しない。
-        def toml_value(value):
-            if isinstance(value, str):
-                return json.dumps(value, ensure_ascii=False)
-            if isinstance(value, bool):
-                return str(value).lower()
-            if isinstance(value, dict):
-                return '{' + ', '.join(json.dumps(k) + ' = ' + toml_value(v)
-                                       for k, v in value.items()) + '}'
-            raise ValueError('unsupported hooks.state value')
-        if state:
-            text += '\n[hooks.state]\n'
-            text += '\n'.join(json.dumps(k) + ' = ' + toml_value(v)
-                              for k, v in state.items()) + '\n'
+        merged = merge(template, live)
+        # インラインテーブルで任意の深さ・引用キーを標準ライブラリだけで書く。
+        text = '\n'.join(toml_value(k) + ' = ' + toml_value(v)
+                         for k, v in merged.items()) + '\n'
     tomllib.loads(text)
     pathlib.Path(tmp).write_text(text)
 except Exception:
-    sys.exit('config.toml generation failed: template or existing hooks.state is unreadable; existing config retained')
+    sys.exit('config.toml generation failed: template or existing config is unreadable; existing config retained')
 PY
   then
-    fail "config.toml の生成・フック状態の保持に失敗しました。既存設定を保持します: $dest"
+    fail "config.toml の生成・既存設定の保持に失敗しました。既存設定を保持します: $dest"
   fi
   mv "$tmp" "$dest"
   log "generated: $dest <- $src （__AIENV_HOME__ を $HOME へ置換）"
@@ -378,7 +402,7 @@ PY
 # claude/settings.json も config.toml と同じ理由（JSONはシェル変数展開されない・
 # symlinkだとClaude Code自身の `/model` 書込がリポジトリ側ファイルへ直接及んでしまう）
 # で symlink ではなく実ファイルとして生成する。config.toml は Python で共通値・
-# ホームを展開し、既存の hooks.state を保持して TOML を検査する。
+# ホームを展開し、既存のアプリ管理値・未知キーを保持して TOML を検査する。
 # settings.json は json module で model・effortLevel 等のキーへ直接代入する。
 # テンプレの __AIENV_MODEL__ 等は生成対象の目印として残し、check-drift.sh の
 # ①-2 は --render-settings-json の生成物と比較する。

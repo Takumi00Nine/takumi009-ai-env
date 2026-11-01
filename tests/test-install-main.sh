@@ -83,6 +83,14 @@ echo "=== 全フックと雛形を配置する ==="
 rc=0
 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "導入が正常終了する" 0 "$rc"
+assert_true "初回はプレースホルダ展開済みテンプレそのもの" "$(python3 - "$FAKE_HOME" "$REPO_ROOT" <<'PY'
+import json, pathlib, sys
+home, repo = map(pathlib.Path, sys.argv[1:])
+window = json.loads((repo/'core/assembly/settings.json').read_text())['env']['CLAUDE_CODE_AUTO_COMPACT_WINDOW']
+expected = (repo/'team/connect/codex/config.toml').read_text().replace('__AIENV_HOME__', str(home)).replace('__AIENV_AUTO_COMPACT_WINDOW__', str(int(window)))
+assert (home/'.codex/config.toml').read_text() == expected
+PY
+[ "$?" -eq 0 ] && echo 1 || echo 0)"
 assert_true "登録した全フックの実体が実行可能" "$(python3 - "$FAKE_HOME" <<'PY'
 import json,os,shlex,sys
 from pathlib import Path
@@ -110,6 +118,85 @@ assert_true "雛形は独立した実ファイルとして作る" "$([[ -f "$HOM
 before="$(shasum -a 256 "$FAKE_HOME/.config/takumi009-ai-env/profile.md")"
 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 assert_eq "既存プロファイルは上書きしない" "$before" "$(shasum -a 256 "$FAKE_HOME/.config/takumi009-ai-env/profile.md")"
+
+echo "=== Codex 設定の初回生成・再生成 ==="
+cat > "$FAKE_HOME/.codex/config.toml" <<'EOF'
+model = "old-model"
+model_reasoning_effort = "low"
+notify = ["app-notify", "turn-ended"]
+unknown_setting = { text = "引用\"と改行\n", count = 3, ratio = 1.5, enabled = true, day = 2026-11-01, items = [{ name = "one" }] }
+[plugins."unified-computer-use@openai-bundled"]
+enabled = true
+[plugins."computer-use@openai-bundled"]
+enabled = true
+[projects."/test/project"]
+trust_level = "trusted"
+[tui]
+counter = 7
+[marketplaces.local]
+last_updated = 2026-11-01T01:02:03Z
+[hooks.state."test-hook"]
+enabled = false
+[mcp_servers.node_repl]
+command = "/app/node_repl"
+env_vars = ["BROWSER_USE_TEST"]
+[mcp_servers.node_repl.env]
+BROWSER_USE_AVAILABLE_BACKENDS = "iab"
+BROWSER_USE_CODEX_APP_VERSION = "test-version"
+[features]
+hooks = false
+js_repl = true
+unknown_feature = "keep"
+[sandbox_workspace_write]
+network_access = false
+EOF
+cp "$FAKE_HOME/.codex/config.toml" "$WORK/config-before.toml"
+HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
+assert_true "アプリ値・未知キーを保持し、本人キーをテンプレ値に戻す" "$(python3 - "$FAKE_HOME" "$WORK/config-before.toml" "$REPO_ROOT" <<'PY'
+import json, pathlib, sys, tomllib
+home, before, repo = map(pathlib.Path, sys.argv[1:])
+live = tomllib.loads((home/'.codex/config.toml').read_text())
+old = tomllib.loads(before.read_text())
+for key in ('notify', 'unknown_setting', 'projects', 'tui', 'marketplaces', 'hooks'):
+    assert live[key] == old[key], key
+for key, value in old['plugins'].items():
+    assert live['plugins'][key] == value, key
+node = live['mcp_servers']['node_repl']
+for key in ('command', 'env_vars'):
+    assert node[key] == old['mcp_servers']['node_repl'][key], key
+for key, value in old['mcp_servers']['node_repl']['env'].items():
+    assert node['env'][key] == value, key
+# 既存に無いアプリ管理キーはテンプレから補う。
+assert node['startup_timeout_sec'] == 120
+assert node['env']['CODEX_HOME'] == str(home/'.codex')
+window = json.loads((repo/'core/assembly/settings.json').read_text())['env']['CLAUDE_CODE_AUTO_COMPACT_WINDOW']
+template = tomllib.loads((repo/'team/connect/codex/config.toml').read_text().replace('__AIENV_HOME__', str(home)).replace('__AIENV_AUTO_COMPACT_WINDOW__', window))
+for key in ('model', 'model_reasoning_effort', 'sandbox_workspace_write'):
+    assert live[key] == template[key], key
+assert live['features'] == dict(template['features'], unknown_feature='keep')
+PY
+[ "$?" -eq 0 ] && echo 1 || echo 0)"
+
+# 検査②を実際の check-drift で確認。外部照会・実 launchd はスタブへ向ける。
+mkdir -p "$WORK/bin"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/launchctl"
+printf '#!/bin/sh\necho PRIVATE\n' > "$WORK/bin/gh"
+chmod +x "$WORK/bin/launchctl" "$WORK/bin/gh"
+HOME="$FAKE_HOME" PATH="$WORK/bin:$PATH" bash "$REPO_ROOT/core/assembly/check-drift.sh" > "$WORK/drift.log" 2>&1
+assert_true "生成直後の check-drift ② は drift 0（未知キーは WARN）" "$(python3 - "$WORK/drift.log" <<'PY'
+import pathlib, sys
+section = pathlib.Path(sys.argv[1]).read_text().split('② ~/.codex/config.toml', 1)[1].split('③ repo', 1)[0]
+assert 'TOML三分類で一致しています' in section
+assert 'WARN: 未知キー' in section
+assert '[DIFF]' not in section and '[MISSING-KEY]' not in section and '[TOML-PARSE-FAILED]' not in section
+PY
+[ "$?" -eq 0 ] && echo 1 || echo 0)"
+
+printf 'model = [broken\n' > "$FAKE_HOME/.codex/config.toml"
+before="$(shasum -a 256 "$FAKE_HOME/.codex/config.toml")"
+rc=0
+HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1 || rc=$?
+assert_true "壊れた既存 TOML は導入失敗となり内容を保持する" "$([[ "$rc" -ne 0 && "$before" == "$(shasum -a 256 "$FAKE_HOME/.codex/config.toml")" ]] && echo 1 || echo 0)"
 
 echo "=== dry-run は配置しない ==="
 DRY_HOME="$WORK/dry-home"; mkdir -p "$DRY_HOME"
