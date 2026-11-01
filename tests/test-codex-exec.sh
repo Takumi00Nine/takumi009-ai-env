@@ -85,9 +85,11 @@ echo "=== 1. 基本呼び出し: 引数の組み立て・依頼文はstdin経由
   else
     fail_case "通常起動の引数・sandbox"
   fi
+  assert_eq "新規起動では必読指示と空行を依頼文の先頭に付ける" \
+    "着手前に $HOME/Data/obsidian/Preferences/absolute-rules.md と $HOME/Data/obsidian/Preferences/core-worker.md を全文読み、従う。"$'\n\n'"absolute-rules を読んでhello" \
+    "$(cat "$STDIN_LOG")"
   assert_true "依頼文はstdin・成果物はevents/stderr" \
-    "$([ "$(cat "$STDIN_LOG")" = "absolute-rules を読んでhello" ] \
-       && ! grep -q 'absolute-rules' "$LOG" \
+    "$(! grep -q 'absolute-rules' "$LOG" \
        && printf '%s\n' "$stdout_out" | grep -q '^THREAD_ID:' \
        && printf '%s\n' "$stdout_out" | grep -q '^OUT:' \
        && printf '%s\n' "$stdout_out" | grep -q '^EXIT:0$' \
@@ -136,8 +138,9 @@ echo "=== 3. --resume: 引数順（共通オプションの後ろ・resume -- <i
 
   assert_true "resumeはオプション終端後のIDとstdinを渡す" \
     "$([ "$rc" -eq 0 ] && [ "$last_line" = - ] && [ "$resume_id_line" = thread-xyz-123 ] \
-       && [ "$dashdash_line" = -- ] && [ "$resume_kw_line" = resume ] \
-       && [ "$(cat "$STDIN_LOG")" = "absolute-rules を読んで続きをやって" ] && echo 1 || echo 0)"
+       && [ "$dashdash_line" = -- ] && [ "$resume_kw_line" = resume ] && echo 1 || echo 0)"
+  assert_eq "--resume では必読指示を付けず依頼文をそのまま渡す" \
+    "absolute-rules を読んで続きをやって" "$(cat "$STDIN_LOG")"
 
   rm -rf "$WORK"
 }

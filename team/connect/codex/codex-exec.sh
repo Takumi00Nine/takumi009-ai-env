@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Codex 呼び出しの唯一の口（`codex exec` をラップする）。
+# 新規起動では外部脳の必読指示を付け、ワーカーの決まりを ~/.codex/AGENTS.md に
+# 書かずに読ませる。--resume は同じスレッドで読了済みのため付けない。
 #
 # 背景: Claude CodeからCodexを呼ぶ経路をMCPサーバー経由からこのexecラッパー
 # （CLI・背景実行）へ一本化した（2026-09-06 本人決定）。理由＝公式でCodexの
@@ -185,6 +187,10 @@ case "$PROMPT" in
     exit 2
     ;;
 esac
+
+if [ -z "$RESUME_ID" ]; then
+  PROMPT="着手前に $HOME/Data/obsidian/Preferences/absolute-rules.md と $HOME/Data/obsidian/Preferences/core-worker.md を全文読み、従う。"$'\n\n'"$PROMPT"
+fi
 
 command -v codex >/dev/null 2>&1 || fail_usage "codex コマンドが見つかりません（PATHを確認してください）"
 
