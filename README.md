@@ -37,7 +37,7 @@ takumi009-ai-env/
 ├── ai-brain/                   # Vault bootstrap, recall, read-log, write-gate, backup, weekly maintenance, public export
 │   ├── executor/               # vault-recall.sh, vault-read-log.sh, bootstrap-vault.sh (SessionStart contribution), backup-vault.sh,
 │   │                           # maintenance.sh / maintenance-kick.sh, export-public-vault.sh, fragments-reviewed.sh, health_judge.py,
-│   │                           # the vault-agents detectors (apply_aliases.py, fragments_log.py, maintenance_run_step.py, vault_inventory.py, vault_lib.py)
+│   │                           # the Vault detectors (fragments_log.py, maintenance_run_step.py, vault_inventory.py, vault_lib.py)
 │   ├── connect/
 │   │   └── claude-code/        # vault-write-gate.sh (Vault-write guard loaded into a worker's child settings)
 │   ├── assembly/                # install-backup.sh, install-maintenance.sh, the 2 LaunchAgent plists (backup-vault / maintenance)
@@ -362,8 +362,8 @@ takumi009-ai-env/
 ├── ai-brain/                   # Vault の読込・想起・読取記録・書込の柵・バックアップ・週次メンテ・公開出力
 │   ├── executor/               # vault-recall.sh・vault-read-log.sh・bootstrap-vault.sh（SessionStart 合成器への寄与）・
 │   │                           # backup-vault.sh・maintenance.sh／maintenance-kick.sh・export-public-vault.sh・
-│   │                           # fragments-reviewed.sh・health_judge.py・vault-agents の検出器群
-│   │                           # （apply_aliases.py・fragments_log.py・maintenance_run_step.py・vault_inventory.py・vault_lib.py）
+│   │                           # fragments-reviewed.sh・health_judge.py・Vault の検出器群
+│   │                           # （fragments_log.py・maintenance_run_step.py・vault_inventory.py・vault_lib.py）
 │   ├── connect/
 │   │   └── claude-code/        # vault-write-gate.sh（子向け Vault 保護柵）
 │   ├── assembly/                # install-backup.sh・install-maintenance.sh・LaunchAgent plist 2 本（backup-vault／maintenance）
@@ -418,7 +418,7 @@ takumi009-ai-env/
 `team/rules/agents/` およびこの環境のワークフローは、次の3つの役割語を軸に組み立てられています。
 
 - **リーダー（orchestrator）**: Claude・Codex のどちらでも担えるメインセッション。意思決定・ユーザー対話・工程全体の采配を行い、実装/調査/テストは自分でやらずワーカーへ委任します。
-- **ワーカー（worker）**: `team/rules/agents/` 配下の役割定義（1 ファイル＝1 職種。集合はディレクトリの中身そのもの＝現在は要件定義・設計・実装・検証・調査・運用・採用判定・記録）で起動されるサブエージェントです。
+- **ワーカー（worker）**: `team/rules/agents/` 配下の役割定義（1 ファイル＝1 職種。集合はディレクトリの中身そのもの＝現在は要件定義・設計・実装・検証・調査・運用・採用判定）で起動されるサブエージェントです。
 - **Codex**: リーダーにもワーカーにもなれます。検証役として起動する場合は `team/connect/codex/codex-exec.sh`（`codex exec` の Bash ラッパー）を使い、レビュースレッドの継続はラッパーの `--resume` で行います。ワーカー自身は起動せず、工程の成果物が完成したらリーダーが検証を開始し、ワーカーは指摘を修正します。
 
 ワーカーの起動の仕組みの詳細＝`team/connect/claude-code/claude-exec.sh` 冒頭のコメント。

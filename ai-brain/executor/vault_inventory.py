@@ -266,7 +266,7 @@ def parse_iso(ts):
 # `log_row "ERROR\t\t${SESSION_ID:-}\t$1[\t${LOG_LEVEL_INFO}]"` として書かれる
 # （log_error()はレベル列を省略・log_fact()だけ6列目に固定文字列"INFO"を付与する
 # ＝vault-recall.sh側コメント参照）。0-indexで添字5（6列目）がこのレベル列。
-# 旧scripts/vault-agents/recall_bench.py（2026-09-19退役）の同名定数と契約を
+# 旧recall_bench.py（2026-09-19退役）の同名定数と契約を
 # 揃えていた名残（2026-07-15追加）。
 LOG_LEVEL_COL = 5
 LOG_LEVEL_INFO_VALUE = "INFO"

@@ -24,7 +24,6 @@ part	ai-brain/executor/maintenance-kick.sh	ai-brain	executor	-	ai-brain.maintena
 part	ai-brain/executor/export-public-vault.sh	ai-brain	executor	-	ai-brain.export-public	公開スナップショットの出力	-	-
 part	ai-brain/executor/fragments-reviewed.sh	ai-brain	executor	-	ai-brain.fragments-reviewed	昇格の締め	-	-
 part	ai-brain/executor/personal-link-check.sh	ai-brain	executor	-	-	公開出力の共有 lib	-	-
-part	ai-brain/executor/apply_aliases.py	ai-brain	executor	-	-	検出器（alias 適用）	-	-
 part	ai-brain/executor/fragments_log.py	ai-brain	executor	-	-	検出器（Fragments 記録）	-	-
 part	ai-brain/executor/maintenance_run_step.py	ai-brain	executor	-	-	メンテの段の記録	-	-
 part	ai-brain/executor/vault_inventory.py	ai-brain	executor	-	-	検出器（棚卸し）	-	-
@@ -114,7 +113,6 @@ part	core/data/ledger.tsv	core	data	-	-	台帳（本ファイル）	-	-
 part	core/data/moves.tsv	core	data	-	-	移動表	-	-
 
 # ===== スイート（tests/test-*.sh・1 本 1 機能） =====
-suite	tests/test-apply-aliases.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-backup-vault.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-bootstrap-vault.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-core-docs-placeholder-schema.sh	ai-brain	-	-	-	-	-	-

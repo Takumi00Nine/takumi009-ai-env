@@ -32,7 +32,7 @@
 #
 # 環境変数（テスト用・既定はmaintenance.shと同じ値/同じ既定パス）:
 #   LAST_RUN_FILE         既定 $HOME/.claude/logs/maintenance/last-run.json
-#   FRAGMENTS_LOG_PY      既定 <このスクリプトの場所>/vault-agents/fragments_log.py
+#   FRAGMENTS_LOG_PY      既定 <このスクリプトの場所>/fragments_log.py
 #   TIMEOUT_FRAGMENTS_LOG 既定 90（秒）
 
 set -u

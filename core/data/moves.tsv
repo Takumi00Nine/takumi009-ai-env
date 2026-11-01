@@ -97,7 +97,6 @@ scripts/lib/usage-notify.sh	usage/executor/usage-notify.sh	移動	-
 scripts/lib/pid-lock.sh	core/executor/pid-lock.sh	移動	-
 scripts/lib/status-file.sh	core/executor/status-file.sh	移動	-
 scripts/lib/managed-symlink.sh	core/assembly/managed-symlink.sh	移動	-
-scripts/vault-agents/apply_aliases.py	ai-brain/executor/apply_aliases.py	移動	-
 scripts/vault-agents/fragments_log.py	ai-brain/executor/fragments_log.py	移動	-
 scripts/vault-agents/maintenance_run_step.py	ai-brain/executor/maintenance_run_step.py	移動	-
 scripts/vault-agents/vault_inventory.py	ai-brain/executor/vault_inventory.py	移動	-
@@ -128,7 +127,6 @@ tests/test-cmux-next-model.sh	tests/test-integration.sh	分割	-
 # --- 変更の無いスイート（旧＝新＝本人裁定 Q5 tests/ は残す） ---
 tests/test-agent-definitions.sh	tests/test-agent-definitions.sh	移動	-
 tests/test-agent-model-guard.sh	tests/test-agent-model-guard.sh	移動	-
-tests/test-apply-aliases.sh	tests/test-apply-aliases.sh	移動	-
 tests/test-audit.sh	tests/test-audit.sh	移動	-
 tests/test-backup-vault.sh	tests/test-backup-vault.sh	移動	-
 tests/test-bash-policy-gate.sh	tests/test-bash-policy-gate.sh	移動	-

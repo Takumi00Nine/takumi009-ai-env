@@ -380,8 +380,7 @@ else:
 }
 
 # $1=timeout $2=status_file $3=stdout_file $4=stderr_file -- $5..=cmd
-# maintenance_run_step.py経由でtimeout付き起動する共通ラッパ（設計書§1.2
-# 「各ステップはscripts/vault-agents/maintenance_run_step.py経由で起動」）。
+# maintenance_run_step.py経由でtimeout付き起動する共通ラッパ。
 run_wrapped_step() {
   local timeout="$1" status_file="$2" stdout_file="$3" stderr_file="$4"
   shift 4

@@ -11,16 +11,6 @@
     使っていた＝2026-07-15棚卸しレポートで指摘された構造。それらの利用側は
     2026-09-19までに退役済み）。本ファイルへ抽出し、vault_inventory.py 自身も
     含め全員がここを参照する側へ回る。
-  - apply_updated・write_note_atomic・require_generic_aliases・parse_tsv・
-    process_note・find_aliases_block・build_aliases_block・strip_quotes・
-    split_flow_list は ai-brain/executor/apply_aliases.py に定義されていた
-    alias一括適用ロジック。週次メンテの無人適用（2026-09-19退役）が
-    apply_updated/write_note_atomicを再利用するために先出しで共有化したのが
-    最初の動機だが、他の利用側（2026-09-19退役）も process_note/parse_tsv/
-    require_generic_aliases を必要としており、`import apply_aliases` を全廃する
-    ため alias 一括適用の再利用可能な純粋関数一式をここへ集約し、
-    apply_aliases.py自身はCLI（argparse・diff表示・ファイルI/O orchestration）
-    専業へ縮小した。現在の利用側＝vault_inventory.py・apply_aliases.py。
 
 方針: 本ファイルは「複数ファイルから使われる純粋な解析・書込ヘルパ」のみを置く。
 各CLIツール固有のビジネスロジック（棚卸しの各チェック項目・非破壊マージ判定 等）は
@@ -131,7 +121,7 @@ def load_generic_aliases(path):
     return words
 
 
-# --- ノート書込ヘルパ（旧 apply_aliases.py） -----------------------------------
+# --- ノート書込ヘルパ -----------------------------------
 # 「候補ID方式（旧 vault_inventory.py）」節にあった stable_fix_id() は、FIX機能
 # （棚卸しmissing_updatedの機械修正）が2026-07-18本人裁定で丸ごと削除された
 # ことに伴い不要になったため撤去した（[[Decisions/2026-07-18-external-brain-
@@ -218,7 +208,7 @@ def write_note_atomic(path, text):
         raise
 
 
-# --- alias一括適用ロジック（旧 apply_aliases.py） -------------------------------
+# --- alias一括適用ロジック -------------------------------
 
 # parse_frontmatter()が読める2形式（フロー配列・ブロックリスト）を書く/読む側でも
 # 同じ形式として扱う。
@@ -232,13 +222,7 @@ def require_generic_aliases(path):
     """load_generic_aliases(path)を呼び、欠落/空ならfail-closedでプロセスを
     終了する（exit 1）。
 
-    リストが欠落/空の状態は「汎用語チェックが安全に機能しない」ことを意味し、
-    load_generic_aliases()単体（空集合を返すだけの純粋関数）を直接呼ぶ全ての
-    呼び出し元（apply_aliases.py main()・recall_bench.py build_overlay_vault()
-    ―recall_bench.pyは2026-09-19退役・記述は歴史的経緯として残す。
-    どちらも独立した呼び出し元で重複実装するとfail-closedの抜け漏れが起きやすい
-    ため、ここへ集約する）が共通してこの関数を経由する契約にする。書き込み・
-    採点いずれの用途でも、チェックが機能しない状態のまま処理を続けない。
+    リストが欠落/空の状態は「汎用語チェックが安全に機能しない」ことを意味する。
     """
     path = pathlib.Path(path)
     if not path.exists():

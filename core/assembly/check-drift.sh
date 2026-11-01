@@ -33,7 +33,7 @@
 #      drift件数に乗らず、私的リポジトリの意図しない公開化を検知するはずの
 #      安全網自体が静かに無効化していても週次通知に出ない穴があった＝
 #      「監視不能も異常」として明示的に検知対象にする）。
-#   ⑥ vault-agents（maintenance.sh週次ランナー・weekly-review・想起/読取ログ
+#   ⑥ 外部脳（maintenance.sh週次ランナー・weekly-review・想起/読取ログ
 #      フック）の死活。「maintenance.shの最終開始(started_at)が古すぎる」
 #      「vault-reads.tsv/vault-recall.tsvの最終記録が古すぎる」のいずれかを
 #      検知する（2026-07-10 敵対的レビュー M-1/M-2 対応。3年ノーメンテ運用では
@@ -1135,7 +1135,7 @@ done
 
 echo
 echo "======================================================================"
-echo "⑥ vault-agents 死活チェック（maintenance.sh週次ランナー・weekly-review・reads/recallログ）"
+echo "⑥ 外部脳 死活チェック（maintenance.sh週次ランナー・weekly-review・reads/recallログ）"
 echo "======================================================================"
 
 # maintenance.sh（週次ランナー・com.takumi009.maintenance）と、
@@ -1176,7 +1176,7 @@ vault_agent_installed() {
   [ -f "${LAUNCH_AGENTS_DIR}/com.takumi009.$1.plist" ]
 }
 
-# vault-agents関連のシグナル（reads/recallログ2種＋maintenance/weekly-reviewの
+# 外部脳関連のシグナル（reads/recallログ2種＋maintenance/weekly-reviewの
 # LaunchAgent plist2種＋maintenanceのlast-run.json＝計5種）が1つも無ければ
 # 「一度も導入されていない」とみなしてセクション全体を対象外にする（旧実装は
 # vault-inventory/fragments-log/knowledge-merge-detectの出力ディレクトリ有無も
@@ -1205,7 +1205,7 @@ vault_agent_installed "weekly-review" && vault_agents_untouched=0
 if [ ! -d "$VAULT" ]; then
   log "  -> Vaultが見つかりません（${VAULT}）。このマシンに私的Vaultが無い（サブ機）想定ならチェック対象外"
 elif [ "$vault_agents_untouched" = "1" ]; then
-  log "  -> vault-agentsの出力（${MAINTENANCE_LAST_RUN_FILE}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）・maintenance/weekly-review plist（${LAUNCH_AGENTS_DIR}/com.takumi009.{maintenance,weekly-review}.plist）が1件も見つかりません。vault-agentsが一度も導入されていない想定ならチェック対象外"
+  log "  -> 外部脳の出力（${MAINTENANCE_LAST_RUN_FILE}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）・maintenance/weekly-review plist（${LAUNCH_AGENTS_DIR}/com.takumi009.{maintenance,weekly-review}.plist）が1件も見つかりません。外部脳が一度も導入されていない想定ならチェック対象外"
 else
   # epoch(秒)から現在までの経過日数を返す。未来のepoch（時計ズレ・ファイル破損）
   # では負値をそのまま返す＝呼び出し側で「未来日=異常」と判定できるようにする
