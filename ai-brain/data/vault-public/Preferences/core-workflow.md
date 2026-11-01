@@ -54,7 +54,7 @@ aliases:
 ## 3. 作る前の型
 - コードを書く必要が出たら、まず既存確認（`~/Workspace/Tools/` と Vault の Preferences・Knowledge）→ 三択（既存拡張／新規／使い捨て）を本人に提案。本人不在時のみ使い捨て暫定・帰還時に必ず報告。
 
-> ⚠️ 置き場は依頼のたびにリーダーが指定する。
+> ⚠️ 置き場は依頼のたびにリーダーが指定する。置き場の決まりの正本＝[[Preferences/file-placement]]（ほかの場所に中身を写さない）。
 > 文書成果物（要件書・設計書級）の既定の置き場＝メイン機ローカル `~/Workspace/Projects/<案件slug>/docs/`（他機へ配布しない）。案件を独立 private repo で管理するときはその repo の `docs/` でよい（ai-env の repo には入れない）。
 > 残す資料は3つだけ＝外部脳の案件ノート・`docs/` の4本（`requirements.md`・`requirements-notes.md`・`design.md`・`design-notes.md`＝版で増やさず書き直す）・`output/`（成果物そのもの）。調査・検証・テスト結果などの途中の資料は `work/` に置き、要点を案件ノートへ書いて締めで消す（[[Decisions/2026-11-01-doc-management]]）。
 ## 4. 記録（外部脳）
