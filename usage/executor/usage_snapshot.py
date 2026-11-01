@@ -902,7 +902,7 @@ def render_human(snapshot: dict, now: int) -> str:
     lines = []
     for pool in snapshot["pools"]:
         if pool["pool_ref"] == "unlimited":
-            lines.append("unlimited（Bedrock・ローカル）: 使用率なし")
+            lines.append("unlimited（ローカル）: 使用率なし")
         else:
             lines.append(_human_line_for_subscription(pool, now))
     return "\n".join(lines)

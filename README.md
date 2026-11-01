@@ -51,7 +51,7 @@ takumi009-ai-env/
 │   ├── executor/                 # profile_resolve.py (cast/model resolver)
 │   └── connect/
 │       ├── claude-code/          # claude-exec.sh, delegation-gate-v2.sh, inprocess-gate.sh, agent-model-guard.sh,
-│       │                         # codex-direct-call-gate.sh, role_candidates.py, guard_common.sh, bedrock.env.sample
+│       │                         # codex-direct-call-gate.sh, role_candidates.py, guard_common.sh
 │       └── codex/                # codex-exec.sh, AGENTS.md, hooks.json, config.toml template (generated)
 ├── usage/                        # Usage fetch, cache, injection into prompts
 │   ├── executor/                 # usage-fetch.sh, usage-source.sh, usage-inject.sh, usage-block.sh, usage_snapshot.py,
@@ -377,7 +377,7 @@ takumi009-ai-env/
 │   ├── executor/                 # profile_resolve.py（配役表・モデル定義の解決器）
 │   └── connect/
 │       ├── claude-code/          # claude-exec.sh・delegation-gate-v2.sh・inprocess-gate.sh・agent-model-guard.sh・
-│       │                         # codex-direct-call-gate.sh・role_candidates.py・guard_common.sh・bedrock.env.sample
+│       │                         # codex-direct-call-gate.sh・role_candidates.py・guard_common.sh
 │       └── codex/                # codex-exec.sh・AGENTS.md・hooks.json・config.toml テンプレ（生成）
 ├── usage/                        # 使用率の取得・保存・発言への注入
 │   ├── executor/                 # usage-fetch.sh・usage-source.sh・usage-inject.sh・usage-block.sh・usage_snapshot.py・

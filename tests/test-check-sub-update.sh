@@ -81,14 +81,11 @@ EOF
 
 # フックを実行し、標準出力(additionalContext抽出済み)を返す。$2はローカル実体
 # プロファイルのパス（無ければ「解決失敗」＝メイン機扱いのfail-closed経路）。
-# AIENV_BEDROCK_ENV_FILEは実行機のホームを参照させないようWORK配下の
-# 実在しないパスへ固定する（テストのhermeticity）。
 run_hook() {
   local dir="$1" profile="$2" log="$3" timeout_secs="${4:-5}" stdin_json="${5:-\{\}}"
   printf '%s' "$stdin_json" \
     | CHECK_SUB_UPDATE_DIR="$dir" AIENV_LOCAL_PROFILE_PATH="$profile" \
       AIENV_MODEL_DEFS_FILE="$(dirname "$profile")/models.conf" \
-      AIENV_BEDROCK_ENV_FILE="$(dirname "$log")/nonexistent-bedrock.env" \
       CHECK_SUB_UPDATE_LOG="$log" CHECK_SUB_UPDATE_TIMEOUT="$timeout_secs" "$SCRIPT"
 }
 

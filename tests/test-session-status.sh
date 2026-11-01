@@ -32,15 +32,6 @@ assert_contains() {
   fi
 }
 
-assert_not_contains() {
-  local desc="$1" haystack="$2" needle="$3"
-  if [[ "$haystack" != *"$needle"* ]]; then
-    pass "$desc"
-  else
-    fail_case "$desc (含まれてはいけないのに含まれる: \"$needle\")"
-  fi
-}
-
 SHARED_MODELS_CONF="$STATUS_HOME/models.conf"
 cat > "$SHARED_MODELS_CONF" <<'EOF'
 [t-opus-high]
@@ -51,18 +42,6 @@ effort=high
 [t-sonnet-high]
 provider=anthropic-api
 model=claude-sonnet-5-5
-
-[bedrock-opus]
-provider=bedrock
-model=opus
-
-[bedrock-haiku]
-provider=bedrock
-model=haiku
-
-[bedrock-sonnet]
-provider=bedrock
-model=sonnet
 
 [codex-review]
 provider=external
@@ -156,12 +135,8 @@ PROFILE_LIB="$REPO_ROOT/team/executor/profile_resolve.py"
 AGENTS_DIR="$REPO_ROOT/team/rules/agents"
 
 resolve_v2() {
-  local path="$1" bedrock_env="${2:-/nonexistent-dir/bedrock.env}" agents_dir="${3:-$AGENTS_DIR}"
-  python3 "$PROFILE_LIB" resolve "$path" --bedrock-env "$bedrock_env" --agents-dir "$agents_dir"
-}
-resolve_leader_v2() {
-  local path="$1" bedrock_env="${2:-/nonexistent-dir/bedrock.env}" agents_dir="${3:-$AGENTS_DIR}"
-  python3 "$PROFILE_LIB" resolve-leader "$path" --bedrock-env "$bedrock_env" --agents-dir "$agents_dir"
+  local path="$1" agents_dir="${2:-$AGENTS_DIR}"
+  python3 "$PROFILE_LIB" resolve "$path" --agents-dir "$agents_dir"
 }
 
 V2_BASE='---
@@ -188,70 +163,6 @@ echo "=== 外部providerのリーダーは拒否する ==="
     "role.leader: configured model=codex-review"
   out="$(resolve_v2 "$EXT_LEADER")"  || true
   assert_contains "leaderのprovider=externalはfailになる" "$out" "MINIMAL"
-}
-echo "=== ワーカーの利用可能候補と空席の判定 ==="
-{
-  MULTI_CAND="$(mktemp -d)/workermulticand.md"
-  make_v2_profile "$MULTI_CAND" \
-    "role.leader: configured model=t-opus-high" \
-    "role.verifier: configured model=bedrock-haiku,t-sonnet-high"
-  # bedrock.envを与えない(ABSENT=disabled)のでverifierの1件目(bedrock)はV9-dで使用不可・
-  # 2件目(t-sonnet-high)は使用可。
-  out="$(resolve_v2 "$MULTI_CAND")"  || true
-  assert_not_contains "1件目が使用不可でも2件目が使えれば空席にならない" "$out" "VACANT:verifier"
-  assert_contains "resolve自体はOKのまま" "$out" "OK"
-
-  echo "--- 全候補が使用不可のときだけVACANT+VACANT_REASON、優先順はV1-b→V9-d→V12 ---"
-  BOTH_BAD="$(mktemp -d)/bothbad.md"
-  make_v2_profile "$BOTH_BAD" \
-    "role.leader: configured model=t-opus-high" \
-    "role.verifier: configured model=bedrock-haiku,bedrock-opus"
-  out="$(resolve_v2 "$BOTH_BAD")"  || true
-  assert_contains "全候補がbedrockで経路無効なら空席になる" "$out" "VACANT:verifier"
-  assert_contains "空席理由の条件番号が出る(V9-d)" "$out" "VACANT_REASON:verifier=V9-d"
-}
-echo "=== 成功時にピン実値と認証情報を漏らさない ==="
-{
-  PIN_ENV="$(mktemp -d)/bedrock.env"
-  cat > "$PIN_ENV" <<'EOF'
-CLAUDE_CODE_USE_BEDROCK=1
-ANTHROPIC_DEFAULT_OPUS_MODEL=us.anthropic.claude-opus-supersecret-arn
-AWS_ACCESS_KEY_ID=AKIA_SHOULD_NEVER_LEAK
-EOF
-  SECRET_PROFILE="$(mktemp -d)/secretprofile.md"
-  make_v2_profile "$SECRET_PROFILE" \
-    "role.leader: configured model=bedrock-opus"
-  out="$(resolve_v2 "$SECRET_PROFILE" "$PIN_ENV")"  || true
-  assert_not_contains "resolve出力にピン実値(ARN)が現れない" "$out" "supersecret-arn"
-  assert_not_contains "resolve出力にAWSキーが現れない" "$out" "AKIA_SHOULD_NEVER_LEAK"
-
-  json="$(resolve_leader_v2 "$SECRET_PROFILE" "$PIN_ENV")"  || true
-  assert_not_contains "resolve-leader出力にもピン実値(ARN)が現れない" "$json" "supersecret-arn"
-  assert_not_contains "resolve-leader出力にもAWSキーが現れない" "$json" "AKIA_SHOULD_NEVER_LEAK"
-  assert_contains "resolve-leaderはmodelとして別名(opus)だけを返す" "$json" '"model": "opus"'
-}
-echo "=== 失敗時もピン実値と認証情報を漏らさない ==="
-{
-  PIN_ENV2="$(mktemp -d)/bedrock.env"
-  cat > "$PIN_ENV2" <<'EOF'
-CLAUDE_CODE_USE_BEDROCK=1
-ANTHROPIC_DEFAULT_OPUS_MODEL=us.anthropic.claude-opus-supersecret-arn-2
-AWS_SECRET_ACCESS_KEY=SHOULD_NEVER_LEAK_2
-EOF
-  # Codex二次レビュー指摘・Major対応: --model opusはピン(ANTHROPIC_DEFAULT_
-  # OPUS_MODEL)が満たされているためcheck-candidateはOK(成功)を返し、失敗経路の
-  # 秘匿を検査したことにならなかった。ピンが無いhaikuを使いFAIL経路を通す。
-  cc_out="$(python3 "$PROFILE_LIB" check-candidate --provider bedrock --model haiku \
-    --role-name leader --for-leader --bedrock-env "$PIN_ENV2" --agents-dir "$AGENTS_DIR" 2>&1)"  || true
-  assert_contains "check-candidateが実際にFAILを返している（テストの前提確認）" "$cc_out" "FAIL"
-  assert_not_contains "check-candidate出力にピン実値が現れない" "$cc_out" "supersecret-arn-2"
-  assert_not_contains "check-candidate出力にAWSキーが現れない" "$cc_out" "SHOULD_NEVER_LEAK_2"
-
-  LEADER_FAIL_ENV="$(mktemp -d)/leaderfailenv.md"
-  make_v2_profile "$LEADER_FAIL_ENV" "role.leader: configured model=bedrock-sonnet"
-  leader_err="$(python3 "$PROFILE_LIB" resolve-leader "$LEADER_FAIL_ENV" --bedrock-env "$PIN_ENV2" --agents-dir "$AGENTS_DIR" 2>&1 1>/dev/null)"  || true
-  assert_not_contains "resolve-leaderのstderrにもピン実値が現れない" "$leader_err" "supersecret-arn-2"
-  assert_not_contains "resolve-leaderのstderrにもAWSキーが現れない" "$leader_err" "SHOULD_NEVER_LEAK_2"
 }
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="

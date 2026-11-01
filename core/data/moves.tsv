@@ -64,7 +64,6 @@ codex/hooks.json	team/connect/codex/hooks.json	移動	-
 # --- 設定雛形（config/） ---
 config/profile.md.sample	team/data/profile.md.sample	移動	-
 config/models.conf.sample	team/data/models.conf.sample	移動	-
-config/bedrock.env.sample	team/connect/claude-code/bedrock.env.sample	移動	-
 
 # --- LaunchAgent 定義（launchagents/） ---
 launchagents/com.takumi009.backup-vault.plist	ai-brain/assembly/com.takumi009.backup-vault.plist	移動	-
@@ -80,7 +79,6 @@ scripts/fragments-reviewed.sh	ai-brain/executor/fragments-reviewed.sh	移動	-
 scripts/install-backup.sh	ai-brain/assembly/install-backup.sh	移動	-
 scripts/install-maintenance.sh	ai-brain/assembly/install-maintenance.sh	移動	-
 scripts/claude-exec.sh	team/connect/claude-code/claude-exec.sh	移動	-
-scripts/experiments/worker-provider-probe.sh	team/connect/claude-code/worker-provider-probe.sh	移動	-
 scripts/codex-exec.sh	team/connect/codex/codex-exec.sh	移動	-
 scripts/usage-fetch.sh	usage/executor/usage-fetch.sh	移動	撤去
 scripts/install-usage-fetch.sh	usage/assembly/install-usage-fetch.sh	移動	-

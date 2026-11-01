@@ -488,8 +488,7 @@ echo "======================================================================"
 #   入力口＝core/assembly/install-main.sh --render-settings-json <path> の1つだけ
 #   （旧 --print-* 系の値出力口と項目別比較は退役）。
 #   生成側と本番installは同じ生成関数・同じ環境変数の既定値
-#   （AIENV_LOCAL_PROFILE_PATH・AIENV_MODEL_DEFS_FILE・AIENV_BEDROCK_ENV_FILE・
-#   AIENV_AGENTS_DIR）を読むため、ここで揃える処理は持たない（本スクリプトは
+#   （AIENV_LOCAL_PROFILE_PATH・AIENV_MODEL_DEFS_FILE・AIENV_AGENTS_DIR）を読むため、ここで揃える処理は持たない（本スクリプトは
 #   それらを上書きしない）。
 #   判定＝両側から既知アプリ管理キー（下記）をトップレベル完全一致で除いたうえで
 #   sort_keysで正規化し、差分のあるトップレベルキー名だけを1件1行で出す
@@ -1799,42 +1798,16 @@ print('UNKNOWN_EXTRA' + chr(9) + unknown_extra)
     item_drift "[PROFILE-VALIDATION-FAILED] --check-profile はexit 0でしたが、既知の応答形式（OK行）と一致しない出力でした＝監視不能。詳細: ${CHECK_PROFILE_FIRST_LINE:-空}"
   else
     check_profile_drift_before=$TOTAL_DRIFT
-    check_profile_had_info=0
     if [ -n "$CP_ADVISORY" ]; then
-      # advisory のうち V1-a・V9-f・T4系（T4・T4-PRIME）・JUDGEMENT_UNKNOWN を
-      # driftとして週次通知に出す（残課題台帳#3・本人裁定2026-09-01）。
-      # ⚠️ プロファイル契約（profile-resolve-contract-2026-09-01.md §3）が
-      # ADVISORY:に列挙しうる6コードのうち、監視不能系（版が仮想補完された
-      # T4／このマシンのコードが古い可能性があるT4-PRIME／Bedrock経路・pin
-      # 留めの判定不能だが通したJUDGEMENT_UNKNOWN）は「監視できていない」
-      # こと自体が異常であり、V1-a・V9-fと同様にdrift計上へ拡張する。一方
-      # EFFORT_COMPATIBILITY_UNVERIFIED（別名等でmodel実体を判別できない
-      # ためのeffort適合警告）だけは恒常的に成立しうるノイズのため、本人裁定
-      # により引き続きINFO表示に留めdriftへは数えない。⚠️ 契約が列挙する6
-      # コードのいずれとも一致しない未知コードはEFFORT_COMPATIBILITY_
-      # UNVERIFIEDと同列のINFOへは丸めず、PROFILE-ADVISORY-UNKNOWNとして
-      # drift計上する（Codex一次レビュー指摘・Major対応: 6コード限定の契約に
-      # 対する不一致自体が監視不能だから）。
       IFS=',' read -ra cp_advisory_items <<< "$CP_ADVISORY"
       for cp_item in "${cp_advisory_items[@]}"; do
         [ -z "$cp_item" ] && continue
         case "$cp_item" in
-          V1-a|V9-f|T4|T4-PRIME|JUDGEMENT_UNKNOWN)
+          V1-a|V9-f|T4|T4-PRIME)
             item_drift "[PROFILE-ADVISORY:${cp_item}] ローカル実体プロファイルにadvisory該当があります（条件番号: ${cp_item}）。詳細は install-main.sh --check-profile の出力を確認してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
             ;;
-          EFFORT_COMPATIBILITY_UNVERIFIED)
-            check_profile_had_info=1
-            log "  -> ℹ️ INFO: advisory該当があります（条件番号: ${cp_item}）。恒常ノイズ回避のためdriftには数えません（本人裁定2026-09-01）"
-            ;;
           *)
-            # ⚠️ プロファイル契約（§3）がADVISORY:に列挙する6コードのいずれとも
-            # 一致しない未知コード（将来の追加漏れ・contract側との版ずれ等の
-            # 可能性）は、無条件でINFOへ丸めない（Codex一次レビュー指摘・Major
-            # 対応: 従来は`*)`が唯一INFO扱いのデフォルト分岐であり、契約の
-            # 6コード以外＝本来はresolverとの契約不一致であるものまで
-            # 「恒常ノイズ」として静かに見逃していた）。監視不能として
-            # drift計上する。
-            item_drift "[PROFILE-ADVISORY-UNKNOWN:${cp_item}] ローカル実体プロファイルに未知のadvisory条件番号があります（条件番号: ${cp_item}）。プロファイル契約（profile-resolve-contract-2026-09-01.md §3）の6コードのいずれとも一致しません＝resolverとの契約不一致の可能性があり監視不能です: $AIENV_LOCAL_PROFILE_PATH_HINT"
+            item_drift "[PROFILE-ADVISORY-UNKNOWN:${cp_item}] ローカル実体プロファイルに未知のadvisory条件番号があります（条件番号: ${cp_item}）。既知のコードのいずれとも一致しません＝resolverとの契約不一致の可能性があり監視不能です: $AIENV_LOCAL_PROFILE_PATH_HINT"
             ;;
         esac
       done
@@ -1846,14 +1819,7 @@ print('UNKNOWN_EXTRA' + chr(9) + unknown_extra)
       item_drift "[PROFILE-AI-UNREADABLE] ローカル実体プロファイルに未知キーがあり、AI側は必読から除外されています（キー名: ${CP_UNKNOWN_EXTRA}）。機械側の解決値は有効なままですが、AIはこのプロファイルを読めていません。対処: core/assembly/update-sub.sh でコードを追随させるか、未知キーを削除してください: $AIENV_LOCAL_PROFILE_PATH_HINT"
     fi
     if [ "$TOTAL_DRIFT" -eq "$check_profile_drift_before" ]; then
-      if [ "$check_profile_had_info" = "1" ]; then
-        # 2026-09-01 Codex二次レビュー指摘・Minor対応: 対象外advisory
-        # （INFO表示）が出ているのに「何も検出されなかった」と言うのは
-        # 自己矛盾。driftが0件であることだけを言う。
-        log "  -> ✅ --check-profile は正常終了しました（drift対象のadvisory・未知キーは検出されませんでした。対象外advisoryは上記INFO参照）"
-      else
-        log "  -> ✅ --check-profile は正常終了し、advisory・未知キーも検出されませんでした"
-      fi
+      log "  -> ✅ --check-profile は正常終了し、advisory・未知キーも検出されませんでした"
     fi
   fi
 fi

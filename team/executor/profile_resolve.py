@@ -13,8 +13,7 @@ install-main.sh から `python3 <このファイル> <subcommand> ...` として
 （ただしテストの都合上 import しても壊れないようにトップレベル副作用は
 `if __name__ == "__main__"` の中に閉じる）。
 
-⚠️ 秘匿方針（絶対厳守③）: bedrock.env のうち読むのは「許可された特定キーの
-存在・非空」だけ。値そのものをstdout/stderrへ書かない。role行が
+⚠️ 秘匿方針（絶対厳守③）: role行が
 参照する定義（モデル定義ファイル側）のmodel=/provider=の値は resolve() の
 出力へ再掲しない（配役の値をDIRECTIVEへ再掲しない＝4.1-f。resolve-leader
 だけは settings.json 生成用に値を返す＝これは元々installerが書く値であり、
@@ -39,7 +38,6 @@ import hashlib
 import json
 import os
 import re
-import stat
 import sys
 from typing import Optional
 
@@ -87,7 +85,7 @@ PROFILE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 ROLE_STATES = frozenset({"configured", "unavailable", "not_adopted", "unknown"})
 CAPABILITY_STATES = frozenset({"configured", "unavailable", "unknown"})
-PROVIDERS = frozenset({"anthropic-api", "bedrock", "bedrock-mantle", "external"})
+PROVIDERS = frozenset({"anthropic-api", "external"})
 EXECUTIONS = frozenset({"subagent", "external-cli", "external-api"})
 # 2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.1・FR-8）: role
 # 行が持てる属性は`model`（定義名のカンマ列挙＝候補）だけになった。
@@ -113,11 +111,8 @@ SENTINEL = "<fill-in>"
 # provider毎のmodel正規表現（適合表§3.3）。[1m]は許容するが判定時は除去する。
 MODEL_PATTERNS = {
     "anthropic-api": re.compile(r"^claude-[a-z0-9.-]+(\[1m\])?$"),
-    "bedrock": re.compile(r"^[a-z0-9]+(\[1m\])?$"),
-    "bedrock-mantle": re.compile(r"^anthropic\.[a-z0-9.-]+$"),
     "external": re.compile(r"^[a-z0-9._-]+$"),
 }
-BEDROCK_DISALLOWED_MODEL_PREFIXES = ("us.", "eu.", "global.", "arn:")
 
 # V9-d① 実装済みハンドラの写像（execution!=subagentのものだけを列挙する。
 # subagent実行は経路そのものがTask toolのspawnであり写像は不要＝常に①を満たす）。
@@ -166,18 +161,6 @@ AGENT_MODEL_ALIASES = {
     "claude-sonnet-5-5": "sonnet",
     "claude-haiku-5-5": "haiku",
 }
-
-# Bedrockピン留め論理名の導出（§1-3・§6.1）。人はこの名前を書けない
-# （role.*が参照する定義のproviderがbedrockのとき、その定義のmodelは
-# 別名しか持てないためbedrock_pin_*は常にコードが導出する側）。
-BEDROCK_PIN_ENV_VAR = {
-    "opus": "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "haiku": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "fable": "ANTHROPIC_DEFAULT_FABLE_MODEL",
-}
-
-BEDROCK_ENABLE_KEY = "CLAUDE_CODE_USE_BEDROCK"
 
 # V15: 禁止キー名ガード。大小問わず部分一致で判定する。値は一切読まない
 # （キー名だけを見る＝§3.1の文法上、値に秘密が入っていても検出できない
@@ -690,8 +673,6 @@ def validate_model_def(d: ModelDef) -> None:
     pattern = MODEL_PATTERNS[d.provider]
     if not pattern.match(d.model):
         raise ProfileError("T12", f"{d.lineno}行目: model形式が不正です（{d.name}）")
-    if d.provider == "bedrock" and d.model.startswith(BEDROCK_DISALLOWED_MODEL_PREFIXES):
-        raise ProfileError("T12", f"{d.lineno}行目: modelが別名ではありません（{d.name}）")
 
     execution = d.execution or "subagent"
     if execution not in EXECUTIONS:
@@ -862,95 +843,6 @@ def role_definition_exists(name: str, execution: str, agents_dir: Optional[str])
 
 
 # ============================================================
-# Bedrock関連（V9-d③・V12）
-# ============================================================
-
-
-def bedrock_env_file_kind(path: Optional[str]) -> str:
-    if not path:
-        return "ABSENT"
-    try:
-        st = os.lstat(path)
-    except FileNotFoundError:
-        return "ABSENT"
-    except OSError:
-        return "UNAVAILABLE"
-    if stat.S_ISLNK(st.st_mode):
-        try:
-            st = os.stat(path)
-        except OSError:
-            return "UNAVAILABLE"
-    return "OK" if stat.S_ISREG(st.st_mode) else "UNAVAILABLE"
-
-
-def _read_bedrock_env_wanted(path: str, wanted_keys: set[str]) -> Optional[dict[str, str]]:
-    """wanted_keysに含まれるキーだけを読む。それ以外のキー（AWS認証情報等）は
-    一切保持しない（絶対厳守③）。読めない場合はNone。
-    ⚠️ tester独立検証・Major差し戻し対応（2026-09-01）: bedrock.envに不正な
-    UTF-8バイト列が含まれると、for行での読取中にUnicodeDecodeError（OSErrorの
-    派生ではない）が送出され、従来はここで捕まらず未処理例外として
-    resolve/check-candidate/resolve-leaderへ伝播していた（--check-profileでは
-    生tracebackがstdoutへ流れ§4契約違反、bootstrap経由では2>/dev/nullで
-    吸収されるが全職種が一律T10へ丸められ、§3.7「判定不能はワーカーなら
-    通す」より広い縮退になっていた）。既存の「読めない＝None」経路
-    （呼び出し側のbedrock_route_enabled/bedrock_pin_satisfiedがUNAVAILABLE/
-    unknownとして扱う）へ合流させる。"""
-    result: dict[str, str] = {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k = k.strip()
-                if k in wanted_keys:
-                    result[k] = v.strip()
-    except (OSError, UnicodeDecodeError):
-        return None
-    return result
-
-
-def bedrock_route_enabled(bedrock_env: Optional[str]) -> str:
-    """V9-d③。戻り値: 'enabled' | 'disabled' | 'unknown'（§3.7の判定不能）。"""
-    kind = bedrock_env_file_kind(bedrock_env)
-    if kind == "ABSENT":
-        return "disabled"
-    if kind == "UNAVAILABLE":
-        return "unknown"
-    values = _read_bedrock_env_wanted(bedrock_env, {BEDROCK_ENABLE_KEY})
-    if values is None:
-        return "unknown"
-    v = values.get(BEDROCK_ENABLE_KEY, "").strip().lower()
-    return "enabled" if v in ("1", "true") else "disabled"
-
-
-def bedrock_pin_env_var(alias: str) -> Optional[str]:
-    alias = re.sub(r"\[1m\]$", "", alias)
-    return BEDROCK_PIN_ENV_VAR.get(alias)
-
-
-def bedrock_pin_satisfied(provider: str, model: str, bedrock_env: Optional[str]) -> str:
-    """V12。戻り値: 'satisfied' | 'missing' | 'unknown'。providerがbedrock以外は
-    'satisfied'（対象外）を返す。"""
-    if provider != "bedrock":
-        return "satisfied"
-    var = bedrock_pin_env_var(model)
-    if var is None:
-        return "missing"  # 別名がそもそも認識できない＝ピンの導出先が無い
-    kind = bedrock_env_file_kind(bedrock_env)
-    if kind == "ABSENT":
-        return "missing"
-    if kind == "UNAVAILABLE":
-        return "unknown"
-    values = _read_bedrock_env_wanted(bedrock_env, {var})
-    if values is None:
-        return "unknown"
-    val = values.get(var, "")
-    return "satisfied" if val.strip() != "" else "missing"
-
-
-# ============================================================
 # check-candidate（§8注記の共有関数。CLIエントリはmain()側）
 # ============================================================
 
@@ -969,11 +861,10 @@ def check_candidate(
     execution: Optional[str],
     for_leader: bool,
     role_name: Optional[str],
-    bedrock_env: Optional[str],
     agents_dir: Optional[str],
 ) -> None:
     """1組の(provider, model, effort)を検査する。違反はCandidateFailを送出する。
-    role_nameが指定されたときだけV1-b/V9-d③/V12まで評価する
+    role_nameが指定されたときだけV1-bを評価する
     （契約書§5の評価順どおり）。
     2026-09-08 モデル定義ファイルと候補指定対応: role行がもう
     provider/execution/effortを持たない（validate_role_line_formatの意味が
@@ -996,8 +887,6 @@ def check_candidate(
     pattern = MODEL_PATTERNS[provider]
     if not pattern.match(model):
         raise CandidateFail("V9-b", f"role.{label}のmodel形式が不正です")
-    if provider == "bedrock" and model.startswith(BEDROCK_DISALLOWED_MODEL_PREFIXES):
-        raise CandidateFail("V9-b", f"role.{label}のmodelが別名ではありません")
 
     if effort is not None:
         if provider == "external":
@@ -1029,16 +918,7 @@ def check_candidate(
     if role_name is not None:
         if not role_definition_exists(role_name, execution, agents_dir):
             raise CandidateFail("V1-b", f"{role_name}の定義ファイルがありません")
-        route = bedrock_route_enabled(bedrock_env) if provider in ("bedrock", "bedrock-mantle") else "enabled"
-        if provider in ("bedrock", "bedrock-mantle") and route == "disabled":
-            raise CandidateFail("V9-d3", "Bedrock経路が有効になっていません")
-        if provider in ("bedrock", "bedrock-mantle") and route == "unknown":
-            raise CandidateFail("V9-d3-UNKNOWN", "Bedrock経路の有効性を判定できません")
-        pin = bedrock_pin_satisfied(provider, model, bedrock_env)
-        if pin == "missing":
-            raise CandidateFail("V12", "Bedrockのピン留めが記入されていません")
-        if pin == "unknown":
-            raise CandidateFail("V12-UNKNOWN", "ピン留めの充足を判定できません")
+
 
 
 # ============================================================
@@ -1053,63 +933,6 @@ class Candidacy:
         self.usable: Optional[RoleLine] = None  # 採用された行
         self.vacant = False
         self.vacant_reason: Optional[str] = None  # 条件番号
-        self.unknown_note: Optional[str] = None  # §3.7 判定不能（leader以外は通す）
-
-
-class Candidate:
-    """1候補（配役表の1行×解決済みModelDef 1つ）を表す軽量ビュー。
-    2026-09-08 モデル定義ファイルと候補指定対応: role行が複数候補を
-    持てるようになったため、_evaluate_single_candidate()等の既存関数
-    （RoleLine.attrsの{provider,model,execution,[effort]}形状を期待する）を
-    そのまま再利用できるよう、1候補ぶんだけこの形へ写す。
-    """
-
-    __slots__ = ("name", "def_name", "attrs")
-
-    def __init__(self, role_name: str, d: "ModelDef"):
-        self.name = role_name  # role_definition_exists()が引く職種名
-        self.def_name = d.name
-        self.attrs = {"provider": d.provider, "model": d.model, "execution": d.execution}
-        if d.effort is not None:
-            self.attrs["effort"] = d.effort
-
-
-def _evaluate_single_candidate(
-    line, agents_dir: Optional[str], bedrock_env: Optional[str], is_leader: bool
-) -> tuple[bool, Optional[str], Optional[str]]:
-    """1本の候補（Candidate。provider/model確定済み）を§3.6の3条件で評価する。
-    戻り値: (使用可か, 縮退理由の条件番号(最初に確定したもの), 判定不能メモ)
-    優先順: V1-b -> V9-d3(Bedrock有効性) -> V12(ピン留め)
-    """
-    execution = line.attrs.get("execution", "subagent")
-    if not role_definition_exists(line.name, execution, agents_dir):
-        return False, "V1-b", None
-
-    provider = line.attrs["provider"]
-    model = line.attrs["model"]
-    if provider in ("bedrock", "bedrock-mantle"):
-        route = bedrock_route_enabled(bedrock_env)
-        if route == "disabled":
-            return False, "V9-d", None
-        if route == "unknown":
-            if is_leader:
-                return False, "V9-d", "leaderはBedrock経路の判定不能でfail扱いです"
-            return True, None, "Bedrock経路の有効性を判定できません（判定不能・通します）"
-
-    pin = bedrock_pin_satisfied(provider, model, bedrock_env)
-    if pin == "missing":
-        return False, "V12", None
-    if pin == "unknown":
-        if is_leader:
-            return False, "V12", "leaderはピン留め充足の判定不能でfail扱いです"
-        return True, None, "ピン留め充足を判定できません（判定不能・通します）"
-
-    return True, None, None
-
-
-# §3.6優先順（V1-b→V9-d→V12）。1行の複数候補がすべて使用不可のとき、
-# どの候補の理由を採るかをこの優先順で決める。
-_REASON_PRIORITY = {"V1-b": 0, "V9-d": 1, "V12": 2}
 
 
 def evaluate_worker_candidate(
@@ -1117,7 +940,6 @@ def evaluate_worker_candidate(
     roles: dict,
     resolved: dict,
     agents_dir,
-    bedrock_env,
 ) -> Candidacy:
     """§3.3(a)。2026-09-08 モデル定義ファイルと候補指定対応: 1行が複数候補を
     持てるようになったため「1行1候補」から「1行n候補」へ広げる。役割の行
@@ -1128,31 +950,22 @@ def evaluate_worker_candidate(
     """
     result = Candidacy()
     primary = roles.get(name)
-    reasons: list[str] = []
 
     if primary is not None and primary.state == "configured":
         for d in resolved.get(name, []):
-            ok, reason, note = _evaluate_single_candidate(
-                Candidate(name, d), agents_dir, bedrock_env, False
-            )
-            if ok:
+            if role_definition_exists(name, d.execution, agents_dir):
                 result.usable = primary
-                result.unknown_note = note
                 return result
-            if reason is not None:
-                reasons.append(reason)
+            result.vacant_reason = "V1-b"
     # ⚠️ primary.state == "unavailable" は§3.6のとおり評価しない
     # （「意図的な不使用」であって縮退理由ではない）。
 
     result.vacant = True
-    if reasons:
-        reasons.sort(key=lambda r: _REASON_PRIORITY.get(r, 99))
-        result.vacant_reason = reasons[0]
     return result
 
 
 def resolve_leader_candidate(
-    parsed: ParsedProfile, resolved: dict, agents_dir, bedrock_env
+    parsed: ParsedProfile, resolved: dict, agents_dir
 ) -> tuple[Optional[RoleLine], Optional["ModelDef"], Optional[str]]:
     """§3.5-L・FR-16。2026-09-08 モデル定義ファイルと候補指定対応:
     リーダー行の<u>先頭の候補だけ</u>を解決・評価する（settings.jsonが値を
@@ -1179,11 +992,8 @@ def resolve_leader_candidate(
         if not candidates:
             return None, "V1-b"  # 防御的（V8-aが非空を既に保証している）
         head = candidates[0]
-        ok, reason, _note = _evaluate_single_candidate(
-            Candidate(role_name, head), agents_dir, bedrock_env, True
-        )
-        if not ok:
-            return None, reason
+        if not role_definition_exists(role_name, head.execution, agents_dir):
+            return None, "V1-b"
         extra = _leader_extra_checks(head)
         if extra is not None:
             return None, extra
@@ -1208,16 +1018,13 @@ KNOWN_NO_XHIGH_ANTHROPIC = frozenset({"claude-opus-4.6", "claude-sonnet-4.6"})
 
 def model_effort_advisory(provider: str, model: str, effort: Optional[str]) -> Optional[str]:
     """V9-f（advisory・failにしない）。既知の非対応モデル×xhighの組み合わせだけを
-    条件番号V9-fとして警告する。別名（bedrockのopus/sonnet/haiku/fable）は実モデルの
-    版を判別できないため EFFORT_COMPATIBILITY_UNVERIFIED を返す。
+    条件番号V9-fとして警告する。
     """
     if effort != "xhigh":
         return None
     base = re.sub(r"\[1m\]$", "", model)
     if provider == "anthropic-api" and base in KNOWN_NO_XHIGH_ANTHROPIC:
         return "V9-f"
-    if provider == "bedrock":
-        return "EFFORT_COMPATIBILITY_UNVERIFIED"
     return None
 
 
@@ -1264,7 +1071,7 @@ def determine_machine_role(parsed: ParsedProfile) -> str:
     return "unknown"
 
 
-def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str]) -> tuple[str, int]:
+def do_resolve(path: str, agents_dir: Optional[str]) -> tuple[str, int]:
     """戻り値: (標準出力へ書く1行, exit code)。"""
     forbidden_hits = preflight_forbidden_keys(path)
     if forbidden_hits:
@@ -1293,7 +1100,7 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
 
     # §3.5-L リーダー確定（先頭候補のみ・FR-16）
     leader_line, leader_def, leader_fail_code = resolve_leader_candidate(
-        parsed, resolved, agents_dir, bedrock_env
+        parsed, resolved, agents_dir
     )
     if leader_line is None:
         return f"MINIMAL\tT8\tV4: {leader_fail_code}", 1
@@ -1314,14 +1121,9 @@ def do_resolve(path: str, bedrock_env: Optional[str], agents_dir: Optional[str])
             vacant_unknown_roles.append(name)
             continue
         cand = evaluate_worker_candidate(
-            name, parsed.roles, resolved, agents_dir, bedrock_env
+            name, parsed.roles, resolved, agents_dir
         )
-        if cand.usable is not None:
-            if cand.unknown_note:
-                # §3.7: 判定不能でも通したワーカーは、通したこと自体を
-                # ADVISORYとして黙って捨てない（Codex一次レビュー指摘・Major）。
-                advisory_codes.append("JUDGEMENT_UNKNOWN")
-        elif cand.vacant:
+        if cand.vacant:
             vacant_roles.append(name)
             if cand.vacant_reason:
                 vacant_reason_pairs.append(f"{name}={cand.vacant_reason}")
@@ -1415,7 +1217,7 @@ def _load_and_validate_v2_self_contained(
     return parsed, model_defs, resolved, declared, None
 
 
-def do_resolve_leader(path: str, bedrock_env: Optional[str], agents_dir: Optional[str]) -> tuple[Optional[dict], Optional[tuple[str, str]]]:
+def do_resolve_leader(path: str, agents_dir: Optional[str]) -> tuple[Optional[dict], Optional[tuple[str, str]]]:
     """戻り値: (成功時のJSON辞書 or None, (機械可読コード, 短い理由) or None)。
     契約書§4のとおり自己完結（存在確認・symlink拒否・preflight・parse・
     validateまでこのコマンド自身が行う）。出力の形（JSONのキー集合）は
@@ -1426,7 +1228,7 @@ def do_resolve_leader(path: str, bedrock_env: Optional[str], agents_dir: Optiona
         return None, err
 
     leader_line, leader_def, leader_fail_code = resolve_leader_candidate(
-        parsed, resolved, agents_dir, bedrock_env
+        parsed, resolved, agents_dir
     )
     if leader_def is None:
         return None, (leader_fail_code or "LEADER_UNCONFIGURED", "リーダー配役を確定できません")
@@ -1439,11 +1241,8 @@ def do_resolve_leader(path: str, bedrock_env: Optional[str], agents_dir: Optiona
 
 def do_list_roles(path: str) -> tuple[Optional[list[tuple]], Optional[tuple[str, str]]]:
     """`list-roles`本体。⚠️ AI向けDIRECTIVEには絶対に流用しない
-    （resolve()の「配役の値を再掲しない」秘匿方針の唯一の例外＝Bの
-    `--check-profile`・4.2-dの動的Bedrock許可リスト計算専用。リーダー裁定
-    2026-09-01でこの例外を承認）。ピン留めの実値（bedrock.env側）は一切
-    扱わない——role行にはBedrockの別名（opus/sonnet等）しか
-    書けないため、値を再掲してもピン実値の秘匿設計とは矛盾しない。
+    （resolve()の「配役の値を再掲しない」秘匿方針の例外＝Bの
+    `--check-profile`用）。
     2026-09-08 モデル定義ファイルと候補指定対応（FR-17）: 1候補1行・7列
     （name,state,定義名,provider,model,execution,effort）。候補の起動可否・
     Agent別名変換は行わない。
@@ -1498,7 +1297,6 @@ def _evaluate_selected_candidate(
     role_line: "RoleLine",
     selected: "ModelDef",
     agents_dir: Optional[str],
-    bedrock_env: Optional[str],
 ) -> tuple[Optional["ModelDef"], Optional[tuple[str, str]]]:
     """1つの候補（selectedはrole_lineの候補一覧に含まれること前提）を
     §3.6の規則で評価する。`resolve-candidate`・`list-candidates`の2口が
@@ -1513,17 +1311,14 @@ def _evaluate_selected_candidate(
             f"role={role_name} def={selected.name} provider={selected.provider}",
         )
     if role_line.state == "configured":
-        ok, reason, _note = _evaluate_single_candidate(
-            Candidate(role_name, selected), agents_dir, bedrock_env, False
-        )
-        if ok:
+        if role_definition_exists(role_name, selected.execution, agents_dir):
             if selected.execution == "subagent" and selected.model not in AGENT_MODEL_ALIASES:
                 return None, (
                     "AGENT_MODEL_UNSUPPORTED",
                     f"role={role_name} def={selected.name} model={selected.model}",
                 )
             return selected, None
-        return None, (f"CANDIDATE_UNUSABLE:{reason}", "候補が使用不可です")
+        return None, ("CANDIDATE_UNUSABLE:V1-b", "候補が使用不可です")
 
     # role_line.state == "unavailable"：§3.6のとおり本命は評価せず
     # （意図的な不使用であって縮退理由ではない）。
@@ -1531,7 +1326,7 @@ def _evaluate_selected_candidate(
 
 
 def do_resolve_candidate(
-    path: str, role: str, model_def_name: Optional[str], bedrock_env: Optional[str], agents_dir: Optional[str]
+    path: str, role: str, model_def_name: Optional[str], agents_dir: Optional[str]
 ) -> tuple[Optional["ModelDef"], Optional[tuple[str, str]]]:
     """`resolve-candidate`本体（新設・候補指定の口＝C。同設計§3.6）。
     戻り値: (実効ModelDef or None, (機械可読コード, 短い理由) or None)。
@@ -1567,7 +1362,7 @@ def do_resolve_candidate(
         return None, ("CANDIDATE_NOT_IN_LIST", f"{model_def_name}はrole.{role}の候補にありません")
 
     selected = next(d for d in candidates_of_role if d.name == model_def_name)
-    return _evaluate_selected_candidate(role, role_line, selected, agents_dir, bedrock_env)
+    return _evaluate_selected_candidate(role, role_line, selected, agents_dir)
 
 
 def _profile_revision(path: str) -> Optional[str]:
@@ -1629,7 +1424,7 @@ def do_check_inprocess(path: str, subagent_type: str) -> dict:
 
 
 def do_list_candidates(
-    path: str, bedrock_env: Optional[str], agents_dir: Optional[str]
+    path: str, agents_dir: Optional[str]
 ) -> tuple[Optional[list[tuple]], Optional[tuple[str, str]]]:
     """`list-candidates`本体（新設・設計-v1.2.md §4.2・要件v1.2.1 FR-14〜24の
     列挙元）。候補一覧コマンドが subprocess で1回だけ
@@ -1654,7 +1449,7 @@ def do_list_candidates(
             rows.append((name, line.state, "", "", "", ""))
             continue
         for d in resolved.get(name, []):
-            selected, cand_err = _evaluate_selected_candidate(name, line, d, agents_dir, bedrock_env)
+            selected, cand_err = _evaluate_selected_candidate(name, line, d, agents_dir)
             if selected is not None:
                 verdict = "OK"
                 pass_value = _candidate_pass_value(selected)
@@ -1683,12 +1478,10 @@ def main(argv: list[str]) -> int:
 
     p_resolve = sub.add_parser("resolve")
     p_resolve.add_argument("path")
-    p_resolve.add_argument("--bedrock-env")
     p_resolve.add_argument("--agents-dir")
 
     p_resolve_leader = sub.add_parser("resolve-leader")
     p_resolve_leader.add_argument("path")
-    p_resolve_leader.add_argument("--bedrock-env")
     p_resolve_leader.add_argument("--agents-dir")
 
     p_list_roles = sub.add_parser("list-roles")
@@ -1699,13 +1492,11 @@ def main(argv: list[str]) -> int:
     p_resolve_candidate.add_argument("path")
     p_resolve_candidate.add_argument("--role", required=True)
     p_resolve_candidate.add_argument("--model-def")
-    p_resolve_candidate.add_argument("--bedrock-env")
     p_resolve_candidate.add_argument("--agents-dir")
 
     # list-candidates（新設・設計-v1.2.md §4.2・要件v1.2.1 FR-14〜24の列挙元）。
     p_list_candidates = sub.add_parser("list-candidates")
     p_list_candidates.add_argument("path")
-    p_list_candidates.add_argument("--bedrock-env")
     p_list_candidates.add_argument("--agents-dir")
 
     # check-candidate: --model-defを受け付ける（--provider/--model/--effort/
@@ -1719,7 +1510,6 @@ def main(argv: list[str]) -> int:
     p_check.add_argument("--execution")
     p_check.add_argument("--for-leader", action="store_true")
     p_check.add_argument("--role-name")
-    p_check.add_argument("--bedrock-env")
     p_check.add_argument("--agents-dir")
 
     # check-inprocess（新設・ラッパー起動-設計-v1.1.1.md §4.1・要件FR-22）。
@@ -1732,9 +1522,6 @@ def main(argv: list[str]) -> int:
 
     sub.add_parser("known-keys")
 
-    p_pin = sub.add_parser("bedrock-pin-var")
-    p_pin.add_argument("alias")
-
     args = parser.parse_args(argv)
 
     if args.cmd == "preflight":
@@ -1746,12 +1533,12 @@ def main(argv: list[str]) -> int:
         return 0
 
     if args.cmd == "resolve":
-        line, code = do_resolve(args.path, args.bedrock_env, args.agents_dir)
+        line, code = do_resolve(args.path, args.agents_dir)
         _print_out(line)
         return code
 
     if args.cmd == "resolve-leader":
-        result, err = do_resolve_leader(args.path, args.bedrock_env, args.agents_dir)
+        result, err = do_resolve_leader(args.path, args.agents_dir)
         if err is not None:
             code, reason = err
             sys.stderr.write(f"{code}\t{reason}\n")
@@ -1771,7 +1558,7 @@ def main(argv: list[str]) -> int:
 
     if args.cmd == "resolve-candidate":
         selected, err = do_resolve_candidate(
-            args.path, args.role, args.model_def, args.bedrock_env, args.agents_dir
+            args.path, args.role, args.model_def, args.agents_dir
         )
         if err is not None:
             code, reason = err
@@ -1796,7 +1583,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     if args.cmd == "list-candidates":
-        rows, err = do_list_candidates(args.path, args.bedrock_env, args.agents_dir)
+        rows, err = do_list_candidates(args.path, args.agents_dir)
         if err is not None:
             code, reason = err
             sys.stderr.write(f"{code}\t{reason}\n")
@@ -1841,7 +1628,6 @@ def main(argv: list[str]) -> int:
                 execution,
                 args.for_leader,
                 args.role_name,
-                args.bedrock_env,
                 args.agents_dir,
             )
         except CandidateFail as e:
@@ -1863,13 +1649,6 @@ def main(argv: list[str]) -> int:
         _print_out("FIXED:" + ",".join(FIXED_KEYS_ORDERED))
         _print_out("PREFIXES:" + ",".join(DYNAMIC_PREFIXES))
         _print_out(f"SCHEMA_VERSION:{EXPECTED_SCHEMA_VERSION}")
-        return 0
-
-    if args.cmd == "bedrock-pin-var":
-        var = bedrock_pin_env_var(args.alias)
-        if var is None:
-            return 1
-        _print_out(var)
         return 0
 
     return 2

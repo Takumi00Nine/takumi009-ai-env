@@ -50,8 +50,8 @@
 #
 # --render-settings-json <path>（2026-09-19 着手順3・設計 §3.5）: check-drift ①-2
 # の唯一の入力口。雛形配置・symlink化・config.toml生成・dotfiles には一切進まず、
-# resolver→動的Bedrock許可キー→generate_settings_json() を <path> を dest に
-# して1回だけ実行して exit する。読むものは実 profile／models.conf／bedrock.env
+# resolver→generate_settings_json() を <path> を dest に
+# して1回だけ実行して exit する。読むものは実 profile／models.conf
 # だけ（インストール本番と同じ環境変数の既定値を同じように読む＝揃える処理は
 # 不要）。resolver 失敗・テンプレ欠落・python3 不在は非0で終了し stdout へは
 # 何も出さない。
@@ -75,8 +75,8 @@
 #
 # Role definitions (moved from README "About vault-public/" 2026-09-19, verbatim; paths updated for the v1.1 component split 2026-10-03): Role definitions (`~/.claude/agents/<role>.md`, one per role under `team/rules/agents/*.md` in the repo) are symlinks straight into the repo, like the other symlinked destinations above — there is no per-role frontmatter generation.
 #
-# *.sample (moved from README "Main environment" 2026-09-19; paths updated for the v1.1 component split 2026-10-03): `team/data/*.sample` and `team/connect/claude-code/bedrock.env.sample` are the source for these three local config files' real values. `team/data/profile.md.sample` and `team/data/models.conf.sample` ship with the real values used on the maintainer's main machine, so a fresh main machine can copy them as-is; a sub machine should copy them too and then edit at least `machine_role` (and, if it plays a different leader role, `role.leader`).
-# `team/connect/claude-code/bedrock.env.sample` (→ `~/.config/takumi009-ai-env/bedrock.env`, permission 0600) is only for machines that actually use Bedrock — don't place it on a subscription-only machine; there is no auto-copy for it, you always copy it yourself. `team/data/models.conf.sample` likewise has no auto-copy — copy it yourself.
+# *.sample (moved from README "Main environment" 2026-09-19; paths updated for the v1.1 component split 2026-10-03): `team/data/*.sample` are the source for these two local config files' real values. `team/data/profile.md.sample` and `team/data/models.conf.sample` ship with the real values used on the maintainer's main machine, so a fresh main machine can copy them as-is; a sub machine should copy them too and then edit at least `machine_role` (and, if it plays a different leader role, `role.leader`).
+# `team/data/models.conf.sample` has no auto-copy — copy it yourself.
 # `team/data/profile.md.sample` is different: if `~/.config/takumi009-ai-env/profile.md` doesn't exist yet, `install-main.sh` automatically copies `team/data/profile.md.sample` there for you the first time it runs (an existing skeleton-placement step from before these `*.sample` files existed; it never overwrites a profile that's already there). Copying it yourself beforehand has the same effect — either way you end up with this machine's real values, not a placeholder.
 #
 # 注意: インストール系スクリプトはユーザーが内容を確認したうえで実行する（自動実行しない）。
@@ -102,210 +102,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # 手でコピーして作ること。実体が無いときだけ後述の
 # 「雛形配置」ブロックが同サンプルをコピーする＝既存は上書きしない）。
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
-# Bedrock最小セット: ピン留めの実値（推論プロファイルID・リージョン・
-# CLAUDE_CODE_USE_BEDROCK等）の正本となるマシンローカルenvファイル。AWSの
-# 認証情報そのもの（AWS_ACCESS_KEY_ID等）はここに置かない（専用の資格情報
-# 機構のまま）。存在しない（Bedrock未導入機）場合は何もしない。
-: "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
 # 共有lib（team/executor/profile_resolve.py）とコア職種マニフェスト
 # （team/rules/agents/）の場所。session-start-compose.sh（旧ライブ名
 # bootstrap-vault.sh）と同じ「自身の実体パスから同梱libを解決する」方式。
 : "${AIENV_PROFILE_RESOLVE_LIB:=$DIR/team/executor/profile_resolve.py}"
 : "${AIENV_AGENTS_DIR:=$DIR/team/rules/agents}"
-# Bedrock env ファイルから settings.json の "env" ブロックへ取り込んでよい
-# キーの許可リスト（2026-08-25 Codex一次レビュー指摘・Major対応: 当初は
-# テンプレと衝突しないキーを無条件で取り込んでいたため、誤ってAWS認証情報
-# （AWS_ACCESS_KEY_ID等）を書いてしまうと settings.json 経由で複製・露出する
-# 穴があった）。許可するのは「どのモデルを指すか」の値だけで、AWSへの
-# 認証情報は対象外（専用の資格情報機構のまま＝絶対厳守③）。
-# ⚠️ この配列を唯一の値表とする——check-drift.sh は自前でこの一覧を複製せず、
-# check-drift ①-2 は `--render-settings-json` の生成物と diff する
-# （2026-08-30 工程横断レビュー指摘・MAJOR-5対応。§9.0 A-0-1の
-# 「値出力口の一本化」と同じ設計思想の横展開＝値表を3箇所に増やさない）。
-# 2026-09-01 配役表解凍 §4.2-d 改訂: 固定で許可するのは以下2キーだけへ縮小。
-# 旧版はANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU_MODELも無条件固定で許可していたが、
-# それらは「プロファイルのrole.*が参照する定義名の実効providerが
-# bedrockで、実際にその別名を使っているときだけ」動的に許可する側へ移した
-# （compute_allowed_bedrock_env_keys()参照。2026-09-08モデル定義ファイルと
-# 候補指定対応でproviderは役割の行自身ではなくモデル定義ファイル側の属性に
-# なった＝list-rolesの解決結果を見る）。名前だけ許可リストのパターンに合う
-# 任意キーへ秘密値を入れる穴を、人がピン留めの論理名を書けない設計と
-# 組み合わせて塞ぐ（迂回もできない）。
-AIENV_ALLOWED_BEDROCK_ENV_KEYS=(
-  "CLAUDE_CODE_USE_BEDROCK"
-  "AWS_REGION"
-)
-
-# compute_allowed_bedrock_env_keys — 固定2キー＋動的キーの和集合を1行1キーで
-# 標準出力へ書く（2026-09-01 §4.2-d）。動的キー＝ローカル実体プロファイルの
-# role.*の候補が参照するモデル定義（configured/unavailableの
-# どちらも意図を残す設計＝V8-aに合わせ両方見る）のうちproviderがbedrockの
-# ものがあれば、その model 別名を共有libのlist-rolesサブコマンドへ渡して
-# bedrock_pin_<別名>のenvキー名を導出したものの重複排除。list-rolesは
-# 自己完結（存在確認・symlink拒否・preflight・全validatorをlib側が内部で
-# 行う契約＝担当A確定）。
-#
-# 戻り値の契約（2026-09-01 Codex差分レビュー・MAJOR対応で明確化）:
-#   exit 0: 成功。動的キー0件（プロファイルが無い＝PROFILE_NOT_FOUND）は
-#           「Bedrock役職を使っていない」ことの正しい表現であり失敗ではない。
-#   exit 1: 算出そのものに失敗（mktemp失敗・実体がv2として妥当なのに
-#           list-rolesが予期せず失敗・bedrock-pin-varの解決失敗）。標準出力
-#           へは何も書かず、標準エラーへ理由を1行書く。「算出不能」と
-#           「Bedrock役職が存在しない」を呼び出し側が区別できるようにする
-#           （--print-bedrock-env-jsonがupdate-sub.sh/check-drift.shの唯一の
-#           値出力口である以上、動的pinが欠けた不完全な集合をexit 0で返さない）。
-compute_allowed_bedrock_env_keys() {
-  local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB"
-  local fixed=("CLAUDE_CODE_USE_BEDROCK" "AWS_REGION")
-  local dynamic=() alias var
-
-  if [ -f "$lib" ]; then
-    # ⚠️ list-rolesの終了コードをprocess substitution経由のwhileループでは
-    # 直接拾えない。一時ファイルへ出力してから終了コードを明示的に確認する。
-    local rows_tmp rows_rc=0 rows_err
-    rows_tmp="$(mktemp 2>/dev/null)" || {
-      printf 'BEDROCK_KEYS_COMPUTE_ERROR\t一時ファイルを作成できません\n' >&2
-      return 1
-    }
-    rows_err="$(python3 "$lib" list-roles "$path" 2>&1 1>"$rows_tmp")" || rows_rc=$?
-    if [ "$rows_rc" -eq 0 ]; then
-      while IFS= read -r alias; do
-        [ -z "$alias" ] && continue
-        if ! var="$(python3 "$lib" bedrock-pin-var "$alias" 2>/dev/null)"; then
-          rm -f "$rows_tmp"
-          printf 'BEDROCK_KEYS_COMPUTE_ERROR\tbedrock-pin-varが失敗しました\n' >&2
-          return 1
-        fi
-        [ -z "$var" ] && continue
-        dynamic+=("$var")
-      done < <(awk -F'\t' '($2=="configured"||$2=="unavailable") && $4=="bedrock" {print $5}' "$rows_tmp" | sort -u)
-    else
-      case "$rows_err" in
-        PROFILE_NOT_FOUND*)
-          # 実体なしはBedrock役職の入力元(role.*行)自体が無い正常な状態。
-          # 動的キー0件が正しい結果であり失敗ではない。
-          :
-          ;;
-        *)
-          # PROFILE_INVALID:*（旧版=T4-LEGACYを含む）・PROFILE_UNREADABLE等＝
-          # 実体はあるがv2として妥当でない、または想定外の失敗。「算出不能」を
-          # 「Bedrock役職なし」と区別するため非0で返す。
-          rm -f "$rows_tmp"
-          printf 'BEDROCK_KEYS_COMPUTE_ERROR\t%s\n' "${rows_err%%$'\n'*}" >&2
-          return 1
-          ;;
-      esac
-    fi
-    rm -f "$rows_tmp"
-  fi
-
-  local seen=" " out=() k
-  # ⚠️ bash 3.2（macOS既定）は空配列を`"${arr[@]}"`で展開すると`set -u`下で
-  # unbound variableになる（bash 4.4+では修正済みの既知の相違）。
-  # `"${arr[@]:-}"`（scripts/lib/pid-lock.shの`_PID_LOCK_ACQUIRED_FILES`と
-  # 同じ回避策）で空配列でも安全に展開する。
-  for k in "${fixed[@]:-}" "${dynamic[@]:-}"; do
-    [ -z "$k" ] && continue
-    case "$seen" in *" $k "*) continue ;; esac
-    seen="$seen$k "
-    out+=("$k")
-  done
-  printf '%s\n' "${out[@]:-}"
-  return 0
-}
-
-# bedrock_env_file_kind <path> — Bedrock envファイルの種別を1行で標準出力へ
-# 印字する: ABSENT（本当に存在しない＝ENOENT）／UNAVAILABLE（通常ファイル以外
-# ＝ディレクトリ・dangling symlink・親ディレクトリの探索権限不足等でlstat自体
-# が失敗する場合を含む）／OK（読める可能性のある通常ファイル）。
-# ⚠️ シェルの `[ -e ]`/`[ -L ]` だけに頼らずPythonの例外種別で判定する
-# （2026-08-30 Codex四次レビュー指摘・MAJOR対応: `[ -e path ]`は親ディレクトリの
-# 探索権限が無いだけでも偽になり、「本当に存在しない」場合と区別できない。
-# これを呼び出し側がABSENTと誤認すると、実際には存在する設定ファイルを
-# 空payloadで上書きしてしまう。os.lstat()でFileNotFoundError〈ENOENT〉のみを
-# ABSENTとし、それ以外の全OSError〈権限不足等〉はUNAVAILABLE側へ安全側に倒す）。
-bedrock_env_file_kind() {
-  python3 -c "
-import os, stat, sys
-path = sys.argv[1]
-try:
-    st = os.lstat(path)
-except FileNotFoundError:
-    print('ABSENT')
-    sys.exit(0)
-except OSError:
-    print('UNAVAILABLE')
-    sys.exit(0)
-if stat.S_ISLNK(st.st_mode):
-    try:
-        st = os.stat(path)
-    except OSError:
-        print('UNAVAILABLE')
-        sys.exit(0)
-print('OK' if stat.S_ISREG(st.st_mode) else 'UNAVAILABLE')
-" "$1"
-}
-
-# compute_bedrock_env_json [bedrock-env-file] — Bedrock envファイルを解析し、
-# 構造化されたJSONオブジェクトを標準出力へ1行で書く:
-#   {"env": {"CLAUDE_CODE_USE_BEDROCK": "1", ...},
-#    "rejected_keys": ["AWS_ACCESS_KEY_ID", ...],
-#    "malformed_lines": ["3", ...]}
-# `env`＝上記許可リストに載っているキーだけの値。`rejected_keys`＝ファイルには
-# あったが許可リスト外だったキー名（値は含まない＝絶対厳守③）。
-# `malformed_lines`＝`KEY=VALUE`として解析できなかった行番号。
-# ⚠️ これがBedrock envファイルの**唯一の解析経路**である（2026-08-30
-# 工程横断レビュー指摘・MAJOR-A対応: 従来はinstall-main.shのgenerate_
-# settings_json()とupdate-sub.shがそれぞれ独自にファイルを読み・許可リストで
-# filterする処理を複製しており、値表こそ共有していたが解析ロジック自体が
-# 2箇所に分岐していた。以後は両方ともこの関数（またはこの関数を呼ぶ
-# --print-bedrock-env-json）の出力だけを使い、生ファイルを直接readしない）。
-# ⚠️ 「ファイルが存在しない」（正常＝Bedrock未導入機）場合だけ
-# {"env": {}, "rejected_keys": [], "malformed_lines": []}をexit 0で返す。
-# ファイルが存在するのに読めない・解析に失敗した場合はfail-openで空扱いに
-# せず非0終了する（2026-08-30 Codex二次レビュー指摘・Major対応: 従来は
-# `|| echo '{}'`で読取失敗等のあらゆる異常を「Bedrock未導入」と同じ扱いに
-# してしまい、check-drift.sh側が「監視できていないのに一致」と誤判定する
-# 経路になっていた）。パーミッションの矯正（chmod 600）はここでは行わない
-# （読み取り専用の判定。矯正は呼び出し側＝generate_settings_json()・
-# update-sub.shの責務のまま）。
-compute_bedrock_env_json() {
-  local bedrock_env_file="${1:-}" allowed_joined
-  allowed_joined="$(printf '%s\x1f' "${AIENV_ALLOWED_BEDROCK_ENV_KEYS[@]}")"
-  # bedrock_env_file_kind()での判定＝ABSENT(ENOENT)だけを「未導入」として
-  # 空payload・exit0にする。UNAVAILABLE（権限不足・ディレクトリ等）は
-  # そのまま下のpython3実行へ進ませ、実際のopen()失敗（非0終了）として
-  # 呼び出し側へ伝播させる（2026-08-30 Codex四次レビュー指摘・MAJOR対応）。
-  if [ -z "$bedrock_env_file" ] || [ "$(bedrock_env_file_kind "$bedrock_env_file")" = "ABSENT" ]; then
-    echo '{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-    return 0
-  fi
-  python3 -c "
-import json, sys
-allowed = set(k for k in sys.argv[2].split(chr(0x1f)) if k)
-path = sys.argv[1]
-env, rejected, malformed = {}, [], []
-with open(path) as f:
-    for lineno, raw in enumerate(f, start=1):
-        line = raw.strip()
-        if not line or line.startswith('#'):
-            continue
-        if '=' not in line:
-            malformed.append(str(lineno))
-            continue
-        k, v = line.split('=', 1)
-        k, v = k.strip(), v.strip()
-        if not k:
-            malformed.append(str(lineno))
-            continue
-        if k not in allowed:
-            rejected.append(k)
-            continue
-        env[k] = v
-print(json.dumps({'env': env, 'rejected_keys': rejected, 'malformed_lines': malformed}))
-" "$bedrock_env_file" "$allowed_joined"
-}
-
 log() { echo "[install-main] $*"; }
 warn() { echo "[install-main] WARN: $*" >&2; }
 fail() { echo "[install-main] FAIL: $*" >&2; exit 1; }
@@ -378,7 +179,7 @@ resolve_leader_runtime() {
     return 1
   fi
   if out="$(python3 "$lib" resolve-leader "$path" \
-        --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR")"; then
+        --agents-dir "$AIENV_AGENTS_DIR")"; then
     printf '%s\n' "$out"
     return 0
   fi
@@ -393,15 +194,10 @@ check_profile_cmd() {
   local path="$AIENV_LOCAL_PROFILE_PATH" lib="$AIENV_PROFILE_RESOLVE_LIB" rc=0
   command -v python3 >/dev/null 2>&1 || fail "python3 が見つかりません（--check-profile の実行に必要です）"
   [ -f "$lib" ] || fail "resolver本体（${lib}）が見つかりません"
-  python3 "$lib" resolve "$path" --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" || rc=$?
+  python3 "$lib" resolve "$path" --agents-dir "$AIENV_AGENTS_DIR" || rc=$?
   exit "$rc"
 }
 
-# AIENV_DEFERRED_EXIT_CODE — 「settings.json以外の処理は続行させたいが、最終的な
-# 終了コードは非0にする必要がある」状態（bedrock.envが実在するのに読めない／
-# 動的Bedrock許可キーの算出失敗／職種定義のdangling）を記録し、スクリプト
-# 末尾で最終exit codeへ反映する（他の処理を中断させない・値を再掲しないWARNは
-# 各所で既に出している前提）。
 AIENV_DEFERRED_EXIT_CODE=0
 DRY_RUN=0
 WITH_DOTFILES=0
@@ -578,7 +374,7 @@ PY
   log "generated: $dest <- $src （__AIENV_HOME__ を $HOME へ置換）"
 }
 
-# generate_settings_json <repo-relative-source> <destination> <model-value> [bedrock-env-file] [effort] [places]
+# generate_settings_json <repo-relative-source> <destination> <model-value> [effort] [places]
 # claude/settings.json も config.toml と同じ理由（JSONはシェル変数展開されない・
 # symlinkだとClaude Code自身の `/model` 書込がリポジトリ側ファイルへ直接及んでしまう）
 # で symlink ではなく実ファイルとして生成する。config.toml は Python で共通値・
@@ -586,23 +382,12 @@ PY
 # settings.json は json module で model・effortLevel 等のキーへ直接代入する。
 # テンプレの __AIENV_MODEL__ 等は生成対象の目印として残し、check-drift.sh の
 # ①-2 は --render-settings-json の生成物と比較する。
-# Bedrock env取り込みの許可リスト（AIENV_ALLOWED_BEDROCK_ENV_KEYS）は
-# スクリプト冒頭（引数解析より前）で既に宣言済み——ここでは再宣言しない
-# （値表を複数箇所に増やさないため。2026-08-30 工程横断レビュー指摘・MAJOR-5
-# 対応で、宣言をこの関数より前へ移動した）。
-# 4番目の引数（bedrock-env-file）は2026-08-30 §9.0 A-1-4追加: 存在すれば
-# KEY=VALUE形式で読み、上記許可リストに載っていて、かつテンプレ由来のenvキー
-# （DISABLE_AUTOUPDATER等）と衝突しないキーだけを"env"ブロックへ追加する
-# （許可リスト外・衝突キーはいずれもスキップしキー名だけをログに残す。値は
-# 一切出力しない＝絶対厳守③。§11.2「ピン留めの実値の置き場」の裁定どおり、
-# 値そのものはテンプレにもpublicなプロファイルにも書かない）。ファイルが無い
-# （Bedrock未導入機）場合は何もしない。
-# 5番目の引数（effort）は2026-09-01 配役表解凍 §4.2-g追加: 実効リーダー候補の
+# 4番目の引数（effort）は2026-09-01 配役表解凍 §4.2-g追加: 実効リーダー候補の
 # effortから"effortLevel"を生成する。空文字なら"effortLevel"キー自体を出力
 # しない（未指定＝セッション/アカウント既定に従う。既定値を発明しない・§3.8）。
 # テンプレの"effortLevel"値（__AIENV_EFFORT__）が目印のままであることも
 # "model"と同じ理由で検証してから置換/削除する。
-# 6番目の引数（places）は v1.2 登録の絞り込み（設計 §3.2）: 選択の導出の置き場（1 行 1 つ・$HOME 展開済み）。
+# 5番目の引数（places）は v1.2 登録の絞り込み（設計 §3.2）: 選択の導出の置き場（1 行 1 つ・$HOME 展開済み）。
 # 雛形の各フックのうち、命令の先頭語（$HOME/ は展開して比べる）がこの集合に当たるものだけを残し、
 # 当たらないフックは 1 件 1 行で報告する（hooks が空になったイベントは消す）。他の生成規則は変えない。
 # 生成物を置けたら AIENV_SETTINGS_WRITTEN=1（掃除＝登録の後、の判定に使う）。
@@ -653,98 +438,11 @@ print(compact_window)
 }
 
 generate_settings_json() {
-  local src="$DIR/$1" dest="$2" model="$3" bedrock_env_file="${4:-}" effort="${5:-}" places="${6:-}" tmp PY_ERR PY_OUT
-  local bedrock_status bedrock_env_perm bedrock_payload bedrock_kind
-  # テンプレの欠落・不正（設計書S5）は A0 の check_settings_template() が先に止める。下の生成の python も
-  # 同じ検証の断片（SETTINGS_TPL_CHECK_PY）から始まる。
-  # Bedrock envファイルの状態を3分類する（bedrock_env_file_kind()参照）:
-  # ABSENT(未導入・正常)／EXISTS_BUT_UNAVAILABLE(存在するのに読めない・解析
-  # できない)／OK。EXISTS_BUT_UNAVAILABLEの場合は「生成失敗時は旧ファイルを
-  # 触らない」契約（設計書§11.2）を守るため、settings.json本体の生成ごと
-  # 中止し既存ファイルを保持する（2026-08-30 Codex 3巡目差し戻し・MAJOR
-  # 対応: 従来はパーミッション矯正失敗・compute_bedrock_env_json()の解析
-  # 失敗のいずれも「Bedrock未導入」と同じ空payloadへ丸めた上でsettings.json
-  # 本体の生成・mv上書きを続行しており、既存設定に書かれていたCLAUDE_CODE_
-  # USE_BEDROCK・リージョン・モデルpin等が黙って消え得た）。
-  # ⚠️ DRY_RUNでも（副作用の無い読み取り専用判定のため）この分類を行う
-  # （2026-08-30 Codex四次レビュー指摘・Minor対応: 従来は`[ -f ]`だけの
-  # dry-run独自判定で、実行時なら中止になるケース〈ディレクトリ・dangling
-  # symlink等〉でも「settings.jsonを生成する」と誤った計画表示をしていた）。
-  # ⚠️ この判定は mkdir/backup_once/mktemp より前に行う（Codex四次レビュー
-  # 指摘・Minor対応: 中止するだけなのに`.pre-aienv.bak`や一時ファイルを
-  # 新規作成してしまう副作用を避けるため）。
-  # ⚠️ シェルの`[ -e ]`/`[ -L ]`だけに頼らずbedrock_env_file_kind()
-  # （os.lstat()の例外種別で判定）を使う（2026-08-30 Codex四次レビュー
-  # 指摘・MAJOR対応: `[ -e ]`は親ディレクトリの探索権限が無いだけでも偽に
-  # なり、「本当に存在しない」場合と区別できない。dangling symlinkも同様に
-  # 誤ってABSENT扱いされていた）。
-  bedrock_status="ABSENT"
-  if [ -n "$bedrock_env_file" ]; then
-    bedrock_kind="$(bedrock_env_file_kind "$bedrock_env_file")"
-  else
-    bedrock_kind="ABSENT"
-  fi
+  local src="$DIR/$1" dest="$2" model="$3" effort="${4:-}" places="${5:-}" tmp PY_OUT
   if [ "$DRY_RUN" = "1" ]; then
-    if [ "$bedrock_kind" = "UNAVAILABLE" ]; then
-      # ⚠️ ここでは`would_backup`を表示しない（Codex五次レビュー指摘・Minor
-      # 対応: UNAVAILABLE側は生成自体を中止するため`.pre-aienv.bak`も
-      # 実際には作られない。dry-runの計画表示を実実行の分岐と一致させる）。
-      log "[dry-run] Bedrock envファイルが読めない・解析できない見込みのため、settings.jsonの生成は中止され既存ファイルが保持される見込みです: $bedrock_env_file"
-    else
-      would_backup "$dest" && log "[dry-run] would back up: $dest -> $dest.pre-aienv.bak"
-      log "[dry-run] would generate (not symlink): $dest <- $src (\"model\"/\"effortLevel\"を更新)"
-      if [ "$bedrock_kind" = "OK" ]; then
-        log "[dry-run] would merge env from: $bedrock_env_file"
-      fi
-    fi
+    would_backup "$dest" && log "[dry-run] would back up: $dest -> $dest.pre-aienv.bak"
+    log "[dry-run] would generate (not symlink): $dest <- $src (\"model\"/\"effortLevel\"を更新)"
     return
-  fi
-  if [ "$bedrock_kind" != "ABSENT" ]; then
-    if [ "$bedrock_kind" = "UNAVAILABLE" ]; then
-      warn "Bedrock envファイルのパスが通常ファイルではありません（ディレクトリ・dangling symlink・親ディレクトリの探索権限不足等の可能性）。settings.jsonの生成を中止し、既存ファイルを保持します: $bedrock_env_file"
-      bedrock_status="EXISTS_BUT_UNAVAILABLE"
-    else
-      # Bedrock env ファイルは非公開の値（推論プロファイルID等）を持つため、
-      # 読む前にパーミッションを0600へ揃える（既に0600ならno-op。絶対厳守③）。
-      # ⚠️ 矯正に失敗した、または矯正後もちょうど600でない場合は
-      # fail-openで読み進めない（Codex一次レビュー指摘・Major対応:
-      # `chmod ... || true` だけだと読取専用FS・所有者不一致等で0644のまま
-      # 残っても気付かず非公開値を取り込んでしまっていた）。
-      chmod 600 "$bedrock_env_file" 2>/dev/null || true
-      bedrock_env_perm="$(stat -f '%Lp' "$bedrock_env_file" 2>/dev/null || stat -c '%a' "$bedrock_env_file" 2>/dev/null || echo '')"
-      if [ "$bedrock_env_perm" != "600" ]; then
-        warn "Bedrock envファイルのパーミッションを0600へ揃えられませんでした（現在: ${bedrock_env_perm:-不明}）。settings.jsonの生成を中止し、既存ファイルを保持します: $bedrock_env_file"
-        bedrock_status="EXISTS_BUT_UNAVAILABLE"
-      else
-        # Bedrock envファイルの解析は compute_bedrock_env_json() だけが行う
-        # （2026-08-30 工程横断レビュー指摘・MAJOR-A対応: 以前はここで生
-        # ファイルを直接読む処理を複製していた。update-sub.shは install-sub
-        # 経由でこの関数を呼ぶ経路へ揃えた＝値表・解析ロジックとも複製箇所は増やさない）。
-        if bedrock_payload="$(compute_bedrock_env_json "$bedrock_env_file")"; then
-          bedrock_status="OK"
-        else
-          warn "Bedrock envファイルの解析に失敗しました。settings.jsonの生成を中止し、既存ファイルを保持します: $bedrock_env_file"
-          bedrock_status="EXISTS_BUT_UNAVAILABLE"
-        fi
-      fi
-    fi
-  fi
-  if [ "$bedrock_status" = "EXISTS_BUT_UNAVAILABLE" ]; then
-    # ⚠️ ここは非0ではなく0で返す（2026-08-30 Codex四次レビュー指摘・
-    # BLOCKING対応: 「既存settings.jsonを意図的に保持して中止した」のは
-    # この関数の正常な仕事の一部であり、失敗ではない。非0で返すと呼び出し
-    # 側で`|| true`のような一律の抑制が必要になり、mktemp/mv失敗等の本当の
-    # 異常まで一緒に握り潰してしまう。呼び出し側は裸の関数呼び出しのまま
-    # `set -e`を効かせ続けられるようにする）。
-    # ⚠️ ただし設計書S4「bedrock.envが実在するのに読めない/解析できない場合
-    # は非0終了」の要件があるため（2026-09-01 リーダー裁定・差し戻し対応:
-    # 「不在」は非Bedrock機で常に起きる正常系なのでexit 0のまま維持するが、
-    # 「実在するのに壊れている」を exit 0 のままにすると監視側〈check-drift〉
-    # と非対称になる）、
-    # AIENV_DEFERRED_EXIT_CODEを立てて他の処理（hooksのsymlink化等）は
-    # そのまま続行させつつ、スクリプト末尾で最終的な終了コードへ反映する。
-    AIENV_DEFERRED_EXIT_CODE=1
-    return 0
   fi
 
   # ⚠️ 設計書S7（mktemp/mv/権限/容量の失敗）対応: 従来は裸呼び出しで`set -e`
@@ -755,31 +453,17 @@ generate_settings_json() {
   backup_once "$dest" || fail_settings_generation "settings.jsonの既存バックアップ作成に失敗しました: $dest.pre-aienv.bak"
   tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").aienv-tmp.XXXXXX")" || fail_settings_generation "settings.json生成用の一時ファイルを作成できません"
   trap 'rm -f "$tmp"' RETURN
-  if [ "$bedrock_status" != "OK" ]; then
-    bedrock_payload='{"env": {}, "rejected_keys": [], "malformed_lines": []}'
-  fi
   # 雛形の検証（SETTINGS_TPL_CHECK_PY＝A0 と同じ断片）を通ったものだけを上書きする。
   if ! PY_OUT="$(python3 -c "$SETTINGS_TPL_CHECK_PY
 data['model'] = sys.argv[3]
-effort = sys.argv[5]
+effort = sys.argv[4]
 if effort:
     data['effortLevel'] = effort
 else:
     data.pop('effortLevel', None)
 
-payload = json.loads(sys.argv[4])
-template_env_keys = set((data.get('env') or {}).keys())
-skipped = []
-if payload.get('env'):
-    data.setdefault('env', {})
-    for k, v in payload['env'].items():
-        if k in template_env_keys:
-            skipped.append(k)
-            continue
-        data['env'][k] = v
-
 import os
-places = set(p for p in sys.argv[6].split('\n') if p)
+places = set(p for p in sys.argv[5].split('\n') if p)
 home = os.environ.get('HOME', '')
 hooks = data.get('hooks') or {}
 for event in list(hooks):
@@ -806,13 +490,7 @@ for event in list(hooks):
 with open(sys.argv[2], 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
-if skipped:
-    print('SKIPPED_ENV_KEYS:' + ','.join(skipped))
-if payload.get('rejected_keys'):
-    print('REJECTED_ENV_KEYS:' + ','.join(payload['rejected_keys']))
-if payload.get('malformed_lines'):
-    print('MALFORMED_ENV_LINES:' + ','.join(payload['malformed_lines']))
-" "$src" "$tmp" "$model" "$bedrock_payload" "$effort" "$places" 2>&1)"; then
+" "$src" "$tmp" "$model" "$effort" "$places" 2>&1)"; then
     fail_settings_generation "settings.json の生成に失敗しました（テンプレの検証またはpython3 json処理エラー。checkout破損・テンプレへの誤ったmodel値ハードコード・python3不在等の可能性）: $src${PY_OUT:+ (詳細: $PY_OUT)}"
   fi
   mv "$tmp" "$dest" || fail_settings_generation "settings.jsonの原子的な配置(mv)に失敗しました: $tmp -> $dest"
@@ -824,15 +502,6 @@ if payload.get('malformed_lines'):
   log "generated: $dest <- $src (\"model\"/\"effortLevel\" updated)"
   while IFS= read -r py_out_line; do
     case "$py_out_line" in
-      SKIPPED_ENV_KEYS:*)
-        warn "Bedrock envファイルのキーがテンプレ側envと衝突したためスキップしました（キー名: ${py_out_line#SKIPPED_ENV_KEYS:}）: $bedrock_env_file"
-        ;;
-      REJECTED_ENV_KEYS:*)
-        warn "Bedrock envファイルに許可リスト外のキーがあったため取り込みませんでした（キー名: ${py_out_line#REJECTED_ENV_KEYS:}・許可リスト: ${AIENV_ALLOWED_BEDROCK_ENV_KEYS[*]}）: $bedrock_env_file"
-        ;;
-      MALFORMED_ENV_LINES:*)
-        warn "Bedrock envファイルに解析できない行がありました（行番号: ${py_out_line#MALFORMED_ENV_LINES:}）: $bedrock_env_file"
-        ;;
       DROPPED_HOOK:*)
         log "登録しないフック（命令が選択の導出の置き場に無い）: ${py_out_line#DROPPED_HOOK:}"
         ;;
@@ -845,17 +514,10 @@ EOF
 # resolve_settings_inputs — settings.json 生成の入力を確定する:
 #   AIENV_SETTINGS_MODEL／AIENV_SETTINGS_EFFORT＝resolve_leader_runtime() の
 #   JSON から（解決できなければ fail_settings_generation で即時非0＝設計書S2）。
-#   AIENV_ALLOWED_BEDROCK_ENV_KEYS＝固定2キー＋動的キー（compute_allowed_
-#   bedrock_env_keys()）。算出に失敗した場合は fail-open で固定2キーへ縮退せず、
-#   AIENV_SKIP_SETTINGS_GENERATION=1・AIENV_DEFERRED_EXIT_CODE=1 を立てる
-#   （設計書§6.2-B S18＝生成をスキップして既存ファイルを保持し、他の処理は
-#   完走させたうえで末尾で非0。「動的キー0件」という正常な結果〈exit 0契約〉
-#   と「算出そのものの失敗」〈exit 1契約〉の区別を呼び出し側でも維持する）。
 # インストール本番と --render-settings-json の両方がこの1つの関数だけを使う。
 resolve_settings_inputs() {
   AIENV_SETTINGS_MODEL=""
   AIENV_SETTINGS_EFFORT=""
-  AIENV_SKIP_SETTINGS_GENERATION=0
   local err_tmp json fields errline
   # ⚠️ 裸の代入のままだと、mktemp失敗時に`set -e`で即座に終了するが
   # fail_settings_generation()を経由しないためNO_GENERATED_FILEが付かない。
@@ -880,27 +542,7 @@ print(d.get("effort", ""))
     fail_settings_generation "リーダー実行値を解決できませんでした（${errline:-不明なエラー}）。settings.jsonの生成を中止します。"
   fi
 
-  AIENV_ALLOWED_BEDROCK_ENV_KEYS=("CLAUDE_CODE_USE_BEDROCK" "AWS_REGION")
-  local keys_tmp keys_rc=0 keys_err key
-  keys_tmp="$(mktemp 2>/dev/null)" || keys_tmp=""
-  if [ -z "$keys_tmp" ]; then
-    warn "動的Bedrock許可キーの算出に失敗しました（一時ファイルを作成できません）。settings.jsonの生成をスキップし、既存ファイルを保持します。"
-    AIENV_SKIP_SETTINGS_GENERATION=1
-    AIENV_DEFERRED_EXIT_CODE=1
-    return 0
-  fi
-  keys_err="$(compute_allowed_bedrock_env_keys 2>&1 1>"$keys_tmp")" || keys_rc=$?
-  if [ "$keys_rc" -eq 0 ]; then
-    AIENV_ALLOWED_BEDROCK_ENV_KEYS=()
-    while IFS= read -r key; do
-      [ -n "$key" ] && AIENV_ALLOWED_BEDROCK_ENV_KEYS+=("$key")
-    done < "$keys_tmp"
-  else
-    warn "動的Bedrock許可キーの算出に失敗しました（${keys_err:-不明なエラー}）。settings.jsonの生成をスキップし、既存ファイルを保持します。"
-    AIENV_SKIP_SETTINGS_GENERATION=1
-    AIENV_DEFERRED_EXIT_CODE=1
-  fi
-  rm -f "$keys_tmp"
+
 }
 
 # ============================================================
@@ -953,16 +595,11 @@ RERUN_CMD="$RERUN_CMD --select $SELECT_VALUE"
 # 雛形配置・symlink化・config.toml・dotfiles には進まない。<path> は呼び出し側が
 # 用意した一時ディレクトリ内を想定（backup_once は dest 不在で no-op・mktemp/mv
 # も <path> と同じディレクトリ）。実 $HOME/.claude 配下には何も作らない。
-# 既知の残余＝bedrock env ファイルが実在する機では generate_settings_json() の
-# chmod 600（冪等）。
 if [ -n "$RENDER_SETTINGS_JSON" ]; then
   resolve_settings_inputs
-  if [ "$AIENV_SKIP_SETTINGS_GENERATION" = "1" ]; then
-    fail "動的Bedrock許可キーを算出できないため settings.json を生成できません: $RENDER_SETTINGS_JSON"
-  fi
-  generate_settings_json core/assembly/settings.json "$RENDER_SETTINGS_JSON" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT" "$SEL_PLACES"
+  generate_settings_json core/assembly/settings.json "$RENDER_SETTINGS_JSON" "$AIENV_SETTINGS_MODEL" "$AIENV_SETTINGS_EFFORT" "$SEL_PLACES"
   if [ "$AIENV_DEFERRED_EXIT_CODE" != "0" ] || [ ! -f "$RENDER_SETTINGS_JSON" ]; then
-    fail "settings.json を生成できませんでした（Bedrock envファイルが実在するのに読めない等。詳細は上記のWARN）: $RENDER_SETTINGS_JSON"
+    fail "settings.json を生成できませんでした: $RENDER_SETTINGS_JSON"
   fi
   exit 0
 fi
@@ -1154,7 +791,7 @@ fi
 # 各ワーカーが team/connect/codex/codex-exec.sh を直接叩く方式になったため、インストーラ側の
 # 自動登録ステップは不要になった。
 
-# --- リーダー実行値と動的Bedrock許可キーの決定・settings.json 生成（A4 登録＝全配置の完了後）---
+# --- リーダー実行値の決定・settings.json 生成（A4 登録＝全配置の完了後）---
 # 検証 V-04（3 巡目 BLOCKING）対応・2026-10-03: 以前はこの決定・生成をフック／
 # 職種定義の link・chmod・codex/ の link より前に置いていたため、途中で ln が
 # 失敗すると「新しい settings.json だけが公開され、まだ配置されていない新フック
@@ -1167,33 +804,13 @@ fi
 # 計画を表示する。Python の機能と雛形の検査は A0 より前・A0 で行う。
 AIENV_SETTINGS_MODEL=""
 AIENV_SETTINGS_EFFORT=""
-AIENV_SKIP_SETTINGS_GENERATION=0
 if [ "$DRY_RUN" != "1" ]; then
   resolve_settings_inputs
 fi
 
 # settings.json はsymlinkではなく生成（マシン別modelプレースホルダ置換。上記
 # 「例外その2」コメント参照）。
-# ⚠️ Bedrock envファイルが存在するのに読めない・解析できない場合、
-# generate_settings_json()はWARNを出しsettings.json本体の生成を中止・既存
-# ファイルを保持したまま**AIENV_DEFERRED_EXIT_CODEを立てて戻る**（設計書
-# §6.2-B S4「bedrock.envが実在するのに読めない/解析できない場合は非0終了」。
-# 詳細は同関数のコメント参照）。導出の一覧の全配置（A2）は
-# ここより前で既に完走しているため、残る処理（--with-dotfiles時の
-# dotfiles導入＝独立したsoft-fail経路）はそのまま続行させ、最終的な終了コード
-# だけスクリプト末尾で非0へ反映する。これは意図した安全側の分岐であり、
-# `|| true`のような一律の抑制は付けない（2026-08-30 Codex四次レビュー指摘・
-# BLOCKING対応: `|| true`を付けると、この関数内で本当に発生した異常＝
-# mktemp/mv/backup_once失敗等まで一緒に握り潰してしまい、`set -e`の保護が
-# 意図せず外れてしまっていた）。
-# ⚠️ 動的Bedrock許可キーの算出自体に失敗した場合（AIENV_SKIP_SETTINGS_
-# GENERATION=1）は、generate_settings_json()を呼ぶことすらせず既存ファイルを
-# 保持する（設計書§6.2-B S18・2026-09-01工程横断レビュー差し戻し・MAJOR
-# 対応。判定・WARN・AIENV_DEFERRED_EXIT_CODEの計上は上のブロックで既に
-# 済ませている）。
-if [ "$AIENV_SKIP_SETTINGS_GENERATION" != "1" ]; then
-  generate_settings_json core/assembly/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_BEDROCK_ENV_FILE" "$AIENV_SETTINGS_EFFORT" "$SEL_PLACES"
-fi
+generate_settings_json core/assembly/settings.json "$HOME/.claude/settings.json" "$AIENV_SETTINGS_MODEL" "$AIENV_SETTINGS_EFFORT" "$SEL_PLACES"
 
 # 掃除前に生成区間を閉じる。生成成功後の別件の非0終了では巻き戻さない。
 if [ "$DRY_RUN" != "1" ]; then
@@ -1352,9 +969,7 @@ else
   log "done."
 fi
 
-# ⚠️ AIENV_DEFERRED_EXIT_CODEが立っていれば（設計書S4等・generate_settings_
-# json()参照）、他の全処理を完走させたうえでここで初めて非0終了する
-# （2026-09-01 リーダー裁定・差し戻し対応）。
+# 配置中の異常が記録されていれば、他の処理を完走させたうえで非0終了する。
 if [ "$AIENV_DEFERRED_EXIT_CODE" != "0" ]; then
   exit "$AIENV_DEFERRED_EXIT_CODE"
 fi

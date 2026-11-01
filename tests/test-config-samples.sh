@@ -10,7 +10,6 @@ INSTALL_MAIN="$REPO_ROOT/core/assembly/install-main.sh"
 CONFIG_DIR="$REPO_ROOT/team/data"
 PROFILE_SAMPLE="$CONFIG_DIR/profile.md.sample"
 MODELS_SAMPLE="$CONFIG_DIR/models.conf.sample"
-BEDROCK_SAMPLE="$REPO_ROOT/team/connect/claude-code/bedrock.env.sample"
 AGENTS_DIR="$REPO_ROOT/team/rules/agents"
 
 
@@ -22,7 +21,7 @@ fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-for f in "$PROFILE_SAMPLE" "$MODELS_SAMPLE" "$BEDROCK_SAMPLE"; do
+for f in "$PROFILE_SAMPLE" "$MODELS_SAMPLE"; do
   [ -f "$f" ] || { fail_case "前提: $f が存在する"; }
 done
 
@@ -83,7 +82,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(sys.argv[1])/'team/executor'))
 import profile_resolve as pr
 root=Path(sys.argv[1])
-for rel in ('team/data/profile.md.sample','team/data/models.conf.sample','team/connect/claude-code/bedrock.env.sample'):
+for rel in ('team/data/profile.md.sample','team/data/models.conf.sample'):
     text=(root/rel).read_text()
     assert not re.search(r'/Users/|/home/[^/\s]+/',text), rel
     for key in re.findall(r'^\s*#?\s*\[?([A-Za-z0-9_.-]+)\]?\s*[:=]',text,re.M):
@@ -91,9 +90,8 @@ for rel in ('team/data/profile.md.sample','team/data/models.conf.sample','team/c
 PY
 then pass "sample に認証キー・個人の実パスが無い"; else fail_case "sample に認証キー・個人の実パスが無い"; fi
 ac3_home="$WORK/home"; mkdir -p "$ac3_home"
-cp "$BEDROCK_SAMPLE" "$WORK/bedrock.env"
 rc=0
-AIENV_LOCAL_PROFILE_PATH="$PROFILE_SAMPLE" AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" AIENV_BEDROCK_ENV_FILE="$WORK/bedrock.env" \
+AIENV_LOCAL_PROFILE_PATH="$PROFILE_SAMPLE" AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" \
   HOME="$ac3_home" "$INSTALL_MAIN" --render-settings-json "$WORK/settings.json" >/dev/null 2>&1 || rc=$?
 if [ "$rc" -eq 0 ] && python3 - "$WORK/settings.json" "$LIB" <<'PY'
 import json,sys

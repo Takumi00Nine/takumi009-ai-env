@@ -2,7 +2,7 @@
 # モデル定義ファイル（メイン機の実値。repo の team/data/models.conf.sample を
 #  ~/.config/takumi009-ai-env/models.conf へコピーして使う。メイン機は
 #  そのままコピーして使う。サブ機もコピーし、使わない定義は削る／
-#  必要な定義（Bedrock 経由など）だけ有効化する。installer はこのファイルを
+#  必要な定義だけ有効化する。installer はこのファイルを
 #  コピーしない（本人が自分でコピーする）。実体は machine ごとのローカル
 #  ファイル・repo 管理外のまま。
 #  置き場: ~/.config/takumi009-ai-env/models.conf
@@ -15,12 +15,9 @@
 #     （本人方針 2026-09-10）
 #  背景（各経路の性質・向く仕事の詳しい比較）: Vault
 #  Preferences/model-catalog.md（本ファイルは定義の網羅、あちらは選び方）
-#  ファイル構成（本人指示 2026-09-10。経路の種類でA/B/Cへ大分類し、
-#  A=サブスク系→B=Bedrock系→C=ローカルLLM系の順に並べる）:
+#  ファイル構成（経路の種類で分類する）:
 #    A. サブスク系   ①Claudeサブスク（anthropic-api）②Codexサブスク（external）
-#    B. Bedrock系    ③Claude Bedrock別名方式（bedrock）④Claude Bedrock
-#                    Messages API（bedrock-mantle）⑤Codex on Bedrock（未対応）
-#    C. ローカルLLM系 ⑥vLLM（未対応）
+#    B. ローカルLLM系 ③vLLM（未対応）
 # =====================================================================
 
 # =====================================================================
@@ -186,39 +183,11 @@ model=gpt-6-luna
 effort=low
 
 # =====================================================================
-# B. Bedrock系（Claude/Codexのサブスク時間枠を消費しない従量課金経路。
-#  AWS側のアカウントには別途デフォルトクォータがある＝無制限ではない）
-# =====================================================================
-# ③④（bedrock／bedrock-mantle）の定義は 2026-09-19 本人裁定で削除＝休眠。
-#  コード経路は残す（ローカル LLM 段階経路スライス B で再追加・Decisions/
-#  2026-09-19-ai-env-optimization-rulings）。
-
-# =====================================================================
-# ⑤ Codex on Bedrock（amazon-bedrock model provider）。すべてコメント
-#  アウト。amazon-bedrockというprovider自体がこのファイルのPROVIDERS集合
-#  に無く、現行の属性では `-c model_provider=amazon-bedrock` を表現できず
-#  未対応。WebSearch不可・従量課金（ChatGPTサブスクとは別建て）につき
-#  優先度も低い。
-#  ⚠️危険: 下の3行「だけ」を解除すると、他の値（provider=external等）が
-#  すべて形式上正しいため resolver は失敗せずexit 0を返す。だが provider
-#  をamazon-bedrockへ切り替える手段がこの属性群には無いため、Bedrock経由
-#  にはならず、通常のexternal-cli（ChatGPTサブスク経由・codex-sol-*のmodel値）と
-#  して静かに実行されてしまう（2026-09-10検証職実測: 解除するとexit 0で
-#  CODEX_ARGS --model <codex-sol-*のmodel値>が生成され（当時gpt-5.6-sol）、
-#  Bedrock指定は一切含まれない）。resolverがprovider overrideを表現できるschemaへ拡張されるまで、
-#  このブロックは実際に有効化してはいけない参考例にすぎない
-# =====================================================================
-# [codex-bedrock-sol]
-# provider=external
-# execution=external-cli
-# model=gpt-6.1-sol
-
-# =====================================================================
-# C. ローカルLLM系（vLLM・ポート8000。枠の概念なし・自己ホスト）
+# B. ローカルLLM系（vLLM・ポート8000。枠の概念なし・自己ホスト）
 # =====================================================================
 
 # =====================================================================
-# ⑥ ローカルLLM（vLLM・ポート8000）。すべてコメントアウト。provider=local
+# ③ ローカルLLM（vLLM・ポート8000）。すべてコメントアウト。provider=local
 #  はresolver未実装のため、有効化すると resolver が全定義を検査する構造上
 #  この1行だけで定義ファイル全体がMINIMALへ落ちる（2026-09-10リーダー実測。
 #  将来スライスBで対応後にコメントを外す）

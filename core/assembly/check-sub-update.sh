@@ -42,8 +42,6 @@
 #                                $HOME/.config/takumi009-ai-env/profile.md。
 #                                4つの読み手が共有する既定値＝配役表-能力軸
 #                                整理-設計-2026-09-07.md §2.2）
-#   AIENV_BEDROCK_ENV_FILE    … Bedrockピン留め実値ファイル（既定
-#                                $HOME/.config/takumi009-ai-env/bedrock.env）
 #   AIENV_AGENTS_DIR           … コア職種マニフェストの実体側入力（既定
 #                                ${SELF_DIR%/*/*}/team/rules/agents）
 #   CHECK_SUB_UPDATE_DIR      … リポジトリのルート（既定 $HOME/Workspace/Tools/takumi009-ai-env。
@@ -76,7 +74,6 @@ resolve_check_sub_update_self_dir() {
 SELF_DIR="$(resolve_check_sub_update_self_dir)"
 : "${PROFILE_RESOLVE_LIB:=$SELF_DIR/../../team/executor/profile_resolve.py}"
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
-: "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
 : "${AIENV_AGENTS_DIR:=${SELF_DIR%/*/*}/team/rules/agents}"
 DIR="${CHECK_SUB_UPDATE_DIR:-$HOME/Workspace/Tools/takumi009-ai-env}"
 LOG_FILE="${CHECK_SUB_UPDATE_LOG:-/tmp/check-sub-update.log}"
@@ -98,7 +95,7 @@ AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // ""' 2>/dev/null)
 # メイン機とみなす。積極的な証明（`sub`と読めること）が無ければ動かない設計
 # （配役表-能力軸整理-設計-2026-09-07.md §2.2の共通レシピ）。
 _mr_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" \
-  --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _mr_out=""
+  --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _mr_out=""
 # 失敗を静かにしない（Knowledge/fail-open-and-observable-guards）＝空、または
 # OKで始まらない出力はログへ1行残してからexit 0する。標準出力へは出さない
 # （メイン機で毎セッション出力が増えるのを避ける＝§2.4②）。

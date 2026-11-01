@@ -49,7 +49,6 @@ set -euo pipefail
 : "${PROFILE_RESOLVE_LIB:=$DIR/team/executor/profile_resolve.py}"
 : "${AIENV_LOCAL_PROFILE_PATH:=$HOME/.config/takumi009-ai-env/profile.md}"
 : "${AIENV_AGENTS_DIR:=$DIR/team/rules/agents}"
-: "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
 STALE_LOCK_SECONDS="${STALE_LOCK_SECONDS:-3600}"
 # 3. の install-sub.sh（Vault 骨格配置）と 4.・5. が同じ Vault を見るようにする。
 export VAULT
@@ -75,7 +74,7 @@ fail() { echo "[update-sub] FAIL: $*" >&2; exit 1; }
 resolve_machine_role() {
   local _out _tab _rest _role
   _out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" \
-    --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _out=""
+    --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)" || _out=""
   _tab=$'\t'
   _rest="${_out#*"${_tab}MACHINE_ROLE:"}"
   _role=""

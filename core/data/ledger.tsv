@@ -54,8 +54,6 @@ part	team/connect/claude-code/delegation-gate-v2.sh	team	connect	claude-code	-	�
 part	team/connect/claude-code/codex_direct_call_check.py	team	connect	claude-code	-	Codex 直叩き判定	-	-
 part	team/connect/claude-code/codex-direct-call-gate.sh	team	connect	claude-code	-	Codex 直叩き柵（PreToolUse Bash）	-	link:$HOME/.claude/hooks/codex-direct-call-gate.sh
 part	team/connect/claude-code/profile-status.sh	team	connect	claude-code	team.session-status	合成器の寄与（枠 opening・directive5・machine_role 保留・profile-warning）	-	-
-part	team/connect/claude-code/bedrock.env.sample	team	connect	claude-code	-	Bedrock 経路の設定雛形	-	-
-part	team/connect/claude-code/worker-provider-probe.sh	team	connect	claude-code	-	実験	-	-
 part	team/connect/codex/codex-exec.sh	team	connect	codex	team.codex-exec	Codex の口（Codex 直叩き柵が照会）	-	-
 part	team/connect/codex/AGENTS.md	team	connect	codex	-	Codex ワーカーの作法	-	link:$HOME/.codex/AGENTS.md
 part	team/connect/codex/config.toml	team	connect	codex	-	Codex の設定雛形	-	gen:$HOME/.codex/config.toml

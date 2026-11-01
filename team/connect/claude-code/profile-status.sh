@@ -14,8 +14,6 @@
 # 判定式の正本は解決器 profile_resolve.py の1箇所（同じ機能の実行器＝本寄与の実体位置からの相対）。
 STATUS_SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${PROFILE_RESOLVE_LIB:=$STATUS_SELF_DIR/../../executor/profile_resolve.py}"
-# Bedrock のピン留め実値ファイル（全部入りの組立と同じ既定値。特定キーの有無だけ見る＝値は読まない）。
-: "${AIENV_BEDROCK_ENV_FILE:=$HOME/.config/takumi009-ai-env/bedrock.env}"
 # コア職種マニフェストの実体側入力。team/rules/agents。
 : "${AIENV_AGENTS_DIR:=${STATUS_SELF_DIR%/*/*/*}/team/rules/agents}"
 
@@ -124,7 +122,7 @@ resolve_local_profile() {
 
   local v2_out v2_rc=0
   v2_out="$(python3 "$PROFILE_RESOLVE_LIB" resolve "$path" \
-    --bedrock-env "$AIENV_BEDROCK_ENV_FILE" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)"
+    --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null)"
   v2_rc=$?
   if is_v2_resolve_output_well_formed "$v2_out" "$v2_rc"; then
     printf '%s\n' "$v2_out"
