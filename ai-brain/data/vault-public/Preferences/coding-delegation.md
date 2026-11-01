@@ -15,10 +15,8 @@ related:
   - "[[Decisions/2026-09-17-tests-rough-not-strict]]"
   - "[[Decisions/2026-09-21-test-three-roles]]"
 aliases:
-
   - "オーケストレーター強制"
   - "モデル割り当て"
-
   - "cmux notify"
   - "notify.sh call ask"
   - "delegation-gate-v2 許可パス"
