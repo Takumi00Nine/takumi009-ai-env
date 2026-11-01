@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-10-31
+updated: 2026-11-01
 tags: [preference, delegation, codex, reviewer, orchestrator, agent-teams]
 project: meta
 related:
@@ -30,7 +30,7 @@ aliases:
 - **ワーカー**: 作る工程の実働。9工程ロールを名指しで委任（正本＝[[Preferences/worker-role-prompts]]）。使うモデルは配役表の候補からリーダーが spawn ごとに選ぶ（既定は持たない・判断材料＝[[Preferences/model-catalog]]。2026-09-10 既定撤回＝[[Decisions/2026-09-10-leader-free-model-choice]]）。候補を選ぶときの目安（工程ごとの向き不向き）は [[Preferences/model-catalog]] にだけ置く（職種→モデルの固定はしない＝[[Decisions/2026-09-16-rules-bind-to-roles-not-models]]）。Claude のとき：職種定義は `~/.claude/agents/`。起動は `cct`・チームメイトは in-process（[[Decisions/2026-08-07-teammate-in-process-permanent]]）。
 - **配役の選択**: 検証職・実装・調査のいずれも、配役表の候補に並べておけばリーダーが spawn ごとに選ぶ（別系統の検証は推奨＝[[Decisions/2026-09-10-verifier-lineage-recommended]]・候補が使えないときは同じ行の別候補）（2026-09-10 既定撤回＝[[Decisions/2026-09-10-leader-free-model-choice]]。Codex 委任の再開自体の経緯＝[[Decisions/2026-07-23-codex-delegation-reopened]]）。**ビジュアル素材生成（画像・3D/Blender・ボクセル）は最初からワーカー（implementer）へ一気通貫**（[[Decisions/2026-07-21-image-tasks-codex-end-to-end]]・最終検収はリーダー・⚠️独立チェックは本人評価か検証職のレビュー）。**デザイン系成果物の案件は要件定義・設計の上流工程もワーカー（requirements-analyst・system-designer）主担当**（2026-08-10 本人決定＝[[Decisions/2026-08-10-codex-upstream-for-design]]。この場合の検証職は別系統の候補を選ぶのが推奨（上限時は同系統でよい＝[[Decisions/2026-09-10-verifier-lineage-recommended]]）。デザイン上流に向く定義の目安は [[Preferences/model-catalog]]（経緯＝[[Decisions/2026-09-05-astra-for-design-upstream-only]]）。ただし**案件内の非デザイン部品（JS・ロジック・データ集計等の仕組み部分）は通常ルール＝ワーカー（implementer）へ委任**し、一次レビューは検証職が行う（部品単位の分割＝[[Decisions/2026-08-13-design-project-component-split]]・本人明示 2026-08-13）。Codex のとき：**実装を振るときの起動手順（ラッパーワーカー不要・`codex exec` 背景実行）＝[[Preferences/codex-exec-worker]]**（2026-09-03）。
 ## 工程フロー（正本＝[[Preferences/codex-review-protocol]]）
-各工程で**ワーカーが成果物を作成 → リーダーが工程の完了時に検証職を1回起動 → 指摘は作成者が反映 → リーダーが却下希望の採否と全体確認**→ ユーザー最終レビュー。締め（検証職の検証後・本人レビュー前）は2ゲート必須: ①**工程横断の全体構成レビュー**（検証職・手順＝正本「工程横断・全体構成の最終レビュー」）②**リーダーの本番経路 end-to-end スモーク**＝テスト環境と異なる実行環境（launchd/cron・別PATH/権限等）の成果物は**本番と同じ起動経路で最低1回通し実走**してから「完了」と言う（初回実走は本人が見ている場で）。
+各工程で**ワーカーが成果物を作成 → リーダーが工程の完了時に検証職を1回起動 → 指摘は作成者が反映 → リーダーが却下希望の採否と全体確認**→ ユーザー最終レビュー。締め（検証職の検証後・本人レビュー前）は2ゲート必須: ①**工程横断の全体構成レビュー**（検証職・手順＝正本「工程横断・全体構成の最終レビュー」）②**リーダーの本番経路 end-to-end スモーク**＝テスト環境と異なる実行環境（launchd/cron・別PATH/権限等）の成果物は**本番と同じ起動経路で最低1回通し実走**してから「完了」と言う（初回実走は本人が見ている場で）。③**受入テストの退役**＝本人の最終確認のあと、その案件で足した受入テストのうち不変条件以外を test-writer に削らせ、Tasks に件数を残す（2026-11-01＝[[Decisions/2026-11-01-no-overdefense]]）。
 - **実装工程はテスト先行・別個体**＝要件確定後に test-writer が受入条件からテストを書き、implementer がそれを緑にする。テストの実行は test-runner（固定スイートはリーダー直叩き可）、verifier は指摘のみ（[[Decisions/2026-09-21-test-three-roles]]）。
 - テストは厳密にやりすぎない＝不変条件だけを恒久テストに残し、案件の受入条件は締めで1回確認して退役する。repo のテストは repo の中で完結（実体・Vault・private repo を読まない）。値でなく形・全件でなく経路ごとに代表1件（[[Decisions/2026-09-17-tests-rough-not-strict]]）。
 ## 運用ルール
