@@ -64,13 +64,13 @@ assert_denied() {
 }
 
 echo "=== 1. R1 公開ガード: gh repo create --public は deny・--private は allow ==="
-assert_denied "gh repo create foo --public は deny" "gh repo create foo --public" "リポジトリの公開"
+assert_denied "gh repo create foo --public は deny・正本参照" "gh repo create foo --public" "~/Data/obsidian/Preferences/absolute-rules.md"
 assert_allowed "gh repo create foo --private は allow" "gh repo create foo --private"
 
-assert_denied "pip install requests は deny" "pip install requests" "グローバルへの直接pip"
+assert_denied "pip install requests は deny・正本参照" "pip install requests" "~/Data/obsidian/Preferences/python-venv.md"
 assert_allowed ".venv/bin/pip install requests は allow（明示パス）" ".venv/bin/pip install requests"
 echo "=== 3. R3 brew ランタイム: brew install python@3.12 は deny・brew install jq は allow ==="
-assert_denied "brew install python@3.12 は deny" "brew install python@3.12" "言語ランタイム"
+assert_denied "brew install python@3.12 は deny・正本参照" "brew install python@3.12" "~/Data/obsidian/Preferences/anyenv-runtime-management.md"
 echo "=== 4. 不正入力: 空 stdin・tool_input 欠落 → 無出力 exit 0（fail-silent） ==="
 out="$(printf '' | env -u VIRTUAL_ENV -u CONDA_PREFIX bash "$HOOK")"; rc=$?
 if [ -z "$out" ] && [ "$rc" -eq 0 ]; then

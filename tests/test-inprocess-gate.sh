@@ -107,6 +107,7 @@ echo "=== AC-14②: deny_four_states（陰性4通り・各1行の監査） ==="
           /bin/bash "$GATE" >"$out_file" 2>/dev/null
     rc=$?
     assert_eq "deny_four_states($role): permissionDecision=deny" "deny" "$(permission_decision_of "$(cat "$out_file")")"
+    assert_eq "in-process拒否の正本参照" "true" "$(jq '.hookSpecificOutput.permissionDecisionReason | contains("~/Data/obsidian/Preferences/worker-role-prompts.md")' "$out_file")"
   done
 }
 echo "=== AC-14③: fail_close_on_port_failure（口が非0／不正JSON→ともにdenied・fail-close） ==="

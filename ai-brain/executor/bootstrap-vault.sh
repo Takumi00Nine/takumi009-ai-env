@@ -255,7 +255,7 @@ if [ "$missing_count" -gt 0 ]; then
 fi
 if [ "$unexpected_missing_count" -gt 0 ]; then
   list="$list
-  ⚠️ 必読のはずのpublicノートが見つかりません（想定外・同期失敗やcheckout破損の可能性。core/assembly/update-sub.shの再実行・core/assembly/check-drift.shでの確認を推奨）:$unexpected_missing"
+  ⚠️ 必読のはずのpublicノートが見つかりません（不足 ${unexpected_missing_count} 件）。正本: $VAULT/Preferences/core-workflow.md・$VAULT/Preferences/git-workflow.md:$unexpected_missing"
 fi
 
 # 外部脳ヘルス（fail-open: 失敗しても必読の枠は必ず出す）＝①観測記録 → ②判定機 → ③描画。
@@ -266,13 +266,11 @@ compute_health_section 2>/dev/null
 
 # 枠 must-read（「重要: …」から「④ …」まで）と枠 health（ヘルス節＋節の外の ℹ️ 行）。末尾に改行を付けない。
 SLOT_MUST_READ="重要: 必読ノートの全文はこのメッセージには注入されていない。
-あなたは下記ファイルをまだ読んでいない。プレビューや要約で読んだ気にならないこと。
-
-① タスクに着手する前に、まず Read ツールで以下を「全文」読む（${present_count}ファイルを1回の並列 Read で同時取得すること）:
+① タスクに着手する前に、以下の${present_count}ファイルを全文読む:
 $list
 
-② 上記を読み終えるまで、ユーザー依頼の実作業（調査・検索・コード変更・委任を含む）に着手しない。
-④ Vault への書き込みは軽重に関係なくリーダー自身が行う。ワーカーは書かず、最終報告の「Vault記録候補:」で申告する。Preferences の編集と公開スナップショットの生成・commit はメイン機（machine_role=main）のリーダーだけ。"
+② 上記を読み終えるまで作業しない。不足があれば読了扱いにせず、最初の応答で本人に伝える。
+④ 正本: $VAULT/Preferences/core-workflow.md §5・$VAULT/Preferences/core-worker.md §4・$VAULT/Preferences/vault-operation.md"
 SLOT_HEALTH="${HEALTH_SECTION}${HEALTH_INFO_LINE:+
 
 ${HEALTH_INFO_LINE}}"

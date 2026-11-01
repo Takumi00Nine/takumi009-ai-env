@@ -42,6 +42,7 @@ CMUX_TASK_STATE="$DECL_HOME/workspaces.json"
 export CMUX_TASK_STATE
 ctx="$(run_decl)"
 assert_contains "cmux 不在でも状態不明の案内" "$ctx" '宣言状態 不明'
+assert_contains "案件宣言の正本参照" "$ctx" '~/Data/obsidian/Preferences/core-workflow.md'
 assert_eq "状態を調べても記録は作らない" 0 "$([ -e "$CMUX_TASK_STATE" ] && echo 1 || echo 0)"
 
 echo "=== 宣言済と未宣言を読み取りだけで判断する ==="

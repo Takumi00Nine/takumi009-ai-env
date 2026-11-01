@@ -148,13 +148,16 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"boot-read-test"}'
 printf '%s\\n' '{"type":"turn.completed"}'
 ''')
         probe.chmod(0o755)
+        prefs = work / 'preferences'
+        prefs.mkdir()
+        (prefs / 'worker-role-implementer.md').write_text('試験用職種ノート')
         log = work / 'worker-env.txt'
         child_env = dict(env, HOME=str(work / 'worker'), PATH=str(bindir) + os.pathsep + env['PATH'],
-                         BOOT_READ_ENV_LOG=str(log))
+                         BOOT_READ_ENV_LOG=str(log), AIENV_PREFERENCES_DIR=str(prefs))
         require('AIENV_CODEX_WORKER' not in child_env, '親のworker変数が混入')
         result = subprocess.run([
             'bash', str(repo / 'team/connect/codex/codex-exec.sh'),
-            '--cwd', str(work), '--sandbox', 'read-only', '--out', str(work / 'worker-out.md'),
+            '--role', 'implementer', '--cwd', str(work), '--sandbox', 'read-only', '--out', str(work / 'worker-out.md'),
             '--prompt-file', '-',
         ], input='必読: ~/Data/obsidian/Preferences/absolute-rules.md（テスト用依頼）',
             env=child_env, cwd=work, text=True, capture_output=True, timeout=10)

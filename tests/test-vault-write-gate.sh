@@ -40,7 +40,7 @@ run_hook() {
 assert_denied() {
   local desc="$1" fpath="$2" cwd="$3" out
   out="$(run_hook "$fpath" "$cwd")"
-  if printf '%s' "$out" | grep -qE '"permissionDecision":[[:space:]]*"deny"'; then
+  if printf '%s' "$out" | jq -e '.hookSpecificOutput | .permissionDecision == "deny" and (.permissionDecisionReason | contains("~/Data/obsidian/Preferences/core-worker.md §4"))' >/dev/null; then
     pass "$desc"
   else
     fail_case "$desc (denyされなかった。fpath=[$fpath] cwd=[$cwd] out=[$out])"

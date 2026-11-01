@@ -250,7 +250,7 @@ echo "=== 10. PA-22: マーカーも委任実績も無い → deny（共通前�
 
   json="$(make_input "$SID" "$AID" "$ATYPE" "$fpath" "$WORK")"
   run_gate "$HOME_D" "$TEAMS_D" "$MARK_D" "$json"
-  assert_deny "PA-22: マーカー・委任実績いずれも無ければdeny" "delegation-gate"
+  assert_deny "PA-22: マーカー・委任実績いずれも無ければdeny・正本参照" "~/Data/obsidian/Preferences/coding-delegation.md"
   rm -rf "$WORK"
 }
 

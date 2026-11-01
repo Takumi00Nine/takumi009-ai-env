@@ -64,7 +64,7 @@ assert_denied() {
   pass "$desc"
 }
 
-RULE3_REASON='team/connect/codex/codex-exec.sh 経由のみ'
+RULE3_REASON='~/Data/obsidian/Preferences/codex-exec-worker.md'
 
 assert_denied "codex exec 直叩きはdeny" \
   "codex exec --skip-git-repo-check -s read-only -C /tmp --json -o /tmp/out.md 'hello'" "$RULE3_REASON"

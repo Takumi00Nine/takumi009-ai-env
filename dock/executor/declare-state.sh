@@ -46,7 +46,7 @@ resolve_declare_state() {
   slug="$(ws_state_lookup_slug "$DECLARE_STATE_FILE" "$uuid" 2>/dev/null)"
   if [ -n "$slug" ]; then
     # 記録は書き手（宣言 CLI）が FR-34 で検証済み。手で壊された値は注入文に写さない。
-    ws_slug_valid "$slug" || slug="（slug が不正＝記録を確認）"
+    ws_slug_valid "$slug" || slug="（slug 不正）"
     DECLARE_STATE="declared"
     DECLARE_SLUG="$slug"
   else
@@ -60,13 +60,13 @@ resolve_declare_state() {
 compose_declare_line6() {
   case "$DECLARE_STATE" in
     declared)
-      DECLARE_LINE6="⑥ 案件宣言＝宣言済み: ${DECLARE_SLUG}（このワークスペースの宣言は cmux 再起動後も同じワークスペースで生きる。別の案件へ切り替えるときだけ ${DECLARE_CMD} を呼び直す・実行はリーダーであってフックではない）" ;;
+      DECLARE_LINE6="⑥ 案件宣言＝宣言済み: ${DECLARE_SLUG}・command=${DECLARE_CMD}。正本: ~/Data/obsidian/Preferences/core-workflow.md" ;;
     undeclared)
-      DECLARE_LINE6="⑥ 案件宣言＝未宣言。プロジェクトが確定したら1回だけ宣言する: ${DECLARE_CMD}（実行はリーダーであってフックではない）" ;;
+      DECLARE_LINE6="⑥ 案件宣言＝未宣言・command=${DECLARE_CMD}。正本: ~/Data/obsidian/Preferences/core-workflow.md" ;;
     corrupt)
-      DECLARE_LINE6="⑥ 案件宣言＝宣言状態 不明（宣言記録破損: ${DECLARE_STATE_FILE}＝set は記録破損時に拒否される。記録の確認を先に）。直してからプロジェクトが確定したら1回だけ宣言する: ${DECLARE_CMD}（実行はリーダーであってフックではない）" ;;
+      DECLARE_LINE6="⑥ 案件宣言＝宣言状態 不明（宣言記録破損: ${DECLARE_STATE_FILE}）・command=${DECLARE_CMD}。正本: ~/Data/obsidian/Preferences/core-workflow.md" ;;
     *)
-      DECLARE_LINE6="⑥ 案件宣言＝宣言状態 不明（cmux の応答なし・呼び出し元ワークスペース未確定など）。プロジェクトが確定したら1回だけ宣言する: ${DECLARE_CMD}（実行はリーダーであってフックではない）" ;;
+      DECLARE_LINE6="⑥ 案件宣言＝宣言状態 不明・command=${DECLARE_CMD}。正本: ~/Data/obsidian/Preferences/core-workflow.md" ;;
   esac
 }
 

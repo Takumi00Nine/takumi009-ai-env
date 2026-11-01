@@ -64,6 +64,7 @@ data = json.loads(pathlib.Path(sys.argv[1]).read_text())
 assert data['hookSpecificOutput']['hookEventName'] == 'PreToolUse'
 assert data['hookSpecificOutput']['permissionDecision'] == 'deny'
 assert data['hookSpecificOutput']['permissionDecisionReason'].split(':')[0] == sys.argv[2].split(':')[0]
+assert '~/Data/obsidian/Preferences/worker-role-prompts.md' in data['hookSpecificOutput']['permissionDecisionReason']
 PY
   then
     pass "$label"
@@ -79,23 +80,23 @@ run_guard "$base,"'"model":"opus"}}' "$WORK/gd01.out" "$WORK/gd01.err"
 assert_pass_case "GD-01 model=opusはexit 0・stdout/stderr空" "$WORK/gd01.out" "$WORK/gd01.err"
 
 run_guard "$base}}" "$WORK/gd02.out" "$WORK/gd02.err"
-assert_deny_case "GD-02 欠落をexit 0の完全なdeny JSONで拒否" "$WORK/gd02.out" "$WORK/gd02.err" 'MODEL_ARGUMENT_REQUIRED: resolve-candidate の AGENT_MODEL を Agent.model に明示してください。'
+assert_deny_case "GD-02 欠落をexit 0の完全なdeny JSONで拒否" "$WORK/gd02.out" "$WORK/gd02.err" 'MODEL_ARGUMENT_REQUIRED'
 
 run_guard "$base,"'"model":"claude-opus-5-5"}}' "$WORK/gd04.out" "$WORK/gd04.err"
-assert_deny_case "GD-04 具体IDをexit 0の完全なdeny JSONで拒否" "$WORK/gd04.out" "$WORK/gd04.err" 'MODEL_ARGUMENT_INVALID: Agent.model は resolve-candidate が返した4別名のいずれかを明示してください。'
+assert_deny_case "GD-04 具体IDをexit 0の完全なdeny JSONで拒否" "$WORK/gd04.out" "$WORK/gd04.err" 'MODEL_ARGUMENT_INVALID'
 
 run_guard '{"tool_name":"Agent","tool_input":{"subagent_type":"Explore"}}' "$WORK/gd05.out" "$WORK/gd05.err"
 assert_pass_case "GD-05 対象外職種はexit 0・stdout/stderr空" "$WORK/gd05.out" "$WORK/gd05.err"
 
 echo "=== EF-01〜02: CLAUDE_CODE_SUBAGENT_MODEL_FORCE 環境変数の検査（締めレビュー1巡目 #1対応） ==="
 run_guard_env "$base,"'"model":"opus"}}' "$WORK/ef01.out" "$WORK/ef01.err" "CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1"
-assert_deny_case "EF-01 FORCE=1設定時はmodel指定済みでもexit 0の完全なdeny JSONで拒否" "$WORK/ef01.out" "$WORK/ef01.err" 'MODEL_ENV_OVERRIDE_FORBIDDEN: 環境変数 CLAUDE_CODE_SUBAGENT_MODEL_FORCE が設定されています。Agent.model の指定を上書きする可能性があるため、解除してから再実行してください。'
+assert_deny_case "EF-01 FORCE=1設定時はmodel指定済みでもexit 0の完全なdeny JSONで拒否" "$WORK/ef01.out" "$WORK/ef01.err" 'MODEL_ENV_OVERRIDE_FORBIDDEN'
 
 echo "=== HF-01〜04: 入力契約・依存障害は固定ERROR deny ==="
 check_error() {
   label=$1 input=$2 cause=$3
   run_guard "$input" "$WORK/hf.out" "$WORK/hf.err"
-  expected="MODEL_GUARD_ERROR: cause=$cause; model 指定を検査できません。フックの入力と配置を確認してください。"
+  expected='MODEL_GUARD_ERROR'
   assert_deny_case "$label はexit 0の完全なdeny JSON" "$WORK/hf.out" "$WORK/hf.err" "$expected"
 }
 check_error HF-01a '{' JQ_FAILED

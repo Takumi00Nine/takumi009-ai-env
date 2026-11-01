@@ -96,11 +96,10 @@ echo "=== プロファイル不在では最小能力へ倒す ==="
   PROFILE_PATH="$(mktemp -d)/nonexistent/profile.md"
 
   ctx="$(run_status_with_profile "$PROFILE_PATH")"
-  assert_contains "T1: 最小能力+⚠️の警告が出る" "$ctx" "最小能力"
-  # FR-12（要件v1.2.1）: 不在(T1)は🧭モード行の同じ1行の中に「利用不可」
-  # 「本人確認へ倒す」が含まれる（値の再掲は無く区分コードのみ）。
+  assert_contains "T1: 解決不能時の正本参照" "$ctx" "~/Data/obsidian/Preferences/role-vacancy.md"
+  # 不在(T1)はモード行に利用不可の状態を出す。
   mode_line_t1="$(printf '%s\n' "$ctx" | grep '^🧭 現在＝')"
-  assert_contains "T1: モード行に「本人確認へ倒す」を含む" "$mode_line_t1" "本人確認へ倒す"
+  assert_contains "T1: モード行に利用不可の理由コード" "$mode_line_t1" "利用不可（T1）"
 }
 echo "=== プロファイル破損では最小能力へ倒す ==="
 {
@@ -113,7 +112,7 @@ team_mode: 本人
 EOF
 
   ctx="$(run_status_with_profile "$PROFILE_PATH")"
-  assert_contains "T6: 最小能力+⚠️の警告が出る" "$ctx" "最小能力"
+  assert_contains "T6: 破損時の正本参照" "$ctx" "~/Data/obsidian/Preferences/core-workflow.md §7"
   assert_contains "T6: YAML破損の理由が出る" "$ctx" "T6"
 
   rm -rf "$PROFILE_DIR"
@@ -127,7 +126,7 @@ echo "=== symlinkは実体として受理しない ==="
   ln -s "$REAL_TARGET" "$PROFILE_PATH"
 
   ctx="$(run_status_with_profile "$PROFILE_PATH")"
-  assert_contains "symlinkでは最小能力+⚠️の警告が出る" "$ctx" "最小能力"
+  assert_contains "symlink時の正本参照" "$ctx" "~/Data/obsidian/Preferences/role-vacancy.md"
   assert_contains "SYMLINK理由コードが出る" "$ctx" "SYMLINK"
   rm -rf "$PROFILE_DIR"
 }

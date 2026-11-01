@@ -40,11 +40,11 @@ assert_true() {
 #               NAME_FILENAME_MISMATCH・FRONTMATTER_FIELD_*／BODY_EMPTY はそのまま）
 #   (c)(e)(f) … このヘルパ内で直接見る（BUILTIN_NAME_COLLISION・
 #               MODEL_KEY_FORBIDDEN・EFFORT_KEY_FORBIDDEN・
-#               PERMISSION_HEADING_COUNT・LEGACY_REFERENCE_PRESENT）
+#               REFERENCE_BODY_INVALID）
 # ⚠️ 定義集合の等値・件数はここでは見ない（AC-6＝集合の閉列挙なし）。
 # ------------------------------------------------------------------
 contract_check() {
-  PYTHONPATH="$AGENT_DEF_LIB" python3 - "$1" <<'PYCONTRACT'
+  PYTHONPATH="$AGENT_DEF_LIB" python3 - "$1" "$2" <<'PYCONTRACT'
 import re
 import sys
 from pathlib import Path
@@ -88,6 +88,7 @@ def frontmatter_text(raw: bytes):
 
 
 agents_dir = sys.argv[1]
+preferences_dir = Path(sys.argv[2])
 files = sorted(p for p in Path(agents_dir).glob("*.md") if p.is_file())
 if not files:
     print("NO_DEFINITIONS")
@@ -122,10 +123,20 @@ for path in files:
         if re.search(r"^[ \t]*effort[ \t]*:", fm, re.M):
             add("EFFORT_KEY_FORBIDDEN")
     text = raw.decode("utf-8", errors="replace")
-    if len(re.findall(r"^## 権限", text, re.M)) != 1:
-        add("PERMISSION_HEADING_COUNT")
-    if "worker-role-prompts" in text:
-        add("LEGACY_REFERENCE_PRESENT")
+    body = text.split("---", 2)[-1].strip()
+    expected = ("着手前に ~/Data/obsidian/Preferences/absolute-rules.md → "
+                f"core-worker.md → worker-role-{stem}.md を全文 Read し、従う。")
+    if body != expected:
+        add("REFERENCE_BODY_INVALID")
+
+    note = preferences_dir / f"worker-role-{stem}.md"
+    try:
+        note_body = note.read_text()
+    except OSError:
+        add("ROLE_NOTE_UNREADABLE")
+    else:
+        if len(re.findall(r"^## 権限\s*$", note_body, re.M)) != 1:
+            add("ROLE_NOTE_PERMISSION_HEADING_COUNT")
 
     for c in codes:
         violations.append(f"{path.name}: {c}")
@@ -148,20 +159,26 @@ write_probe_def() {
     echo "tools: Read"
     for extra in "$@"; do echo "$extra"; done
     echo "---"
-    echo "probe body"
-    echo
-    echo "## 権限"
-    echo "成果物への書込＝なし／テスト＝なし／実行＝なし"
+    echo "着手前に ~/Data/obsidian/Preferences/absolute-rules.md → core-worker.md → worker-role-$name.md を全文 Read し、従う。"
   } > "$out"
 }
 
-echo "=== 定義ファイル契約 ==="
-out="$(contract_check "$AGENTS_DIR")"; rc=$?
-assert_true "配布する定義が契約を満たす" "$([ "$rc" -eq 0 ] && [ -z "$out" ] && echo 1 || echo 0)"
-
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+PREFERENCES_DIR="$WORK/preferences"
+mkdir -p "$PREFERENCES_DIR"
+for definition in "$AGENTS_DIR"/*.md; do
+  role="$(basename "$definition" .md)"
+  printf '%s\n' '## 権限' '試験用の職種権限' > "$PREFERENCES_DIR/worker-role-$role.md"
+done
+
+echo "=== 定義ファイル契約 ==="
+out="$(contract_check "$AGENTS_DIR" "$PREFERENCES_DIR")"; rc=$?
+assert_true "配布する定義が契約を満たす" "$([ "$rc" -eq 0 ] && [ -z "$out" ] && echo 1 || echo 0)"
+
 write_probe_def "$WORK/zz-probe.md" zz-probe
+out="$(contract_check "$WORK" "$PREFERENCES_DIR")"; rc=$?
+assert_true "参照先の職種ノートが無ければ契約検査が失敗する" "$([ "$rc" -ne 0 ] && [[ "$out" == *ROLE_NOTE_UNREADABLE* ]] && echo 1 || echo 0)"
 json="$(python3 "$AGENT_DEF_LIB/agent_def.py" agents-json --dir "$WORK" --role zz-probe)"
 assert_true "職種定義から起動用JSONを生成できる" "$(printf '%s' "$json" | python3 -c '
 import json,sys
@@ -169,7 +186,7 @@ d=json.load(sys.stdin)["zz-probe"]
 assert d["description"] and d["prompt"] and d["tools"]
 ' && echo 1 || echo 0)"
 write_probe_def "$WORK/zz-probe.md" zz-other
-out="$(contract_check "$WORK")"; rc=$?
+out="$(contract_check "$WORK" "$PREFERENCES_DIR")"; rc=$?
 assert_true "名前不一致を拒否する" "$([ "$rc" -ne 0 ] && [[ "$out" == *NAME_FILENAME_MISMATCH* ]] && echo 1 || echo 0)"
 
 echo

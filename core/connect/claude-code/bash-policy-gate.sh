@@ -28,19 +28,19 @@ deny() {
 
 # R1 公開ガード（5 分岐）
 if printf '%s' "$cmd" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+create' && printf '%s' "$cmd" | grep -Eq -- '--public([[:space:]]|=|$)'; then
-  deny 'リポジトリの公開はブロックされています。publicにするにはユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflowルール）。'
+  deny 'PUBLIC_CREATE_DENIED: gh repo create --public。正本: ~/Data/obsidian/Preferences/absolute-rules.md ②・~/Data/obsidian/Preferences/git-workflow.md'
 fi
 if printf '%s' "$cmd" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+edit' && printf '%s' "$cmd" | grep -Eqi -- '--visibility[[:space:]=]+public'; then
-  deny 'private→publicの変更はブロックされています。ユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflowルール）。'
+  deny 'PUBLIC_VISIBILITY_DENIED: gh repo edit --visibility public。正本: ~/Data/obsidian/Preferences/absolute-rules.md ②・~/Data/obsidian/Preferences/git-workflow.md'
 fi
 if printf '%s' "$cmd" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+repo[[:space:]]+create' && ! printf '%s' "$cmd" | grep -Eq -- '--private([[:space:]]|=|$)'; then
-  deny 'gh repo create は必ず --private を明示してください（private既定に依存しない方針）。public化は作成と分離し、ユーザーの明示許可後に行います（git-workflow/absolute-rulesルール）。'
+  deny 'PRIVATE_ARGUMENT_MISSING: gh repo create の --private なし。正本: ~/Data/obsidian/Preferences/absolute-rules.md ②・~/Data/obsidian/Preferences/git-workflow.md'
 fi
 if printf '%s' "$cmd" | grep -Eqi '(^|[[:space:]/])gh[[:space:]]+api' && printf '%s' "$cmd" | grep -Eqi 'visibility' && printf '%s' "$cmd" | grep -Eqi 'public'; then
-  deny 'GitHub API(gh api)経由のpublic化はブロックされています。ユーザーが明示的に「はい、公開してください」と伝える必要があります（git-workflow/absolute-rulesルール）。'
+  deny 'PUBLIC_API_DENIED: gh api visibility public。正本: ~/Data/obsidian/Preferences/absolute-rules.md ②・~/Data/obsidian/Preferences/git-workflow.md'
 fi
 if printf '%s' "$cmd" | grep -Eqi '(^|[[:space:]/])(curl|wget)' && printf '%s' "$cmd" | grep -Eqi 'api.github.com' && printf '%s' "$cmd" | grep -Eqi 'visibility' && printf '%s' "$cmd" | grep -Eqi 'public'; then
-  deny 'curl/wget 経由のGitHub public化はブロックされています。ユーザーの明示許可が必要です（git-workflow/absolute-rulesルール）。'
+  deny 'PUBLIC_HTTP_DENIED: curl/wget api.github.com visibility public。正本: ~/Data/obsidian/Preferences/absolute-rules.md ②・~/Data/obsidian/Preferences/git-workflow.md'
 fi
 
 # R2 pip 仮想環境
@@ -56,7 +56,7 @@ if [ "$is_pip" = "1" ]; then
   printf '%s' "$cmd" | grep -Eq 'venv[^[:space:]]*/bin/(pip|python)' && venv_ok=1
   printf '%s' "$cmd" | grep -Eq 'VIRTUAL_ENV=' && venv_ok=1
   if [ "$venv_ok" = "0" ]; then
-    deny 'グローバルへの直接pip installはブロックされています。先に仮想環境を用意してください：python -m venv .venv && source .venv/bin/activate してから pip install。.venv/bin/pip 等の明示パスや uv pip も可（python-venvルール）。'
+    deny 'PIP_VENV_MISSING: pip install の仮想環境の根拠なし。正本: ~/Data/obsidian/Preferences/python-venv.md'
   fi
 fi
 
@@ -74,7 +74,7 @@ if printf '%s' "$cmd" | grep -Eqi '(^|[^[:alnum:]_])brew[[:space:]]+(install|rei
     esac
   done
   if [ -n "$blocked" ]; then
-    deny "言語ランタイム(${blocked})をbrewで直接入れるのはブロックされています。anyenv経由で管理してください：anyenv install <言語env>（例 jenv/rbenv/goenv）→ その*envでバージョン導入（anyenv-runtimeルール）。"
+    deny "BREW_RUNTIME_DENIED: target=${blocked}。正本: ~/Data/obsidian/Preferences/anyenv-runtime-management.md"
   fi
 fi
 

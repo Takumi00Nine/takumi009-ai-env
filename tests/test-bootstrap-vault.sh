@@ -121,6 +121,7 @@ echo "=== 必読ノートを注入し、読了まで着手を止める ==="
   done
   assert_true "必読ノートがすべて注入される" "$all_present"
   assert_contains "読了まで着手しない指示がある" "$ctx" "② 上記を読み終えるまで"
+  assert_contains "Vault記録分担の正本参照" "$ctx" "$VAULT_DIR/Preferences/core-worker.md §4"
 
   rm -rf "$VAULT_DIR"
 }

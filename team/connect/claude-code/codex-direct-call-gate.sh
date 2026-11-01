@@ -70,9 +70,9 @@ fi
 [ "$codex_direct_call" = "1" ] || exit 0
 
 if [ -n "$wrapper" ]; then
-  deny "Codex の起動は ${wrapper#"$ROOT_DIR"/} 経由のみです（absolute-rules の機械強制はラッパー内部にあります）。直接の codex exec / codex resume 呼び出しはブロックされています（bash-danger-gate）。"
+  deny "CODEX_DIRECT_CALL_DENIED: wrapper=${wrapper#"$ROOT_DIR"/}。正本: ~/Data/obsidian/Preferences/codex-exec-worker.md"
 fi
-no_wrapper='Codex の起動ラッパーが台帳に無いため、直接の codex exec / codex resume 呼び出しはブロックされています（bash-danger-gate）。'
+no_wrapper='CODEX_DIRECT_CALL_DENIED: 台帳の wrapper なし。正本: ~/Data/obsidian/Preferences/codex-exec-worker.md'
 if [ -n "$ledger_msg" ]; then
   printf '%s\n' "$ledger_msg" >&2
   deny "$no_wrapper $ledger_msg"

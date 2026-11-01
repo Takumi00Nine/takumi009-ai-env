@@ -31,7 +31,7 @@
 #
 # 終了コード表（設計§2.9・要件requirements-v1.4.3.md §12に転記済み）:
 #   0成功/1想定外(予約)/2引数不正/3候補外の定義名/4配役表・定義の解決失敗/
-#   5モデル明示の強制違反/6依頼文が読めない・absolute-rules参照無し/
+#   5モデル明示の強制違反/6依頼文が読めない/
 #   7成果物置き場の上書き拒否・並行呼び出し/8前提不備/9子cwdの前提不備/
 #   10上限到達/11認証失敗/12タイムアウト/13権限不足/14その他/15確定失敗
 #
@@ -39,14 +39,13 @@
 #   CLAUDE_CODE_WRAPPER_BIN（既定 claude・FR-8の固定1キー）
 #   AIENV_LOCAL_PROFILE_PATH（既定 ~/.config/takumi009-ai-env/profile.md）
 #   AIENV_AGENT_SOURCE_DIR（既定 <repo>/team/rules/agents）
+#   AIENV_PREFERENCES_DIR（既定 $HOME/Data/obsidian/Preferences）
 #   AIENV_CHILD_SETTINGS_SRC（既定 $HOME/.claude/settings.json）
 #   AIENV_CLAUDE_EXEC_LOG（既定 $HOME/.claude/logs/claude-exec.jsonl）
 #   AIENV_CLAUDE_EXEC_TIMEOUT_SECS（既定 1800）
 #   GATE_MARKER_DIR（既定 /tmp）
 #
-# 絶対厳守④の機械強制: 依頼文に "absolute-rules" の参照が無ければ子を
-# 起動せず exit 6（codex-exec.shと同じ型だが、AC-7④の引数不正=2と区別する
-# ため本ラッパーは6を使う＝DR1-m7）。
+# 職種定義が3ノートの必読指示を渡す。職種ノートが読めない・空なら exit 8。
 #
 # 依存: python3・claude（CLAUDE_CODE_WRAPPER_BINで差し替え可）・
 # claude/hooks/lib/{claude_exec.py,agent_def.py,profile_resolve.py,
@@ -156,6 +155,7 @@ fi
 BIN="${CLAUDE_CODE_WRAPPER_BIN:-claude}"
 PROFILE="${AIENV_LOCAL_PROFILE_PATH:-$HOME/.config/takumi009-ai-env/profile.md}"
 AGENTS_DIR="${AIENV_AGENT_SOURCE_DIR:-$REPO_ROOT/team/rules/agents}"
+PREFERENCES_DIR="${AIENV_PREFERENCES_DIR:-$HOME/Data/obsidian/Preferences}"
 CHILD_SETTINGS_SRC="${AIENV_CHILD_SETTINGS_SRC:-$HOME/.claude/settings.json}"
 EXEC_LOG="${AIENV_CLAUDE_EXEC_LOG:-$HOME/.claude/logs/claude-exec.jsonl}"
 TIMEOUT_SECS="${AIENV_CLAUDE_EXEC_TIMEOUT_SECS:-1800}"
@@ -193,14 +193,15 @@ fail_exit() {
   exit "$1"
 }
 
-# --- 手順4a/4b: 依頼文ファイルを読み、absolute-rules参照を検査する。 --------
+# --- 手順4: 職種ノートと依頼文ファイルの読取可否を検査する。 ------------
+ROLE_NOTE="$PREFERENCES_DIR/worker-role-$ROLE.md"
+if [ ! -r "$ROLE_NOTE" ] || [ ! -s "$ROLE_NOTE" ]; then
+  echo "[$SCRIPT_NAME] FAIL: 職種ノートが読めないか空です: $ROLE_NOTE" >&2
+  fail_exit 8 role_note_unavailable
+fi
 if [ ! -r "$PROMPT_FILE" ]; then
   echo "[$SCRIPT_NAME] FAIL: --prompt-file のファイルが読めません: $PROMPT_FILE" >&2
   fail_exit 6 prompt_unreadable
-fi
-if ! grep -q "absolute-rules" "$PROMPT_FILE" 2>/dev/null; then
-  echo "[$SCRIPT_NAME] FAIL: 依頼文に absolute-rules への参照がありません。Preferences/absolute-rules.md（[[Preferences/absolute-rules]]）を読む指示を依頼文に含めてください。" >&2
-  fail_exit 6 absolute_rules_missing
 fi
 
 # --- 手順5: python3とclaude実行体の存在確認。 -------------------------------

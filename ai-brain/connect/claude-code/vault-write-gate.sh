@@ -45,7 +45,7 @@ resolve_vault_gate_self_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 guard_common_load_error() {
-  reason="vault-write-gate: 共有部品（vault-paths.sh・cause=$1）を読み込めず、Vault保護を判定できません。フックの配置を確認してください。成果物は依頼文が指定した作業ディレクトリへ書いてください。"
+  reason="vault-write-gate: vault-paths.sh 読込失敗・cause=$1・Vault保護判定不能。正本: ~/Data/obsidian/Preferences/core-worker.md §4"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}' 2>/dev/null \
     || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
   exit 0
@@ -76,7 +76,7 @@ case "$fpath" in
 esac
 
 if guard_is_vault_ai_path "$fpath"; then
-  reason="vault-write-gate: Vault の AI 向け6フォルダへの書き込みは不可です。成果物は依頼文の作業ディレクトリへ書き、Vault への記録はリーダーへ報告してください。"
+  reason="vault-write-gate: Vault の AI 向け6フォルダへの書込拒否。正本: ~/Data/obsidian/Preferences/core-worker.md §4"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
 fi
 exit 0

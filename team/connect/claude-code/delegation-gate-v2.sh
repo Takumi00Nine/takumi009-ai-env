@@ -47,7 +47,7 @@ resolve_delegation_gate_self_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 guard_common_load_error() {
-  reason="delegation-gate: 共有部品（vault-paths.sh・cause=$1）を読み込めず、rule 2.5 の判定ができません。フックの配置を確認してください。"
+  reason="delegation-gate: vault-paths.sh 読込失敗・cause=$1・rule 2.5 判定不能。正本: ~/Data/obsidian/Preferences/coding-delegation.md"
   jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}' 2>/dev/null \
     || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
   exit 0
@@ -138,5 +138,5 @@ marker="$MARKER_DIR/claude-direct-edit-ok-$sid"
 [ -f "$marker" ] && exit 0
 
 # deny（自問を強制）
-reason="delegation-gate: このセッションに委任実績がありません。作る工程はワーカーへ委任してください（Preferences/coding-delegation）。直接編集が妥当なら理由を応答に明示して: touch $marker"
+reason="delegation-gate: 委任実績なし・marker=$marker・command=touch $marker。正本: ~/Data/obsidian/Preferences/coding-delegation.md"
 jq -n --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'

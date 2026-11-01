@@ -51,7 +51,7 @@ deny() {
   # jqが無い/失敗した場合のフォールバックは$1（roleを含みうる）を補間しない
   # 固定文にする（printfの%sへ生埋め込みするとJSONが壊れうるため。I2-M1）。
   jq -n --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}' 2>/dev/null \
-    || printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"IN_PROCESS_BLOCKED: jqが利用できないため判定できません（判定不能・fail-close）。team/connect/claude-code/claude-exec.sh 経由で起動してください。"}}'
+    || printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"IN_PROCESS_BLOCKED: jq 利用不能・判定不能。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md"}}'
   exit 0
 }
 
@@ -80,7 +80,7 @@ write_audit_line() {
 # roleが取れていなくても監査を試みる（「書けるなら1行」＝設計§4.3）。
 fail_close() {
   write_audit_line "${1:-}" "denied" "$UNRESOLVED_PORT_JSON"
-  deny 'IN_PROCESS_BLOCKED: 配役表を解決できません（判定不能・fail-close）。team/connect/claude-code/claude-exec.sh 経由で起動してください。'
+  deny 'IN_PROCESS_BLOCKED: PROFILE_UNRESOLVED・判定不能。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md'
 }
 
 command -v jq >/dev/null 2>&1 || fail_close ""
@@ -164,8 +164,8 @@ if [ "$allowed" = "true" ]; then
     exit 0
   fi
   # 記録できない許可は出さない（FR-23②が恒真になるのを防ぐ＝設計§4.3）。
-  deny 'IN_PROCESS_BLOCKED: 監査ログを書き込めません。team/connect/claude-code/claude-exec.sh 経由で起動してください。'
+  deny 'IN_PROCESS_BLOCKED: 監査ログ書込失敗。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md'
 fi
 
 write_audit_line "$role" "denied" "$port_json"
-deny "IN_PROCESS_BLOCKED: role=${role} は配役表の職種として登録されています。Agentツールでのin-process起動は使えません。team/connect/claude-code/claude-exec.sh --role ${role} … で起動してください。"
+deny "IN_PROCESS_BLOCKED: role=${role}・配役表登録あり。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md"

@@ -146,6 +146,8 @@ echo "=== 5. サブ機・1コミット遅れ: 案内メッセージが出る ===
     "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName' | grep -q '^SessionStart$' && echo 1 || echo 0)"
   assert_true "サブ機に更新コマンドを案内する" \
     "$(printf '%s' "$ctx" | grep -qF "$SUB/core/assembly/update-sub.sh" && echo 1 || echo 0)"
+  assert_true "更新の正本参照と遅れ件数" \
+    "$([[ "$ctx" == *'~/Data/obsidian/Preferences/git-workflow.md'* && "$ctx" == *'1 コミット遅れ'* ]] && echo 1 || echo 0)"
 
   rm -rf "$WORK"
 }

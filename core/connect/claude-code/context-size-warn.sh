@@ -114,8 +114,7 @@ except Exception:
 print(
     f"⚠️【要約前の記録確認】現在のコンテキスト推定 ~{ctx//1000}k トークン"
     f"（しきい値 {warn_at//1000}k 超・model={model}・assistant応答 {turns} 回）。"
-    "案件ノートの進捗・次の作業・留意事項と検討経緯への参照を更新し、同じ画面で続ける。"
-    "警告は記録完了の証拠ではない。工程の節目と大きな処理の前にも未記録分を保存する。"
+    "正本: ~/Data/obsidian/Preferences/session-handoff.md・~/Data/obsidian/Preferences/core-conduct.md（記録）"
 )
 PYEOF
 exit 0

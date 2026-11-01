@@ -94,8 +94,8 @@ assert_fail_silent() {
   pass "$desc"
 }
 
-PROJECT_HEADING='Project番号対応表（この瞬間の表示順。ユーザーの「Project の N 番」はこの表で解決する。列＝番号・正式プロジェクト名・next 値・区分（稼働中／待ち／保留）・待ち日時（待ちの行だけ YYYY-MM-DDTHH:MM・他は空））:'
-TASK_HEADING='Task番号対応表（番号は版を指す・この瞬間の表示順。ユーザーの「Task の N 番」は同じ番号の行の版で解決する。列＝番号・版名・分数・状態・本文）:'
+PROJECT_HEADING='Project番号対応表'
+TASK_HEADING='Task番号対応表'
 
 extract_ctx() {
   local desc="$1"
@@ -127,8 +127,8 @@ assert_injected_side() {
   extract_ctx "$desc" || return
   local firstline
   firstline="$(printf '%s' "$CTX" | head -1)"
-  if [ "$firstline" != "$heading" ]; then
-    fail_case "$desc (見出し文が完全一致しない。firstline=[$firstline])"; return
+  if [[ "$firstline" != "$heading"* || "$firstline" != *'~/Data/obsidian/Preferences/project-tasks-format.md'* ]]; then
+    fail_case "$desc (見出しまたは正本参照がない。firstline=[$firstline])"; return
   fi
   if ! printf '%s' "$CTX" | grep -qF "$list_mark"; then
     fail_case "$desc (--listの出力が含まれていない。ctx=[$CTX])"; return
@@ -155,7 +155,7 @@ if extract_ctx "両語同時発火"; then
   project_ln="$(printf '%s\n' "$CTX" | grep -nF "$PROJECT_HEADING" | head -1 | cut -d: -f1)"
   task_ln="$(printf '%s\n' "$CTX" | grep -nF "$TASK_HEADING" | head -1 | cut -d: -f1)"
   blank_before_task="$(printf '%s\n' "$CTX" | sed -n "$((${task_ln:-1} - 1))p")"
-  if [ "$firstline" = "$PROJECT_HEADING" ] && [ -n "$task_ln" ] && [ "${project_ln:-0}" -lt "$task_ln" ] \
+  if [[ "$firstline" == "$PROJECT_HEADING"* ]] && [ -n "$task_ln" ] && [ "${project_ln:-0}" -lt "$task_ln" ] \
      && [ -z "$blank_before_task" ] \
      && printf '%s' "$CTX" | grep -qF "p-active" && printf '%s' "$CTX" | grep -qF "要件定義"; then
     pass "「Project の2番と Task の3番」は1 JSONにProject表→空行→Task表の順で両表が入る（実測 ${both_elapsed}s）"
@@ -170,7 +170,7 @@ assert_fail_silent "Project側LIST_CMDが存在しないときは発火しない
 echo "=== 5b. 両方発火で片方が失敗＝その表だけ落とし、もう片方だけ出す ==="
 run_hook "Project の2番と Task の3番" "$PROJECT_STUB" "$FAIL_STUB"
 if extract_ctx "Task側だけ失敗"; then
-  if [ "$(printf '%s' "$CTX" | head -1)" = "$PROJECT_HEADING" ] && ! printf '%s' "$CTX" | grep -qF "$TASK_HEADING"; then
+  if [[ "$(printf '%s' "$CTX" | head -1)" == "$PROJECT_HEADING"* ]] && ! printf '%s' "$CTX" | grep -qF "$TASK_HEADING"; then
     pass "Task側の--listが失敗してもProject表だけは注入される"
   else
     fail_case "Task側だけ失敗のときProject表だけ (ctx=[$CTX])"

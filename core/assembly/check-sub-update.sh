@@ -183,7 +183,7 @@ esac
 [ "$AHEAD_COUNT" -ge 1 ] || exit 0
 
 # --- 5. 未反映があれば手動実行を案内する ---
-MSG="⚠️ 外部脳（takumi009-ai-env）の更新が未反映です（origin/main より ${AHEAD_COUNT} コミット遅れ）。プロンプトに次を入力すると、このセッション内でそのまま実行して反映できます（\`!\` プレフィックス＝セッション内シェル実行）: \`! $DIR/core/assembly/update-sub.sh\`"
+MSG="⚠️ 外部脳（takumi009-ai-env）の更新が未反映（origin/main より ${AHEAD_COUNT} コミット遅れ）・command=! $DIR/core/assembly/update-sub.sh。正本: ~/Data/obsidian/Preferences/git-workflow.md（サブ機追従）"
 
 # jq自体の異常（実行時障害・SIGPIPE等）でスクリプト全体の終了コードが非0に
 # ならないよう、出力生成を変数に一旦収めてから明示的にexit 0する（Codex一次

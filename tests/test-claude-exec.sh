@@ -86,6 +86,8 @@ model=claude-sonnet-5-5
 EOF
 
   mkdir -p "$WORK/home"
+  mkdir -p "$WORK/preferences"
+  printf '%s\n' '## 権限' '担当範囲へ書込可' > "$WORK/preferences/worker-role-implementer.md"
   SETTINGS_SRC="$WORK/settings-src.json"
   cat > "$SETTINGS_SRC" <<EOF
 {
@@ -119,6 +121,7 @@ EOF
   export AIENV_LOCAL_PROFILE_PATH="$PROFILE"
   export AIENV_MODEL_DEFS_FILE="$MODELS_CONF"
   export AIENV_AGENT_SOURCE_DIR="$AGENTS_DIR"
+  export AIENV_PREFERENCES_DIR="$WORK/preferences"
   export AIENV_CHILD_SETTINGS_SRC="$SETTINGS_SRC"
   export AIENV_CLAUDE_EXEC_LOG="$LOG"
   export GATE_MARKER_DIR="$MARKER_DIR"
@@ -220,6 +223,18 @@ echo "=== AC-4: argv_has_p_agent_json_and_no_bare ==="
        && [ "$(stub_arg_after --output-format)" = json ] \
        && [ -n "$(stub_arg_after --model)" ] && [ -n "$(stub_arg_after --effort)" ] \
        && [ "$(stub_argv_has -p)" = 1 ] && echo 1 || echo 0)"
+  agents_json="$(stub_arg_after --agents)"
+  assert_true "職種の参照本文とtoolsが起動JSONへ渡る" \
+    "$(python3 -c '
+import json,sys
+from pathlib import Path
+agent=json.loads(sys.argv[1])["implementer"]
+body=Path(sys.argv[2]).read_text().split("---",2)[-1].strip()
+assert agent["prompt"].strip() == body
+assert "worker-role-implementer.md" in agent["prompt"]
+assert "Read" in agent["tools"]
+' "$agents_json" "$REAL_AGENTS_DIR/implementer.md" && echo 1 || echo 0)"
+
 }
 
 echo "=== AC-8: 子環境の組み立て ==="
@@ -382,14 +397,22 @@ EOF
   assert_eq "classify_other_529: exit14" "14" "$RC"
   unset AIENV_CLAUDE_STUB_RESPONSE_FILE AIENV_CLAUDE_STUB_STDERR
 }
-echo "=== 設計固有の失敗経路: reject_prompt_without_absolute_rules(6) ==="
+echo "=== 職種ノートが無ければ起動しない ==="
+{
+  new_fixture
+  export AIENV_PREFERENCES_DIR="$WORK/missing-preferences"
+  run_wrapper --role implementer --prompt-file "$PROMPT" --out "$WORK/o.json" --task-id t-nonote --model-def t-sonnet-high
+  assert_true "職種ノート欠落で子を起動せず前提不備を記録する" \
+    "$([ "$RC" -eq 8 ] && [ "$(stub_lines)" = 0 ] && [ "$(log_field reason_code)" = role_note_unavailable ] && echo 1 || echo 0)"
+}
+echo "=== absolute-rules 参照なしでも起動する ==="
 {
   new_fixture
   BADPROMPT="$WORK/no-ref.txt"
   echo "こんにちは、何かして" > "$BADPROMPT"
   run_wrapper --role implementer --prompt-file "$BADPROMPT" --out "$WORK/o.json" --task-id t-noref --model-def t-sonnet-high
-  assert_true "absolute-rulesの参照なしでは起動しない" \
-    "$([ "$RC" -eq 6 ] && [ "$(stub_lines)" = 0 ] && echo 1 || echo 0)"
+  assert_true "absolute-rulesの参照なしでも起動する" \
+    "$([ "$RC" -eq 0 ] && [ "$(stub_lines)" = 1 ] && echo 1 || echo 0)"
 }
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="

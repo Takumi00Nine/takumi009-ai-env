@@ -188,10 +188,10 @@ emit_table() {
   local list heading
   if [ "$1" = "project" ]; then
     list=$("$PROJECT_LIST_CMD" --list 2>/dev/null) || return 1
-    heading='Project番号対応表（この瞬間の表示順。ユーザーの「Project の N 番」はこの表で解決する。列＝番号・正式プロジェクト名・next 値・区分（稼働中／待ち／保留）・待ち日時（待ちの行だけ YYYY-MM-DDTHH:MM・他は空））:'
+    heading='Project番号対応表（この瞬間の表示順。列＝番号・正式プロジェクト名・next 値・区分（稼働中／待ち／保留）・待ち日時（待ちの行だけ YYYY-MM-DDTHH:MM・他は空））。正本: ~/Data/obsidian/Preferences/project-tasks-format.md'
   else
     list="$(CMUX_TASK_CALL_TIMEOUT=1 "$TASK_LIST_CMD" --list 2>/dev/null)" || return 1
-    heading='Task番号対応表（番号は版を指す・この瞬間の表示順。ユーザーの「Task の N 番」は同じ番号の行の版で解決する。列＝番号・版名・分数・状態・本文）:'
+    heading='Task番号対応表（この瞬間の表示順。列＝番号・版名・分数・状態・本文）。正本: ~/Data/obsidian/Preferences/project-tasks-format.md'
   fi
   [ -n "$list" ] || return 1
   printf '%s\n%s' "$heading" "$list" | jq -Rs .

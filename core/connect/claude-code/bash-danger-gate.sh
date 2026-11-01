@@ -17,10 +17,10 @@ deny() {
 
 # ① リモート取得内容をシェルへ流す実行（curl/wget ... | [sudo] bash/sh/zsh、bash <(curl ...)）
 if printf '%s' "$cmd" | grep -Eqi '(^|[^[:alnum:]_])(curl|wget)[^|;&]*\|[[:space:]]*(sudo[[:space:]]+)?(bash|sh|zsh|source)([[:space:]]|$)'; then
-  deny 'リモートスクリプトのパイプ実行（curl/wget | shell）はブロックされています。スクリプトは一旦ファイルに保存し、内容を確認してから実行してください（bash-danger-gate）。'
+  deny 'REMOTE_PIPE_DENIED: curl/wget | shell。正本: ~/Data/obsidian/Preferences/absolute-rules.md・~/Data/obsidian/Preferences/core-worker.md §5'
 fi
 if printf '%s' "$cmd" | grep -Eqi '(^|[^[:alnum:]_])(bash|sh|zsh)[[:space:]]+<\([[:space:]]*(curl|wget)'; then
-  deny 'リモートスクリプトのプロセス置換実行（bash <(curl ...)）はブロックされています。スクリプトは一旦ファイルに保存し、内容を確認してから実行してください（bash-danger-gate）。'
+  deny 'REMOTE_SUBSTITUTION_DENIED: shell process substitution curl/wget。正本: ~/Data/obsidian/Preferences/absolute-rules.md・~/Data/obsidian/Preferences/core-worker.md §5'
 fi
 
 # ② 再帰 rm（rm -r/-R/--recursive）× 保護パス（HOME 直下の実パス基準＋相対形は cwd/cd 判定）
@@ -34,18 +34,18 @@ if printf '%s' "$cmd" | grep -Eq '(^|[;&|[:space:]])(sudo[[:space:]]+)?rm[[:spac
   ncmd=$(printf '%s' "$cmd" | sed -E 's#/(\./)+#/#g; s#/{2,}#/#g')
   # ②-a 絶対形: HOME 直下の保護ディレクトリそのもの・またはその配下（末尾が英数・_・.・- 以外）
   if printf '%s' "$ncmd" | grep -Eqi "${home_pfx}/(\{[^}]*)?${prot}${tail}"; then
-    deny '保護パス（~/Data/obsidian・~/.claude・~/.codex・~/.cmuxterm）への再帰 rm は拒否しました。必要なら本人が手で実行してください（bash-danger-gate）。'
+    deny 'PROTECTED_RM_DENIED: ~/Data/obsidian・~/.claude・~/.codex・~/.cmuxterm への再帰 rm。正本: ~/Data/obsidian/Preferences/absolute-rules.md・~/Data/obsidian/Preferences/core-worker.md §5'
   fi
   # ②-b 相対形: cwd が HOME、または同じコマンド内で HOME へ cd している時だけ、裸の保護名を見る
   in_home=0
   [ -n "$cwd" ] && [ "${cwd%/}" = "${HOME%/}" ] && in_home=1
   printf '%s' "$ncmd" | grep -Eqi "(^|[;&|[:space:]])cd([[:space:]]+${home_pfx}/?)?[[:space:]]*(;|&|\||$)" && in_home=1
   if [ "$in_home" = 1 ] && printf '%s' "$ncmd" | grep -Eqi "(^|[[:space:]\"'=])(\./)?${prot}${tail}"; then
-    deny '保護パス（~/Data/obsidian・~/.claude・~/.codex・~/.cmuxterm）への再帰 rm は拒否しました。必要なら本人が手で実行してください（bash-danger-gate）。'
+    deny 'PROTECTED_RM_DENIED: ~/Data/obsidian・~/.claude・~/.codex・~/.cmuxterm への再帰 rm。正本: ~/Data/obsidian/Preferences/absolute-rules.md・~/Data/obsidian/Preferences/core-worker.md §5'
   fi
   # HOME 直下・ルートへの再帰 rm（rm -rf ~ / rm -rf /）
   if printf '%s' "$cmd" | grep -Eq 'rm[[:space:]]+-[[:alnum:]]*[rR][[:alnum:]]*[[:space:]]+("?\$HOME"?|~)?/?([[:space:]]|$)'; then
-    deny 'ホーム直下またはルートへの再帰 rm はブロックされています（bash-danger-gate）。'
+    deny 'HOME_ROOT_RM_DENIED: HOME または / への再帰 rm。正本: ~/Data/obsidian/Preferences/absolute-rules.md・~/Data/obsidian/Preferences/core-worker.md §5'
   fi
 fi
 

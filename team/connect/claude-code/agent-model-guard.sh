@@ -26,7 +26,7 @@ deny() {
 }
 
 guard_error() {
-  deny "MODEL_GUARD_ERROR: cause=$1; model 指定を検査できません。フックの入力と配置を確認してください。"
+  deny "MODEL_GUARD_ERROR: cause=$1; model 判定不能。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md・~/Data/obsidian/Preferences/core-workflow.md"
 }
 
 # 検証1巡目 I1-B1 対応: installer はこの3フックを1本ずつ
@@ -132,13 +132,13 @@ case "$result" in
     exit 0
     ;;
   REQUIRED)
-    deny 'MODEL_ARGUMENT_REQUIRED: resolve-candidate の AGENT_MODEL を Agent.model に明示してください。'
+    deny 'MODEL_ARGUMENT_REQUIRED: Agent.model なし。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md・~/Data/obsidian/Preferences/core-workflow.md'
     ;;
   INVALID)
-    deny 'MODEL_ARGUMENT_INVALID: Agent.model は resolve-candidate が返した4別名のいずれかを明示してください。'
+    deny 'MODEL_ARGUMENT_INVALID: Agent.model の許容別名不一致。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md・~/Data/obsidian/Preferences/core-workflow.md'
     ;;
   FORCE_OVERRIDE)
-    deny 'MODEL_ENV_OVERRIDE_FORBIDDEN: 環境変数 CLAUDE_CODE_SUBAGENT_MODEL_FORCE が設定されています。Agent.model の指定を上書きする可能性があるため、解除してから再実行してください。'
+    deny 'MODEL_ENV_OVERRIDE_FORBIDDEN: CLAUDE_CODE_SUBAGENT_MODEL_FORCE 設定あり。正本: ~/Data/obsidian/Preferences/worker-role-prompts.md'
     ;;
   ERROR:*) guard_error "${result#ERROR:}" ;;
   *) guard_error JQ_FAILED ;;

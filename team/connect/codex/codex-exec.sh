@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Codex 呼び出しの唯一の口（`codex exec` をラップする）。
-# 新規起動では外部脳の必読指示を付け、ワーカーの決まりを ~/.codex/AGENTS.md に
-# 書かずに読ませる。--resume は同じスレッドで読了済みのため付けない。
+# 新規起動・--resume とも、職種に応じた外部脳の必読指示を先頭に付ける。
 #
 # 背景: Claude CodeからCodexを呼ぶ経路をMCPサーバー経由からこのexecラッパー
 # （CLI・背景実行）へ一本化した（2026-09-06 本人決定）。理由＝公式でCodexの
@@ -14,8 +13,8 @@
 # ものであり、呼び出し側（ワーカー・職種定義）は本スクリプトだけを叩けばよい。
 #
 # 使い方:
-#   team/connect/codex/codex-exec.sh --cwd <絶対パス> --sandbox read-only|workspace-write|danger-full-access \
-#     --out <絶対パス> --prompt-file <file>|- \
+#   team/connect/codex/codex-exec.sh --role <職種名> --cwd <path> --sandbox read-only|workspace-write|danger-full-access \
+#     --out <path> --prompt-file <file>|- \
 #     [--search] [--resume <thread_id>] [--developer-instructions <file>] \
 #     [--model <model>] [--effort <effort>] [--image <path>]...
 #
@@ -23,11 +22,7 @@
 # 存在しないファイル・カンマを含むパスは不可（codex が -i の値をカンマで分割するため）で、
 # codex を起動せず exit 2。
 #
-# 絶対厳守④の機械強制（[[Preferences/absolute-rules]]）: 依頼文（プロンプト）に
-# "absolute-rules" の文字列が含まれていなければ、codex を起動せず exit 2 で
-# 終了する。`codex exec` は Claude Code の PreToolUse フックの対象外（MCP経路の
-# ように自動で検査されない）ため、ここで肩代わりする。継続（--resume）でも
-# 同じ検査を行う（省略不可）。
+# Preferences は AIENV_PREFERENCES_DIR で変更できる。
 #
 # stdout は次の3行のみを出す（それ以外は書かない。呼び出し元の文脈を汚さない
 # ため）:
@@ -50,7 +45,10 @@
 set -uo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PREFERENCES_DIR="${AIENV_PREFERENCES_DIR:-$HOME/Data/obsidian/Preferences}"
 
+ROLE=""
 CWD=""
 SANDBOX=""
 OUT=""
@@ -64,8 +62,8 @@ IMAGES=()
 
 usage() {
   cat >&2 <<EOF
-使い方: $SCRIPT_NAME --cwd <絶対パス> --sandbox read-only|workspace-write|danger-full-access \\
-  --out <絶対パス> --prompt-file <file>|- \\
+使い方: $SCRIPT_NAME --role <職種名> --cwd <path> --sandbox read-only|workspace-write|danger-full-access \\
+  --out <path> --prompt-file <file>|- \\
   [--search] [--resume <thread_id>] [--developer-instructions <file>] \\
   [--model <model>] [--effort <effort>] [--image <path>]...   (パスにカンマ不可)
 EOF
@@ -79,6 +77,9 @@ fail_usage() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --role)
+      [ $# -ge 2 ] || fail_usage "--role には値が必要です"
+      ROLE="$2"; shift 2 ;;
     --cwd)
       [ $# -ge 2 ] || fail_usage "--cwd には値が必要です"
       CWD="$2"; shift 2 ;;
@@ -115,6 +116,14 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+[ -n "$ROLE" ] || fail_usage "--role は必須です"
+case "$ROLE" in
+  *[!a-z0-9-]*) fail_usage "不明な職種: $ROLE" ;;
+esac
+[ -f "$SCRIPT_DIR/../../rules/agents/$ROLE.md" ] || fail_usage "不明な職種: $ROLE"
+ROLE_NOTE="$PREFERENCES_DIR/worker-role-$ROLE.md"
+[ -r "$ROLE_NOTE" ] && [ -s "$ROLE_NOTE" ] || fail_usage "職種ノートが読めないか空です: $ROLE_NOTE"
+
 [ -n "$CWD" ] || fail_usage "--cwd は必須です"
 [ -n "$SANDBOX" ] || fail_usage "--sandbox は必須です"
 [ -n "$OUT" ] || fail_usage "--out は必須です"
@@ -122,13 +131,13 @@ done
 
 case "$CWD" in
   /*) ;;
-  *) fail_usage "--cwd は絶対パスで指定してください: $CWD" ;;
+  *) CWD="$PWD/$CWD" ;;
 esac
 [ -d "$CWD" ] || fail_usage "--cwd のディレクトリが存在しません: $CWD"
 
 case "$OUT" in
   /*) ;;
-  *) fail_usage "--out は絶対パスで指定してください: $OUT" ;;
+  *) OUT="$PWD/$OUT" ;;
 esac
 
 case "$SANDBOX" in
@@ -172,25 +181,7 @@ fi
 
 [ -n "$PROMPT" ] || fail_usage "依頼文が空です"
 
-# --- 絶対厳守④の機械強制（--resume でも同じ検査。省略不可） ---
-# 注意（仕様として明記＝Codex一次レビュー指摘・2巡目）: この検査は単純な
-# 部分一致であり、旧・Claude Code側PreToolUseフック（`grep -q
-# 'absolute-rules'`）と意図的に同じ強度に揃えている。悪意ある依頼への
-# セキュリティ境界ではなく、「absolute-rulesを読む指示の書き忘れ防止」が
-# 目的。大文字小文字や偽装文字列（例: "do-not-read-absolute-rules"）でも
-# 通過しうるが、依頼文を書くのは信頼された呼び出し元（Claudeワーカー・
-# Codex自身）である前提のため許容している。
-case "$PROMPT" in
-  *absolute-rules*) ;;
-  *)
-    echo "[$SCRIPT_NAME] FAIL: 依頼文に absolute-rules への参照がありません。Preferences/absolute-rules.md（[[Preferences/absolute-rules]]）を読む指示を依頼文に含めてください。" >&2
-    exit 2
-    ;;
-esac
-
-if [ -z "$RESUME_ID" ]; then
-  PROMPT="着手前に $HOME/Data/obsidian/Preferences/absolute-rules.md と $HOME/Data/obsidian/Preferences/core-worker.md を全文読み、従う。"$'\n\n'"$PROMPT"
-fi
+PROMPT="着手前に $PREFERENCES_DIR/absolute-rules.md・$PREFERENCES_DIR/core-worker.md・$ROLE_NOTE を全文読み、従う。"$'\n\n'"$PROMPT"
 
 command -v codex >/dev/null 2>&1 || fail_usage "codex コマンドが見つかりません（PATHを確認してください）"
 

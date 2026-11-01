@@ -3,7 +3,7 @@
 #
 # 実 codex コマンドには依存しない。モックの `codex`（PATH前置）を使って、
 # 引数の組み立て（--search のグローバル位置・resume の `--` 区切り・-c の値の
-# 組み立て方）・absolute-rules 欠落時の exit 2（codex を起動しないこと含む）・
+# 組み立て方）・職種と必読指示・起動前の拒否・
 # stdout 3行契約・events/stderr の保存先・依頼文の受け渡し方式（argvではなく
 # stdin経由・positionalは常に`-`）を検証する
 # （2026-09-06 codex exec 一本化・[[Preferences/codex-exec-worker]]。
@@ -23,6 +23,10 @@ SCRIPT="$REPO_ROOT/team/connect/codex/codex-exec.sh"
 
 PASS=0
 FAIL=0
+PREFS_WORK="$(mktemp -d)"
+export AIENV_PREFERENCES_DIR="$PREFS_WORK"
+printf '%s\n' '試験用職種ノート' > "$PREFS_WORK/worker-role-implementer.md"
+PREFIX="着手前に $PREFS_WORK/absolute-rules.md・$PREFS_WORK/core-worker.md・$PREFS_WORK/worker-role-implementer.md を全文読み、従う。"
 
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
@@ -75,7 +79,7 @@ echo "=== 1. 基本呼び出し: 引数の組み立て・依頼文はstdin経由
   make_mock_codex "$BINDIR" "$LOG" "thread-abc" "$STDIN_LOG"
   OUT="$WORK/out.md"
 
-  stdout_out="$(PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" --prompt-file - <<< "absolute-rules を読んでhello" 2>"$WORK/stderr-of-script.log")"
+  stdout_out="$(PATH="$BINDIR:$PATH" bash "$SCRIPT" --role implementer --cwd "$WORK" --sandbox read-only --out "$OUT" --prompt-file - <<< "absolute-rules を読んでhello" 2>"$WORK/stderr-of-script.log")"
   rc=$?
   if [ "$rc" -eq 0 ] && grep -qx -- '--json' "$LOG" \
      && { grep -A1 -- '^-s$' "$LOG" | grep -qx read-only; } \
@@ -86,7 +90,7 @@ echo "=== 1. 基本呼び出し: 引数の組み立て・依頼文はstdin経由
     fail_case "通常起動の引数・sandbox"
   fi
   assert_eq "新規起動では必読指示と空行を依頼文の先頭に付ける" \
-    "着手前に $HOME/Data/obsidian/Preferences/absolute-rules.md と $HOME/Data/obsidian/Preferences/core-worker.md を全文読み、従う。"$'\n\n'"absolute-rules を読んでhello" \
+    "$PREFIX"$'\n\n'"absolute-rules を読んでhello" \
     "$(cat "$STDIN_LOG")"
   assert_true "依頼文はstdin・成果物はevents/stderr" \
     "$(! grep -q 'absolute-rules' "$LOG" \
@@ -99,7 +103,7 @@ echo "=== 1. 基本呼び出し: 引数の組み立て・依頼文はstdin経由
   rm -rf "$WORK"
 }
 
-echo "=== 2. absolute-rules への参照が無い依頼文 → exit 2・codexを起動しない ==="
+echo "=== 2. absolute-rules 参照なし・相対パスでも起動する ==="
 {
   WORK="$(mktemp -d)"
   BINDIR="$WORK/bin"
@@ -109,10 +113,10 @@ echo "=== 2. absolute-rules への参照が無い依頼文 → exit 2・codexを
   OUT="$WORK/out.md"
 
   rc=0
-  out=$(PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" --prompt-file - <<< "こんにちは、何かして" 2>&1) || rc=$?
-  assert_eq "exit code 2" "2" "$rc"
-  assert_true "codexは一度も呼ばれていない（ログが空）" \
-    "$([ ! -s "$LOG" ] && echo 1 || echo 0)"
+  out=$(cd "$WORK" && PATH="$BINDIR:$PATH" bash "$SCRIPT" --role implementer --cwd bin --sandbox danger-full-access --out relative/out.md --prompt-file - <<< "こんにちは、何かして" 2>&1) || rc=$?
+  assert_eq "参照なしでも成功する" "0" "$rc"
+  assert_true "cwd・outを呼出元基準の絶対パスで渡す" \
+    "$(grep -A1 -- '^-C$' "$LOG" | grep -qx "$WORK/bin" && grep -A1 -- '^-o$' "$LOG" | grep -qx "$WORK/relative/out.md" && echo 1 || echo 0)"
   rm -rf "$WORK"
 }
 
@@ -127,8 +131,8 @@ echo "=== 3. --resume: 引数順（共通オプションの後ろ・resume -- <i
   OUT="$WORK/out2.md"
 
   rc=0
-  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox workspace-write --out "$OUT" \
-    --prompt-file - --resume "thread-xyz-123" <<< "absolute-rules を読んで続きをやって" >/dev/null 2>"$WORK/stderr.log" || rc=$?
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --role implementer --cwd "$WORK" --sandbox workspace-write --out "$OUT" \
+    --prompt-file - --resume "thread-xyz-123" <<< "続きをやって" >/dev/null 2>"$WORK/stderr.log" || rc=$?
   args_before_end=$(sed -n '1,/ARGS-END/p' "$LOG" | grep -v 'ARGS-END')
   n=$(printf '%s\n' "$args_before_end" | wc -l | tr -d ' ')
   last_line=$(printf '%s\n' "$args_before_end" | sed -n "${n}p")
@@ -139,29 +143,38 @@ echo "=== 3. --resume: 引数順（共通オプションの後ろ・resume -- <i
   assert_true "resumeはオプション終端後のIDとstdinを渡す" \
     "$([ "$rc" -eq 0 ] && [ "$last_line" = - ] && [ "$resume_id_line" = thread-xyz-123 ] \
        && [ "$dashdash_line" = -- ] && [ "$resume_kw_line" = resume ] && echo 1 || echo 0)"
-  assert_eq "--resume では必読指示を付けず依頼文をそのまま渡す" \
-    "absolute-rules を読んで続きをやって" "$(cat "$STDIN_LOG")"
+  assert_eq "--resume でも先頭に3ノートの必読指示を付ける" \
+    "$PREFIX"$'\n\n'"続きをやって" "$(cat "$STDIN_LOG")"
 
   rm -rf "$WORK"
 }
 
-echo "=== 4. --resume でも absolute-rules 検査は省略されない ==="
+echo "=== 4. 職種なし・未知の職種・職種ノート欠落／空は起動しない ==="
 {
   WORK="$(mktemp -d)"
   BINDIR="$WORK/bin"
   LOG="$WORK/calls.log"
   : > "$LOG"
   make_mock_codex "$BINDIR" "$LOG"
-  OUT="$WORK/out3.md"
-
-  rc=0
-  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
-    --prompt-file - --resume "thread-xyz" <<< "続きをやってください、よろしく" >/dev/null 2>&1 || rc=$?
-  assert_eq "exit code 2（resumeでも検査が効く）" "2" "$rc"
-  assert_true "codexは呼ばれていない" \
-    "$([ ! -s "$LOG" ] && echo 1 || echo 0)"
-
-  rm -rf "$WORK"
+  for mode in missing-role unknown-role missing-note empty-note; do
+    role_args=(--role implementer)
+    prefs="$PREFS_WORK"
+    case "$mode" in
+      missing-role) role_args=() ;;
+      unknown-role) role_args=(--role unknown-role) ;;
+      missing-note) prefs="$WORK/missing" ;;
+      empty-note)
+        prefs="$WORK/empty"
+        mkdir -p "$prefs"
+        : > "$prefs/worker-role-implementer.md" ;;
+    esac
+    rc=0
+    AIENV_PREFERENCES_DIR="$prefs" PATH="$BINDIR:$PATH" bash "$SCRIPT" ${role_args[@]+"${role_args[@]}"} \
+      --cwd "$WORK" --sandbox danger-full-access --out "$WORK/out.md" --prompt-file - \
+      <<< "依頼" >/dev/null 2>&1 || rc=$?
+    assert_true "$mode: CLIを起動しない" \
+      "$([ "$rc" -ne 0 ] && [ ! -s "$LOG" ] && echo 1 || echo 0)"
+  done
 }
 
 echo "=== 7. --model / --effort: -m と -c model_reasoning_effort= に変換される ==="
@@ -173,7 +186,7 @@ echo "=== 7. --model / --effort: -m と -c model_reasoning_effort= に変換さ�
   make_mock_codex "$BINDIR" "$LOG"
   OUT="$WORK/out6.md"
 
-  PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" \
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --role implementer --cwd "$WORK" --sandbox read-only --out "$OUT" \
     --prompt-file - --model t-model-x --effort high <<< "absolute-rules を読んでやって" >/dev/null 2>&1
 
   assert_true "-m t-model-x が渡る" \
@@ -199,7 +212,7 @@ EOF
   OUT="$WORK/out7.md"
 
   rc=0
-  stdout_out=$(PATH="$BINDIR:$PATH" bash "$SCRIPT" --cwd "$WORK" --sandbox read-only --out "$OUT" --prompt-file - <<< "absolute-rules テスト" 2>"$WORK/stderr.log") || rc=$?
+  stdout_out=$(PATH="$BINDIR:$PATH" bash "$SCRIPT" --role implementer --cwd "$WORK" --sandbox read-only --out "$OUT" --prompt-file - <<< "absolute-rules テスト" 2>"$WORK/stderr.log") || rc=$?
   assert_eq "codexのexit codeがそのまま返る" "7" "$rc"
   assert_true "EXIT:7 がstdoutに出る" \
     "$(printf '%s\n' "$stdout_out" | grep -qx 'EXIT:7' && echo 1 || echo 0)"

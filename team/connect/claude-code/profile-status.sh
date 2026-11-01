@@ -18,34 +18,19 @@ STATUS_SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${AIENV_AGENTS_DIR:=${STATUS_SELF_DIR%/*/*/*}/team/rules/agents}"
 
 # 開幕1行（team_mode＝solo|lean|full|unknown）。builtin だけで書く（外部プロセスを起こさない）。
-# 文面の正本＝Preferences/core-conduct.md §1（両者の一致は静的テストが検証する）。
+# 文面の正本＝Preferences/core-conduct.md §1。
 compose_team_mode_line() {   # $1 = solo|lean|full|unknown
   case "$1" in
-    solo) TEAM_MODE_LINE='🧭 現在＝単独モード（リーダーが全工程を自分で行います。第三者検証はありません）。他のモード＝軽量／フル。切り替えたいときは言ってください' ;;
-    lean) TEAM_MODE_LINE='🧭 現在＝軽量モード（実装者と検証職を置き、適用工程ごとに1巡で回します）。他のモード＝単独／フル。切り替えたいときは言ってください' ;;
-    full) TEAM_MODE_LINE='🧭 現在＝フルモード（職種ごとに担当を立て、指摘が収まるまで検証を回します）。他のモード＝単独／軽量。切り替えたいときは言ってください' ;;
-    *)    TEAM_MODE_LINE='🧭 現在＝モード未確定（配役表の team_mode が読めません）。委任の前に本人へ確認します。' ;;
+    solo) TEAM_MODE_LINE='🧭 現在＝単独モード（team_mode=solo）。正本: ~/Data/obsidian/Preferences/core-conduct.md §1' ;;
+    lean) TEAM_MODE_LINE='🧭 現在＝軽量モード（team_mode=lean）。正本: ~/Data/obsidian/Preferences/core-conduct.md §1' ;;
+    full) TEAM_MODE_LINE='🧭 現在＝フルモード（team_mode=full）。正本: ~/Data/obsidian/Preferences/core-conduct.md §1' ;;
+    *)    TEAM_MODE_LINE='🧭 現在＝モード未確定（team_mode=unknown）。正本: ~/Data/obsidian/Preferences/core-conduct.md §1' ;;
   esac
 }
 
 # DIRECTIVE ⑤（オーケストレーター行動則）をモード別に組み立てる（先頭に「⑤ 」を含む）。
 compose_team_mode_directive5() {   # $1 = solo|lean|full|unknown
-  local base5='⑤ オーケストレーター行動則（詳細＝Preferences/core-workflow.md §1・§2）: 「作る工程」は自分でやらず委任し、成果物の修正はリーダーが直接行わず作成元ロールへ差し戻す。⚠️ リーダー自身の Edit/Write が正当なのは、リーダー自身の成果物への軽微な修正・ユーザーの直接作業指示・Vault への書き込み。Vault への書き込みは軽重に関係なくリーダー自身が行い、ワーカーは最終報告で記録候補を申告する（Preferences/vault-operation.md）。'
-  local gate5='Claude Code のとき：リーダー自身の Edit/Write は ~/.claude・scratchpad も許可。ゲートは AI 向け6フォルダを通す。6フォルダ以外の許可パス外への直接編集は delegation-gate-v2 フックが deny する（委任するか、理由をユーザーに明示してマーカー touch）。'
-  case "$1" in
-    solo)
-      TEAM_MODE_DIRECTIVE5='⑤ ⚠️ 単独モードでは全工程をリーダー自身が行い、他の職種を1つも立てない（検証職も立てない）。工程は飛ばさず『専任なし』を明記する。Vault への書き込みは軽重に関係なくリーダー自身が行う（Preferences/vault-operation.md）。Claude Code のとき：許可パス外の直接編集は、単独モードであることを理由として本人への応答で明示してから touch $MARKER_DIR/claude-direct-edit-ok-<session_id> して再試行する。AI 向け6フォルダはマーカー無しで直筆できる。'
-      ;;
-    lean)
-      TEAM_MODE_DIRECTIVE5="${base5} ⚠️ 軽量モードでは要件定義と設計はリーダー自身が行う。実装は implementer へ委任し、適用工程ごとに検証職を1巡だけ回す。requirements-analyst・system-designer・researcher・adoption-critic・operator は立てず『専任なし』を明記する。${gate5}"
-      ;;
-    full)
-      TEAM_MODE_DIRECTIVE5="${base5}${gate5}"
-      ;;
-    *)
-      TEAM_MODE_DIRECTIVE5="${base5} ⚠️ モードが未確定なので、委任の前に本人へ確認する。${gate5}"
-      ;;
-  esac
+  TEAM_MODE_DIRECTIVE5="⑤ team_mode=$1。正本: ~/Data/obsidian/Preferences/core-workflow.md §1・§2・§4・~/Data/obsidian/Preferences/coding-delegation.md・~/Data/obsidian/Preferences/vault-operation.md"
 }
 
 # テスト専用: BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY=1 なら開幕1行4本を1行1本で出して即終了する（本処理には進まない）。
@@ -100,7 +85,7 @@ is_v2_resolve_output_well_formed() {
 #   OK\t<解決値>[\tVACANT:...][\tVACANT_REASON:...][\tVACANT_UNKNOWN:...][\tADVISORY:...][\tUNKNOWN_EXTRA:...]
 resolve_local_profile() {
   local path="$1"
-  [ -L "$path" ] && { printf 'MINIMAL\tSYMLINK\t実体はsymlinkであってはいけません（マシンローカルの通常ファイルとして直接作成してください）: %s\n' "$path"; return; }
+  [ -L "$path" ] && { printf 'MINIMAL\tSYMLINK\tsymlink: %s\n' "$path"; return; }
   [ -f "$path" ] || { printf 'MINIMAL\tT1\t実体ファイルが存在しません: %s\n' "$path"; return; }
 
   if [ ! -f "$PROFILE_RESOLVE_LIB" ]; then
@@ -151,18 +136,18 @@ if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
     profile_reason_code="${profile_rest%%$'\t'*}"
     profile_reason_msg="${profile_rest#*$'\t'}"
     if [ "$profile_reason_code" = "T11" ]; then
-      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})に認証情報らしいキー名があります（T11: ${profile_reason_msg}）→ 該当行を削除して再開。最小能力として扱う。"
+      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH}): T11・認証情報らしいキー名あり。正本: ~/Data/obsidian/Preferences/absolute-rules.md ③・~/Data/obsidian/Preferences/core-workflow.md §7"
     else
-      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH})を解決できません（${profile_reason_code}: ${profile_reason_msg}）→ 最小能力として扱い、空席の申告（Preferences/core-workflow.md §7）を行う。既定値を発明しない。"
+      LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル(${AIENV_LOCAL_PROFILE_PATH}): 解決不能・code=${profile_reason_code}。正本: ~/Data/obsidian/Preferences/core-workflow.md §7・~/Data/obsidian/Preferences/role-vacancy.md"
     fi
   elif [ "$profile_has_unknown_extra" = "1" ]; then
     # 未知キーの「値」に秘密が書かれている可能性があるため、機械側の解決は有効でも AI 向けには最小能力として扱う。
     unknown_extra="${profile_status#*UNKNOWN_EXTRA:}"
-    LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイルに未知のキーがあります（${unknown_extra}）→ プロファイル利用不可＝最小能力として扱い、ワーカー起動は本人確認へ倒してください（Preferences/core-workflow.md §7）。"
+    LOCAL_PROFILE_WARNING="⚠️ ローカル実体プロファイル: UNKNOWN_EXTRA=${unknown_extra}。正本: ~/Data/obsidian/Preferences/core-workflow.md §7・~/Data/obsidian/Preferences/role-vacancy.md"
   elif printf '%s' "$profile_status" | grep -q -E '(VACANT|VACANT_REASON|VACANT_UNKNOWN|ADVISORY):'; then
     # 配役の値そのものは再掲しないが、縮退・未確定の職種名と条件番号は必ず注入する（静かな失敗を防ぐ）。
     casting_note="$(printf '%s' "$profile_status" | sed -E 's/^OK\t//')"
-    LOCAL_PROFILE_WARNING="ℹ️ 配役表の状態（職種名と条件番号のみ・値は含みません）: ${casting_note}。詳細はPreferences/core-workflow.md §7（職種が空席のとき）を参照してください。"
+    LOCAL_PROFILE_WARNING="ℹ️ 配役表の状態: ${casting_note}。正本: ~/Data/obsidian/Preferences/core-workflow.md §7・~/Data/obsidian/Preferences/role-vacancy.md"
   fi
 fi
 
@@ -189,7 +174,7 @@ fi
 # main|sub|unavailable はそのまま通し、それ以外だけ unknown へ倒す（unavailable では保留行を出さない）。
 case "$machine_role" in main|sub|unavailable) : ;; *) machine_role="unknown" ;; esac
 MACHINE_ROLE_HOLD_LINE=""
-[ "$machine_role" = "unknown" ] && MACHINE_ROLE_HOLD_LINE='⚠️ 配役表の machine_role が未確定です（この機がメイン機かサブ機かを本人が宣言していません）。機役割に依存する判断（Preferences の編集・公開スナップショットの生成・git の立場）は本人へ確認してから行う。既定値を発明しない。'
+[ "$machine_role" = "unknown" ] && MACHINE_ROLE_HOLD_LINE='⚠️ machine_role=unknown。正本: ~/Data/obsidian/Preferences/core-workflow.md §5'
 
 # 🧭モード行の末尾セグメント（解決の成否・schema_version・machine_role・照会コマンド）。
 # BOOTSTRAP_ENABLE_LOCAL_PROFILE=0 では解決を試みていないので付けない。
@@ -207,14 +192,13 @@ if [ "$BOOTSTRAP_ENABLE_LOCAL_PROFILE" = "1" ]; then
     elif [ "$profile_has_unknown_extra" = "1" ]; then
       profile_unresolved_code="UNKNOWN_EXTRA"
     fi
-    TEAM_MODE_LINE="${TEAM_MODE_LINE}｜配役表＝利用不可（${profile_unresolved_code}）＝最小能力として振る舞う・ワーカー起動は本人確認へ倒す"
+    TEAM_MODE_LINE="${TEAM_MODE_LINE}｜配役表＝利用不可（${profile_unresolved_code}）。正本: ~/Data/obsidian/Preferences/core-workflow.md §7・~/Data/obsidian/Preferences/role-vacancy.md"
   fi
 fi
 
 # 枠（末尾に改行を付けない）。opening＝転記指示＋🧭 行＋⚠️ 行／profile-warning＝見出し＋警告（警告が無ければ空）。
-SLOT_OPENING="【開幕1行】最初の応答の冒頭に、次の1行をそのまま転記する（1行だけ・要約しない）:
-${TEAM_MODE_LINE}
-⚠️ この依頼に本人のモード指定が含まれていたら、上の行ではなく指定後のモードの行を1行だけ出す（2行出さない）。モードを変えられるのは本人だけ。"
+SLOT_OPENING="【開幕1行】正本: ~/Data/obsidian/Preferences/core-conduct.md §1
+${TEAM_MODE_LINE}"
 SLOT_PROFILE_WARNING="${LOCAL_PROFILE_WARNING:+【ローカル実体プロファイル】
 $LOCAL_PROFILE_WARNING}"
 
