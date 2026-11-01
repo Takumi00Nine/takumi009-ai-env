@@ -1,6 +1,6 @@
 ---
 date: 2026-07-05
-updated: 2026-10-04
+updated: 2026-11-01
 tags: [preference, cmux, notifications]
 project: meta
 related:
@@ -32,7 +32,7 @@ aliases:
 - `notifications.agentPermissionPrompt: true` / `agentIdleReminder: true` — 発生はする（履歴用）が、上記 hook により無音・非表示。
 
 ## Codex の通知
-- **Codex 自前のターン終了通知は無効化済み**: `~/.codex/config.toml` の `notify` 設定をコメントアウトしてある（cmux とは別経路で毎ターン鳴る挙動を止めるため）。戻す場合は該当行頭の `#` を外す。
+- **Codex アプリ自身の通知（`notify`）は残す**（本人決定 2026-11-01）: Codex アプリ（Computer Use）が `~/.codex/config.toml` に書き込む設定で、cmux の通知とは別経路。ひな形（team/connect/codex/config.toml）には書かず、install-main はアプリ管理キーとして既存の値を保持する（[[Knowledge/codex-desktop-rewrites-config-toml]]）。
 
 ## 運用上の前提・注意
 - **表示中ワークスペースの通知バナーは自動取り下げ**（default のレガシー挙動）。通知の発火テストはフォーカスを外して行う。

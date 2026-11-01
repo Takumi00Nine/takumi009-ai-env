@@ -33,7 +33,7 @@ aliases:
 - **実装工程はテスト先行・別個体**＝要件確定後に test-writer が受入条件からテストを書き、implementer がそれを緑にする。テストの実行は test-runner（固定スイートはリーダー直叩き可）、verifier は指摘のみ（[[Decisions/2026-09-21-test-three-roles]]）。
 - テストは厳密にやりすぎない＝不変条件だけを恒久テストに残し、案件の受入条件は締めで1回確認して退役する。repo のテストは repo の中で完結（実体・Vault・private repo を読まない）。値でなく形・全件でなく経路ごとに代表1件（[[Decisions/2026-09-17-tests-rough-not-strict]]）。
 ## 運用ルール
-- **着手時のループ適用判定（2026-07-21 本人指示）**: まとまったタスクの着手前に「ループ型（自動検証で回す）か・人間チェック挟み込み型か」を判定し**本人に確認してから進める**。基準＝**ゴールが機械的に計測・数値化できるか**（テスト/リント/型/バイト一致＝向く⇔主観のみ＝向かない）。詳細・聞き方の例文＝[[Knowledge/loop-engineering]]。
+- **着手時のループ適用判定（2026-07-21 本人指示）**: まとまったタスクの着手前に「ループ型（自動検証で回す）か・人間チェック挟み込み型か」を判定し、**着手の確認（[[Preferences/core-conduct]] §1）に含めて**本人に確認する。基準＝**ゴールが機械的に計測・数値化できるか**（テスト/リント/型/バイト一致＝向く⇔主観のみ＝向かない）。詳細・聞き方の例文＝[[Knowledge/loop-engineering]]。
 - **本人を呼ぶときは口を呼ぶ＝`~/Workspace/Tools/takumi009-ai-env/notify/executor/notify.sh call ask "📣 <用件>" "<補足>"` を明示発行**（📣なしは届かない。正本＝[[Preferences/cmux-notifications]]）。見せる成果物は cmux ペイン表示してから依頼（`~/Workspace/Tools/dotfiles/cmux/show-review.sh`。例外＝Vault ノート・Explorations/ HTML＝Obsidian で見る＝テキスト報告のみ）。
 - **長い会話の節約＝区切らず早めに要約**（2026-10-31 本人決定＝[[Decisions/2026-10-31-no-session-split-compact-in-place]]）。セッションは区切らず、要約の開始を 300k に早めて読み込み量を抑える（正本＝[[Preferences/session-handoff]]）。リーダーは大物（成果物全文・長ログ）を読まずワーカーに要約させる。**Vault 全域への書き込みは軽重に関係なくリーダー自身が行い、ワーカーは記録候補を最終報告で申告する**（[[Preferences/vault-operation]]）。Claude Code のとき：要約の開始目安の手前（既定 250k）で `context-size-warn.sh` フックが「案件ノートの未記録分を今書く」合図を出す（経緯＝[[Decisions/2026-08-10-fable-session-split]]）。
 - **Vault の AI向け6フォルダはリーダーが軽重に関係なく直筆する**（[[Preferences/vault-operation]]）。**直接編集できる範囲内でも、テスト・デバッグの反復（書く→動かす→直す）が見込まれる実装は委任する**（リーダー直接は**自身の成果物**で1〜2編集で完結する変更まで＝ワーカー成果物は対象外・作成元へ差し戻し。判定目安＝「動かして確認する必要があるか」＝[[Decisions/2026-08-10-delegate-iterative-work]]）。Claude Code のとき：リーダーの直接編集は delegation-gate v2 が制限。許可パス＝`~/.claude`・tmp と Vault の AI向け6フォルダ。他は委任するか理由を明示してマーカー touch（[[Decisions/2026-07-05-delegation-gate-v2]]）。
@@ -41,5 +41,5 @@ aliases:
 - ワーカー/チームメイトが起動時に持つルールは**職種定義本文（共通ルール節＝absolute-rules 必読・Vault 書込禁止＝申告制・obsidian-mcp 不使用）＋委任プロンプトのみ**。SessionStart フックの軽量版ブートストラップは in-process ワーカーへ届いていなかったため 2026-09-03 に撤去（[[Decisions/2026-09-03-worker-write-tools-for-deliverable-roles]] 追記節）。ペイン型・定義なし個体を再採用する場合は、その起動経路で共通ルールの供給を実装・実測する。フル版・Vault 書込はリーダーのみ。
 - 合議＝後戻りコスト高の設計・技術選定のみ: リーダーが論点定義→複数のワーカー（system-designer）が案+根拠+リスク→リーダー統合・決定（委任除外は設けない）。
 ## コード作成の前提（トリアージ・共通化ファースト）
-- **書く前のトリアージ（2026-08-01 本人指示・恒久）**: コード作成が必要になった時点で（都度スクリプトも対象）①**既存確認**（[[Knowledge/tools-inventory]]・`~/Workspace/Tools/`）→②**三択を本人に提案**（既存拡張/新規/使い捨て）→③本人不在時のみ使い捨て暫定可・**帰還時に必ず報告**（[[Decisions/2026-08-01-code-writing-triage]]）。
+- **書く前のトリアージ（2026-08-01 本人指示・恒久）**: コード作成が必要になった時点で（都度スクリプトも対象）①**既存確認**（[[Knowledge/tools-inventory]]・`~/Workspace/Tools/`）→②**三択を本人に提案**（既存拡張/新規/使い捨て。着手時は着手の確認＝[[Preferences/core-conduct]] §1 に含め、着手後に新たにコードが要るときはその時点で提案）→③本人不在時のみ使い捨て暫定可・**帰還時に必ず報告**（[[Decisions/2026-08-01-code-writing-triage]]）。
 - **共通化のタイミング**：最初は案件内で必要な形で作り、実際に同じ処理が2回目に現れたら共通部分と固有の設定・データに分ける。先回りした汎用化はしない（正本＝[[Preferences/common-first-decomposition]]）。
