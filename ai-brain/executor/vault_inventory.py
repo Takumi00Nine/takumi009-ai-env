@@ -8,7 +8,7 @@
   4. 旧方針キーワードの残存（Decisions/mistakes-archive は履歴なので対象外）
   5. 必読ファイル（BOOTSTRAP_FILES＝bootstrap-vault.shのFILES配列と同期）の注入サイズ監視
   6. status 付きノートの一覧と停滞検知
-  8. Fragments の直近統計（capture が続いているか・昇格レビューの目安）
+  8. Fragments の直近統計（capture が続いているか）
   11. review_by の期限超過・14日以内到来（任意フィールド）
 
 出力: ~/.claude/logs/vault-inventory/YYYY-MM-DD.md（人間向け・日本語。2026-07-11
@@ -40,16 +40,13 @@ import pathlib
 import re
 import sys
 import tempfile
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-# frontmatter解析・wikilink正規表現・aliases正規化・汎用alias禁止リスト読込は
-# 2026-07-16簡素化（cleanup決定#10）でvault_lib.pyへ抽出済み（他4本＝
-# embedding_index.py→撤去済み・knowledge_merge.py→撤去済み・merge_quality_gate.py→
-# 撤去済み・重複候補検出関連の旧CLI（2026-09-19退役）・recall_bench.pyが`import vault_inventory`
-# していたのはこれらの関数だけを再利用するためだった＝CLI/共有ライブラリ同居の解消）。
 import vault_lib  # noqa: E402
+from keyword_recall_helper import load_recall_config  # noqa: E402
 
-VAULT = pathlib.Path.home() / "Data" / "obsidian"
+VAULT = pathlib.Path(os.environ.get("VAULT", pathlib.Path.home() / "Data" / "obsidian"))
 OUT_DIR = pathlib.Path.home() / ".claude" / "logs" / "vault-inventory"
 
 # 必読ファイル（bootstrap-vault.sh の FILES 配列・最終形と同じ並び）。
@@ -177,11 +174,84 @@ def write_latest_json(payload):
         raise
 
 
+def recurrence_report(records, issues, start, end, timezone, log_path):
+    """全発生の先頭を除いてから期間を絞り、同日の提示と突き合わせる。保存しない。"""
+    presented, recorded_days, log_issues = set(), [], []
+    if log_path.exists():
+        for number, line in enumerate(log_path.read_text(encoding="utf-8").splitlines(), 1):
+            try:
+                row = json.loads(line)
+                at = datetime.datetime.fromisoformat(row["at"].replace("Z", "+00:00"))
+                if at.tzinfo is None:
+                    raise ValueError("UTC日時が必要")
+                day = at.astimezone(timezone).date().isoformat()
+                if row["event"] == "completed":
+                    if not isinstance(row["items"], list) or not all(isinstance(i, str) for i in row["items"]):
+                        raise ValueError("items はIDの配列が必要")
+                    presented.update((day, item) for item in row["items"])
+                recorded_days.append(day)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                log_issues.append(f"{log_path}:{number}: 記録の形式不備（集計対象外）")
+    lessons = []
+    for record in records:
+        if record["kind"] != "lesson":
+            continue
+        occurrences = [dict(occurrence, presented=(occurrence["date"], record["id"]) in presented)
+                       for occurrence in record["occurrences"][1:]
+                       if start <= occurrence["date"] <= end]
+        if occurrences:
+            lessons.append({"id": record["id"], "text": record["text"],
+                            "count": len(occurrences), "occurrences": occurrences})
+    return {"start": start, "end": end, "timezone": str(timezone or "local"),
+            "total": sum(lesson["count"] for lesson in lessons), "lessons": lessons,
+            "recorded_period": {"start": min(recorded_days), "end": max(recorded_days)} if recorded_days else None,
+            "log_path": str(log_path), "log_issues": log_issues, "format_issues": issues}
+
+
 def main():
     ap = argparse.ArgumentParser(description="外部脳(Obsidian Vault)の定期棚卸し検出ツール。")
     ap.add_argument("--json", action="store_true",
                      help="機械可読なJSON出力を標準出力へ返す（maintenance.sh向け・.mdレポートも従来どおり生成する）")
+    ap.add_argument("--recurrence", action="store_true", help="再発を読み取り専用で期間集計する（通常の棚卸しは行わない）")
+    ap.add_argument("--start", help="集計開始日 YYYY-MM-DD（含む）")
+    ap.add_argument("--end", help="集計終了日 YYYY-MM-DD（含む）")
+    ap.add_argument("--timezone", help="発生日のタイムゾーン（例 Asia/Tokyo。既定はこの機のローカル日付）")
+    ap.add_argument("--recall-log", type=pathlib.Path, help="提示記録（既定は想起と共通の設定）")
     args = ap.parse_args()
+
+    if args.recurrence:
+        try:
+            start, end = (datetime.date.fromisoformat(value).isoformat() for value in (args.start, args.end))
+            if start > end:
+                raise ValueError("開始日は終了日以前が必要です")
+            timezone = ZoneInfo(args.timezone) if args.timezone else None
+        except (TypeError, ValueError, KeyError) as error:
+            ap.error(f"--start/--end に日付、--timezone に有効な地域名が必要です: {error}")
+        records, issues = vault_lib.read_recall_records(VAULT, include_incomplete=True)
+        report = recurrence_report(records, issues, start, end, timezone,
+                                   args.recall_log or pathlib.Path(load_recall_config()["log_path"]))
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False))
+        else:
+            print(f"期間: {start}〜{end}（{args.timezone or 'この機のローカル日付'}・両端を含む）")
+            period = report["recorded_period"]
+            print("提示記録の対象期間: " + (f"{period['start']}〜{period['end']}" if period else "記録なし")
+                  + f"（{report['log_path']}）")
+            print("記録開始前・欠損を含む可能性があります。記録なしは正常稼働の証拠にはなりません。")
+            print(f"再発合計: {report['total']}件")
+            for lesson in report["lessons"]:
+                print(f"- {lesson['id']}: {lesson['count']}件 — {lesson['text']}")
+                for occurrence in lesson["occurrences"]:
+                    print(f"  - {occurrence['date']} {occurrence['source']} — "
+                          + ("出した" if occurrence["presented"] else "出していない"))
+            for issue in issues:
+                print(f"書式不備: {issue['id']} — {', '.join(issue['fields'])}")
+            for issue in report["log_issues"]:
+                print(issue)
+            print("同日提示の有無だけを照合しています。利用・時間の前後・因果関係は示しません。")
+        return
+    if any((args.start, args.end, args.timezone, args.recall_log)):
+        ap.error("期間・提示記録の引数は --recurrence と一緒に指定してください")
 
     today = datetime.date.today()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -248,6 +318,7 @@ def main():
             if unreadable_reason is not None:
                 unreadable_notes.append((rel, unreadable_reason))
 
+    _, format_issues = vault_lib.read_recall_records(VAULT, skip_sources={rel for rel, _ in unreadable_notes})
     missing_updated, date_drift, broken_links, stale_hits = [], [], [], []
     status_rows, stalled, status_future_dated = [], [], []
     review_overdue, review_soon, review_invalid = [], [], []
@@ -360,7 +431,7 @@ def main():
     # §11 review_overdue+review_invalid。数えない（md には従来どおり⚠️付き
     # 情報表示のまま残す）＝§5 サイズ超過・必読欠落（旧裁定の6ファイル基準が
     # 前提から外れた＝§10-4・段3-4の必読圧縮まで据え置き）・§6 停滞プロジェクト・
-    # §8 Fragments capture停止疑い・§11 review_soon（14日以内到来）・
+    # §8 Fragments capture停止疑い・§11 review_soon（14日以内到来）・§12 形の欠け。
     # （AIが機械的に直せない/人間の目視相談が要る項目のため）。
     size_over_total = total_lines > SIZE_LIMIT_TOTAL_LINES or total_bytes > SIZE_LIMIT_TOTAL
     size_over_files = sum(1 for _f, _n_lines, _n_bytes, over in size_rows if over)
@@ -380,7 +451,7 @@ def main():
     # 2026-09-20）。kind は sections のキーと同じ語彙、並びは sections と同じ順、
     # target／detail は md レポートの各節の行と同じ材料（読み手＝health_judge.py が
     # 注入ブロックの棚卸し項目 4 点＝種別・対象・主体・減る条件に写す）。
-    # 検出ロジックは不変（SO-3）＝actionable に数える 10 種別の行をそのまま並べる
+    # 検出ロジックは不変（SO-3）＝actionable に数える種別の行をそのまま並べる
     # だけなので len(items) == actionable を書き手が保証する（テストで検査）。
     # 停滞プロジェクト・サイズ超過・未読・要観察は actionable に数えないので載せない（R-1）。
     items = []
@@ -413,9 +484,9 @@ def main():
     L.append(f"# 外部脳 棚卸しレポート {today.isoformat()}")
     L.append("")
     L.append(f"自動生成（`work/takumi009-ai-env/ai-brain/executor/`）。ノート {len(notes)} 件を検査し、"
-             f"**要確認 {actionable} 件（対処可能な項目のみ。停滞・未読・サイズは各節の情報表示）**。"
+             f"**要確認 {actionable} 件（対処可能な項目のみ。停滞・サイズは各節の情報表示）**。"
              "本レポートは検出のみで自動対処はしない（2026-07-16簡素化で"
-             "「最初のセッションでリーダーが自律対処」運用は撤去済み）。綻び（鮮度・リンク切れ・alias）は"
+             "「最初のセッションでリーダーが自律対処」運用は撤去済み）。綻び（鮮度・リンク切れ）は"
              "気づいた時点で読み時に直し、更新日ズレ・波及漏れ疑い等は次回の棚卸し相談で人間と目視する"
              "＝[[Knowledge/external-brain-maintenance-split]]。運用ノート:"
              " [[Knowledge/external-brain-guide#定期チェック（陳腐化・肥大化の検出）]]")
@@ -469,7 +540,7 @@ def main():
     L.append("## 8. Fragments（直近14日）")
     L.append(f"- 日次ファイル {frag_files} 件 / エントリ約 {frag_entries} 件"
              + ("（⚠️ capture が止まっている可能性）" if frag_files == 0 else " ✅ capture 継続中"))
-    L.append(f"- `status: promoted` マーク累計 {promoted_total} 件（週次昇格レビューの参考値）")
+    L.append(f"- `status: promoted` マーク累計 {promoted_total} 件（昇格済みの記録）")
 
     L.append("")
     L.append(f"## 11. review_by の期限（任意フィールド・超過{len(review_overdue)}件／{REVIEW_SOON_DAYS}日以内{len(review_soon)}件）")
@@ -487,6 +558,9 @@ def main():
         L.append("**形式不正（`YYYY-MM-DD`で書き直す）:**")
         L.extend(f"- `{r}` — review_by: `{d}`" for r, d in review_invalid)
 
+    section(f"12. 教訓・判断の形の欠け（{len(format_issues)}件）", format_issues,
+            lambda issue: f"- `{issue['id']}` — {'・'.join(issue['fields'])}")
+
     L.append("")
     out = OUT_DIR / f"{today.isoformat()}.md"
     out.write_text("\n".join(L), encoding="utf-8")
@@ -502,12 +576,13 @@ def main():
         "n_notes": len(notes),
         "sections": sections,
         "items": items,
+        "recall_format": format_issues,
     })
 
     if args.json:
         # --json時は標準出力をJSON1行のみにする（呼び出し元=maintenance_run_step.py
         # がそのままjson.loads()する契約。人間向けメッセージは標準エラーへ回す・
-        # fragments_log.pyと同じ流儀）。missing_updated_fix_candidatesキーは
+        # JSONのみをstdoutへ返す流儀）。missing_updated_fix_candidatesキーは
         # FIX機能撤去（2026-07-18本人裁定・[[Decisions/2026-07-18-external-
         # brain-hardening]]）に伴い削除した＝missing_updatedは検出のみで
         # actionableへの計上と`.md`レポート§1への表示にとどまる。
@@ -516,6 +591,7 @@ def main():
             "report_path": str(out),
             "actionable": actionable,
             "n_notes": len(notes),
+            "recall_format": format_issues,
         }
         print(f"レポート生成: {out}（要確認 {actionable} 件）", file=sys.stderr)
         print(json.dumps(payload, ensure_ascii=False))

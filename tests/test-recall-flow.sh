@@ -7,7 +7,6 @@ trap 'rm -rf "$WORK"' EXIT
 export PYTHONDONTWRITEBYTECODE=1
 python3 - "$REPO_ROOT" "$WORK" "$@" <<'PY'
 import datetime as dt
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +23,8 @@ test_names = sys.argv[3:]
 sys.path.insert(0, str(repo / 'ai-brain/executor'))
 import health_judge as health
 import recall_runtime as runtime
+sys.path.insert(0, str(repo / 'tests'))
+from recall_fixtures import trust_codex_recall
 
 
 class RecallFlow(unittest.TestCase):
@@ -93,22 +94,7 @@ role.leader: configured model=test
                               env={**self.env, **(extra or {})}, cwd=self.home, timeout=40)
 
     def trust(self):
-        # fixture のみ。製品コードは承認値を書かない。
-        source = self.home / '.codex/hooks.json'
-        hooks = json.loads(source.read_text())['hooks']['UserPromptSubmit']
-        config = self.home / '.codex/config.toml'
-        with config.open('a') as out:
-            for gi, group in enumerate(hooks):
-                for hi, handler in enumerate(group['hooks']):
-                    if 'vault-recall.sh' in handler['command']:
-                        key = f'{source}:user_prompt_submit:{gi}:{hi}'
-                        identity = {'event_name': 'user_prompt_submit', 'hooks': [{
-                            'type': 'command', 'command': handler['command'],
-                            'timeout': 5, 'async': False}]}
-                        raw = json.dumps(identity, sort_keys=True, separators=(',', ':'))
-                        fingerprint = 'sha256:' + hashlib.sha256(raw.encode()).hexdigest()
-                        out.write(f'\n[hooks.state.{json.dumps(key)}]\ntrusted_hash = '
-                                  + json.dumps(fingerprint) + '\n')
+        trust_codex_recall(self.home)
 
     def test_cmux_group_zero_keeps_fixed_trust(self):
         # HEAD の実定義と実環境で照合済みのハッシュを固定の正解にする。

@@ -34,12 +34,12 @@ The repository is split into 6 **functions** (what a human would choose to take 
 
 ```
 takumi009-ai-env/
-├── ai-brain/                   # Vault bootstrap, recall, read-log, backup, weekly maintenance, public export
+├── ai-brain/                   # Vault bootstrap, recall, backup, weekly maintenance, public export
 │   ├── connect/                # Installed leader-hook configuration and trust observation
 │   │   └── leader-hooks/
-│   ├── executor/               # vault-recall.sh, vault-read-log.sh, bootstrap-vault.sh (SessionStart contribution), backup-vault.sh,
-│   │                           # maintenance.sh / maintenance-kick.sh, export-public-vault.sh, fragments-reviewed.sh, health_judge.py,
-│   │                           # the Vault detectors (fragments_log.py, maintenance_run_step.py, vault_inventory.py, vault_lib.py)
+│   ├── executor/               # vault-recall.sh, bootstrap-vault.sh (SessionStart contribution), backup-vault.sh,
+│   │                           # maintenance.sh / maintenance-kick.sh, export-public-vault.sh, health_judge.py,
+│   │                           # the Vault detectors (maintenance_run_step.py, vault_inventory.py, vault_lib.py)
 │   ├── assembly/                # install-backup.sh, install-maintenance.sh, the 2 LaunchAgent plists (backup-vault / maintenance)
 │   └── data/
 │       ├── templates/           # README templates for the private skeleton folders
@@ -181,6 +181,10 @@ core/assembly/check-drift.sh --managed-symlinks-only   # placement health: exit 
 core/assembly/check-drift.sh --forward-refs            # retirement precheck: no output and exit 0 = nothing names a removed old path
 ```
 
+##### Taking in S4 on an existing main machine
+
+After running `core/assembly/install-main.sh`, restart any running leader sessions.
+
 #### Sub environment
 
 ```sh
@@ -221,20 +225,23 @@ The "Task" pane shows the Tasks section of the project declared for the **focuse
 
 `ai-brain/executor/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). Details = the comment at the top of the script.
 
+### Recurrence review
+
+For version retrospectives, run `python3 ai-brain/executor/vault_inventory.py --recurrence --start 2026-11-01 --end 2026-11-30 --timezone Asia/Tokyo` (add `--json` for structured output). Dates include both endpoints; omit `--timezone` to use this machine's local dates. `VAULT` selects the Vault, and `--recall-log` overrides the log path resolved from the shared recall settings. This mode only reads files and writes its result to stdout. It excludes each lesson's first occurrence before filtering by date and checks whether a completed recall presented that lesson on the same day. The output includes the available recording period; missing records do not establish normal operation. Regular inventory reports lesson and decision format issues and never runs recurrence aggregation automatically. Format issues appear only in report §12 and the JSON `recall_format` field; they do not count toward health findings requiring attention. At the end of the S5 backfill, confirm that §12 reports zero format issues.
+
 ### Weekly Maintenance Runner (main only)
 
 `ai-brain/executor/maintenance.sh` is the single weekly runner (Monday 06:00, installed by `ai-brain/assembly/install-maintenance.sh`). Details = the comment at the top of the script.
 
-**State record contract (schema 2)** — `~/.claude/logs/maintenance/last-run.json` is the single source of truth for the weekly runner's result, read by the health judge (`ai-brain/executor/health_judge.py`, via the SessionStart hook and the Dock). The legacy 6 keys (`started_at` / `last_success_at` / `last_result` / `last_result_summary` / `fragments_candidates` / `fragments_since`) are still written for the older readers; the new readers use only the keys below.
+**State record contract (schema 2)** — `~/.claude/logs/maintenance/last-run.json` is the single source of truth for the weekly runner's result, read by the health judge (`ai-brain/executor/health_judge.py`, via the SessionStart hook and the Dock). The runner also writes `started_at`, `last_success_at`, `last_result` and `last_result_summary`. It no longer counts promotion candidates; historical logs and state keys are left in place and ignored by current displays.
 
 - `run` — the most recent **start** and how it ended. Written unconditionally at start (`status: running`, together with `started_at`), and rewritten **as a whole with the runner's own content** on every one of the 6 endings: completed (finish / Phase 0 snapshot failure / Vault write-lock failure / run-dir creation failure) → `status: completed`; busy-skip (Phase 0 backup busy → `skipped` + `skip_reason: busy:backup0`; Vault write-lock busy → `skipped` + `busy:lock`). Fields = `run_id` (`<date>/<HHMMSS-pid>`), `run_dir`, `started_at`, `trigger` (`scheduled` / `manual`), `status`, `stale_after_seconds` (a copy of `MAINTENANCE_STALE_LOCK_SECONDS`; the reader uses it to tell "still running" from "interrupted"), `skip_reason`, `finished_at`. A record left at `running` past `stale_after_seconds` means the runner died without a completion record.
-- `completed` — the most recent **completion record** (only the 4 completed endings write it; busy-skips leave the previous one). `fully_ok` is true only for a fully clean run. `steps[]` holds **one entry per abnormal step** (clean steps are not listed): `id` (`phase0-dir` / `phase0-lock` / `phase0-backup` / `phase0-export` / `phase1-drift` / `phase1-fragments` / `phase1-inventory` / `phase3-summary` / `phase3-backup` / `phase3-record`), `name`, `result` (`fail` / `warn` — a child's failure the runner continued past is still `fail`; `warn` is only a drift finding), `reason` (verbatim, never truncated; control characters normalized to spaces), `actor` (`AI` / `本人` from the runner's fixed table — drift findings are `本人`, everything else `AI`, unknown ids fall to `本人`), `log_ref` (that step's log under `run_dir`). `info[]` = informational notes that are not steps (unknown `config.toml` keys, declaration prune not performed).
+- `completed` — the most recent **completion record** (only the 4 completed endings write it; busy-skips leave the previous one). `fully_ok` is true only for a fully clean run. `steps[]` holds **one entry per abnormal step** (clean steps are not listed): `id` (`phase0-dir` / `phase0-lock` / `phase0-backup` / `phase0-export` / `phase1-drift` / `phase1-inventory` / `phase3-summary` / `phase3-backup` / `phase3-record`), `name`, `result` (`fail` / `warn` — a child's failure the runner continued past is still `fail`; `warn` is only a drift finding), `reason` (verbatim, never truncated; control characters normalized to spaces), `actor` (`AI` / `本人` from the runner's fixed table — drift findings are `本人`, everything else `AI`, unknown ids fall to `本人`), `log_ref` (that step's log under `run_dir`). `info[]` = informational notes that are not steps (unknown `config.toml` keys, declaration prune not performed).
 - `success_streak` — number of consecutive fully-clean completions (reset to 0 on any abnormal completion).
 - `ack` — the leader AI's "handled, judge on the next run" note (see *Acknowledging a finding*). The runner deletes it on the next fully-clean completion and keeps it on a re-failure (the judge then reports "re-failed after ack" because `ack.run_id != completed.run_id`).
 
 **Manual kick (`ai-brain/executor/maintenance-kick.sh`)** — runs the weekly runner through launchd (`launchctl kickstart` without `-k`), so it uses the same executable, environment (plist `HOME` / `PATH` / `USER`) and record as the scheduled run; it leaves a marker so the record says `trigger: manual` (a raw `launchctl kickstart` is recorded as `scheduled`). It refuses to start when the LaunchAgent is not loaded (`KICK_REFUSED:not_loaded`, exit 2), when the Vault write-lock is held or `run.status` is `running` within `stale_after_seconds` (`KICK_REFUSED:busy`, exit 3), or when the marker cannot be written (exit 4); `KICK_FAILED` (5) if kickstart fails, `KICK_TIMEOUT` (6) if no new `run.run_id` appears within 30 s (this also removes the marker — a run that starts late past this point is recorded as `scheduled`, not `manual`). On success it prints `RUN_ID:<id>` and `STATE_FILE:<path>`; with `--wait` it also waits until `run.status != running` and prints `STATUS:<completed|skipped>` plus `FULLY_OK:<true|false>` (or `SKIP_REASON:<busy:…>` — a busy-skip is not a failure; re-run a few minutes later). `KICK_WAIT_TIMEOUT` (7) if the completion record never appears.
 
-**Closing out a promotion (`ai-brain/executor/fragments-reviewed.sh`)** — run this once you've finished handling the Fragments promotion candidates the Dock's weekly line counted (after the leader has marked each handled entry `status: promoted`), so the count returns to 0 without waiting for the next weekly run. It re-counts unprocessed Fragments starting exclusively from today (`fragments_log.py --since <today>`; today's own entries aren't counted — see the known limitation below), then writes `fragments_reviewed_at` (now, UTC), `fragments_candidates` and `fragments_since` to `last-run.json` atomically; the next weekly run's `--since` prefers `fragments_reviewed_at` over `last_success_at` when it's valid (not malformed, not in the future, within 30 days — otherwise it falls back the same way `last_success_at` always has). On any failure (the detector script failing/timing out, malformed JSON, or a contract violation) it writes nothing and exits non-zero with a one-line reason on stderr. `--dry-run` shows the 3 values it would write without writing them. Env vars for testing: `LAST_RUN_FILE`, `FRAGMENTS_LOG_PY`, `TIMEOUT_FRAGMENTS_LOG` (same defaults as `maintenance.sh`). Known limitation: because the window is date-granularity (`since_date < d`), Fragments added the *same day* the CLI runs won't be counted until the next day — run it last, after all promotions for the session are done.
 
 **Acknowledging a finding (`health_judge.py ack`)** — the leader AI records "handled; judge on the next production run" in `last-run.json`'s `ack`:
 
@@ -359,13 +366,13 @@ repo は人が取る単位＝**機能** 6 つに分かれ、各機能の内側�
 
 ```
 takumi009-ai-env/
-├── ai-brain/                   # Vault の読込・想起・読取記録・バックアップ・週次メンテ・公開出力
+├── ai-brain/                   # Vault の読込・想起・バックアップ・週次メンテ・公開出力
 │   ├── connect/                # 配置済みリーダーフックの構成・信頼状態の観測
 │   │   └── leader-hooks/
-│   ├── executor/               # vault-recall.sh・vault-read-log.sh・bootstrap-vault.sh（SessionStart 合成器への寄与）・
+│   ├── executor/               # vault-recall.sh・bootstrap-vault.sh（SessionStart 合成器への寄与）・
 │   │                           # backup-vault.sh・maintenance.sh／maintenance-kick.sh・export-public-vault.sh・
-│   │                           # fragments-reviewed.sh・health_judge.py・Vault の検出器群
-│   │                           # （fragments_log.py・maintenance_run_step.py・vault_inventory.py・vault_lib.py）
+│   │                           # health_judge.py・Vault の検出器群
+│   │                           # （maintenance_run_step.py・vault_inventory.py・vault_lib.py）
 │   ├── assembly/                # install-backup.sh・install-maintenance.sh・LaunchAgent plist 2 本（backup-vault／maintenance）
 │   └── data/
 │       ├── templates/           # private 骨格フォルダの README 雛形
@@ -516,6 +523,10 @@ core/assembly/check-drift.sh --managed-symlinks-only   # 配置の健全性検�
 core/assembly/check-drift.sh --forward-refs            # 撤去の前提検査＝出力なし・exit 0 で撤去した旧パスを名指す先が無い
 ```
 
+##### 既存メイン機の S4 反映手順
+
+`core/assembly/install-main.sh` の実行後、起動中のリーダーセッションを再起動します。
+
 #### サブ環境
 
 ```sh
@@ -556,20 +567,23 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 
 `ai-brain/executor/backup-vault.sh` は `$HOME/Data/obsidian` を対象に、変更があれば `git add -A && git commit`（メッセージ: `backup: YYYY-MM-DD HH:MM`）し、remote `origin` が設定済みの場合のみ push します（未設定なら commit までで警告を出して終了）。詳細＝スクリプト冒頭のコメント。
 
+### 再発の振り返り
+
+版の振り返り⑤では `python3 ai-brain/executor/vault_inventory.py --recurrence --start 2026-11-01 --end 2026-11-30 --timezone Asia/Tokyo` を実行します（機械向けは `--json`）。期間の両端を含み、`--timezone` を省くとこの機のローカル日付を使います。Vault は `VAULT`、提示記録は `--recall-log` で変更できます（既定は想起と共通の設定）。このモードは読み取り専用で結果を標準出力へ返します。教訓の全発生から初回を除いた後で期間を絞り、再発当日にその教訓を提示したかを照合します。提示記録の対象期間を併記し、記録なしを正常稼働の証拠にはしません。通常の棚卸しでは教訓・判断の形の欠けを報告し、再発集計は自動実行しません。形の欠けはレポート §12 と JSON の `recall_format` にだけ出し、ヘルスの要確認件数には含めません。S5 の埋め戻しの締めでは、§12 の「欠け0件」を確認します。
+
 ### 週次メンテナンスランナー（メイン専用機能）
 
 `ai-brain/executor/maintenance.sh` は単一の週次ランナーです（毎週月曜06:00・`ai-brain/assembly/install-maintenance.sh` が設置。詳細＝スクリプト冒頭のコメント）。
 
-**状態記録の契約（schema 2）** — `~/.claude/logs/maintenance/last-run.json` が週次ランナーの実行結果の正本で、判定機（`ai-brain/executor/health_judge.py`＝SessionStart フックと Dock が呼ぶ）が読みます。旧 6 キー（`started_at`／`last_success_at`／`last_result`／`last_result_summary`／`fragments_candidates`／`fragments_since`）は旧読み手のため従来どおり書きますが、新しい読み手は下のキーだけを使います。
+**状態記録の契約（schema 2）** — `~/.claude/logs/maintenance/last-run.json` が週次ランナーの実行結果の正本で、判定機（`ai-brain/executor/health_judge.py`＝SessionStart フックと Dock が呼ぶ）が読みます。`started_at`／`last_success_at`／`last_result`／`last_result_summary` も記録します。昇格候補の集計は終了し、過去のログ・状態キーは残したまま現在の表示から除外します。
 
 - `run` — **直近の開始**とその終わり方。開始時に無条件で書き（`status: running`・`started_at` と同時）、**終わり方 6 経路すべてでランナー自身の内容で丸ごと書き直します**: 完了記録に到達する 4 経路（完走／Phase 0 直前スナップショット失敗／Vault 書込ロック取得失敗／実行ディレクトリ作成失敗）→ `status: completed`、busy-skip の 2 経路（Phase 0 backup が busy → `skipped`＋`skip_reason: busy:backup0`、Vault 書込ロックが busy → `skipped`＋`busy:lock`）。フィールド＝`run_id`（`<日付>/<HHMMSS-pid>`）・`run_dir`・`started_at`・`trigger`（`scheduled`／`manual`）・`status`・`stale_after_seconds`（`MAINTENANCE_STALE_LOCK_SECONDS` の写し。読み手はこの値で「実行中」と「中断」を分ける）・`skip_reason`・`finished_at`。`running` のまま `stale_after_seconds` を過ぎた記録＝完了記録に到達せずランナーが止まった（中断）。
-- `completed` — **直近の完了記録**（完了記録に到達する 4 経路だけが書く。busy-skip は前回のまま残す）。`fully_ok` は完全正常終了のときだけ true。`steps[]` は**異常工程 1 つにつき 1 要素**（正常な工程は書かない）＝`id`（`phase0-dir`／`phase0-lock`／`phase0-backup`／`phase0-export`／`phase1-drift`／`phase1-fragments`／`phase1-inventory`／`phase3-summary`／`phase3-backup`／`phase3-record`）・`name`・`result`（`fail`／`warn`。子の失敗をランナーが警告として継続し完走しても `fail`。`warn` は drift 検知だけ）・`reason`（逐語・切り詰めない・制御文字は空白へ正規化）・`actor`（`AI`／`本人`＝ランナーの固定表。drift 検知は `本人`、他は `AI`、表に無い id は `本人`）・`log_ref`（その工程のログ＝`run_dir` 配下）。`info[]`＝工程ではない参考情報（`config.toml` の未知キー・宣言掃除の未実施）。
+- `completed` — **直近の完了記録**（完了記録に到達する 4 経路だけが書く。busy-skip は前回のまま残す）。`fully_ok` は完全正常終了のときだけ true。`steps[]` は**異常工程 1 つにつき 1 要素**（正常な工程は書かない）＝`id`（`phase0-dir`／`phase0-lock`／`phase0-backup`／`phase0-export`／`phase1-drift`／`phase1-inventory`／`phase3-summary`／`phase3-backup`／`phase3-record`）・`name`・`result`（`fail`／`warn`。子の失敗をランナーが警告として継続し完走しても `fail`。`warn` は drift 検知だけ）・`reason`（逐語・切り詰めない・制御文字は空白へ正規化）・`actor`（`AI`／`本人`＝ランナーの固定表。drift 検知は `本人`、他は `AI`、表に無い id は `本人`）・`log_ref`（その工程のログ＝`run_dir` 配下）。`info[]`＝工程ではない参考情報（`config.toml` の未知キー・宣言掃除の未実施）。
 - `success_streak` — 完全正常終了の連続回数（異常な完了で 0 に戻る）。
 - `ack` — リーダー AI の対処済み申告（後述）。次の完全正常終了でランナーが削除し、再失敗なら残す（`ack.run_id != completed.run_id` を判定機が「申告後に再失敗」と読む）。
 
 **手動起動（`ai-brain/executor/maintenance-kick.sh`）** — launchd 経由（`launchctl kickstart`・`-k` は付けない）で週次ランナーを起動するので、定期実行と同じ実行体・同じ環境（plist の `HOME`／`PATH`／`USER`）・同じ記録先を通ります。起動前に印ファイルを置き、記録には `trigger: manual` と載ります（`launchctl kickstart` を直接叩いた起動は `scheduled` と記録される＝監査用の既知の限界）。LaunchAgent が未ロード（`KICK_REFUSED:not_loaded`・終了 2）、Vault 書込ロック保持中または `run.status` が `running` で `stale_after_seconds` 未満（`KICK_REFUSED:busy`・終了 3）、印ファイルを作れない（終了 4）のときは起動しません。kickstart 失敗＝`KICK_FAILED`（5）、30 秒以内に新しい `run.run_id` が現れない＝`KICK_TIMEOUT`（6・この場合も印ファイルを消します＝この後に遅れて開始した run は `manual` ではなく `scheduled` として記録されうる）。成功時は `RUN_ID:<id>` と `STATE_FILE:<path>` を印字し、`--wait` を付けると `run.status != running` まで待って `STATUS:<completed|skipped>` と `FULLY_OK:<true|false>`（`skipped` なら `SKIP_REASON:<busy:…>`＝失敗ではなく再実行の対象。数分後に再実行）を印字します。完了記録が現れなければ `KICK_WAIT_TIMEOUT`（7）。
 
-**昇格の締め（`ai-brain/executor/fragments-reviewed.sh`）** — Dock の週次行が数えた昇格候補への対応が終わったら（リーダーが対応済みの各エントリへ `status: promoted` を付けた後に）実行し、次の週次を待たずに候補数を 0 件へ戻します。今日を排他的な起点として未処理 Fragments を数え直し（`fragments_log.py --since <今日>`・当日分は数えない。下記の既知の限界を参照）、`fragments_reviewed_at`（UTC の今）・`fragments_candidates`・`fragments_since` を `last-run.json` へ原子的に書きます。次回の週次メンテの `--since` は、`fragments_reviewed_at` が有効（形式正・未来でない・30 日以内）ならそれを優先し、無効なら従来どおり `last_success_at` へフォールバックします。失敗時（検出スクリプトの失敗/timeout・JSON 破損・契約違反のいずれか）は何も書かずに非 0 で終わり、理由を stderr へ 1 行出します。`--dry-run` は書く予定の 3 値を表示するだけで書き込みません。テスト用 env は `LAST_RUN_FILE`・`FRAGMENTS_LOG_PY`・`TIMEOUT_FRAGMENTS_LOG`（既定は `maintenance.sh` と同じ）。既知の限界＝窓は日付単位（`since_date < d`）なので、CLI を実行した**その日**に足した Fragments は翌日以降まで数えられません（昇格対応の一連の最後に実行してください）。
 
 **対処済み申告（`health_judge.py ack`）** — リーダー AI が「対処した・次回の本番実行で判定する」を `last-run.json` の `ack` に残します:
 

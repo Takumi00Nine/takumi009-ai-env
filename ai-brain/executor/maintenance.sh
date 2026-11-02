@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # 週次メンテナンスランナー（LaunchAgent com.takumi009.maintenance・月曜 06:00・無人。手動起動＝ai-brain/executor/maintenance-kick.sh）。
 # Phase0: backup-vault.sh（直前スナップショット）→ Vault 書込ロック → export-public-vault.sh 再試行
-# Phase1: ① check-drift.sh --json（drift は警告・止めない）② fragments_log.py --since <last_success_at> --json
-#         ③ vault_inventory.py --json（各ステップは maintenance_run_step.py で timeout 隔離・1 本の失敗で止めない）
+# Phase1: ① check-drift.sh --json（drift は警告・止めない）③ vault_inventory.py --json（各ステップは maintenance_run_step.py で timeout 隔離・1 本の失敗で止めない）
+# ② は 2026-11 に撤去。記録の段名を変えないため番号は詰めない。
 # Phase3: cmux-task-declare.sh prune → Fragments 当日ファイルへサマリ 1 行 → backup-vault.sh → last-run.json → 異常時のみ macOS 通知 → 30 日整理
 # 出力: ~/.claude/logs/maintenance/<日付>/<時刻-pid>/（latest symlink）と last-run.json（契約＝README「状態記録の契約（schema 2）」・
 #       health-self-explain 設計 v1.2 §3。読み手＝ai-brain/executor/health_judge.py（bootstrap-vault.sh・cmux-next-model.sh 経由）。
-#       旧 6 キー（started_at・last_success_at・last_result・last_result_summary・fragments_*）は旧読み手（check-drift.sh ⑥・
-#       fragments_log.py）互換のため従来どおり書き、run／completed／success_streak／ack を足す＝終わり方 6 経路すべてで run を書く）
+#       started_at・last_success_at・last_result・last_result_summary と run／completed／success_streak／ack を記録する）
 # 環境変数で全パス・timeout を上書き可（テスト用）。経緯＝Decisions/2026-08-10-round6-rulings・2026-09-19-ai-env-optimization-rulings
 #
 # 補足（README「Weekly Maintenance Runner」から 2026-09-19 に移設・原文）:
 # Phase 0 — takes a pre-run snapshot via `backup-vault.sh`, acquires a Vault write-lock (PID file, held through Phase 3), and retries `export-public-vault.sh` if the `ai-brain/data/vault-public/Preferences` snapshot is behind.
-# Phase 1 (detection only, read-only) — runs, in order, `check-drift.sh` (environment health check; since 2026-08-10, a drift finding, execution error, or timeout no longer aborts the run — it's recorded as a warning and the run continues. The sole gate for Vault write safety is Phase 0's pre-run snapshot), `fragments_log.py`, and `vault_inventory.py`. The 3 steps are isolated from each other's failures. `vault_inventory.py` writes `~/.claude/logs/vault-inventory/latest.json` (`actionable` = number of fixable findings), which the SessionStart health line and the Dock read.
-# Phase 3 — appends a one-line summary to today's Fragments file, updates `last-run.json` (`last_success_at` only on a fully clean run; `last_result` — success/warn/fail — is always recorded, and a warning or failure shows up as a ⚠️ line in the next session's startup health check; `fragments_candidates` = number of unprocessed Fragments since the last successful run, shown by the Dock's Project pane weekly line as "候補N件" — it is never injected into the AI, and nothing moves until the user says "昇格して"), takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
+# Phase 1 (detection only, read-only) — runs, in order, `check-drift.sh` (environment health check; since 2026-08-10, a drift finding, execution error, or timeout no longer aborts the run — it's recorded as a warning and the run continues. The sole gate for Vault write safety is Phase 0's pre-run snapshot), and `vault_inventory.py`. The 2 steps are isolated from each other's failures. `vault_inventory.py` writes `~/.claude/logs/vault-inventory/latest.json` (`actionable` = number of fixable findings), which the SessionStart health line and the Dock read.
+# Phase 3 — appends a one-line summary to today's Fragments file, updates `last-run.json` (`last_success_at` only on a fully clean run; `last_result` — success/warn/fail — is always recorded, and a warning or failure shows up as a ⚠️ line in the next session's startup health check), takes a final `backup-vault.sh` snapshot, releases the Vault write-lock, sends a macOS notification only if something went wrong, and prunes maintenance logs older than 30 days.
 # `ai-brain/executor/maintenance.sh` is the single weekly runner (Monday 06:00 since 2026-09-20 (03:00 before), installed by `ai-brain/assembly/install-maintenance.sh`) that replaced the older separate Vault-cultivation LaunchAgents on 2026-07-16. The unattended headless-Claude apply step (Fragments promotion / Knowledge merge / Decision propagation) was retired on 2026-09-19 — the runner now only detects and counts; promotion happens while the user is present, by the leader.
 # All intermediate files and machine-readable status files for a given run live under `~/.claude/logs/maintenance/<YYYY-MM-DD>/<HHMMSS>-<pid>/`, with `~/.claude/logs/maintenance/latest` always pointing at the most recent run.
 #
@@ -54,7 +53,6 @@ source "$SCRIPT_DIR/../../core/executor/notice.sh"
 : "${TIMEOUT_BACKUP_VAULT:=180}"
 : "${TIMEOUT_EXPORT_PUBLIC_VAULT:=180}"
 : "${TIMEOUT_CHECK_DRIFT:=120}"
-: "${TIMEOUT_FRAGMENTS_LOG:=90}"
 : "${TIMEOUT_VAULT_INVENTORY:=180}"
 # 宣言記録の掃除（cmux-task-declare.sh prune）はcmuxを叩くためソケット半死で
 # ハングしうる。既存ステップと同じ形で打ち切る（既定30秒）。
@@ -68,8 +66,7 @@ warn() { echo "[maintenance] WARN: $*" >&2; }
 RUN_FULLY_OK=1
 
 # 異常理由の蓄積（Phase3「異常時のみmacOS通知」用）。呼ぶたびにRUN_FULLY_OKも
-# 0へ倒す＝「隔離して継続する異常」でも1件あればlast_success_atは進めない
-# （fragments_log.pyの--sinceが次回も同じ窓を再走査できるようにする）。
+# 0へ倒す＝「隔離して継続する異常」でも1件あればlast_success_atは進めない。
 #
 # 2026-09-20 health-self-explain（設計 v1.2 §3.3）: 引数を
 #   add_anomaly <step_id> <result> <message> [<log_ref>]
@@ -103,7 +100,6 @@ step_name() {
     phase0-backup)    echo "Phase0 直前スナップショット" ;;
     phase0-export)    echo "Phase0 公開スナップショット再試行" ;;
     phase1-drift)     echo "Phase1① check-drift" ;;
-    phase1-fragments) echo "Phase1② fragments_log" ;;
     phase1-inventory) echo "Phase1③ vault_inventory" ;;
     phase3-task-prune) echo "Phase3 宣言掃除の入口の照会" ;;
     phase3-summary)   echo "Phase3 Fragmentsサマリ追記" ;;
@@ -119,7 +115,7 @@ step_actor() {
     phase1-drift) if [[ "$2" == "warn" ]]; then echo "本人"; else echo "AI"; fi ;;
     # phase0-export＝公開スナップショット再試行は承認済み export の再実行＝AI
     # （本人裁定 OQ-2・2026-09-20。本人ゲートは公開の可否＝push に掛かる）。
-    phase0-dir|phase0-lock|phase0-backup|phase0-export|phase1-fragments|phase1-inventory|phase3-summary|phase3-backup|phase3-record)
+    phase0-dir|phase0-lock|phase0-backup|phase0-export|phase1-inventory|phase3-summary|phase3-backup|phase3-record)
       echo "AI" ;;
     *) echo "本人" ;;
   esac
@@ -135,19 +131,6 @@ add_info_note() { INFO_NOTES+=("$1"); log "INFO: $1"; }
 # --- last-run.json 読み書きヘルパ（原子更新・破損時はfail-openで{}扱い） ---
 # ファイルパス・フィールド名・値はPythonコード文字列へ埋め込まずsys.argv経由で
 # 渡す（値に ' が含まれると構文が壊れ、細工された値では任意コード実行になりうる）。
-read_last_run_field() {
-  python3 -c "
-import json, sys
-try:
-    with open(sys.argv[1], encoding='utf-8') as f:
-        d = json.load(f)
-    v = d.get(sys.argv[2])
-    print(v if isinstance(v, str) else '')
-except Exception:
-    print('')
-" "$LAST_RUN_FILE" "$1"
-}
-
 write_last_run_field() {
   python3 -c "
 import json, os, pathlib, sys
@@ -277,8 +260,7 @@ write_run_status() {
 #   読み手が run_id の不一致で「申告後に再失敗」と読む）も処理する。
 #   completed.steps[] の 1 要素＝異常工程 1 つ（正常な工程は書かない＝fully_ok の
 #   とき steps は空）。理由は切り詰めず、制御文字（C0・DEL）を空白へ正規化する。
-#   同じ step_id が複数回積まれた場合（例: Phase1② の件数書込失敗と
-#   scan_error_count>0 が同じ実行で起きる）は 1 工程 1 件に畳む（理由は「／」で
+#   同じ step_id が複数回積まれた場合は 1 工程 1 件に畳む（理由は「／」で
 #   連結・fail が warn に勝つ）。fail-open（書けなければ warn＝run.status は
 #   running のまま残り、次回判定で中断として現れる＝F-2）。
 write_completed_record() {
@@ -512,65 +494,6 @@ elif ! python3 -c "import os, sys; os.rename(sys.argv[1], sys.argv[2])" "$TMP_LA
   rm -f "$TMP_LATEST_LINK" 2>/dev/null || true
 fi
 
-# --sinceに渡す日付の算出（fragments_log.py --sinceは日付部分のみ解釈する契約）。
-# 候補は [fragments_reviewed_at, last_success_at] の順（昇格の締めCLI＝
-# ai-brain/executor/fragments-reviewed.sh が書くfragments_reviewed_atを優先する＝
-# 「対応したら消える」を実現するため。設計書§2.2）。どちらも無い/形式不正/
-# 未来日時/30日超過はいずれも7日前へfail-openでフォールバックする
-# （fragments_log.py自身のresolve_since()と同じ閾値）。候補値の検証ロジックは
-# 1か所にまとめ、候補ごとに複製しない。
-REVIEWED_AT="$(read_last_run_field fragments_reviewed_at)"
-PREV_SUCCESS_AT="$(read_last_run_field last_success_at)"
-SINCE_RESULT="$(python3 -c "
-import datetime, re, sys
-
-def validate(raw, today):
-    # last_success_at/fragments_reviewed_atはUTC（date -u）で保存されるため、
-    # 今日の日付判定もUTC基準に揃える（ローカル日付（datetime.date.today()）
-    # のままだと、UTCとローカルTZの日付が食い違う時間帯（例: 週次実行予定の
-    # JST 06:00はUTCでは前日）で未来日判定・30日境界が1日ずれうるため）。
-    raw = (raw or '').strip()
-    if not raw:
-        return None
-    # write_last_run_field()が書く形式（date -u +%Y-%m-%dT%H:%M:%SZ）に加え、
-    # 日付のみの形式も許容するが、末尾に無関係な文字列が付いた壊れた値
-    # （例: '2026-07-16broken'）は正規表現で構造ごと弾く（先頭10文字を
-    # 切り出すだけだとraw[:10]がたまたま有効な日付形式に見えれば通過して
-    # しまうため）。
-    m = re.match(r'^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2}))?\$', raw)
-    if not m:
-        return None
-    try:
-        if m.group(2):
-            # 時刻部分を含む場合は文字列全体を厳密に解析する（日付部分
-            # （m.group(1)）だけをfromisoformat()に渡すと、
-            # '2026-07-16T99:99:99Z'のような不正な時刻値でも正規表現の
-            # 桁数チェックさえ満たせば日付部分は正常に解析され、時刻の
-            # 妥当性が一切検証されないまま通過してしまうため）。
-            parsed = datetime.datetime.fromisoformat(raw.replace('Z', '+00:00')).date()
-        else:
-            parsed = datetime.date.fromisoformat(m.group(1))
-    except ValueError:
-        return None
-    if parsed > today or (today - parsed).days > 30:
-        return None
-    return parsed
-
-today = datetime.datetime.now(datetime.timezone.utc).date()
-fallback = (today - datetime.timedelta(days=7)).isoformat()
-chosen_raw, chosen_date = '', None
-for raw in sys.argv[1:]:
-    parsed = validate(raw, today)
-    if parsed is not None:
-        chosen_raw, chosen_date = raw, parsed.isoformat()
-        break
-if chosen_date is None:
-    chosen_date = fallback
-print(chosen_date + '\t' + chosen_raw)
-" "$REVIEWED_AT" "$PREV_SUCCESS_AT")"
-IFS=$'\t' read -r SINCE_DATE SINCE_SOURCE <<< "$SINCE_RESULT"
-log "起点: ${SINCE_SOURCE:-なし（初回相当）} / --since に使う日付: $SINCE_DATE"
-
 # =============================================================================
 # Phase 0: Vault書込ロック取得＋直前スナップショット＋export-public-vault再試行
 # =============================================================================
@@ -792,67 +715,6 @@ print(v)
   add_info_note "Phase1①: check-drift.sh②がconfig.tomlの未知キーを${UNKNOWN_CONFIG_KEYS_COUNT}件検出しました（テンプレにも既知アプリ管理キー一覧にも無い・driftには数えません。詳細: ${RUN_DIR}）"
 fi
 
-# --- ②fragments_log.py --since <起点> --json ---
-# fragments_log.py/vault_inventory.pyはVaultパスを$HOME/Data/obsidianに固定
-# しており--vault相当のオプションを持たない（本スクリプトは現状追随）。
-# 成功時は候補件数（len(fragments)・truncatedは含めない）をlast-run.jsonの
-# fragments_candidates／fragments_since（--sinceの日付）へ書く。読み手＝
-# cmux-next-model.sh の週次行「候補N件」（AIへは注入しない）。
-# 失敗時（rc≠0・timeout・JSON破損・契約違反）は前週の値を残さないよう両キーを削除する。
-FRAGMENTS_STATUS_FILE="$RUN_DIR/step-status-fragments.json"
-FRAGMENTS_JSON="$RUN_DIR/fragments.json"
-run_wrapped_step "$TIMEOUT_FRAGMENTS_LOG" "$FRAGMENTS_STATUS_FILE" \
-  "$FRAGMENTS_JSON" "$RUN_DIR/fragments-stderr.log" \
-  python3 "$SCRIPT_DIR/fragments_log.py" --since "$SINCE_DATE" --json
-FRAGMENTS_RESULT="$(parse_step_status "$FRAGMENTS_STATUS_FILE")"
-log "②fragments_log.py: $FRAGMENTS_RESULT"
-FRAGMENTS_CANDIDATES=""   # 空＝件数を確定できなかった（サマリ行は「不明」）
-if [[ "$FRAGMENTS_RESULT" == "OK 0" ]]; then
-  # fragments_log.pyは個々のFragmentsファイルの読取失敗をscan_error_countとして
-  # JSONへ返しつつexit 0で終わる契約のため、rcだけでは検知できない。
-  # scan_error_count>0はanomaly化してlast_success_atを進めない（翌週再走査）が、
-  # 件数自体は書く。JSON破損/契約違反（キー欠落・非負整数でない）は「0件（正常）」へ
-  # 丸めずanomaly化し、件数も書かない。
-  if FRAGMENTS_SCAN_ERROR_COUNT="$(python3 -c "
-import json, sys
-d = json.load(open(sys.argv[1], encoding='utf-8'))
-v = d['scan_error_count']
-if not (isinstance(v, int) and not isinstance(v, bool) and v >= 0):
-    raise SystemExit(1)
-print(v)
-" "$FRAGMENTS_JSON" 2>/dev/null)" && [[ "$FRAGMENTS_SCAN_ERROR_COUNT" =~ ^[0-9]+$ ]]; then
-    if FRAGMENTS_CANDIDATES="$(python3 -c "
-import json, sys
-d = json.load(open(sys.argv[1], encoding='utf-8'))
-v = d['fragments']
-assert isinstance(v, list)
-print(len(v))
-" "$FRAGMENTS_JSON" 2>/dev/null)" && [[ "$FRAGMENTS_CANDIDATES" =~ ^[0-9]+$ ]] \
-        && write_last_run_json fragments_candidates "$FRAGMENTS_CANDIDATES" \
-        && write_last_run_json fragments_since "\"$SINCE_DATE\""; then
-      log "②昇格候補${FRAGMENTS_CANDIDATES}件（${SINCE_DATE}以降）を last-run.json に記録しました"
-    else
-      FRAGMENTS_CANDIDATES=""
-      write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-      write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-      add_anomaly phase1-fragments fail "Phase1②: 候補件数を last-run.json に書けませんでした" "$FRAGMENTS_JSON"
-    fi
-    if [[ "$FRAGMENTS_SCAN_ERROR_COUNT" -gt 0 ]]; then
-      # 子の失敗を実行体が警告として継続し完走する 09-14 型（要件 S-17）。実行体が
-      # 継続することは結果種別を変えない＝子の処理の結果が失敗を含む＝fail（V-4・W-1）。
-      add_anomaly phase1-fragments fail "Phase1②: fragments_log.pyが読み取れなかったFragmentsファイルが${FRAGMENTS_SCAN_ERROR_COUNT}件あります（scan_error_count>0・候補件数は記録しつつ継続しますが、翌週再走査させるためlast_success_atは進めません）" "$FRAGMENTS_JSON"
-    fi
-  else
-    write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-    write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-    add_anomaly phase1-fragments fail "Phase1②: fragments_log.pyのJSON出力からscan_error_countを取得できませんでした（契約違反/JSON破損の疑い・候補件数は記録せず継続します）" "$FRAGMENTS_JSON"
-  fi
-else
-  write_last_run_json fragments_candidates null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-  write_last_run_json fragments_since null || warn "Phase1②: last-run.json の候補キー削除に失敗"
-  add_anomaly phase1-fragments fail "Phase1②: fragments_log.pyが失敗/timeoutしました（${FRAGMENTS_RESULT}・継続します）" "$RUN_DIR/fragments-stderr.log"
-fi
-
 # --- ③vault_inventory.py --json ---
 # 棚卸し検出（latest.jsonとmdレポートを書く）。失敗/timeoutはanomaly化する。
 INVENTORY_STATUS_FILE="$RUN_DIR/step-status-inventory.json"
@@ -937,9 +799,8 @@ else
   esac
   if [[ "$TASK_PRUNE_RESULT" != "OK 0" ]]; then
     # rc=1/2/3・WRAPPER_FAILのいずれも、掃除の失敗はadd_info_noteに積む。
-    # add_anomalyは使わない＝last_success_atはPhase1②の--since算出の起点なので、
-    # 毎週の掃除失敗が毎週の再走査を引き起こす二次被害が出る。月曜06:00にcmuxが
-    # 起動していないのは普通に起こる状態で、異常扱いにすると警告が常態化する。
+    # add_anomalyは使わない＝月曜06:00にcmuxが起動していないのは普通に
+    # 起こる状態で、異常扱いにすると警告が常態化する。
     # 掃除が失敗しても記録は元のまま（run_wrapped_stepの隔離＋prune側の
     # 「取得に失敗したら1件も消さない」契約）。
     TASK_PRUNE_SEGMENT="・宣言掃除 未実施（${TASK_PRUNE_REASON}）"
@@ -974,14 +835,7 @@ append_fragments_summary() {
   mv "$tmp" "$day_file"
 }
 
-# 昇格候補の件数（Phase1②）。昇格そのものは在席時にリーダーが行う（無人では
-# 動かない）ため、サマリ行は件数と窓（起点以降）だけを残す。
-if [[ -n "$FRAGMENTS_CANDIDATES" ]]; then
-  CANDIDATES_SEGMENT="昇格候補${FRAGMENTS_CANDIDATES}件（起点 ${SINCE_DATE} 以降・Dock の Project 枠参照）"
-else
-  CANDIDATES_SEGMENT="昇格候補 不明（fragments_log 失敗）"
-fi
-SUMMARY_LINE="定常メンテ(週次): ${CANDIDATES_SEGMENT}${TASK_PRUNE_SEGMENT}（詳細: ${RUN_DIR}）"
+SUMMARY_LINE="定常メンテ(週次): 実行完了${TASK_PRUNE_SEGMENT}（詳細: ${RUN_DIR}）"
 if append_fragments_summary "$SUMMARY_LINE"; then
   log "Fragmentsサマリ追記: $SUMMARY_LINE"
 else

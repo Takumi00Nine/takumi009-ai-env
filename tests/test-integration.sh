@@ -14,6 +14,7 @@ mkdir -p "$WORKDIR/cmux-stub"
 printf '#!/bin/bash\nexit 9\n' > "$WORKDIR/cmux-stub/cmux"; chmod +x "$WORKDIR/cmux-stub/cmux"
 export PATH="$WORKDIR/cmux-stub:$PATH" HOME="$WORKDIR/home"
 mkdir -p "$HOME"
+python3 "$TESTS_DIR/recall_fixtures.py" "$REPO_ROOT" "$HOME" || exit 1
 
 VAULT="$WORKDIR/vault"
 
@@ -37,14 +38,12 @@ b_rows() { awk -F '\t' '$1=="B"' "$WORKDIR/frame_stdout"; }
 echo "=== 正常時のB行 ==="
 mkdir -p "$VAULT/Projects"
 run_frame_fixture S-1
-s1_cand="$(jq -r '.fragments_candidates' "$FX_ROOT/S-1/last-run.json")"
-assert_eq "frame_b_row_ok: B 行の文法（種別 外部脳・warn 欄 ok・3 値 OK・付記）" "B	外部脳	ok	OK 候補${s1_cand}件" "$(b_rows)"
+assert_eq "frame_b_row_ok: 旧キーがあっても候補を出さない" "B	外部脳	ok	OK" "$(b_rows)"
 echo "=== WARNINGとERRORのB行 ==="
 run_frame_fixture S-2
-s2_cand="$(jq -r '.fragments_candidates' "$FX_ROOT/S-2/last-run.json")"
-assert_eq "S-2: B 行 warn／WARNING" "B	外部脳	warn	WARNING 候補${s2_cand}件" "$(b_rows)"
+assert_eq "S-2: B 行 warn／WARNING" "B	外部脳	warn	WARNING" "$(b_rows)"
 run_frame_fixture S-15
-assert_eq "S-15: B 行 error／ERROR" "B	外部脳	error	ERROR 候補12件" "$(b_rows)"
+assert_eq "S-15: B 行 error／ERROR" "B	外部脳	error	ERROR" "$(b_rows)"
 echo "=== 入力破損でもB行を出す ==="
 d="$FX_ROOT/X-3"
 CMUX_NEXT_VAULT="$VAULT" CMUX_NEXT_MAINT_STATE="$d/last-run.json" CMUX_NEXT_INVENTORY_LATEST="$d/latest.json" \

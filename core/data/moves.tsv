@@ -4,6 +4,7 @@
 #   主後継＝同じ旧パスを持つ行のうち先頭行（分割は主後継を先に書く）。
 #   印＝`撤去`＝v1.1 で旧パスに置いた主後継への転送 symlink を v1.2 で撤去した記録（旧パスに追跡ファイルを置かない・
 #   前提検査 check-drift.sh --forward-refs の旧パスの集合）。`転送`＝旧パスに転送 symlink を置く（v1.2 で 0 件）。無しは `-`。
+#   `撤去` は退役した部品にも付ける（旧パスに追跡ファイルを置かない）。
 #   末尾 `/` の行はフォルダ単位（配下のパスへ前方一致で当てる）。
 #   スイート（tests/）は置き場を変えない。v1.1 FR-14＝v1.1 時点の全スイートが行を持つ＝変更の無いものは旧＝新（移動）、
 #   分けた働きを新スイートへ移したものは分割、新設は新規。
@@ -71,7 +72,7 @@ scripts/backup-vault.sh	ai-brain/executor/backup-vault.sh	移動	撤去
 scripts/maintenance.sh	ai-brain/executor/maintenance.sh	移動	撤去
 scripts/maintenance-kick.sh	ai-brain/executor/maintenance-kick.sh	移動	-
 scripts/export-public-vault.sh	ai-brain/executor/export-public-vault.sh	移動	-
-scripts/fragments-reviewed.sh	ai-brain/executor/fragments-reviewed.sh	移動	-
+scripts/fragments-reviewed.sh	ai-brain/executor/fragments-reviewed.sh	移動	撤去
 scripts/install-backup.sh	ai-brain/assembly/install-backup.sh	移動	-
 scripts/install-maintenance.sh	ai-brain/assembly/install-maintenance.sh	移動	-
 scripts/claude-exec.sh	team/connect/claude-code/claude-exec.sh	移動	-
@@ -93,11 +94,11 @@ scripts/lib/usage-notify.sh	usage/executor/usage-notify.sh	移動	-
 scripts/lib/pid-lock.sh	core/executor/pid-lock.sh	移動	-
 scripts/lib/status-file.sh	core/executor/status-file.sh	移動	-
 scripts/lib/managed-symlink.sh	core/assembly/managed-symlink.sh	移動	-
-scripts/vault-agents/fragments_log.py	ai-brain/executor/fragments_log.py	移動	-
+scripts/vault-agents/fragments_log.py	ai-brain/executor/fragments_log.py	移動	撤去
 scripts/vault-agents/maintenance_run_step.py	ai-brain/executor/maintenance_run_step.py	移動	-
 scripts/vault-agents/vault_inventory.py	ai-brain/executor/vault_inventory.py	移動	-
 scripts/vault-agents/vault_lib.py	ai-brain/executor/vault_lib.py	移動	-
-scripts/vault-agents/generic-aliases.txt	ai-brain/data/generic-aliases.txt	移動	-
+scripts/vault-agents/generic-aliases.txt	ai-brain/data/generic-aliases.txt	移動	撤去
 scripts/templates/	ai-brain/data/templates/	移動	-
 
 # --- 公開スナップショット（旧更新コマンドの手順 4・5 と公開 repo の目印だった＝撤去） ---
@@ -136,8 +137,8 @@ tests/test-core-docs-placeholder-schema.sh	tests/test-core-docs-placeholder-sche
 tests/test-delegation-gate-v2.sh	tests/test-delegation-gate-v2.sh	移動	-
 tests/test-dock-pane-resolve.sh	tests/test-dock-pane-resolve.sh	移動	-
 tests/test-export-public-vault.sh	tests/test-export-public-vault.sh	移動	-
-tests/test-fragments-log.sh	tests/test-fragments-log.sh	移動	-
-tests/test-fragments-reviewed.sh	tests/test-fragments-reviewed.sh	移動	-
+tests/test-fragments-log.sh	tests/test-fragments-log.sh	移動	撤去
+tests/test-fragments-reviewed.sh	tests/test-fragments-reviewed.sh	移動	撤去
 tests/test-health-judge.sh	tests/test-health-judge.sh	移動	-
 tests/test-inprocess-gate.sh	tests/test-inprocess-gate.sh	移動	-
 tests/test-install-backup.sh	tests/test-install-backup.sh	移動	-
@@ -145,7 +146,7 @@ tests/test-install-main.sh	tests/test-install-main.sh	移動	-
 tests/test-install-maintenance.sh	tests/test-install-maintenance.sh	移動	-
 tests/test-install-sub.sh	tests/test-install-sub.sh	移動	-
 tests/test-install-usage-fetch.sh	tests/test-install-usage-fetch.sh	移動	-
-tests/test-keyword-recall-helper.sh	tests/test-keyword-recall-helper.sh	移動	-
+tests/test-keyword-recall-helper.sh	tests/test-keyword-recall-helper.sh	移動	撤去
 tests/test-maintenance-kick.sh	tests/test-maintenance-kick.sh	移動	-
 tests/test-maintenance-run-step.sh	tests/test-maintenance-run-step.sh	移動	-
 tests/test-maintenance.sh	tests/test-maintenance.sh	移動	-
@@ -161,6 +162,6 @@ tests/test-usage-inject.sh	tests/test-usage-inject.sh	移動	-
 tests/test-usage-snapshot.sh	tests/test-usage-snapshot.sh	移動	-
 tests/test-vault-inventory.sh	tests/test-vault-inventory.sh	移動	-
 tests/test-vault-lib.sh	tests/test-vault-lib.sh	移動	-
-tests/test-vault-read-log.sh	tests/test-vault-read-log.sh	移動	-
+tests/test-vault-read-log.sh	tests/test-vault-read-log.sh	移動	撤去
 tests/test-vault-recall.sh	tests/test-vault-recall.sh	移動	撤去
 tests/test-with-dotfiles.sh	tests/test-with-dotfiles.sh	移動	-

@@ -17,7 +17,6 @@ part	ai-brain/connect/leader-hooks/connection_probe.py	ai-brain	connect	leader-h
 part	ai-brain/data/recall.json	ai-brain	data	-	-	想起の設定	-	-
 part	ai-brain/executor/vault-recall.sh	ai-brain	executor	-	ai-brain.recall	想起（UserPromptSubmit）	-	link:$HOME/.claude/hooks/vault-recall.sh link:$HOME/.codex/hooks/vault-recall.sh
 part	ai-brain/executor/bootstrap-vault.sh	ai-brain	executor	-	ai-brain.bootstrap	読込（合成器の寄与・枠 must-read・health）	-	-
-part	ai-brain/executor/vault-read-log.sh	ai-brain	executor	-	ai-brain.read-log	読取記録（PostToolUse Read）	-	link:$HOME/.claude/hooks/vault-read-log.sh
 part	ai-brain/executor/health_judge.py	ai-brain	executor	-	ai-brain.health-judge	ヘルス判定機（Dock が照会）	-	-
 part	ai-brain/executor/keyword_recall_helper.py	ai-brain	executor	-	-	想起補助	-	-
 part	ai-brain/executor/recall_runtime.py	ai-brain	executor	-	-	想起の期限・提示記録と独立期待観測	-	-
@@ -25,13 +24,10 @@ part	ai-brain/executor/backup-vault.sh	ai-brain	executor	-	ai-brain.backup	バ�
 part	ai-brain/executor/maintenance.sh	ai-brain	executor	-	ai-brain.maintenance	週次メンテ（LaunchAgent の起動対象）	-	-
 part	ai-brain/executor/maintenance-kick.sh	ai-brain	executor	-	ai-brain.maintenance-kick	メンテの手動起動	-	-
 part	ai-brain/executor/export-public-vault.sh	ai-brain	executor	-	ai-brain.export-public	公開スナップショットの出力	-	-
-part	ai-brain/executor/fragments-reviewed.sh	ai-brain	executor	-	ai-brain.fragments-reviewed	昇格の締め	-	-
 part	ai-brain/executor/personal-link-check.sh	ai-brain	executor	-	-	公開出力の共有 lib	-	-
-part	ai-brain/executor/fragments_log.py	ai-brain	executor	-	-	検出器（Fragments 記録）	-	-
 part	ai-brain/executor/maintenance_run_step.py	ai-brain	executor	-	-	メンテの段の記録	-	-
 part	ai-brain/executor/vault_inventory.py	ai-brain	executor	-	-	検出器（棚卸し）	-	-
 part	ai-brain/executor/vault_lib.py	ai-brain	executor	-	-	検出器群の共有 lib	-	-
-part	ai-brain/data/generic-aliases.txt	ai-brain	data	-	-	語彙表	-	-
 part	ai-brain/data/templates/	ai-brain	data	-	-	private 骨格フォルダの README 雛形	-	-
 part	ai-brain/data/vault-public/	ai-brain	data	-	-	公開スナップショット	-	-
 part	ai-brain/assembly/install-backup.sh	ai-brain	assembly	-	ai-brain.install-backup	バックアップの常駐の登録	-	-
@@ -117,19 +113,15 @@ suite	tests/test-backup-vault.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-bootstrap-vault.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-core-docs-placeholder-schema.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-export-public-vault.sh	ai-brain	-	-	-	-	-	-
-suite	tests/test-fragments-log.sh	ai-brain	-	-	-	-	-	-
-suite	tests/test-fragments-reviewed.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-health-judge.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-install-backup.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-install-maintenance.sh	ai-brain	-	-	-	-	-	-
-suite	tests/test-keyword-recall-helper.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-maintenance.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-maintenance-kick.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-maintenance-run-step.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-personal-link-check.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-vault-inventory.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-vault-lib.sh	ai-brain	-	-	-	-	-	-
-suite	tests/test-vault-read-log.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-recall-situations.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-recall-flow.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-agent-definitions.sh	team	-	-	-	-	-	-

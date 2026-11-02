@@ -887,19 +887,6 @@ mk_inventory_report_noparse() {
   printf '{"date":"%s"}\n' "$date" > "$dir/latest.json"
 }
 
-# 週次メンテの実行記録（last-run.json）。
-# $1=出力先ファイル $2=last_success_at（ISO8601 UTC・"Z"付き）
-# $3=fragments_candidates（省略可・候補件数。design-step2 §3.2 S9 A-3）。
-mk_maintenance_state() {
-  local file="$1" ts="$2" cand="${3:-}"
-  mkdir -p "$(dirname "$file")"
-  if [ -n "$cand" ]; then
-    printf '{"last_success_at":"%s","fragments_candidates":%s}\n' "$ts" "$cand" > "$file"
-  else
-    printf '{"last_success_at":"%s"}\n' "$ts" > "$file"
-  fi
-}
-
 # ==========================================================================
 # T群: タイミング（v2 design §11.2 の足跡方式と同型・ハング検査用）
 # ==========================================================================

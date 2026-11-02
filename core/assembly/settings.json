@@ -186,19 +186,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$HOME/.claude/hooks/vault-read-log.sh",
-            "timeout": 3,
-            "statusMessage": "Vault利用ログ記録中"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash",

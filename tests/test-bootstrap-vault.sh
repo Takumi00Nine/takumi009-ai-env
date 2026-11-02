@@ -199,35 +199,7 @@ health_section() {
 echo "=== 正常（想起は未観測）のヘルス節は1行 ==="
 {
   # 登録・実体・信頼だけの最小 fixture。想起はまだ一度も発火していない。
-  python3 - "$REPO_ROOT" <<'PY'
-import hashlib
-import json
-from pathlib import Path
-import sys
-repo = Path(sys.argv[1])
-home = Path.home()
-for leader in ('claude', 'codex'):
-    hook_rel = f'.{leader}/hooks/vault-recall.sh'
-    hook = home / hook_rel
-    hook.parent.mkdir(parents=True)
-    hook.symlink_to(repo / 'ai-brain/executor/vault-recall.sh')
-    groups = [{'hooks': [{'type': 'command', 'timeout': 5,
-                         'command': f'$HOME/{hook_rel} --leader {leader}' + suffix}]}
-              for suffix in ('', ' --observe')]
-    root = home / ('.claude' if leader == 'claude' else '.codex')
-    root.mkdir(exist_ok=True)
-    (root / ('settings.json' if leader == 'claude' else 'hooks.json')).write_text(
-        json.dumps({'hooks': {'UserPromptSubmit': groups}}))
-    if leader == 'codex':
-        text = '[features]\nhooks = true\n'
-        for gi, group in enumerate(groups):
-            handler = dict(group['hooks'][0], **{'async': False})
-            identity = {'event_name': 'user_prompt_submit', 'hooks': [handler]}
-            raw = json.dumps(identity, sort_keys=True, separators=(',', ':'))
-            key = f'{root}/hooks.json:user_prompt_submit:{gi}:0'
-            text += f'\n[hooks.state.{json.dumps(key)}]\ntrusted_hash = "sha256:{hashlib.sha256(raw.encode()).hexdigest()}"\n'
-        (root / 'config.toml').write_text(text)
-PY
+  python3 "$TESTS_DIR/recall_fixtures.py" "$REPO_ROOT" "$HOME"
   ctx="$(run_bootstrap_fixture S-1)"
   sec="$(health_section "$ctx")"
   assert_eq "S-1: ヘルス節は1行" "1" "$(printf '%s\n' "$sec" | wc -l | tr -d ' ')"

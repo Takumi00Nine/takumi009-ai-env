@@ -14,7 +14,6 @@ python3 - "$REPO_ROOT/ai-brain/executor" <<'PY'
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import unittest
 from unittest.mock import patch
@@ -163,11 +162,6 @@ class RecallTest(unittest.TestCase):
         next_result = self.run_recall(LESSON_PROMPT)
         self.assertIn("教訓：安全柵を確認してから減らす。", next_result["text"])
         self.assertEqual(next_result["candidates"][1]["id"], result["candidates"][1]["id"])
-        # S1 では既存 CLI の契約を保つ（hook の切替は S3）。
-        self.note("Knowledge/legacy-key.md", "---\naliases: [legacyword]\n---\n本文\n")
-        legacy = subprocess.run([sys.executable, recall.__file__, "--vault", str(self.vault),
-                                 "--query", "legacyword"], capture_output=True, text=True, check=True)
-        self.assertEqual(json.loads(legacy.stdout)["candidates"][0]["relpath"], "Knowledge/legacy-key.md")
 
 
 unittest.main(argv=[sys.argv[0]], verbosity=2)

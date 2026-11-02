@@ -892,6 +892,18 @@ EOF
 NL=$'\n'
 if [ "$DRY_RUN" = "1" ] || [ "$AIENV_SETTINGS_WRITTEN" = "1" ]; then
   cleanup_deselected
+  # S4: 台帳から消した読取フックは全配置の差分に現れない。登録解除後に自分のリンクだけ消す。
+  retired_read_hook="$HOME/.claude/hooks/vault-read-log.sh"
+  if [ -L "$retired_read_hook" ] && [ "$(readlink "$retired_read_hook")" = "$DIR/ai-brain/executor/vault-read-log.sh" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      log "[dry-run] would remove（退役）: $retired_read_hook"
+    elif rm -f "$retired_read_hook"; then
+      log "removed（退役）: $retired_read_hook"
+    else
+      warn "退役フックのリンクを消せませんでした（再実行で消えます）: $retired_read_hook"
+      AIENV_DEFERRED_EXIT_CODE=1
+    fi
+  fi
 else
   warn "settings.json を作り直せなかったため、外した機能の置き場の掃除は行いません（原因を直して再実行すると掃除します）。"
 fi

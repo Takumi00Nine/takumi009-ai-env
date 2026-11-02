@@ -1084,7 +1084,7 @@ echo "======================================================================"
 # 「本ツールにweekly-reviewへの言及が無く監視対象外だった」欠陥への対応）の
 # 出力先。private repo側のスクリプトと同じ既定値。
 : "${WEEKLY_REVIEW_DIR:=$VAULT/Explorations/weekly-review}"
-: "${WEEKLY_REVIEW_STALE_DAYS:=10}"      # 週次(目安7日) + 猶予（fragments-logと同型）
+: "${WEEKLY_REVIEW_STALE_DAYS:=10}"      # 週次(目安7日) + 同期・実行遅延の猶予
 
 # 週次の任意機能は、配置済み plist がある場合だけ検査する。
 : "${LAUNCH_AGENTS_DIR:=$HOME/Library/LaunchAgents}"

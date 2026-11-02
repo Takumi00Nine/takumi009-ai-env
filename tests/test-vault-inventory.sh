@@ -8,6 +8,8 @@ SCRIPT="$REPO_ROOT/ai-brain/executor/vault_inventory.py"
 
 PASS=0
 FAIL=0
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/inventory-test.XXXXXX")"
+trap 'rm -rf "$TEST_ROOT"' EXIT
 
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
@@ -89,13 +91,13 @@ write_note() {
 
 run_inventory() {
   local vault_home="$1"
-  HOME="$vault_home" python3 "$SCRIPT" >/dev/null
+  HOME="$vault_home" VAULT="$vault_home/Data/obsidian" python3 "$SCRIPT" >/dev/null
   cat "$(ls "$vault_home/.claude/logs/vault-inventory"/20*.md | sort | tail -1)"
 }
 
 echo "=== 旧ログと aliases を検査材料にしない ==="
 {
-  VAULT_HOME="$(mktemp -d)"
+  VAULT_HOME="$(mktemp -d "$TEST_ROOT/home.XXXXXX")"
   V="$VAULT_HOME/Data/obsidian"
   make_clean_vault "$V"
   write_note "$V" "Knowledge/no-alias.md" "date: 2026-01-01"
@@ -115,7 +117,7 @@ echo "=== 読めないノートがあっても完走する ==="
   # クラッシュ余地がCodexレビューで指摘され、リーダー裁定により水平展開で
   # 修正した。壊れたsymlink（リンク先が存在しない）は`p.is_file()`がFalseを
   # 返すため検知できる。
-  VAULT_HOME="$(mktemp -d)"
+  VAULT_HOME="$(mktemp -d "$TEST_ROOT/home.XXXXXX")"
   V="$VAULT_HOME/Data/obsidian"
   make_clean_vault "$V"
   ln -s "$V/Knowledge/does-not-exist.md" "$V/Knowledge/broken-link.md"
@@ -129,6 +131,144 @@ echo "=== 読めないノートがあっても完走する ==="
 
   rm -rf "$VAULT_HOME"
 }
+
+echo "=== S4: 再発集計と形の欠け（AC-FL-12・14） ==="
+S4_ROOT="$TEST_ROOT/s4"
+mkdir -p "$S4_ROOT"
+if HOME="$S4_ROOT" VAULT="$S4_ROOT/Data/obsidian" PYTHONDONTWRITEBYTECODE=1 python3 - "$REPO_ROOT" <<'PY'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import unittest
+
+repo = Path(sys.argv[1])
+home = Path.home()
+vault = home / 'Data/obsidian'
+script = repo / 'ai-brain/executor/vault_inventory.py'
+for folder in ('Knowledge', 'Decisions', 'Fragments'):
+    (vault / folder).mkdir(parents=True)
+
+
+def lesson(name, occurrences, scene=True, text=True):
+    return f'''## 教訓: {name}
+{('- 教訓1行: 先に目的を確認する。' if text else '')}
+{('- 効く場面:' + chr(10) + '  - 安全柵のテストを減らす' if scene else '')}
+- 起きたこと: 安全柵を削りかけた。
+- 発生記録:
+''' + ''.join(f'  - {day} [[Fragments/{day}#{name}]] [[Fragments/{day}#検証]]\n' for day in occurrences)
+
+
+class InventoryS4(unittest.TestCase):
+    def run_inventory(self, *args, **env):
+        result = subprocess.run(['python3', str(script), *args], env={**os.environ, **env},
+                                text=True, capture_output=True, check=True)
+        return result.stdout
+
+    def test_dates_and_malformed_headings(self):
+        import tempfile
+        sys.path.insert(0, str(repo / 'ai-brain/executor'))
+        import vault_lib
+        with tempfile.TemporaryDirectory(dir=home) as folder:
+            root = Path(folder)
+            (root / 'Knowledge').mkdir()
+            (root / 'Decisions').mkdir()
+            (root / 'Knowledge/dates.md').write_text(
+                lesson('dates', ['20261102', '2026-10-31', '2026-11-01'])
+                + '## 教訓：全角\n本文\n## 教訓: ID with spaces\n本文\n')
+            (root / 'Decisions/date.md').write_text(
+                '# 判断\n- 判断1行: 日付を揃える\n- 効く場面:\n  - 集計する\n- 判断の日付: 20261102\n')
+            records, issues = vault_lib.read_recall_records(root)
+            self.assertEqual([r['date'] for r in records[0]['occurrences']],
+                             ['2026-10-31', '2026-11-01', '2026-11-02'])
+            self.assertEqual(records[1]['date'], '2026-11-02')
+            self.assertEqual([r['id'] for r in issues],
+                             ['Knowledge/dates.md#教訓：全角', 'Knowledge/dates.md#教訓: ID with spaces'])
+
+    def test_recurrence_and_same_day(self):
+        note = vault / 'Knowledge/lessons.md'
+        note.write_text(lesson('X', ['2026-10-31', '2026-11-02'])
+                        + lesson('Y', ['2026-11-01', '2026-11-03'])
+                        + lesson('first-only', ['2026-11-02']))
+        decision = vault / 'Decisions/choice.md'
+        decision.write_text('# 判断\n- 判断1行: 応急処置で終わらせない\n- 効く場面:\n  - 直すのは別のタスクに回す\n- 判断の日付: 2026-11-02\n')
+        log = home / 'configured-recall.jsonl'
+        rows = [dict(schema='vault-recall/1', at=at, event=event, items=items,
+                     leader=leader, mode=mode, session_id='s', run_id=str(i), error=None)
+                for i, (at, event, items, leader, mode) in enumerate([
+                    ('2026-11-01T15:00:00Z', 'completed', ['Knowledge/lessons.md#X'], 'codex', 'manual'),
+                    ('2026-11-03T01:00:00Z', 'failed', ['Knowledge/lessons.md#Y'], 'claude', 'hook'),
+                    ('2026-11-03T15:00:00Z', 'completed', ['Knowledge/lessons.md#Y', 'Decisions/choice.md'], 'claude', 'hook'),
+                ])]
+        log.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        args = ('--recurrence', '--start', '2026-11-02', '--end', '2026-11-03')
+        before = {str(p): p.read_bytes() for p in home.rglob('*') if p.is_file()}
+        result = json.loads(self.run_inventory(*args, '--timezone', 'Asia/Tokyo', '--json', VAULT_RECALL_LOG=str(log)))
+        self.assertEqual(result['total'], 2)
+        self.assertEqual([(r['id'], r['count']) for r in result['lessons']],
+                         [('Knowledge/lessons.md#X', 1), ('Knowledge/lessons.md#Y', 1)])
+        self.assertEqual([r['occurrences'][0]['presented'] for r in result['lessons']], [True, False])
+        self.assertEqual(result['lessons'][0]['occurrences'][0]['source'],
+                         '[[Fragments/2026-11-02#X]] [[Fragments/2026-11-02#検証]]')
+        self.assertEqual(result['recorded_period'], {'start': '2026-11-02', 'end': '2026-11-04'})
+        self.assertEqual({str(p): p.read_bytes() for p in home.rglob('*') if p.is_file()}, before)
+        # ローカル日付の既定も各日時の TZ に従う（UTC では X は前日）。
+        utc = json.loads(self.run_inventory(*args, '--recall-log', str(log), '--json', TZ='UTC'))
+        self.assertEqual([r['occurrences'][0]['presented'] for r in utc['lessons']], [False, True])
+        output = self.run_inventory(*args, '--timezone', 'Asia/Tokyo', '--recall-log', str(log))
+        for expected in ('再発合計: 2件', '出した', '出していない', '提示記録の対象期間:', '正常稼働の証拠にはなりません'):
+            self.assertIn(expected, output)
+        missing = json.loads(self.run_inventory(*args, '--recall-log', str(home / 'no-log'), '--json'))
+        self.assertIsNone(missing['recorded_period'])
+        self.assertTrue(all(not r['occurrences'][0]['presented'] for r in missing['lessons']))
+        # 記録の壊れた行は、集計対象から外したことを明示する。
+        with log.open('a') as out:
+            out.write('broken JSON\n')
+        broken = json.loads(self.run_inventory(*args, '--recall-log', str(log), '--json'))
+        self.assertEqual(len(broken['log_issues']), 1)
+        note.unlink()
+        decision.unlink()
+
+    def test_format_issues_and_no_legacy_metrics(self):
+        (vault / 'Knowledge/missing.md').write_text(
+            lesson('no-scene', ['2026-11-01'], scene=False)
+            + lesson('no-text', ['2026-11-01'], text=False))
+        (vault / 'Knowledge/example.md').write_text('```markdown\n## 教訓: example\n```\n')
+        (vault / 'Decisions/missing.md').write_text('# 判断\n- 効く場面:\n  - 先に直す\n- 判断の日付: 2026-11-01\n')
+        (vault / 'Decisions/no-date.md').write_text('# 判断\n- 判断1行: 先に直す\n- 効く場面:\n  - 先に直す\n')
+        for path in ('Knowledge/README.md', 'Decisions/README.md', 'Decisions/retired.md'):
+            (vault / path).write_text('# 退役\n> ⚠️ 退役（本文は履歴）\n')
+        logs = home / '.claude/logs'
+        logs.mkdir(parents=True)
+        old = logs / 'vault-reads.tsv'
+        old.write_text('2000-01-01T00:00:00Z\ts\tKnowledge/missing.md\n')
+        output = json.loads(self.run_inventory('--json'))
+        state = json.loads((logs / 'vault-inventory/latest.json').read_text())
+        self.assertEqual(output['recall_format'], state['recall_format'])
+        found = {r['id']: r['fields'] for r in state['recall_format']}
+        self.assertEqual(len(found), 4)
+        self.assertNotIn('recall_format', state['sections'])
+        self.assertFalse(any(r['kind'] == 'recall_format' for r in state['items']))
+        self.assertIn('効く場面', found['Knowledge/missing.md#no-scene'])
+        self.assertIn('教訓1行', found['Knowledge/missing.md#no-text'])
+        self.assertIn('判断1行', found['Decisions/missing.md'])
+        self.assertIn('判断の日付', found['Decisions/no-date.md'])
+        self.assertEqual(state['actionable'], len(state['items']))
+        report = Path(state['report_path']).read_text()
+        self.assertIn('Knowledge/missing.md#no-scene', report)
+        for obsolete in ('読んだ率', '未読', '提示無視率', 'missing_aliases', 'generic_aliases', '候補件数', '再発合計'):
+            self.assertNotIn(obsolete, report + json.dumps(state))
+        self.assertEqual(old.read_text(), '2000-01-01T00:00:00Z\ts\tKnowledge/missing.md\n')
+
+
+unittest.main(argv=['inventory-s4'], verbosity=2)
+PY
+then
+  pass "S4: 再発集計と形の欠け"
+else
+  fail_case "S4: 再発集計と形の欠け"
+fi
 
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

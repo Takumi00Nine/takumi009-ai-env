@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """maintenance.sh（設計書§1.2 Phase 1）が各検出ステップ（check-drift.sh・
-fragments_log.py・vault_inventory.py）を起動するための共通ラッパー。
+vault_inventory.py）を起動するための共通ラッパー。
 
 責務（設計書§1.2「各ステップは ai-brain/executor/maintenance_run_step.py
 経由で起動しPython subprocess.run(cmd, timeout=N, start_new_session=True)＋
@@ -18,7 +18,7 @@ TimeoutExpired時 os.killpg で子プロセスごと終了（bashのkillは子�
     自体がタイムアウトやユーザ中断で先に終了するケースで、孫プロセスだけが
     残留する事故を防ぐ）。
   - 標準入出力は継承する（そのまま親（maintenance.sh）のstdout/stderrへ流す）。
-    fragments_log.py等のJSON出力ステップの生出力を一切加工せずに素通しする
+    vault_inventory.py等のJSON出力ステップの生出力を一切加工せずに素通しする
     ため（バッファリング・二重変換によるJSON破損を避ける）。
   - 終了コード: 通常終了時は子プロセスの終了コードをそのまま返す（シグナル
     終了時はbashの慣習＝128+シグナル番号へ正規化する）。タイムアウト時は124を

@@ -117,10 +117,9 @@ FAKEEOF
   chmod +x "$repo/ai-brain/executor/export-public-vault.sh"
 
   local py_detector upper default_json
-  for py_detector in fragments_log vault_inventory; do
+  for py_detector in vault_inventory; do
     upper="$(echo "$py_detector" | tr '[:lower:]' '[:upper:]')"
     default_json='{}'
-    [[ "$py_detector" == "fragments_log" ]] && default_json='{"scan_error_count": 0, "fragments": [], "truncated": []}'
     cat > "$repo/ai-brain/executor/${py_detector}.py" <<PYEOF
 #!/usr/bin/env python3
 import os, sys
@@ -192,7 +191,6 @@ run_maintenance() {
   : "${TIMEOUT_BACKUP_VAULT:=10}"
   : "${TIMEOUT_EXPORT_PUBLIC_VAULT:=10}"
   : "${TIMEOUT_CHECK_DRIFT:=2}"
-  : "${TIMEOUT_FRAGMENTS_LOG:=10}"
   : "${TIMEOUT_VAULT_INVENTORY:=10}"
   : "${MAINTENANCE_STALE_LOCK_SECONDS:=3600}"
   : "${TIMEOUT_TASK_PRUNE:=5}"
@@ -201,7 +199,7 @@ run_maintenance() {
     FAKE_OSASCRIPT_LOG="$OSASCRIPT_LOG" FAKE_EXPORT_CALL_LOG="$EXPORT_CALL_LOG" \
     FAKE_PRUNE_CALL_LOG="$PRUNE_CALL_LOG" \
     TIMEOUT_BACKUP_VAULT="$TIMEOUT_BACKUP_VAULT" TIMEOUT_EXPORT_PUBLIC_VAULT="$TIMEOUT_EXPORT_PUBLIC_VAULT" \
-    TIMEOUT_CHECK_DRIFT="$TIMEOUT_CHECK_DRIFT" TIMEOUT_FRAGMENTS_LOG="$TIMEOUT_FRAGMENTS_LOG" \
+    TIMEOUT_CHECK_DRIFT="$TIMEOUT_CHECK_DRIFT" \
     TIMEOUT_VAULT_INVENTORY="$TIMEOUT_VAULT_INVENTORY" \
     TIMEOUT_TASK_PRUNE="$TIMEOUT_TASK_PRUNE" MAINTENANCE_TASK_PRUNE_CMD="$MAINTENANCE_TASK_PRUNE_CMD" \
     MAINTENANCE_STALE_LOCK_SECONDS="$MAINTENANCE_STALE_LOCK_SECONDS" \
@@ -220,10 +218,22 @@ rc=0
 run_maintenance || rc=$?
 assert_eq "全 Phase が終了 0" 0 "$rc"
 RUN_DIR="$(latest_run_dir)"
-assert_file_exists "検出器まで到達" "$RUN_DIR/fragments.json"
+assert_file_exists "検出器まで到達" "$RUN_DIR/inventory.json"
 assert_eq "実行と完了の記録が同じ ID で正常終了" true "$(jq '.run.status == "completed" and .completed.run_id == .run.run_id and .completed.fully_ok and (.last_success_at != null)' "$LOG_ROOT/last-run.json")"
 assert_file_not_exists "正常時に異常通知しない" "$OSASCRIPT_LOG"
 assert_contains "Fragments に週次サマリ" "$(find "$VAULT/Fragments" -name '20*.md' -exec cat {} \;)" '定常メンテ(週次)'
+assert_eq "候補件数・起点・締め日時の新規出力を作らない" true "$(jq 'has("fragments_candidates") == false and has("fragments_since") == false and has("fragments_reviewed_at") == false' "$LOG_ROOT/last-run.json")"
+assert_file_not_exists "候補検出工程を起動しない" "$RUN_DIR/fragments.json"
+
+echo "=== 旧候補キーと過去の記録は残し、現在の出力に戻さない ==="
+jq '. + {fragments_candidates: 999, fragments_since: "2000-01-01", fragments_reviewed_at: "2000-01-02T00:00:00Z"}' "$LOG_ROOT/last-run.json" > "$T/legacy.json"
+mv "$T/legacy.json" "$LOG_ROOT/last-run.json"
+printf '過去の昇格候補999件\n' > "$LOG_ROOT/historical.md"
+rc=0; run_maintenance || rc=$?
+assert_eq "旧キーを残した再実行も正常終了" 0 "$rc"
+assert_eq "旧キーと過去の記録を変えない" true "$(jq '.fragments_candidates == 999 and .fragments_since == "2000-01-01" and .fragments_reviewed_at == "2000-01-02T00:00:00Z"' "$LOG_ROOT/last-run.json")"
+assert_eq "過去のメンテ記録を残す" '過去の昇格候補999件' "$(cat "$LOG_ROOT/historical.md")"
+assert_eq "現在のログとサマリに候補表示がない" 0 "$(cat "$LAST_STDOUT" "$LAST_STDERR" "$VAULT"/Fragments/*/*.md | grep -c '昇格候補' || true)"
 
 echo "=== backup 失敗は後続を止める ==="
 T="$WORK_ROOT/backup-fail"; mkdir -p "$T"; setup_test_env "$T"
@@ -245,9 +255,9 @@ assert_eq "警告を記録し成功日時を進めない" true "$(jq '.last_resu
 echo "=== 検出器の失敗を隔離して続行する ==="
 T="$WORK_ROOT/detector-fail"; mkdir -p "$T"; setup_test_env "$T"
 LAST_STDOUT="$T/stdout.log"; LAST_STDERR="$T/stderr.log"
-rc=0; FAKE_FRAGMENTS_LOG_EXIT=1 run_maintenance || rc=$?
-if [ "$rc" -eq 0 ] && [ -f "$(latest_run_dir)/step-status-inventory.json" ]; then pass "検出器の失敗後も続行"; else fail_case "検出器の失敗後も続行"; fi
-assert_eq "誤った候補数や成功日時を記録しない" true "$(jq '.fragments_candidates == null and .last_success_at == null and (.completed.fully_ok == false)' "$LOG_ROOT/last-run.json")"
+rc=0; FAKE_VAULT_INVENTORY_EXIT=1 run_maintenance || rc=$?
+if [ "$rc" -eq 0 ] && [ -f "$(latest_run_dir)/backup3-stdout.log" ]; then pass "棚卸しの失敗後もPhase3へ続行"; else fail_case "棚卸しの失敗後もPhase3へ続行"; fi
+assert_eq "失敗時に成功日時を進めない" true "$(jq '.last_success_at == null and (.completed.fully_ok == false)' "$LOG_ROOT/last-run.json")"
 
 echo "=== 生存ロックがあればメンテしない ==="
 T="$WORK_ROOT/busy"; mkdir -p "$T"; setup_test_env "$T"

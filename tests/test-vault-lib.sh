@@ -54,28 +54,5 @@ print(body.strip())
   assert_eq "本文がfrontmatter除去後になる" "本文" "$(sed -n '4p' <<< "$out")"
 }
 
-echo "=== atomic書込後に一時ファイルを残さない ==="
-{
-  D="$(mktemp -d)"
-  F="$D/note.md"
-  printf 'original' > "$F"
-  run_py "
-import pathlib
-vault_lib.write_note_atomic(pathlib.Path('$F'), 'updated-content')
-"
-  content="$(cat "$F")"
-  n_tmp="$(find "$D" -maxdepth 1 -name '.*.tmp' | wc -l | tr -d ' ')"
-  assert_eq "新しい内容が書き込まれる" "updated-content" "$content"
-  assert_eq "一時ファイルが残置されない" "0" "$n_tmp"
-  rm -rf "$D"
-}
-
-echo "=== 汎用語定義がなければfail-closed ==="
-{
-  out="$(run_py "vault_lib.require_generic_aliases('/nonexistent-generic-$$.txt')" 2>&1)"
-  rc=$?
-  assert_eq "exit code 1" "1" "$rc"
-}
-
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

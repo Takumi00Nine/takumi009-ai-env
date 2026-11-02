@@ -119,6 +119,46 @@ before="$(shasum -a 256 "$FAKE_HOME/.config/takumi009-ai-env/profile.md")"
 HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
 assert_eq "既存プロファイルは上書きしない" "$before" "$(shasum -a 256 "$FAKE_HOME/.config/takumi009-ai-env/profile.md")"
 
+echo "=== S4: 読取フックの登録と配置を解除し、旧ログは残す ==="
+ln -s "$REPO_ROOT/ai-brain/executor/vault-read-log.sh" "$FAKE_HOME/.claude/hooks/vault-read-log.sh"
+mkdir -p "$FAKE_HOME/.claude/logs"
+printf 'legacy-read-log\n' > "$FAKE_HOME/.claude/logs/vault-reads.tsv"
+HOME="$FAKE_HOME" python3 - <<'PY'
+import json
+from pathlib import Path
+path = Path.home() / '.claude/settings.json'
+settings = json.loads(path.read_text())
+settings['hooks']['PostToolUse'] = [{'matcher': 'Read', 'hooks': [
+    {'type': 'command', 'command': '$HOME/.claude/hooks/vault-read-log.sh', 'timeout': 3}]}]
+path.write_text(json.dumps(settings))
+PY
+HOME="$FAKE_HOME" bash "$SCRIPT" --dry-run >/dev/null 2>&1
+assert_true "dry-run は退役リンクを残す" "$([[ -L "$FAKE_HOME/.claude/hooks/vault-read-log.sh" ]] && echo 1 || echo 0)"
+HOME="$FAKE_HOME" bash "$SCRIPT" >/dev/null 2>&1
+assert_true "退役した読取フックのリンクを消す" "$([[ ! -L "$FAKE_HOME/.claude/hooks/vault-read-log.sh" ]] && echo 1 || echo 0)"
+assert_true "Read イベントを処理しても旧読取ログが増えない" "$(HOME="$FAKE_HOME" python3 - <<'PY'
+import json, os, subprocess
+from pathlib import Path
+home = Path.home()
+log = home / '.claude/logs/vault-reads.tsv'
+before = log.read_bytes()
+note = home / 'Data/obsidian/Knowledge/a.md'
+note.parent.mkdir(parents=True)
+note.write_text('# Read の試験\n')
+assert note.read_text() == '# Read の試験\n'
+settings = json.loads((home / '.claude/settings.json').read_text())
+assert 'vault-read-log.sh' not in json.dumps(settings)
+for group in settings['hooks'].get('PostToolUse', []):
+    if group.get('matcher') in ('Read', '*', ''):
+        for handler in group['hooks']:
+            subprocess.run(handler['command'], shell=True, input=json.dumps({
+                'tool_name': 'Read', 'tool_input': {'file_path': str(note)},
+                'session_id': 's4'}), text=True, check=True)
+assert log.read_bytes() == before
+print(1)
+PY
+)"
+
 echo "=== Codex 設定の初回生成・再生成 ==="
 cat > "$FAKE_HOME/.codex/config.toml" <<'EOF'
 model = "old-model"

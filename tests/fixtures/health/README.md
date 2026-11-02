@@ -12,7 +12,7 @@
 | `latest.json` | 必須（X-4 だけ意図的に欠く） | 判定機の入力（棚卸し・`items` つき＝設計 §3.5） |
 | `observation.json` | 必須 | 判定機の入力（読込・想起の観測記録）。bootstrap 経由の検査では期待値 |
 | `vault-recall.tsv` | 必須（空可） | 判定機の入力（疑い判定）・bootstrap の観測材料 |
-| `vault-reads.tsv` | bootstrap 経由で必須 | 観測材料（`reads_rows`） |
+| `vault-reads.tsv` | 任意（過去の記録） | 旧キー・旧ログが残っても現在の判定に使わないことを確認 |
 | `observation-prev.json` | bootstrap 経由で必須 | 「前セッション」の解決（最後に観測記録を書いたセッション） |
 | `now` | 必須（1 行・RFC3339 UTC） | `--now`／`HEALTH_JUDGE_NOW` |
 | `plist` | 任意（S-2・S-13・S-14・S-21・S-23） | `--plist`／`MAINTENANCE_PLIST_FILE`／`CMUX_NEXT_MAINT_PLIST` |

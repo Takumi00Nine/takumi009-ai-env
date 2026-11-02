@@ -59,7 +59,7 @@ assert_eq_num() {
 
 # v1.2 束 C の追加分が使う汎用の等値・真偽（1/0）判定（既存の assert_eq_num・assert_contains とは別名）。
 
-# 実際のフック（vault-recall.sh/vault-read-log.sh）は `date -u +...Z` でUTC時刻を
+# 実際のフック（vault-recall.sh）は `date -u +...Z` でUTC時刻を
 # 書く。テストのfixtureも同じくUTCで生成する（`-u`無しのローカル時刻に'Z'を付けた
 # だけの値だと、check-drift.sh側の解析バグ〈N-5・ローカルTZとして誤解釈〉と
 # 対称に間違えてしまい、テストがバグを覆い隠してしまうため＝2026-07-10
@@ -119,7 +119,6 @@ print(json.dumps({"schema": "health-verdict/1", "stage": "OK", "items": [],
                   "sources": {"recall": {"claude": "未観測", "codex": "未観測"}}}))
 PY_HEALTH
   echo '#!/bin/bash' > "$repo/ai-brain/executor/vault-recall.sh"
-  echo '#!/bin/bash' > "$repo/ai-brain/executor/vault-read-log.sh"
   echo '#!/bin/bash' > "$repo/dock/executor/dock-pane-resolve.sh"
   echo '#!/bin/bash' > "$repo/core/assembly/check-sub-update.sh"
   echo '#!/bin/bash' > "$repo/core/connect/claude-code/context-size-warn.sh"
@@ -161,7 +160,6 @@ install_fake_home() {
   ln -s "$repo/ai-brain/executor/vault-recall.sh" "$home/.claude/hooks/vault-recall.sh"
   mkdir -p "$home/.codex/hooks"
   ln -s "$repo/ai-brain/executor/vault-recall.sh" "$home/.codex/hooks/vault-recall.sh"
-  ln -s "$repo/ai-brain/executor/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
   ln -s "$repo/dock/executor/dock-pane-resolve.sh" "$home/.claude/hooks/dock-pane-resolve.sh"
   ln -s "$repo/core/assembly/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"
   ln -s "$repo/core/connect/claude-code/context-size-warn.sh" "$home/.claude/hooks/context-size-warn.sh"

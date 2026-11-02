@@ -127,23 +127,15 @@ check_file "Preferences/core-conduct.md"
 echo "=== 2. Preferences/core-workflow.md の {{…}} プレースホルダが最小能力表キー、または設計上認められた文書参照名に含まれる ==="
 check_file "Preferences/core-workflow.md"
 
-echo "=== 5. 必読ファイル集合の3重管理（bootstrap FILES／keyword_recall_helper EXCLUDE_RELPATHS／vault_inventory BOOTSTRAP_FILES）が集合として一致する（2026-08-30 Codex 2巡目差し戻し・MINOR-D対応。registry・版管理は作らず3ファイルの現物を静的抽出して突合するだけ） ==="
+echo "=== 5. 起動と棚卸しの必読ファイル集合が一致する ==="
 {
-  KEYWORD_RECALL_PY="$REPO_ROOT/ai-brain/executor/keyword_recall_helper.py"
   VAULT_INVENTORY_PY="$REPO_ROOT/ai-brain/executor/vault_inventory.py"
 
-  # bootstrap-vault.sh・keyword_recall_helper.py・vault_inventory.pyの現物
-  # テキストを静的抽出するだけ（実行はしない＝python3コード自体はこのテストの
-  # 一部として動くが、対象3ファイルはimport/sourceせずreadでテキストとして
-  # 読むだけ）。keyword_recall_helper.pyのEXCLUDE_RELPATHSは仕様上
-  # "Knowledge/mistakes.md"を1件多く含む（H19未決の除外維持・MAJOR-4で
-  # 既知の差分として明文化済み）ため、その1件を除いた残りがFILES／
-  # BOOTSTRAP_FILESと完全一致することを検証する。
-  RESULT="$(python3 - "$BOOTSTRAP_VAULT_SH" "$KEYWORD_RECALL_PY" "$VAULT_INVENTORY_PY" <<'PYEOF'
+  RESULT="$(python3 - "$BOOTSTRAP_VAULT_SH" "$VAULT_INVENTORY_PY" <<'PYEOF'
 import re
 import sys
 
-bootstrap_path, recall_path, inventory_path = sys.argv[1:4]
+bootstrap_path, inventory_path = sys.argv[1:3]
 
 
 def extract(text, pattern):
@@ -154,11 +146,9 @@ def extract(text, pattern):
 
 
 bootstrap_text = open(bootstrap_path, encoding='utf-8').read()
-recall_text = open(recall_path, encoding='utf-8').read()
 inventory_text = open(inventory_path, encoding='utf-8').read()
 
 files_set = extract(bootstrap_text, r'\n\s*FILES=\((.*?)\n\s*\)')
-exclude_set = extract(recall_text, r'\nEXCLUDE_RELPATHS\s*=\s*\((.*?)\n\)')
 bootstrap_files_set = extract(inventory_text, r'\nBOOTSTRAP_FILES\s*=\s*\[(.*?)\n\]')
 
 results = []
@@ -167,9 +157,6 @@ if files_set is None:
     results.append(('FAIL', 'bootstrap-vault.shからFILES配列を抽出できない（正規表現の劣化・変数名変更の可能性）'))
 if bootstrap_files_set is None:
     results.append(('FAIL', 'vault_inventory.pyからBOOTSTRAP_FILESを抽出できない（正規表現の劣化・変数名変更の可能性）'))
-if exclude_set is None:
-    results.append(('FAIL', 'keyword_recall_helper.pyからEXCLUDE_RELPATHSを抽出できない（正規表現の劣化・変数名変更の可能性）'))
-
 if files_set is not None and bootstrap_files_set is not None:
     if files_set == bootstrap_files_set:
         results.append(('PASS', 'bootstrap-vault.shのFILESとvault_inventory.pyのBOOTSTRAP_FILESが集合として完全一致する'))
@@ -178,25 +165,13 @@ if files_set is not None and bootstrap_files_set is not None:
         only_inv = bootstrap_files_set - files_set
         results.append(('FAIL', f'FILESとBOOTSTRAP_FILESが不一致（FILESのみ: {sorted(only_files)} / BOOTSTRAP_FILESのみ: {sorted(only_inv)}）'))
 
-if files_set is not None and exclude_set is not None:
-    known_extra = {'Knowledge/mistakes.md'}
-    exclude_minus_known = exclude_set - known_extra
-    if exclude_minus_known == files_set:
-        results.append(('PASS', 'EXCLUDE_RELPATHSから既知の追加分(Knowledge/mistakes.md)を除いた残りがFILESと集合として完全一致する'))
-    else:
-        only_exclude = exclude_minus_known - files_set
-        only_files2 = files_set - exclude_minus_known
-        results.append(('FAIL', f'EXCLUDE_RELPATHS(既知分除く)とFILESが不一致（EXCLUDE_RELPATHSのみ: {sorted(only_exclude)} / FILESのみ: {sorted(only_files2)}）'))
-    if 'Knowledge/mistakes.md' not in exclude_set:
-        results.append(('FAIL', 'EXCLUDE_RELPATHSにKnowledge/mistakes.mdが含まれない（H19未決の除外維持方針からの逸脱の可能性）'))
-
 for status, desc in results:
     print(f'{status}\t{desc}')
 PYEOF
 )"
 
   if [ -z "$RESULT" ]; then
-    fail_case "3集合突合の静的テスト自体が何も出力しなかった（想定外）"
+    fail_case "2集合突合の静的テスト自体が何も出力しなかった（想定外）"
   else
     while IFS=$'\t' read -r status desc; do
       [ -z "$status" ] && continue
