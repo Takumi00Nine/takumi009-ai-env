@@ -63,6 +63,7 @@ CONFIG_HOME_REL=".config/takumi009-ai-env"         # 雛形の複写先（README
 LIVE_MAIN_KEY="core.install"                       # 全部入りの組立の鍵
 LIVE_AGENT_KEY_RE='^[a-z][a-z0-9-]*\.install-'     # 常駐の登録の鍵（全部入りの後に台帳の行順で走らせる）
 SETTINGS_TPL_REL="core/assembly/settings.json"     # 登録の雛形（各フックの命令が全部入りの導出の置き場に当たること）
+CODEX_HOOKS_REL="team/connect/codex/hooks.json"     # Codex の登録（配置先を直接呼ぶ命令を検査）
 COMPONENTS_FILE="${AIENV_COMPONENTS_FILE:-$HOME/$CONFIG_HOME_REL/components.env}"  # 選択のファイル（無い＝全部入り）
 COMPONENTS_KEY="AIENV_COMPONENTS"                  # 選択のファイルの唯一のキー（値＝機能名のカンマ区切り）
 SELECT_ALL="all"                                   # 全部入りを明示する語（保存はファイルを消すこと）
@@ -167,15 +168,26 @@ ledger_scan() {
       printf "BAD\t%d 行目の機能が語彙外\n", NR; exit }
     $1 == "notify" && $3 != "notify" {
       printf "BAD\t%d 行目の機能が notify でない\n", NR; exit }
-    # 「配置」＝`-` か <link|gen|run>:$HOME/…（設計 §3.2・§4）
-    $9 != "-" && ($1 != "part" || $9 !~ /^(link|gen|run):\$HOME\/./ || ($2 ~ /\/$/ && $9 !~ /^link:.*\/$/) || ($2 !~ /\/$/ && $9 ~ /^(link|gen):.*\/$/)) {
-      printf "BAD\t%d 行目 %s の配置 %s が形式外（- か <link|gen|run>:$HOME/…・フォルダ単位の行は link:…/ だけ）\n", NR, $2, $9; exit }
+    # 「配置」＝`-` か <link|gen|run>:$HOME/… の空白区切り（設計 §3.2・§4）
+    $9 != "-" {
+      np = split($9, places, " ")
+      if (np == 0) { printf "BAD\t%d 行目 %s の配置が空\n", NR, $2; exit }
+      for (p = 1; p <= np; p++) {
+        spec = places[p]
+        if ($1 != "part" || spec !~ /^(link|gen|run):\$HOME\/./ || ($2 ~ /\/$/ && spec !~ /^link:.*\/$/) || ($2 !~ /\/$/ && spec ~ /^(link|gen):.*\/$/)) {
+          printf "BAD\t%d 行目 %s の配置 %s が形式外（- か <link|gen|run>:$HOME/… の空白区切り・フォルダ単位の行は link:…/ だけ）\n", NR, $2, spec; exit
+        }
+      }
+    }
     $1 != "part" { next }
     mode == "resident" && $6 ~ agent_re { print "HIT\tinstall\t" $2 "\t" $3 }
     mode == "resident" && $4 == "assembly" && $2 ~ /\.plist$/ { print "HIT\tplist\t" $2 "\t" $3 }
     sel != "" && index(sel, " " $3 " ") == 0 { next }
     mode == "key" && $6 == q { print "HIT\t" $5 "\t" $2; next }
-    mode == "place" && $9 != "-" { print "HIT\t" $9 "\t" $2 "\t" $3; next }
+    mode == "place" && $9 != "-" {
+      for (p = 1; p <= np; p++) print "HIT\t" places[p] "\t" $2 "\t" $3
+      next
+    }
     mode == "route" {
       n = split($8, v, ",")
       for (i = 1; i <= n; i++) if (v[i] == q || index(q, v[i] ".") == 1) { print "HIT\t" $5 "\t" $2; break }
@@ -196,7 +208,7 @@ scan_ok() {
   fi
 }
 
-# placement [--all] — 配置の一覧（設計 §3.2）。フォルダ単位の行は直下の各ファイル（隠しファイルを除く）へ同名で展開する。
+# placement [--all] — 配置先ごとに 1 行（設計 §3.2）。フォルダ単位の行は直下の各ファイル（隠しファイルを除く）へ同名で展開する。
 placement() {
   local tag spec rel fn how place f
   SEL=""
@@ -315,6 +327,7 @@ NAME_RE = re.compile(E["LT_NAME_RE"])
 REPO_HOME_REL = E["LT_REPO_HOME_REL"]
 LEDGER_REL = E["LT_LEDGER_REL"]
 SETTINGS_TPL_REL = E["LT_SETTINGS_TPL_REL"]
+CODEX_HOOKS_REL = E["LT_CODEX_HOOKS_REL"]
 MSG_HEAD = E["LT_MSG_HEAD"]
 
 OUTSIDE_RE = re.compile(r"^(README\.md|LICENSE|\.gitignore|Brewfile|tests/)")   # 部品外（要件 §2）
@@ -664,21 +677,25 @@ def check_placement(out_path, rc, err_path):
         if how == "run" and (os.path.isdir(src) or not os.access(src, os.X_OK)):
             rep("part", os.path.relpath(src, ROOT), "run の実体が実行可能でない")
     places = {i[1] for i in items}
-    try:
-        with open(full(SETTINGS_TPL_REL), encoding="utf-8") as f:
-            tpl = json.load(f)
-    except (OSError, ValueError):
-        rep("part", SETTINGS_TPL_REL, "登録の雛形を読めない")
-        return
-    for groups in (tpl.get("hooks") or {}).values():
-        for g in groups:
-            for hk in g.get("hooks", []):
-                words = (hk.get("command") or "").split()
-                if not words:
-                    continue
-                w = home + words[0][len("$HOME"):] if words[0].startswith("$HOME/") else words[0]
-                if w not in places:
-                    rep("part", SETTINGS_TPL_REL, "フックの命令 %s が全部入りの導出の置き場に当たらない" % hk["command"])
+    for rel in (SETTINGS_TPL_REL, CODEX_HOOKS_REL):
+        try:
+            with open(full(rel), encoding="utf-8") as f:
+                tpl = json.load(f)
+        except (OSError, ValueError):
+            rep("part", rel, "登録の雛形を読めない")
+            continue
+        for groups in (tpl.get("hooks") or {}).values():
+            for g in groups:
+                for hk in g.get("hooks", []):
+                    words = (hk.get("command") or "").split()
+                    if not words:
+                        continue
+                    # Codex の cmux・起動時読込は複合シェル命令。配置先を直接呼ぶ命令だけを照合する。
+                    if rel == CODEX_HOOKS_REL and not words[0].startswith(("$HOME/", "/")):
+                        continue
+                    w = home + words[0][len("$HOME"):] if words[0].startswith("$HOME/") else words[0]
+                    if w not in places:
+                        rep("part", rel, "フックの命令 %s が全部入りの導出の置き場に当たらない" % hk["command"])
 
 def live_items(h):
     items = []
@@ -752,7 +769,7 @@ PY
 py() {
   LT_ROOT="$ROOT" LT_FUNCTIONS="$FUNCTIONS" LT_LAYERS="$LAYERS" LT_ROW_KINDS="$ROW_KINDS" LT_NAME_RE="$NAME_RE" \
   LT_REPO_HOME_REL="$REPO_HOME_REL" LT_LEDGER_REL="$LEDGER_REL" LT_SETTINGS_TPL_REL="$SETTINGS_TPL_REL" LT_MSG_HEAD="$MSG_HEAD" \
-  LT_NOTICES="$NOTICES" LT_LEDGER_COLS="$LEDGER_COLS" python3 -c "$PY_CODE" "$@"
+  LT_CODEX_HOOKS_REL="$CODEX_HOOKS_REL" LT_NOTICES="$NOTICES" LT_LEDGER_COLS="$LEDGER_COLS" python3 -c "$PY_CODE" "$@"
 }
 
 WORK=""

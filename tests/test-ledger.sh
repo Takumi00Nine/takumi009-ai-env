@@ -47,6 +47,25 @@ echo "=== 台帳検査の正常系 ==="
 run_check "$BASE"
 assert_true "整合した台帳は検査に合格する" "$([[ "$CHECK_RC" -eq 0 && ! -s "$WORK/check.out" ]] && echo 1 || echo 0)"
 
+echo "=== Codex の登録を配置一覧と照合する ==="
+cp "$BASE/team/connect/codex/hooks.json" "$WORK/codex-hooks.json"
+python3 - "$BASE/team/connect/codex/hooks.json" <<'PY_HOOKS'
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+s = json.loads(path.read_text())
+for group in s['hooks']['UserPromptSubmit']:
+    for hook in group['hooks']:
+        hook['command'] = hook['command'].replace(
+            '$HOME/.codex/hooks/vault-recall.sh', '$HOME/.codex/hooks/unplaced-recall.sh')
+path.write_text(json.dumps(s))
+PY_HOOKS
+run_check "$BASE"
+assert_true "Codex の実行・観測の両命令の配置ずれを対象付きで報告する" \
+  "$([ "$CHECK_RC" -eq 1 ] && [ "$(grep -c '^part team/connect/codex/hooks.json フックの命令 .*unplaced-recall.sh.*置き場に当たらない' "$WORK/check.out")" -eq 2 ] && echo 1 || echo 0)"
+cp "$WORK/codex-hooks.json" "$BASE/team/connect/codex/hooks.json"
+
 echo "=== 台帳に無い部品を検出する ==="
 printf '#!/bin/bash\n:\n' > "$BASE/ai-brain/executor/zz-unlisted.sh"
 chmod +x "$BASE/ai-brain/executor/zz-unlisted.sh"

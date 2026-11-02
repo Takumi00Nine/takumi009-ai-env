@@ -197,6 +197,43 @@ role.leader: configured model=test
         self.run_cmd([str(self.hook), '--leader', 'claude'], '{"agent_id":"worker","prompt":"安全柵のテストを減らす"}')
         self.assertEqual(self.log.read_text(), before)
 
+    def test_codex_without_claude_config_or_hooks(self):
+        # installer が配置したリンクだけで起動する。記録の置き場だけは従来どおり。
+        shutil.move(self.home / '.claude', self.home / 'unused-claude')
+        self.assertFalse((self.home / '.claude').exists())
+        source = self.home / '.codex/hooks.json'
+        relocated = self.home / 'repo with spaces'
+        relocated.symlink_to(repo, target_is_directory=True)
+        source.unlink()
+        source.symlink_to(relocated / 'team/connect/codex/hooks.json')
+        hook = self.home / '.codex/hooks/vault-recall.sh'
+        hook.unlink()
+        hook.symlink_to(relocated / 'ai-brain/executor/vault-recall.sh')
+        groups = json.loads(source.read_text())['hooks']['UserPromptSubmit']
+        prompt = '安全柵のテストを減らす'
+        for group in groups[1:]:
+            command = group['hooks'][0]['command']
+            self.assertNotIn('.claude', command)
+            result = self.run_cmd(['bash', '-c', command], json.dumps({
+                'prompt': prompt, 'session_id': 'without-claude'}))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if '--observe' not in command:
+                self.assertIn('教訓：', json.loads(result.stdout)[
+                    'hookSpecificOutput']['additionalContext'])
+        rows = self.rows()
+        self.assertEqual({r['event'] for r in rows}, {'expected', 'started', 'completed'})
+        self.assertTrue(all(r['leader'] == 'codex' for r in rows))
+        self.assertFalse((self.home / '.claude/hooks').exists())
+        self.assertFalse((self.home / '.claude/settings.json').exists())
+        with patch.dict(os.environ, self.env, clear=True):
+            self.assertIsNone(health.recall_connections()['codex'])
+        self.assertIn('必読5ファイル＝全文注入済み（5/5）', self.invoke_reader('codex'))
+        # 新しい定義も、内容変更後には本人の信頼し直しが必要。
+        config = self.home / '.codex/config.toml'
+        config.write_text(config.read_text().split('\n[hooks.state.')[0])
+        with patch.dict(os.environ, self.env, clear=True):
+            self.assertEqual(health.recall_connections()['codex'], '本人の承認待ち')
+
     def test_timeout_records_and_returns_zero(self):
         # 照合そのものを遅らせ、OSタイマーによる全体期限を通す。
         with patch.dict(os.environ, self.env, clear=True), patch.object(sys, 'argv', [

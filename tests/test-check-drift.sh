@@ -159,6 +159,8 @@ install_fake_home() {
   ln -s "$repo/core/connect/claude-code/bash-danger-gate.sh" "$home/.claude/hooks/bash-danger-gate.sh"
   ln -s "$repo/core/connect/claude-code/bash-policy-gate.sh" "$home/.claude/hooks/bash-policy-gate.sh"
   ln -s "$repo/ai-brain/executor/vault-recall.sh" "$home/.claude/hooks/vault-recall.sh"
+  mkdir -p "$home/.codex/hooks"
+  ln -s "$repo/ai-brain/executor/vault-recall.sh" "$home/.codex/hooks/vault-recall.sh"
   ln -s "$repo/ai-brain/executor/vault-read-log.sh" "$home/.claude/hooks/vault-read-log.sh"
   ln -s "$repo/dock/executor/dock-pane-resolve.sh" "$home/.claude/hooks/dock-pane-resolve.sh"
   ln -s "$repo/core/assembly/check-sub-update.sh" "$home/.claude/hooks/check-sub-update.sh"

@@ -192,6 +192,29 @@ assert '[DIFF]' not in section and '[MISSING-KEY]' not in section and '[TOML-PAR
 PY
 [ "$?" -eq 0 ] && echo 1 || echo 0)"
 
+echo "=== 1部品の複数配置を導出・配置・検査する ==="
+HOME="$FAKE_HOME" bash "$REPO_ROOT/core/assembly/ledger-tool.sh" placement --all > "$WORK/placement.tsv"
+mv "$FAKE_HOME/.codex/hooks/vault-recall.sh" "$WORK/codex-recall-link"
+rc=0
+HOME="$FAKE_HOME" PATH="$WORK/bin:$PATH" bash "$REPO_ROOT/core/assembly/check-drift.sh" --managed-symlinks-only > "$WORK/missing-link.log" 2>&1 || rc=$?
+mv "$WORK/codex-recall-link" "$FAKE_HOME/.codex/hooks/vault-recall.sh"
+assert_true "両配置が同じ実体を指し、Codex 側の欠落も検出する" "$(python3 - "$FAKE_HOME" "$REPO_ROOT" "$WORK" "$rc" <<'PY'
+from pathlib import Path
+import re, sys
+home, repo, work = map(Path, sys.argv[1:4])
+src = repo / 'ai-brain/executor/vault-recall.sh'
+rows = [row.split('\t') for row in (work / 'placement.tsv').read_text().splitlines()]
+actual = [row for row in rows if row[2] == str(src)]
+expected = [['link', str(home / leader / 'hooks/vault-recall.sh'), str(src), 'ai-brain']
+            for leader in ('.claude', '.codex')]
+assert actual == expected
+assert all(Path(row[1]).is_symlink() and Path(row[1]).resolve() == src.resolve() for row in actual)
+assert re.search(r'symlink総数: \d+件 / drift: 0件', (work / 'drift.log').read_text())
+assert sys.argv[4] == '1'
+assert f'[MISSING] {home}/.codex/hooks/vault-recall.sh ' in (work / 'missing-link.log').read_text()
+PY
+[ "$?" -eq 0 ] && echo 1 || echo 0)"
+
 printf 'model = [broken\n' > "$FAKE_HOME/.codex/config.toml"
 before="$(shasum -a 256 "$FAKE_HOME/.codex/config.toml")"
 rc=0

@@ -121,14 +121,14 @@
       {
         "hooks": [{
           "type": "command",
-          "command": "$HOME/.claude/hooks/vault-recall.sh --leader codex",
+          "command": "$HOME/.codex/hooks/vault-recall.sh --leader codex",
           "timeout": 5
         }]
       },
       {
         "hooks": [{
           "type": "command",
-          "command": "$HOME/.claude/hooks/vault-recall.sh --leader codex --observe",
+          "command": "$HOME/.codex/hooks/vault-recall.sh --leader codex --observe",
           "timeout": 5
         }]
       }

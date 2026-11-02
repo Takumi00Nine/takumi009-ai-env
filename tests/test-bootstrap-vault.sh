@@ -206,12 +206,13 @@ from pathlib import Path
 import sys
 repo = Path(sys.argv[1])
 home = Path.home()
-hook = home / '.claude/hooks/vault-recall.sh'
-hook.parent.mkdir(parents=True)
-hook.symlink_to(repo / 'ai-brain/executor/vault-recall.sh')
 for leader in ('claude', 'codex'):
+    hook_rel = f'.{leader}/hooks/vault-recall.sh'
+    hook = home / hook_rel
+    hook.parent.mkdir(parents=True)
+    hook.symlink_to(repo / 'ai-brain/executor/vault-recall.sh')
     groups = [{'hooks': [{'type': 'command', 'timeout': 5,
-                         'command': f'$HOME/.claude/hooks/vault-recall.sh --leader {leader}' + suffix}]}
+                         'command': f'$HOME/{hook_rel} --leader {leader}' + suffix}]}
               for suffix in ('', ' --observe')]
     root = home / ('.claude' if leader == 'claude' else '.codex')
     root.mkdir(exist_ok=True)
