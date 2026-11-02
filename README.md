@@ -257,6 +257,14 @@ python3 ~/Workspace/Tools/takumi009-ai-env/ai-brain/executor/health_judge.py ack
 
 **Manual check**: `python3 usage/executor/usage_snapshot.py` prints the same 3 lines on demand (add `--json` for a single-line machine-readable snapshot). Details (the `UserPromptSubmit` block, prerequisite fetcher, Codex "tickets") = the docstring of `usage/executor/usage_snapshot.py`. While a Claude window has not started, the line shows `残100%（未開始）`; once a window's reset time has passed without a newer value it shows `残100%（リセット済・推定）` (an estimate shown only in the human-readable line — `--json` keeps the cached facts).
 
+To show this machine's monthly plan beside each pool name, create `~/.config/takumi009-ai-env/usage-plans.json` (override the path with `AIENV_USAGE_PLANS_FILE`):
+
+```json
+{"claude-subscription": "", "codex-subscription": ""}
+```
+
+Replace each empty string with the monthly price label for that machine's account. Use the pool's `pool_ref` as the key. Labels appear as `Claude枠（monthly price label）:` in human output and prompt blocks; `--json` stays unchanged. Missing/unreadable files, malformed JSON and invalid labels are ignored. Whitespace-only labels are invalid. Labels must be a single line without newlines, control characters or full-width spaces. After trimming surrounding whitespace, labels must be at most 80 characters. Keep real values outside the repository; sub machines may use different accounts. `install-main.sh` does not create it or fill in plan values.
+
 ### Usage fetcher (usage/executor/usage-fetch.sh / usage/assembly/install-usage-fetch.sh)
 
 Install it with `usage/assembly/install-usage-fetch.sh` (a plain bootstrap+enable installer, same shape as `install-backup.sh`; `--dry-run` only prints the current state). Details = the comments at the top of `usage/executor/usage-fetch.sh` and `usage/assembly/install-usage-fetch.sh`.
@@ -598,6 +606,14 @@ python3 ~/Workspace/Tools/takumi009-ai-env/ai-brain/executor/health_judge.py ack
 ### 使用率の見える化（usage_snapshot.py）
 
 **手動で見る口**: `python3 usage/executor/usage_snapshot.py` を実行すると同じ3行がその場で表示されます（`--json` を付けると機械可読の1行JSONになります）。詳細＝`usage/executor/usage_snapshot.py` の docstring。Claude の枠がまだ始まっていない間は `残100%（未開始）`、リセット時刻を過ぎても新しい値が取れていない間は `残100%（リセット済・推定）` と出ます（推定は人が読む行だけ。`--json` はキャッシュの値のまま）。
+
+各枠名にこの機の月額プランを添えるには、`~/.config/takumi009-ai-env/usage-plans.json` を手元に作ります（パスは `AIENV_USAGE_PLANS_FILE` で上書き可）。
+
+```json
+{"claude-subscription": "", "codex-subscription": ""}
+```
+
+空文字を、この機のアカウントの月額表示に置き換えてください。キーは枠の `pool_ref` です。人向け出力と発言時のブロックに `Claude枠（月額表示）:` の形で添わり、`--json` は変わりません。未設定・読めないファイル・不正なJSON・不正な表示文字列は無視します。空白だけの値は不可です。表示文字列は改行・制御文字・全角空白を含まない1行にしてください。前後の空白を削った後で80文字以内です。実値はrepoに入れず、サブ機ではその機のアカウントに合わせます。`install-main.sh` はこのファイルもプランの実値も作りません。
 
 ### 使用率取得器（usage/executor/usage-fetch.sh／usage/assembly/install-usage-fetch.sh）
 

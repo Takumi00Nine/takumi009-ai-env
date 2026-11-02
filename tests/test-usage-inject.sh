@@ -17,6 +17,10 @@ WORK="$(mktemp -d)" || exit 1
 case "$WORK" in "" | "/") echo "FATAL: mktemp -d の返り値が不正です" >&2; exit 1 ;; esac
 [ -d "$WORK" ] || exit 1
 trap 'rm -rf "$WORK"' EXIT
+export HOME="$WORK/home" SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1
+export AIENV_USAGE_PLANS_FILE="$HOME/.config/takumi009-ai-env/usage-plans.json"
+export AIENV_COMPONENTS_FILE="$HOME/.config/takumi009-ai-env/components.env"
+mkdir -p "$(dirname "$AIENV_USAGE_PLANS_FILE")"
 
 CACHE="$WORK/cache"
 mkdir -p "$CACHE"
@@ -40,6 +44,12 @@ run_hook_capture '{"prompt":"test"}'
 if [ "$RUN_RC" -eq 0 ] && [ -z "$RUN_STDERR" ] && [[ "$RUN_STDOUT" == *'【使用率・この発言時点】'* && "$RUN_STDOUT" == *'Claude枠:'* && "$RUN_STDOUT" == *'Codex枠:'* ]]; then
   pass "使用率の見出しとサービス枠を注入"
 else fail_case "使用率の見出しとサービス枠を注入"; fi
+
+printf '%s\n' '{"claude-subscription":"テスト月額A", "codex-subscription":"テスト月額B"}' > "$AIENV_USAGE_PLANS_FILE"
+run_hook_capture '{"prompt":"test"}'
+if [ "$RUN_RC" -eq 0 ] && [ -z "$RUN_STDERR" ] && [[ "$RUN_STDOUT" == *'Claude枠（テスト月額A）:'* && "$RUN_STDOUT" == *'Codex枠（テスト月額B）:'* ]]; then
+  pass "使用率ブロックの2枠へプランを注入"
+else fail_case "使用率ブロックの2枠へプランを注入"; fi
 
 echo "=== 取得器の失敗は発言を止めない ==="
 printf 'print("partial")\nraise SystemExit(3)\n' > "$WORK/nonzero.py"

@@ -26,6 +26,10 @@ assert_contains() {
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+export HOME="$WORK/home" SKIP_LAUNCHCTL=1 LAUNCHCTL_TIMEOUT_SECS=1
+export AIENV_USAGE_PLANS_FILE="$HOME/.config/takumi009-ai-env/usage-plans.json"
+export AIENV_COMPONENTS_FILE="$HOME/.config/takumi009-ai-env/components.env"
+mkdir -p "$(dirname "$AIENV_USAGE_PLANS_FILE")"
 
 NOW=1788858365  # 固定epoch（JST表示・年齢計算を決定的にするための固定値）
 
@@ -63,6 +67,25 @@ for svc in claude codex; do
 done
 human="$(run_human "$FX1")"
 if [[ "$human" == *'Claude枠:'* && "$human" == *'Codex枠:'* ]]; then pass "人向け表示にサービス枠"; else fail_case "人向け表示にサービス枠"; fi
+
+echo "=== 機ごとのプランは人向け表示だけに添える ==="
+baseline="$human"
+printf '%s\n' '{"claude-subscription":"テスト月額A", "codex-subscription":"テスト月額B"}' > "$AIENV_USAGE_PLANS_FILE"
+human="$(AIENV_USAGE_PLANS_FILE='' run_human "$FX1")"
+expected="${baseline/Claude枠:/Claude枠（テスト月額A）:}"
+expected="${expected/Codex枠:/Codex枠（テスト月額B）:}"
+assert_eq "設定済みの2枠へプランを添える（既定パス）" "$expected" "$human"
+assert_eq "プランを設定してもJSONは変わらない" "$json" "$(run_json "$FX1")"
+assert_eq "読めない設定は従来表示（環境変数のパスを優先）" "$baseline" "$(AIENV_USAGE_PLANS_FILE="$WORK/no-file.json" run_human "$FX1")"
+for bad_kind in newline control long json; do
+  python3 - "$AIENV_USAGE_PLANS_FILE" "$bad_kind" <<'PY'
+import json, sys
+value = {'newline': 'bad\nplan', 'control': 'bad\x1bplan', 'long': 'x' * 81, 'json': None}[sys.argv[2]]
+with open(sys.argv[1], 'w') as f:
+    f.write('{broken' if value is None else json.dumps(dict.fromkeys(['claude-subscription', 'codex-subscription'], value)))
+PY
+  assert_eq "壊れたプランは従来表示（${bad_kind}）" "$baseline" "$(run_human "$FX1")"
+done
 FX2="$WORK/fx2"; mkdir -p "$FX2"
 write_json "$FX2/claude-cache.json" "{'fetched_at':$NOW-700,'five_hour':{'used_percent':10.0,'resets_at_epoch':$NOW+1000},'seven_day':{'used_percent':20.0,'resets_at_epoch':$NOW+90000},'last_error':None}"
 write_json "$FX2/codex-cache.json" "{'fetched_at':$NOW-30,'five_hour':{'used_percent':40,'resets_at_epoch':$NOW+2000},'seven_day':{'used_percent':50,'resets_at_epoch':$NOW+90000},'last_error':None}"

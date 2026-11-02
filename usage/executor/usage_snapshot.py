@@ -17,6 +17,7 @@
 リポジトリ claude-codex-usage に由来する名前だが、互換のため据え置き）。
 環境変数 AIENV_USAGE_CACHE_DIR で上書き可（テスト用にfixtureディレクトリを
 差せるように）。
+人向けの行は「枠名（プラン）」で表示。AIENV_USAGE_PLANS_FILE の既定パスは ~/.config/takumi009-ai-env/usage-plans.json。
 
 ⚠️ B1-a のスコープ（実装記録「使用率提示B1a-実装-2026-09-08.md」§2に
 固定表あり。2026-09-08 worker-driven一次レビュー2巡目MAJOR対応で以下を
@@ -79,6 +80,7 @@ JST = timezone(timedelta(hours=9))
 
 DEFAULT_CACHE_DIR_NAME = "claude-codex-usage"
 DEFAULT_STALE_SECONDS = 600
+PLAN_LABEL_MAX_LEN = 80
 
 # 窓ごとの文言の設計定数（設計 v3 §4。変える見込みの無い定義なので設定項目にしない）。
 UNSTARTED_NOTE = "未開始"
@@ -857,8 +859,29 @@ def _format_window_segment(window: dict, now: int) -> str:
     return f"{label} 残{remaining}%（{reset}）"
 
 
-def _human_line_for_subscription(pool: dict, now: int) -> str:
+def _load_plan_labels() -> dict:
+    """機ごとの表示専用設定。不正・未設定の値は表示へ持ち込まない。"""
+    path = os.environ.get("AIENV_USAGE_PLANS_FILE") or os.path.join(
+        os.path.expanduser("~"), ".config", "takumi009-ai-env", "usage-plans.json"
+    )
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as f:
+            labels = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(labels, dict):
+        return {}
+    return {
+        key: value.strip() for key, value in labels.items()
+        if isinstance(value, str) and value.strip()
+        and len(value.strip()) <= PLAN_LABEL_MAX_LEN and value.isprintable()
+    }
+
+
+def _human_line_for_subscription(pool: dict, now: int, plan: Optional[str] = None) -> str:
     name = POOL_HUMAN_LABEL[pool["pool_ref"]]
+    if plan:
+        name += f"（{plan}）"
     state = pool["usage_state"]
     if state == "missing":
         return f"{name}: 取得できません（キャッシュ無し＝使用率取得器 未導入。導入手順: usage/assembly/install-usage-fetch.sh。詳細はREADME §使用率取得器）"
@@ -899,12 +922,13 @@ def _human_line_for_subscription(pool: dict, now: int) -> str:
 def render_human(snapshot: dict, now: int) -> str:
     """枠あたり1行（常に3行。FR-108①のSessionStart注入から同じ関数を
     そのまま呼べる形にする）。"""
+    plans = _load_plan_labels()
     lines = []
     for pool in snapshot["pools"]:
         if pool["pool_ref"] == "unlimited":
             lines.append("unlimited（ローカル）: 使用率なし")
         else:
-            lines.append(_human_line_for_subscription(pool, now))
+            lines.append(_human_line_for_subscription(pool, now, plans.get(pool["pool_ref"])))
     return "\n".join(lines)
 
 
