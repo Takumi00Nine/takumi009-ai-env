@@ -6,6 +6,11 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 SCRIPT_REL="core/assembly/check-drift.sh"
+# S3 は test-recall-flow 側で HOME と観測保存先を隔離し、偽 launchctl を PATH 先頭に置く。
+# git commit/push を使う既存 fixture は起動しない。
+if [ "${1:-}" = "--recall-only" ]; then
+  exec bash "$TESTS_DIR/test-recall-flow.sh" RecallFlow.test_all_readers_persist_recovery_with_legacy_files
+fi
 
 PASS=0
 FAIL=0
@@ -107,6 +112,12 @@ EOF
   echo '#!/bin/bash' > "$repo/team/connect/claude-code/delegation-gate-v2.sh"
   echo '#!/bin/bash' > "$repo/core/connect/claude-code/bash-danger-gate.sh"
   echo '#!/bin/bash' > "$repo/core/connect/claude-code/bash-policy-gate.sh"
+  # 想起の実結合は test-recall-flow.sh。ここは既存の配置・Git・常駐検査を隔離する。
+  cat > "$repo/ai-brain/executor/health_judge.py" <<'PY_HEALTH'
+import json
+print(json.dumps({"schema": "health-verdict/1", "stage": "OK", "items": [],
+                  "sources": {"recall": {"claude": "未観測", "codex": "未観測"}}}))
+PY_HEALTH
   echo '#!/bin/bash' > "$repo/ai-brain/executor/vault-recall.sh"
   echo '#!/bin/bash' > "$repo/ai-brain/executor/vault-read-log.sh"
   echo '#!/bin/bash' > "$repo/dock/executor/dock-pane-resolve.sh"

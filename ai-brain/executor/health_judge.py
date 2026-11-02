@@ -1,21 +1,13 @@
 #!/usr/bin/env python3
 """health_judge.py — 外部脳ヘルスの判定機（唯一の判定ロジック＝FR-16）。
 
-案件 health-self-explain（設計 v1.2 §4・§8）。状態記録 4 本（週次メンテの
-`last-run.json`・棚卸しの `latest.json`・SessionStart の観測記録・想起ログ）を
-読み、段階（OK／WARNING／ERROR）・要対処項目・付記を JSON 1 個
-（`health-verdict/1`）で返す。bootstrap-vault.sh（注入ブロック）と
-Dock の Project 供給（B 行）はどちらもこの出力の写しを描くだけで、
-自分では判定しない。
+週次メンテ・棚卸し・必読の読込と、両 leader の想起を判定する。
+`observe` は JSONL と配置済み接続を観測し、確定した想起の基準を health へ保存して
+`health-verdict/1` を返す。Dock・両起動表示・check-drift は必ずこの口を使う。
+`judge` は与えられた材料を評価するだけで観測基準を書かない。
 
-  python3 health_judge.py judge --last-run <last-run.json> \
-      --inventory-latest <latest.json> --observation <session-observation.json> \
-      --recall-log <vault-recall.tsv> [--reads-log <vault-reads.tsv>] \
-      [--plist <com.takumi009.maintenance.plist>] [--now <RFC3339 UTC>] \
-      [--recall-stale-days 7] [--tz <IANA 名>]
-  python3 health_judge.py ack --last-run <last-run.json> --note "<対処内容>" \
-      [--session-id <sid>] [--observation <session-observation.json>] \
-      [--lock-file <vault-writer.lock>]
+  python3 health_judge.py observe [--now <RFC3339>] [--recall-log <JSONL>]
+  python3 health_judge.py ack --last-run <last-run.json> --note "<対処内容>"
 
 契約:
 - `judge` は JSON を出せたときは常に終了コード 0。非 0 は判定機自身の異常
@@ -47,6 +39,8 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import hashlib
+from pathlib import Path
 import os
 import plistlib
 import subprocess
@@ -73,8 +67,6 @@ OK_WHEN = {
     "legacy": "次回の本番経路の実行が新契約（run／completed）で完了記録を書き、完全正常終了する",
     "inventory": "対処後、次回の週次メンテの棚卸し工程で検出されなくなる（件数が減る）",
     "load": "同セッション内で当該ノートを Read で読み直せる（1 回）。状態記録上の OK は次のセッション開始で成立",
-    "recall_direct": "同セッション内で想起フックを手動起動して候補が出ることを確認（1 回）。状態記録上の OK は次のセッション開始で成立",
-    "recall_stale": "10 文字以上のプロンプトで想起フックが有効な記録（候補提示または heartbeat）を書く（手動起動でも可）",
 }
 
 # 棚卸し種別 → 主体（設計 §3.5 の固定表）。表に無い kind は「本人」。
@@ -85,14 +77,11 @@ INVENTORY_ACTOR = {
     "broken_links": "AI",
     "stale_keywords": "AI",
     "status_future_dated": "AI",
-    "missing_aliases": "AI",
-    "generic_aliases": "AI",
     "review_overdue": "AI",
     "review_invalid": "AI",
 }
 
 ACTORS = ("AI", "本人")
-RECALL_TAIL_ROWS = 50
 SEVERITY_RANK = {"OK": 0, "WARNING": 1, "ERROR": 2}
 
 
@@ -535,6 +524,14 @@ def probe_inventory(path: Optional[str]) -> Dict[str, Any]:
         probe["reason"] = "latest.json が解析できない"
         return probe
     probe["data"] = data
+    data = dict(data)
+    if isinstance(data.get("items"), list):
+        obsolete = {"missing_aliases", "generic_aliases"}
+        kept = [e for e in data["items"] if e.get("kind") not in obsolete]
+        if isinstance(data.get("actionable"), int):
+            data["actionable"] -= len(data["items"]) - len(kept)
+        data["items"] = kept
+        probe["data"] = data
     actionable = data.get("actionable")
     items = data.get("items")
     if "items" not in data:
@@ -560,12 +557,7 @@ def evaluate_inventory(probe: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict
     src["actionable"] = actionable if isinstance(actionable, int) and not isinstance(actionable, bool) else None
     log_ref = src["report_path"] or probe["path"]
     if probe["legacy"]:
-        if isinstance(src["actionable"], int) and src["actionable"] >= 1:
-            items.append({
-                "source": "inventory", "severity": "WARNING", "kind": "legacy", "target": "（旧形式の棚卸し記録）",
-                "detail": f"旧形式の棚卸し記録（内訳不明・要確認 {src['actionable']} 件）", "actor": "AI",
-                "ok_when": OK_WHEN["inventory"], "ack": None, "log_ref": log_ref,
-            })
+        src["actionable"] = None  # 内訳のない旧件数は新基準へ流用しない。
         return src, items
     if probe["inconsistent"]:
         return src, items
@@ -587,15 +579,13 @@ def evaluate_inventory(probe: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict
 # 読込・想起（§4.2）
 # ---------------------------------------------------------------------------
 
-def evaluate_observation(path: Optional[str]) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]], Optional[bool]]:
+def evaluate_observation(path: Optional[str]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     load_src: Dict[str, Any] = {"observed_at": None, "session_id": None, "missing_count": 0,
                                 "vault_root_readable": None, "observed": False}
-    recall_src: Dict[str, Any] = {"prev_session_id": None, "injected": None, "reads_rows": None,
-                                  "recall_valid_rows": None, "last_valid_row_age_days": None, "observed": False}
     items: List[Dict[str, Any]] = []
     status, data = read_json_file(path)
     if status != "ok" or not isinstance(data, dict):
-        return load_src, recall_src, items, None
+        return load_src, items
     load_src["observed_at"] = _as_str(data.get("observed_at"))
     load_src["session_id"] = _as_str(data.get("session_id"))
     load = data.get("load")
@@ -620,83 +610,168 @@ def evaluate_observation(path: Optional[str]) -> Tuple[Dict[str, Any], Dict[str,
                     "result": "読めない（本来存在するはずの必読ノート）", "actor": "AI",
                     "ok_when": OK_WHEN["load"], "ack": None, "log_ref": None,
                 })
-    injected: Optional[bool] = None
-    rp = data.get("recall_prev")
-    if isinstance(rp, dict):
-        recall_src["observed"] = True
-        recall_src["prev_session_id"] = _as_str(rp.get("session_id"))
-        inj = rp.get("injected")
-        injected = inj if isinstance(inj, bool) else None
-        recall_src["injected"] = injected
-        for k in ("reads_rows", "recall_valid_rows"):
-            v = rp.get(k)
-            recall_src[k] = v if isinstance(v, int) and not isinstance(v, bool) else None
-        if injected is False:
-            items.append({
-                "source": "recall", "severity": "ERROR", "id": "recall_not_injected",
-                "result": (f"前セッション（{recall_src['prev_session_id'] or '不明'}）で注入なし（直接観測）"),
-                "reason": (f"前セッション {recall_src['prev_session_id'] or '不明'} は Vault を読んだ"
-                           f"（reads {recall_src['reads_rows'] if recall_src['reads_rows'] is not None else '?'} 行）"
-                           f"が想起の記録が 0 行"),
-                "actor": "AI", "ok_when": OK_WHEN["recall_direct"], "ack": None, "log_ref": None,
-            })
-    return load_src, recall_src, items, injected
-
-
-def last_valid_row_age_days(path: Optional[str], now: _dt.datetime) -> Optional[int]:
-    """TSV の末尾 50 行のうち 3 列目が非空の最終行の経過日数。無ければ None（fail-open）。"""
-    if not path or not os.path.isfile(path):
-        return None
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError:
-        return None
-    lines = raw.decode("utf-8", errors="replace").splitlines()[-RECALL_TAIL_ROWS:]
-    last_ts: Optional[_dt.datetime] = None
-    for line in lines:
-        cols = line.split("\t")
-        if len(cols) >= 3 and cols[2] != "":
-            d = parse_rfc3339(cols[0])
-            if d is not None:
-                last_ts = d
-    if last_ts is None:
-        return None
-    return int((now - last_ts).total_seconds() // 86400)
-
-
-def evaluate_recall_stale(recall_log: Optional[str], now: _dt.datetime, stale_days: int,
-                          injected: Optional[bool], recall_src: Dict[str, Any]) -> List[Dict[str, Any]]:
-    age = last_valid_row_age_days(recall_log, now)
-    recall_src["last_valid_row_age_days"] = age
-    if injected is False:
-        return []  # 直接観測が優先（二重にしない）
-    if age is not None and age > stale_days:
-        return [{
-            "source": "recall", "severity": "WARNING", "id": "recall_stale",
-            "result": f"直近 {stale_days} 日以内に有効な想起の記録なし（疑い・最終有効行 {age} 日前）",
-            "reason": f"vault-recall.tsv の最終有効行が {age} 日前（線＝{stale_days} 日・直接観測なし）",
-            "actor": "AI", "ok_when": OK_WHEN["recall_stale"], "ack": None, "log_ref": recall_log,
-        }]
-    return []
+    return load_src, items
 
 
 # ---------------------------------------------------------------------------
-# judge
+# 想起: 純粋な判定と、全表示経路で共用する観測・保存
+# ---------------------------------------------------------------------------
+
+RECALL_EVENTS = ("expected", "started", "completed", "failed")
+RECALL_BAD = {"未起動", "未完了", "失敗中", "構成異常", "記録障害", "観測記録障害"}
+
+
+def judge_recall(events, previous, now, budget_ms):
+    """同一 leader/session の追加イベントを集計し、確定済み基準との差を判定する。"""
+    counts = previous.get("totals", dict.fromkeys(RECALL_EVENTS, 0)).copy()
+    pending = set(previous.get("pending", []))
+    newest = previous.get("at")
+    terminal = previous.get("terminal")
+    for row in events:
+        event = row["event"]
+        if event == "expected":
+            counts[event] += 1
+        elif event == "started":
+            counts[event] += 1
+            pending.add(row["run_id"])
+        elif row["run_id"] in pending:
+            counts[event] += 1
+            pending.remove(row["run_id"])
+            if terminal is None or row["at"] >= terminal["at"]:
+                terminal = {"at": row["at"], "event": event}
+        if newest is None or row["at"] >= newest:
+            newest = row["at"]
+    before = previous.get("counts", dict.fromkeys(RECALL_EVENTS, 0))
+    delta = {event: counts[event] - before[event] for event in RECALL_EVENTS}
+    basis = {"totals": counts, "pending": sorted(pending), "at": newest, "terminal": terminal,
+             "counts": before, "state": previous.get("state", "未観測")}
+    if not any(delta.values()):
+        return basis["state"], basis
+    if (now - parse_rfc3339(newest)).total_seconds() * 1000 < budget_ms:
+        return "実行中", basis
+    if delta["expected"] > delta["started"]:
+        state = "未起動"
+    elif delta["started"] > delta["completed"] + delta["failed"]:
+        state = "未完了"
+    elif terminal and terminal["event"] == "failed":
+        state = "失敗中"
+    else:
+        state = "正常"
+    basis.update(counts=counts.copy(), state=state)
+    return state, basis
+
+
+def codex_hook_hash(group, handler):
+    """公式 discovery.rs の正規化と config/fingerprint.rs の比較用ハッシュ。
+
+    承認は書かない。https://github.com/openai/codex/tree/main/codex-rs/hooks/src/engine
+    """
+    normalized = {"type": "command", "command": handler["command"],
+                  "timeout": max(1, handler.get("timeout", 600)),
+                  "async": handler.get("async", False)}
+    for field in ("statusMessage", "additionalContextLimit"):
+        if field in handler and not (field == "additionalContextLimit" and handler[field] == 2500):
+            normalized[field] = handler[field]
+    identity = {"event_name": "user_prompt_submit", "hooks": [normalized]}
+    # UserPromptSubmit は matcher を使わない（公式の正規化と同じ）。
+    raw = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(raw.encode()).hexdigest()
+
+
+def recall_connections():
+    """提供元固有の接続観測は台帳で引いた接続層に任せる。"""
+    import importlib.util
+    ledger = Path(__file__).resolve().parents[2] / "core/assembly/ledger-tool.sh"
+    path = subprocess.run([str(ledger), "lookup", "ai-brain.recall-connections"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    spec = importlib.util.spec_from_file_location("recall_connections", path)
+    connection = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(connection)
+    return connection.recall_connections()
+
+
+def observe_recall(args):
+    """材料読取→純粋な judge→確定基準の保存。表示前に全呼出元がここを通る。"""
+    from keyword_recall_helper import load_recall_config
+    sources, items = {}, []
+    config = load_recall_config()
+    leaders = config["leaders"]
+    try:
+        log = Path(args.recall_log or config["log_path"])
+        state_path = Path(config["health_path"])
+        now, _ = resolve_now(args.now)
+        saved = json.loads(state_path.read_text()) if state_path.exists() else {}
+        # 位置の無い旧観測は新ログの先頭から作り直す。旧 TSV の基準は使わない。
+        position = saved.get("position", 0)
+        sessions = saved.get("sessions", {}) if "position" in saved else {}
+        # 空の追記で読取・書込可否を確認。発言本文や擬似成功は書かない。
+        log.parent.mkdir(parents=True, exist_ok=True)
+        grouped = {}
+        with log.open("a+b") as stream:
+            if os.fstat(stream.fileno()).st_size < position:
+                position, sessions = 0, {}
+            stream.seek(position)
+            for line in stream:
+                if not line.endswith(b"\n"):
+                    break
+                position = stream.tell()
+                try:
+                    row = json.loads(line)
+                except (ValueError, UnicodeError):
+                    continue
+                if row["mode"] == "hook":
+                    grouped.setdefault(row["leader"], {}).setdefault(row["session_id"], []).append(row)
+        for leader in leaders:
+            latest = None
+            for sid in grouped.get(leader, {}):
+                sessions.setdefault(leader, {}).setdefault(sid, {})
+            for sid, previous in sessions.get(leader, {}).items():
+                events = grouped.get(leader, {}).get(sid, [])
+                state, basis = judge_recall(events, previous, now, config["budget_ms"])
+                sessions[leader][sid] = basis
+                at = basis["at"]
+                if latest is None or at >= latest[0]:
+                    latest = (at, state)
+            sources[leader] = latest[1] if latest else "未観測"
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = state_path.with_name(state_path.name + f".tmp.{os.getpid()}")
+            tmp.write_text(json.dumps({"schema": "recall-observation/1", "position": position,
+                                       "sessions": sessions}, ensure_ascii=False))
+            tmp.replace(state_path)
+        except OSError:
+            sources = dict.fromkeys(leaders, "観測記録障害")
+        for leader, problem in recall_connections().items():
+            if problem and sources[leader] != "観測記録障害":
+                sources[leader] = problem
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
+        sources = dict.fromkeys(leaders, "記録障害")
+        print(f"想起観測: {type(exc).__name__}", file=sys.stderr)
+    for leader, state in sources.items():
+        if state in RECALL_BAD or state == "本人の承認待ち":
+            items.append({"source": "recall", "severity": "WARNING" if state == "本人の承認待ち" else "ERROR",
+                          "id": f"recall_{leader}", "result": f"{leader}: {state}",
+                          "reason": "発火期待・実行結果と有効な接続を確認", "actor": "本人" if state == "本人の承認待ち" else "AI",
+                          "ok_when": "両ハンドラを有効・信頼済みにし、次の発言で正常完了する",
+                          "ack": None, "log_ref": None})
+    return sources, items
+
+
+# ---------------------------------------------------------------------------
+# judge（I/Oで材料を読むが、観測基準の保存は observe だけ）
 # ---------------------------------------------------------------------------
 
 def judge(args: argparse.Namespace) -> Dict[str, Any]:
     now, now_injected = resolve_now(args.now)
     tz = resolve_tz(args.tz)
-    stale_days = args.recall_stale_days
 
     inv_probe = probe_inventory(args.inventory_latest)
     maint_src, maint_items = evaluate_maintenance(args.last_run, args.plist, now, tz, inv_probe)
     inv_src, inv_items = evaluate_inventory(inv_probe)
-    load_src, recall_src, obs_items, injected = evaluate_observation(args.observation)
-    stale_items = evaluate_recall_stale(args.recall_log, now, stale_days, injected, recall_src)
+    load_src, obs_items = evaluate_observation(args.observation)
+    recall_src, recall_items = args.recall_result or ({"claude": "未観測", "codex": "未観測"}, [])
 
-    items = maint_items + inv_items + obs_items + stale_items
+    items = maint_items + inv_items + obs_items + recall_items
     for n, item in enumerate(items, start=1):
         item_ordered = {"n": n}
         item_ordered.update(item)
@@ -705,22 +780,6 @@ def judge(args: argparse.Namespace) -> Dict[str, Any]:
     for item in items:
         if SEVERITY_RANK[item["severity"]] > SEVERITY_RANK[stage]:
             stage = item["severity"]
-
-    reads_age = last_valid_row_age_days(args.reads_log, now) if args.reads_log else None
-    reads_log_stale: Optional[bool]
-    if not args.reads_log or not os.path.isfile(args.reads_log):
-        reads_log_stale = None
-    else:
-        reads_log_stale = (reads_age is None) or (reads_age > stale_days)
-
-    fragments = None
-    _st, lr = read_json_file(args.last_run)
-    if isinstance(lr, dict):
-        fc = lr.get("fragments_candidates")
-        if isinstance(fc, int) and not isinstance(fc, bool) and fc >= 0:
-            fragments = fc
-        elif isinstance(fc, float) and fc >= 0 and fc == int(fc):
-            fragments = int(fc)
 
     return {
         "schema": SCHEMA_VERDICT,
@@ -735,9 +794,6 @@ def judge(args: argparse.Namespace) -> Dict[str, Any]:
             "recall": recall_src,
         },
         "extras": {
-            "fragments_candidates": fragments,
-            "reads_log_stale": reads_log_stale,
-            "recall_stale_days": stale_days,
             "now_injected": now_injected,
             "tz": str(tz),
         },
@@ -858,15 +914,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="health_judge.py", description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    j = sub.add_parser("judge", help="状態記録 4 本から health-verdict/1 を出す")
-    j.add_argument("--last-run", required=True)
-    j.add_argument("--inventory-latest", required=True)
-    j.add_argument("--observation", required=True)
-    j.add_argument("--recall-log", required=True)
-    j.add_argument("--reads-log", default=None, help="vault-reads.tsv（extras.reads_log_stale の材料・任意）")
+    j = sub.add_parser("judge", aliases=["observe"], help="observe は共通の観測・保存後に判定を返す")
+    j.add_argument("--last-run", default=os.path.expanduser("~/.claude/logs/maintenance/last-run.json"))
+    j.add_argument("--inventory-latest", default=os.path.expanduser("~/.claude/logs/vault-inventory/latest.json"))
+    j.add_argument("--observation", default=os.path.expanduser("~/.claude/logs/health/session-observation.json"))
+    j.add_argument("--recall-log", default=None, help="新 JSONL。旧 TSV は読まない")
+    j.set_defaults(recall_result=None)
     j.add_argument("--plist", default=None)
     j.add_argument("--now", default=None, help="判定時刻（RFC3339 UTC）。省略時は現在時刻")
-    j.add_argument("--recall-stale-days", type=int, default=7)
     j.add_argument("--tz", default=None, help="IANA 時刻帯名（テスト用）。省略時は OS ローカル")
 
     a = sub.add_parser("ack", help="対処済み申告を last-run.json の ack に書く")
@@ -880,8 +935,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.cmd == "judge":
+    if args.cmd in ("judge", "observe"):
         try:
+            if args.cmd == "observe":
+                args.recall_result = observe_recall(args)
             verdict = judge(args)
         except JudgeError as exc:
             print(f"JUDGE_ERROR:{exc}", file=sys.stderr)

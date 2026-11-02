@@ -137,6 +137,26 @@ with tempfile.TemporaryDirectory(prefix='codex-boot-read-') as directory:
         else:
             action = lambda: shortage(result, missing, bodies)
         check(f'{label}: JSONと追加コンテキスト', action)
+
+    def broken_health_keeps_required_notes():
+        bindir = work / 'broken-health-bin'
+        bindir.mkdir()
+        probe = bindir / 'python3'
+        # 必読注入の Python は動かし、子の判定機だけ items の無い JSON を返す。
+        probe.write_text('#!/bin/sh\nif [ "$1" = "-" ]; then exec "' + sys.executable
+                         + '" "$@"; fi\nprintf \'%s\\n\' \'{"stage":"OK","sources":{"recall":{}}}\'\n')
+        probe.chmod(0o755)
+        case_env = dict(env, HOME=str(work / 'complete'), PATH=str(bindir) + os.pathsep + env['PATH'])
+        result = subprocess.run(['bash', str(hook)], env=case_env, text=True,
+                                capture_output=True, timeout=10)
+        expected = {note: (work / 'complete/Data/obsidian' / note).read_text() for note in notes}
+        full_content(result, expected)
+        require(context(result).splitlines()[-1] == '【外部脳ヘルス】判定不能（共通観測・保存に失敗）',
+                '判定不能の1行がない')
+        require(context(result).count('【外部脳ヘルス】') == 1, '途中のヘルス表示が残っている')
+
+    check('ヘルスJSON必須キー欠落でも必読全文を保持', broken_health_keeps_required_notes)
+
     def worker_environment():
         bindir = work / 'bin'
         bindir.mkdir()

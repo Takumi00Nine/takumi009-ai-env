@@ -11,6 +11,9 @@ WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/cmux-next-model-test.XXXXXX")" || {
   exit 1
 }
 trap 'chmod -R u+rwx "$WORKDIR" 2>/dev/null; rm -rf "$WORKDIR"' EXIT   # chmod 000 の fixture が残っても片付く
+# B 行の共通観測・保存も実 HOME に書かない。
+export HOME="$WORKDIR/home" PYTHONDONTWRITEBYTECODE=1
+mkdir -p "$HOME"
 
 . "$SCRIPT_DIR/lib-cmux-fixtures.sh"
 

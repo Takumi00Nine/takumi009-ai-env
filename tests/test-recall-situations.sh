@@ -9,7 +9,7 @@ export PYTHONDONTWRITEBYTECODE=1
 unset VAULT_RECALL_CONFIG VAULT_RECALL_MAX_ITEMS VAULT_RECALL_THRESHOLD VAULT_RECALL_KEYWORD_BUDGET_MS
 mkdir -p "$HOME"
 
-# 作った一時 HOME は呼出元が確認・片付けできるよう残す。
+trap 'rm -rf "$TEST_ROOT"' EXIT
 python3 - "$REPO_ROOT/ai-brain/executor" <<'PY'
 import json
 import os

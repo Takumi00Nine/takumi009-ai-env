@@ -7,6 +7,15 @@ REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
 SCRIPT="$REPO_ROOT/ai-brain/executor/bootstrap-vault.sh"  # AI Brain の寄与（引数なし＝hook 形）。AI Brain のスイートは AI Brain の部品だけを起動する（設計 §4.4）
 PASS=0
 FAIL=0
+# 新しい共通観測も実 HOME に書かない。
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-vault.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+export TMPDIR="$WORK"
+TEST_HOME="$WORK/home"
+mkdir -p "$TEST_HOME"
+export HOME="$TEST_HOME" PYTHONDONTWRITEBYTECODE=1
+export VAULT_RECALL_LOG="$TEST_HOME/recall.jsonl"
+export HEALTH_RECALL_OBSERVATION_FILE="$TEST_HOME/recall-observation.json"
 
 pass() { PASS=$((PASS + 1)); echo "  ok - $1"; }
 fail_case() { FAIL=$((FAIL + 1)); echo "  NG - $1"; }
@@ -85,13 +94,11 @@ make_full_vault() {
 RUN_BOOTSTRAP_DEFAULT_SESSION_JSON='{"session_id":"test-session-0000"}'
 run_bootstrap() {
   local vault="$1"
-  local reads_log="${2:-/nonexistent-dir/vault-reads.tsv}"
-  local recall_log="${3:-/nonexistent-dir/vault-recall.tsv}"
-  local inv_log_dir="${4:-/nonexistent-dir/vault-inventory}"
-  local last_run_file="${5:-/nonexistent-dir/last-run.json}"
-  local plist="${6:-/nonexistent-dir/com.takumi009.maintenance.plist}"
-  local obs_file="${7:-}"
-  local session_json="${8:-$RUN_BOOTSTRAP_DEFAULT_SESSION_JSON}"
+  local inv_log_dir="${2:-/nonexistent-dir/vault-inventory}"
+  local last_run_file="${3:-/nonexistent-dir/last-run.json}"
+  local plist="${4:-/nonexistent-dir/com.takumi009.maintenance.plist}"
+  local obs_file="${5:-}"
+  local session_json="${6:-$RUN_BOOTSTRAP_DEFAULT_SESSION_JSON}"
   local obs_tmp=""
   if [ -z "$obs_file" ]; then
     obs_tmp="$(mktemp -d)"
@@ -99,7 +106,6 @@ run_bootstrap() {
   fi
   printf '%s\n' "$session_json" \
     | BOOTSTRAP_VAULT="$vault" BOOTSTRAP_TEAMS_DIR="/nonexistent-teams-dir" \
-      VAULT_READS_LOG="$reads_log" VAULT_RECALL_LOG="$recall_log" \
       VAULT_INVENTORY_LOG_DIR="$inv_log_dir" \
       MAINTENANCE_LAST_RUN_FILE="$last_run_file" \
       MAINTENANCE_PLIST_FILE="$plist" HEALTH_OBSERVATION_FILE="$obs_file" \
@@ -183,20 +189,57 @@ run_bootstrap_fixture() {
   rm -f "$BOOT_OBS_FILE"
   [ -f "$d/observation-prev.json" ] && cp "$d/observation-prev.json" "$BOOT_OBS_FILE"
   HEALTH_JUDGE_NOW="$(cat "$d/now")" \
-    run_bootstrap "$(fixture_vault_dir "$d")" "$d/vault-reads.tsv" "$d/vault-recall.tsv" "$d" "$d/last-run.json" \
+    run_bootstrap "$(fixture_vault_dir "$d")" "$d" "$d/last-run.json" \
       "$plist" "$BOOT_OBS_FILE" "$session_json"
 }
 
 health_section() {
   printf '%s\n' "$1" | awk '/^【外部脳ヘルス】/{flag=1; print; next} flag && (/^- \[/ || /^⚠️ 観測記録/){print; next} flag{exit}'
 }
-echo "=== 正常時のヘルス節は1行で表示する ==="
+echo "=== 正常（想起は未観測）のヘルス節は1行 ==="
 {
+  # 登録・実体・信頼だけの最小 fixture。想起はまだ一度も発火していない。
+  python3 - "$REPO_ROOT" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+repo = Path(sys.argv[1])
+home = Path.home()
+hook = home / '.claude/hooks/vault-recall.sh'
+hook.parent.mkdir(parents=True)
+hook.symlink_to(repo / 'ai-brain/executor/vault-recall.sh')
+for leader in ('claude', 'codex'):
+    groups = [{'hooks': [{'type': 'command', 'timeout': 5,
+                         'command': f'$HOME/.claude/hooks/vault-recall.sh --leader {leader}' + suffix}]}
+              for suffix in ('', ' --observe')]
+    root = home / ('.claude' if leader == 'claude' else '.codex')
+    root.mkdir(exist_ok=True)
+    (root / ('settings.json' if leader == 'claude' else 'hooks.json')).write_text(
+        json.dumps({'hooks': {'UserPromptSubmit': groups}}))
+    if leader == 'codex':
+        text = '[features]\nhooks = true\n'
+        for gi, group in enumerate(groups):
+            handler = dict(group['hooks'][0], **{'async': False})
+            identity = {'event_name': 'user_prompt_submit', 'hooks': [handler]}
+            raw = json.dumps(identity, sort_keys=True, separators=(',', ':'))
+            key = f'{root}/hooks.json:user_prompt_submit:{gi}:0'
+            text += f'\n[hooks.state.{json.dumps(key)}]\ntrusted_hash = "sha256:{hashlib.sha256(raw.encode()).hexdigest()}"\n'
+        (root / 'config.toml').write_text(text)
+PY
   ctx="$(run_bootstrap_fixture S-1)"
   sec="$(health_section "$ctx")"
-  assert_eq "S-1: ヘルス節が 1 行" "1" "$(printf '%s\n' "$sec" | wc -l | tr -d ' ')"
-  assert_contains "S-1: stage=OK items=0" "$sec" "stage=OK items=0"
+  assert_eq "S-1: ヘルス節は1行" "1" "$(printf '%s\n' "$sec" | wc -l | tr -d ' ')"
+  assert_contains "S-1: 正常" "$sec" "stage=OK items=0"
   assert_not_contains "S-1: ⚠️ を含まない（FR-5）" "$sec" "⚠️"
+}
+echo "=== 想起が未配置なら両リーダーの構成異常を表示する ==="
+{
+  mkdir -p "$WORK/unconfigured"
+  ctx="$(HOME="$WORK/unconfigured" run_bootstrap_fixture S-1)"
+  sec="$(health_section "$ctx")"
+  assert_contains "未配置: 構成異常を隠さない" "$sec" "stage=ERROR items=2"
+  assert_eq "未配置: ヘルス節は見出しと両リーダーの異常" "3" "$(printf '%s\n' "$sec" | wc -l | tr -d ' ')"
 }
 echo "=== 判定機不在でも必読本文を注入する ==="
 {

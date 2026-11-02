@@ -30,7 +30,7 @@
 #
 # 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §6）:
 # B 行はヘルス判定機（AI Brain＝唯一の判定ロジック・台帳の鍵で引く）の写し＝
-#   B<TAB>外部脳<TAB><ok|warn|error><TAB><OK|WARNING|ERROR>[ 候補N件]
+#   B<TAB>外部脳<TAB><ok|warn|error><TAB><OK|WARNING|ERROR>
 # を 0〜1 行。判定機が動かないときは 0 行（3 値の外の機構障害＝FR-15 の例外）。
 # 旧判定（8 日線・棚卸し n/a・週次 ✅/⚠）は退役。
 #
@@ -105,9 +105,7 @@ INVENTORY_DIR="${CMUX_NEXT_INVENTORY_DIR:-$HOME/.claude/logs/vault-inventory}"
 INVENTORY_LATEST="${CMUX_NEXT_INVENTORY_LATEST:-$INVENTORY_DIR/latest.json}"
 MAINT_STATE_FILE="${CMUX_NEXT_MAINT_STATE:-$HOME/.claude/logs/maintenance/last-run.json}"
 HEALTH_OBSERVATION="${CMUX_NEXT_HEALTH_OBSERVATION:-$HOME/.claude/logs/health/session-observation.json}"
-RECALL_LOG="${CMUX_NEXT_RECALL_LOG:-$HOME/.claude/logs/vault-recall.tsv}"
 MAINT_PLIST="${CMUX_NEXT_MAINT_PLIST:-$HOME/Library/LaunchAgents/com.takumi009.maintenance.plist}"
-: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"  # 判定機の既定と同値（読込の注入と同じ渡し方＝設計 §4.1・想起の疑い判定の線）
 # ヘルス判定機は台帳の鍵で引く（他機能の部品名を書かない＝v1.1 設計 §5.2・§5.6）。台帳ツール＝Core の組立。
 LEDGER_TOOL="$LIB_DIR/../../core/assembly/ledger-tool.sh"
 HEALTH_JUDGE_KEY="ai-brain.health-judge"
@@ -407,11 +405,9 @@ print_reason_frame() {
 # 台帳・実体の異常＝0 行＋固定文 `LEDGER: …` を stderr に 1 行。python3 が無い・
 # 非 0・JSON でない・stage が 3 値でない、のいずれでも 0 行（stderr に 1 行）＝
 # 誤った段階を見せない（FR-15 の例外・NFR-2 fail-open）。
-# 末尾付記＝extras.fragments_candidates が非負整数のときだけ「 候補N件」
-# （0 件も表示＝本人裁定 R-2。段階に影響しない）。
 # テスト専用 env HEALTH_JUDGE_NOW が非空なら --now に写す（読込の注入と同名・設計 §4.1）。
 emit_health_rows() {
-  local judge py verdict rc fields stage cand warn
+  local judge py verdict rc stage warn
   judge="$(bash "$LEDGER_TOOL" lookup "$HEALTH_JUDGE_KEY" 2>&1)"; rc=$?
   case "$rc" in
     0) judge="${judge%%$'\n'*}" ;;
@@ -425,25 +421,18 @@ emit_health_rows() {
   esac
   py="$(command -v python3 2>/dev/null)"
   [ -n "$py" ] || py="/usr/bin/python3"
-  verdict="$("$py" "$judge" judge \
+  verdict="$("$py" "$judge" observe \
     --last-run "$MAINT_STATE_FILE" \
     --inventory-latest "$INVENTORY_LATEST" \
     --observation "$HEALTH_OBSERVATION" \
-    --recall-log "$RECALL_LOG" \
     --plist "$MAINT_PLIST" \
-    --recall-stale-days "$VAULT_AGENT_LOG_STALE_DAYS" \
     ${HEALTH_JUDGE_NOW:+--now "$HEALTH_JUDGE_NOW"} 2>/dev/null)"
   rc=$?
   if [ "$rc" != "0" ] || [ -z "$verdict" ]; then
     echo "ヘルス判定機が失敗しました（rc=${rc}・B 行を省略）" >&2
     return 0
   fi
-  fields="$(printf '%s' "$verdict" | jq -r 'select(type == "object" and .schema == "health-verdict/1")
-    | [(.stage // ""), (if (.extras.fragments_candidates | type) == "number" and .extras.fragments_candidates >= 0
-                         then (.extras.fragments_candidates | floor | tostring) else "" end)] | @tsv' 2>/dev/null)"
-  stage="${fields%%$(printf '\t')*}"
-  cand="${fields#*$(printf '\t')}"
-  [ "$fields" = "$stage" ] && cand=""
+  stage="$(printf '%s' "$verdict" | jq -r 'select(.schema == "health-verdict/1") | .stage' 2>/dev/null)"
   case "$stage" in
     OK) warn="ok" ;;
     WARNING) warn="warn" ;;
@@ -452,11 +441,8 @@ emit_health_rows() {
       echo "ヘルス判定機の stage が 3 値でありません（B 行を省略）" >&2
       return 0 ;;
   esac
-  if [ -n "$cand" ]; then
-    printf 'B\t外部脳\t%s\t%s 候補%s件\n' "$warn" "$stage" "$cand"
-  else
-    printf 'B\t外部脳\t%s\t%s\n' "$warn" "$stage"
-  fi
+  printf 'B\t外部脳\t%s\t%s\n' "$warn" "$stage"
+
 }
 
 run_frame() {

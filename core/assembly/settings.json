@@ -150,9 +150,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/vault-recall.sh",
-            "timeout": 2,
-            "statusMessage": "外部脳の関連ノート想起中"
+            "command": "$HOME/.claude/hooks/vault-recall.sh --leader claude",
+            "timeout": 5,
+            "statusMessage": "外部脳の教訓・判断を想起中"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/vault-recall.sh --leader claude --observe",
+            "timeout": 5
           },
           {
             "type": "command",

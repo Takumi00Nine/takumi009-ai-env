@@ -177,7 +177,7 @@ assert live['features'] == dict(template['features'], unknown_feature='keep')
 PY
 [ "$?" -eq 0 ] && echo 1 || echo 0)"
 
-# 検査②を実際の check-drift で確認。外部照会・実 launchd はスタブへ向ける。
+# check-drift は観測基準も保存するため HOME を隔離する。外部照会・実 launchd はスタブへ向ける。
 mkdir -p "$WORK/bin"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/launchctl"
 printf '#!/bin/sh\necho PRIVATE\n' > "$WORK/bin/gh"

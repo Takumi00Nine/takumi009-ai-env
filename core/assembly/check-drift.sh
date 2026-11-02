@@ -33,54 +33,9 @@
 #      drift件数に乗らず、私的リポジトリの意図しない公開化を検知するはずの
 #      安全網自体が静かに無効化していても週次通知に出ない穴があった＝
 #      「監視不能も異常」として明示的に検知対象にする）。
-#   ⑥ 外部脳（maintenance.sh週次ランナー・weekly-review・想起/読取ログ
-#      フック）の死活。「maintenance.shの最終開始(started_at)が古すぎる」
-#      「vault-reads.tsv/vault-recall.tsvの最終記録が古すぎる」のいずれかを
-#      検知する（2026-07-10 敵対的レビュー M-1/M-2 対応。3年ノーメンテ運用では
-#      「本人が定期的にレポートを見に行く」以外に死活を知る手段が無かった＝
-#      検知網そのものが無人だと無言で死ぬ穴を塞ぐ）。
-#      旧・未処理レポート検知（frontmatterのprocessed:マーカー監視）・未解決ALERT監視・
-#      個別のvault_inventory.py/fragments_log.py等の
-#      レポート新鮮度チェック（LaunchAgent単位）は2026-07-16簡素化
-#      （[[Decisions/2026-07-16-nightly-batch-direct-write]]・設計書§4「check-drift.sh
-#      のレポート未処理検知・ALERT監視を削除、maintenance新鮮度チェック
-#      （started_atの経過日数のみで判定＝自己ロックアウト対策）に置換」）で
-#      撤去し、単一の週次ランナー com.takumi009.maintenance
-#      （scripts/maintenance.sh。上記3スクリプトはそのPhase1から呼ばれる
-#      検出専用CLIへ縮小し、個別LaunchAgentは持たない）の死活を
-#      last-run.json基準でまとめて見る方式へ統合した（「レポート→リーダー
-#      処理」の間接ループ廃止・ALERT機構の生成元knowledge_merge.py撤去のため。
-#      旧実装は`git log -p`参照）。started_atはmaintenance.shが実行開始
-#      直後に無条件で更新する値であり、実行中に一部の検出/適用が失敗しても
-#      更新され続ける（＝「実行はされているが失敗し続けている」ことまでは
-#      本チェックでは検知しない。それはmaintenance.sh自身の異常時macOS通知が
-#      担う。本チェックは「そもそも起動すらしていない」自己ロックアウトの
-#      検知に専念する設計判断＝リーダー裁定2026-07-16）。
-#      $VAULT が無い
-#      （サブ機・私的Vault未clone）場合は対象外。maintenance.shは
-#      README.mdにも明記の「メイン専用」機能（ai-brain/assembly/install-maintenance.sh
-#      を実行していなければ対応LaunchAgent plistが無い）なので、reads/recallログ
-#      （install-main.shで標準導入・任意ではない）とは別に、LaunchAgent plistの
-#      実在＋launchd上のロード状態（読み取り専用の`launchctl print`照会。
-#      本チェックがcheck-drift.sh初のlaunchctl呼び出しだが、状態照会のみで
-#      何も変更しないため冒頭の「読み取りのみ」方針には反しない＝
-#      リーダー裁定2026-07-16「(a) plist存在＋launchctl登録」対応）で個別に
-#      導入・稼働判定してからチェックする（Codexレビュー指摘・Major:
-#      reads/recallログだけが存在する普通のmain構成で、未導入の任意機能まで
-#      毎回DEAD誤報していた。この設計自体は踏襲する）。
-#      weekly-review（「今週の歩み」週次振り返りcanvas。
-#      takumi009-ai-env-private/tools/weekly-review/weekly_review.py・
-#      LaunchAgent com.takumi009.weekly-review が毎週月曜04:00に無人実行）も同型の
-#      新鮮度チェック対象に追加（2026-07-14。従来は本ツールに一切の言及が無く
-#      監視対象外だった＝外部脳監視・バックアップ機構総点検で確定）。canvas出力
-#      ファイル名は「対象週の月曜日」であり生成日ではないため、ファイル名基準では
-#      なく最新ファイルのmtime基準で新鮮度を判定する（processedマーカーによる
-#      未処理チェックの対象外＝canvasは本人向けの最終成果物そのものであり、他3種の
-#      ような「処理待ちレポート」ではないため）。
-#      ログの時刻(TSV1列目)はvault-recall.sh/vault-read-log.shがUTCで書くため、
-#      経過日数の算出は `TZ=UTC` を明示してパースする（2026-07-10 敵対的レビュー
-#      2回目 N-5 対応。以前はローカルTZとして解釈しており、JST環境では±9hずれ、
-#      日境界付近では経過日数が1日多くカウントされ得た＝日単位閾値の誤判定要因）。
+#   ⑥ 週次ランナー・weekly-review の死活と、両リーダーの想起。
+#      想起は共通 observe が期待・実行・配置済み接続を観測して基準を保存する。
+#      旧 TSV の日数や候補件数は判定しない。
 #   ⑦ vault-backup（scripts/backup-vault.sh）の push 死活。push失敗はWARNとして
 #      /tmp/backup-vault.log（launchagents/com.takumi009.backup-vault.plistが
 #      指定する一時領域・再起動で揮発。2026-07-16簡素化でLAラベル・ログファイル名を
@@ -127,7 +82,8 @@
 # 撤去した（通知は異常時のみに縮小・「通知は見ていない」本人指摘）。
 # maintenance.sh導入までの間、本ツールは手動実行のみの運用となる。
 #
-# 読み取りのみ（実 ~/.claude・~/.codex・実Vaultには一切書き込まない）。
+# 設定・Vault は読み取りのみ。想起の共通観測は JSONL の作成と health の基準保存を行う。
+# テスト・ゲートから呼ぶ場合は HOME を隔離し、PATH 先頭に偽 launchctl を置く。
 #
 # 使い方: core/assembly/check-drift.sh
 #   --json: 末尾の人間向けサマリ行の直後に、機械可読なJSON1行を追加でstdoutへ
@@ -1116,21 +1072,10 @@ done
 
 echo
 echo "======================================================================"
-echo "⑥ 外部脳 死活チェック（maintenance.sh週次ランナー・weekly-review・reads/recallログ）"
+echo "⑥ 外部脳 死活チェック（maintenance.sh週次ランナー・weekly-review・両リーダーの想起）"
 echo "======================================================================"
 
-# maintenance.sh（週次ランナー・com.takumi009.maintenance）と、
-# vault-recall.sh/vault-read-log.sh（UserPromptSubmit/PostToolUseフック）が
-# 「動いているはずなのに実は死んでいる」を検知する。ここは既存の週次drift
-# 通知に相乗りさせ、見に行かなくても通知される経路にする。
-: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"
-: "${VAULT_READS_LOG:=$HOME/.claude/logs/vault-reads.tsv}"
-: "${VAULT_RECALL_LOG:=$HOME/.claude/logs/vault-recall.tsv}"
-# maintenance.sh（週次ランナー）の死活判定に使うlast-run.json（scripts/
-# maintenance.shが実行開始直後にstarted_atを無条件更新する自己ロックアウト
-# 対策ファイル）。既定値はmaintenance.sh自身のLAST_RUN_FILE既定値と同一
-# （2026-07-16簡素化・設計書§4「maintenance新鮮度チェック（started_atの
-# 経過日数のみで判定）」・リーダー裁定2026-07-16）。
+# maintenance.sh（週次ランナー・com.takumi009.maintenance）。
 : "${MAINTENANCE_LAST_RUN_FILE:=$HOME/.claude/logs/maintenance/last-run.json}"
 : "${MAINTENANCE_STALE_DAYS:=8}"    # 週次(目安7日) + 猶予1日（リーダー裁定2026-07-16の明示値）
 # weekly-review（「今週の歩み」週次振り返りcanvas・takumi009-ai-env-private/
@@ -1141,52 +1086,22 @@ echo "======================================================================"
 : "${WEEKLY_REVIEW_DIR:=$VAULT/Explorations/weekly-review}"
 : "${WEEKLY_REVIEW_STALE_DAYS:=10}"      # 週次(目安7日) + 猶予（fragments-logと同型）
 
-# maintenance.shは README.md にも明記の「メイン専用」機能で、
-# vault-reads.tsv/vault-recall.tsv を書くフック（vault-recall.sh/vault-read-log.sh。
-# install-main.shで標準導入）とは導入の必須性が異なる（Codexレビュー
-# 指摘・Major: reads/recallログだけが存在する状態＝任意機能は未導入だが標準フックは
-# 動いている、というごく普通の main機構成で、下のvault_agents_untouchedだけで
-# ゲートするとDEADが恒常的に誤報され続けてしまう。旧vault-inventory/
-# fragments-log/knowledge-merge-detect時代からの設計方針をそのまま踏襲）。
-# LaunchAgent plist（$HOME/Library/LaunchAgents/com.takumi009.<name>.plist）の
-# 実在をもって「この機能を導入したか」を個別に判定し、未導入なら新鮮度チェック
-# そのものをスキップする（reads/recallログの死活判定には影響しない＝
-# 未導入で標準フックの死活検知まで消してしまわないため）。
+# 週次の任意機能は、配置済み plist がある場合だけ検査する。
 : "${LAUNCH_AGENTS_DIR:=$HOME/Library/LaunchAgents}"
 vault_agent_installed() {
   [ -f "${LAUNCH_AGENTS_DIR}/com.takumi009.$1.plist" ]
 }
 
-# 外部脳関連のシグナル（reads/recallログ2種＋maintenance/weekly-reviewの
-# LaunchAgent plist2種＋maintenanceのlast-run.json＝計5種）が1つも無ければ
-# 「一度も導入されていない」とみなしてセクション全体を対象外にする（旧実装は
-# vault-inventory/fragments-log/knowledge-merge-detectの出力ディレクトリ有無も
-# シグナルに含んでいたが、これら3スクリプトはmaintenance.sh Phase1から呼ばれる
-# 検出専用CLIへ縮小し個別LaunchAgentを持たなくなったため、判定基準を
-# maintenance側の signal へ差し替えた＝2026-07-16簡素化・リーダー裁定対応）。
-# plistもシグナルに含める（Codexレビュー指摘・Major再指摘: 出力の有無だけで
-# 判定すると「plistは導入済みだが初回実行前・またはジョブが一度も成功していない」
-# ケースが出力側の不在と見分けられず、セクション全体が対象外になって本来出るべき
-# DEADが出せなくなる）。
+# Vault 同期で届いた canvas だけではローカルの常駐導入とみなさない。
 vault_agents_untouched=1
 [ -f "$MAINTENANCE_LAST_RUN_FILE" ] && vault_agents_untouched=0
-# WEEKLY_REVIEW_DIR は $VAULT 配下（Vault自体は複数マシン間でgit同期される）を
-# 意図的に signal から除外している（Codexレビュー指摘・Major対応: 他の出力先
-# （$HOME/.claude/logs/... 配下）はローカル専用でマシン間同期されないが、
-# canvas出力だけはVault経由で同期されるため、reads/recallフックもweekly-review
-# LaunchAgentも一切導入していないサブ機が、単に「他マシンが生成したcanvasを
-# Vault同期で受け取っているだけ」でuntouched=0と誤判定され、reads/recallの
-# DEADが誤報される穴があった。ローカル導入の判定はweekly-review plist（下記）
-# だけで行う）。
-[ -f "$VAULT_READS_LOG" ] && vault_agents_untouched=0
-[ -f "$VAULT_RECALL_LOG" ] && vault_agents_untouched=0
 vault_agent_installed "maintenance" && vault_agents_untouched=0
 vault_agent_installed "weekly-review" && vault_agents_untouched=0
 
 if [ ! -d "$VAULT" ]; then
   log "  -> Vaultが見つかりません（${VAULT}）。このマシンに私的Vaultが無い（サブ機）想定ならチェック対象外"
 elif [ "$vault_agents_untouched" = "1" ]; then
-  log "  -> 外部脳の出力（${MAINTENANCE_LAST_RUN_FILE}・${VAULT_READS_LOG}・${VAULT_RECALL_LOG}）・maintenance/weekly-review plist（${LAUNCH_AGENTS_DIR}/com.takumi009.{maintenance,weekly-review}.plist）が1件も見つかりません。外部脳が一度も導入されていない想定ならチェック対象外"
+  log "  -> 外部脳の出力（${MAINTENANCE_LAST_RUN_FILE}）・maintenance/weekly-review plist（${LAUNCH_AGENTS_DIR}/com.takumi009.{maintenance,weekly-review}.plist）が1件も見つかりません。外部脳が一度も導入されていない想定ならチェック対象外"
 else
   # epoch(秒)から現在までの経過日数を返す。未来のepoch（時計ズレ・ファイル破損）
   # では負値をそのまま返す＝呼び出し側で「未来日=異常」と判定できるようにする
@@ -1214,43 +1129,6 @@ else
     else
       echo $(( diff / 86400 ))
     fi
-  }
-
-  # TSVログの最終行1列目(ISO8601・末尾Z)の経過日数を返す（無ければ非0で返す）。
-  # ERROR行（vault-recall.sh/vault-read-log.shのlog_error()が書く行）も含めた
-  # 「ファイルに何か書かれた最終時刻」＝ログが死んでいるかどうかの一次判定に使う。
-  #
-  # ログの時刻は vault-recall.sh/vault-read-log.sh が `date -u +...Z` で書く
-  # UTC時刻（Codexレビュー指摘・N-5対応前は末尾Zを外しただけで `date -j -f`
-  # に渡していたため、実行環境のローカルTZ（例: JST=+9h）として誤って解釈
-  # されていた＝2026-07-10 敵対的レビュー2回目 N-5。`TZ=UTC` を明示して
-  # パースすることで、UTC時刻をUTCとして正しく経過日数に変換する）。
-  log_last_line_age_days() {
-    local f="$1" ts epoch
-    [ -f "$f" ] || return 1
-    ts="$(tail -1 "$f" 2>/dev/null | cut -f1)"
-    [ -z "$ts" ] && return 1
-    ts="${ts%Z}"
-    epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" +%s 2>/dev/null)" || return 1
-    age_days_from_epoch "$epoch"
-  }
-
-  # ERROR行以外（3列目=ノート相対パスが空でない行）の最終行の経過日数を返す。
-  # vault_inventory.py の read_log() と同じ判定基準（NF>=3 かつ 3列目が空でない）。
-  # フックは実行されているがERROR行しか出せていない（例: jq破損で毎回失敗）状態を
-  # log_last_line_age_days だけでは「鮮度は健全」と見誤ってしまうため分離する
-  # （Codexレビュー指摘・Major: 最終行だけを見ると、ERROR行を出し続ける壊れた
-  # フックでも「直近に記録あり＝健全」と誤判定してしまう）。
-  # log_last_line_age_days と同様、時刻はUTCとして明示的にパースする
-  # （N-5対応。ローカルTZ解釈による±9hのズレを避ける）。
-  log_last_valid_line_age_days() {
-    local f="$1" ts epoch
-    [ -f "$f" ] || return 1
-    ts="$(awk -F'\t' 'NF>=3 && $3!="" {t=$1} END{if (t!="") print t}' "$f" 2>/dev/null)"
-    [ -z "$ts" ] && return 1
-    ts="${ts%Z}"
-    epoch="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$ts" +%s 2>/dev/null)" || return 1
-    age_days_from_epoch "$epoch"
   }
 
   # maintenance.sh週次ランナー1件分の判定をまとめる（2026-07-16簡素化・
@@ -1437,44 +1315,6 @@ EOF
     fi
   }
 
-  # ログ系（vault-reads.tsv・vault-recall.tsv）1件分の判定をまとめる。
-  #   $1=ログパス $2=ラベル $3=しきい値(日) $4=表示名 $5=フックパス $6=補足（recallのみ「ヒット0件」注記）
-  check_log_freshness() {
-    local f="$1" label="$2" threshold="$3" name="$4" hook="$5" extra_hint="${6:-}" age valid_age
-    if ! age="$(log_last_line_age_days "$f")"; then
-      item_drift "[${label}-DEAD] ${name} が無い、または記録が一度もありません（${f}）＝${hook} フック停止の疑い${extra_hint}。確認: tail -1 ${f}"
-      return
-    fi
-    if [ "$age" -lt 0 ]; then
-      item_drift "[${label}-FUTURE-DATE] ${name} の最終記録が未来日時です（${f}）＝ファイル破損かシステム時計のズレの可能性。確認: tail -5 ${f}"
-      return
-    fi
-    if [ "$age" -gt "$threshold" ]; then
-      # 最終行(ERROR含む)自体が古い＝STALE。有効行がそれより新しいことは
-      # log_last_line_age_days の定義上起きない（有効行もrows全体の一部）ため、
-      # ここでは素直にSTALEとして報告する。
-      item_drift "[${label}-STALE] ${name} の最終記録が ${age} 日前（目安 ${threshold} 日）＝${hook} フック停止の疑い${extra_hint}。確認: tail -1 ${f}"
-      return
-    fi
-    # 最終行(ERROR含む)は新しいが、有効な行（ERROR以外）が無い/古い＝動いてはいるが
-    # 失敗し続けている疑い。staleとは別種の異常として報告する（無言のfail-open防止）。
-    if valid_age="$(log_last_valid_line_age_days "$f")"; then
-      # 有効行はあるが、その時刻だけが未来（例: 一時的に未来日時の有効行が書かれ、
-      # 直後に現在日時のERROR行が追記された）ケースも「新しすぎるので健全」に
-      # 誤判定しない（Codexレビュー指摘・Major回帰: 最終行(age)側のFUTURE-DATE
-      # チェックだけでは valid_age 側の未来日時を見逃す）。
-      if [ "$valid_age" -lt 0 ]; then
-        item_drift "[${label}-FUTURE-DATE] ${name} の有効な記録の日時が未来です（${f}）＝ファイル破損かシステム時計のズレの可能性。確認: tail -5 ${f}"
-        return
-      fi
-    fi
-    if [ -z "${valid_age:-}" ] || [ "$valid_age" -gt "$threshold" ]; then
-      item_drift "[${label}-ERRORING] ${name} は最近書き込まれていますが、有効な記録（ERROR行以外）が無い/古い状態です＝${hook} は実行されているが失敗し続けている疑い。確認: tail -5 ${f}"
-      return
-    fi
-    log "  -> ✅ ${name}: 最終記録 ${age}日前"
-  }
-
   # 未処理レポート検知（旧check_report_processed）・未解決ALERT監視
   # （旧count_unresolved_alerts）は撤去した（2026-07-16簡素化・
   # [[Decisions/2026-07-16-nightly-batch-direct-write]]で「レポート→リーダー処理」の
@@ -1494,11 +1334,20 @@ EOF
   else
     log "  -> 週次振り返りcanvas: 任意機能未導入（${LAUNCH_AGENTS_DIR}/com.takumi009.weekly-review.plist が無い。takumi009-ai-env-private/install-private.sh --with-launchagents 未実行。メイン専用の個人ツール）のためチェック対象外"
   fi
-  check_log_freshness "$VAULT_READS_LOG" "VAULT-READS-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
-    "vault-reads.tsv" "ai-brain/executor/vault-read-log.sh"
-  check_log_freshness "$VAULT_RECALL_LOG" "VAULT-RECALL-LOG" "$VAULT_AGENT_LOG_STALE_DAYS" \
-    "vault-recall.tsv" "ai-brain/executor/vault-recall.sh" \
-    "、またはヒット0件の日々が続いている可能性（ヒット時のみ記録する仕様のため区別できません）"
+
+fi
+
+# 共通の観測・保存後に表示。旧ログの鮮度は想起の材料にしない。
+recall_health="$(python3 "$DIR/ai-brain/executor/health_judge.py" observe \
+  --last-run "$MAINTENANCE_LAST_RUN_FILE" \
+  ${HEALTH_JUDGE_NOW:+--now "$HEALTH_JUDGE_NOW"} 2>/dev/null)"
+if [ $? -ne 0 ]; then
+  item_drift "[VAULT-RECALL] 想起の観測・判定不能"
+else
+  while IFS= read -r line; do
+    [ -n "$line" ] && item_drift "[VAULT-RECALL] $line"
+  done < <(printf '%s' "$recall_health" | jq -r '.items[] | select(.source == "recall") | .result')
+  log "  -> 想起: $(printf '%s' "$recall_health" | jq -c '.sources.recall')"
 fi
 
 echo

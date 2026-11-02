@@ -162,5 +162,5 @@ tests/test-usage-snapshot.sh	tests/test-usage-snapshot.sh	移動	-
 tests/test-vault-inventory.sh	tests/test-vault-inventory.sh	移動	-
 tests/test-vault-lib.sh	tests/test-vault-lib.sh	移動	-
 tests/test-vault-read-log.sh	tests/test-vault-read-log.sh	移動	-
-tests/test-vault-recall.sh	tests/test-vault-recall.sh	移動	-
+tests/test-vault-recall.sh	tests/test-vault-recall.sh	移動	撤去
 tests/test-with-dotfiles.sh	tests/test-with-dotfiles.sh	移動	-

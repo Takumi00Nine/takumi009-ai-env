@@ -1,5 +1,8 @@
 {
+  "leaders": ["claude", "codex"],
   "max_items": 2,
   "threshold": 0.8,
-  "budget_ms": 1000
+  "budget_ms": 1000,
+  "log_path": "~/.claude/logs/vault-recall.jsonl",
+  "health_path": "~/.claude/logs/health/recall-observation.json"
 }

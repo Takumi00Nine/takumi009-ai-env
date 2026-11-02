@@ -71,6 +71,7 @@ enabled = true
 enabled = true
 
 [features]
+# 登録は hooks.json のみ。追加・変更時は CLI の /hooks で本人が定義を確認して信頼する。
 hooks = true
 js_repl = false
 

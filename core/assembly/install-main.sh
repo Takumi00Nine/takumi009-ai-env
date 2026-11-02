@@ -396,6 +396,7 @@ PY
   fi
   mv "$tmp" "$dest"
   log "generated: $dest <- $src （__AIENV_HOME__ を $HOME へ置換）"
+  log "Codex 常設の注意: 想起/期待観測の新設・変更時は CLI の /hooks で本人が定義を確認して信頼します（信頼済みなら再承認不要）"
 }
 
 # generate_settings_json <repo-relative-source> <destination> <model-value> [effort] [places]

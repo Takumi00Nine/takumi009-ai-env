@@ -12,18 +12,13 @@ VAULT="${BOOTSTRAP_VAULT:-$HOME/Data/obsidian}"
 # 外部脳ヘルス（案件 health-self-explain・設計 v1.2 §5）: ①観測記録を書く → ②判定機（health_judge.py＝唯一の
 # 判定ロジック）を呼ぶ → ③ヘルス節を描く。fail-open＝ここで何が起きても必読の枠は必ず出す。
 # 旧判定（8 日線・「N 日成功していません」・「前回の週次メンテ結果」・「フック死の疑い」）は退役。
-# ⚠️ 既定が実ファイルの env 6 本（VAULT_READS_LOG・VAULT_RECALL_LOG・VAULT_INVENTORY_LOG_DIR・
-# MAINTENANCE_LAST_RUN_FILE・MAINTENANCE_PLIST_FILE・HEALTH_OBSERVATION_FILE）はテストで必ず fixture へ向ける。
-: "${VAULT_READS_LOG:=$HOME/.claude/logs/vault-reads.tsv}"
-: "${VAULT_RECALL_LOG:=$HOME/.claude/logs/vault-recall.tsv}"
-: "${VAULT_AGENT_LOG_STALE_DAYS:=7}"  # 配置の健全性検査 ⑥ と同じ既定値＝想起の疑い判定の現行の線（据え置き）
 # vault_inventory.py の OUT_DIR と同じ既定値（直下の latest.json を読む）。
 : "${VAULT_INVENTORY_LOG_DIR:=$HOME/.claude/logs/vault-inventory}"
 # maintenance.sh（週次）の状態記録（schema 2＝run／completed／ack。旧 6 キーは互換のため残る）。
 : "${MAINTENANCE_LAST_RUN_FILE:=$HOME/.claude/logs/maintenance/last-run.json}"
 # 配置済み LaunchAgent＝直近の予定時刻の正本（判定機が plistlib で直接読む。派生コピーは持たない）。
 : "${MAINTENANCE_PLIST_FILE:=$HOME/Library/LaunchAgents/com.takumi009.maintenance.plist}"
-# SessionStart の観測記録（読込・前セッションの想起）。書き手＝本寄与（想起の実行体以外の観測者）。
+# SessionStart の観測記録（必読の読込のみ）。書き手＝本寄与（想起の実行体以外の観測者）。
 : "${HEALTH_OBSERVATION_FILE:=$HOME/.claude/logs/health/session-observation.json}"
 # 外部脳ヘルスの判定機（同じフォルダ＝repo パス運用。$HOME へ symlink しない）。
 : "${HEALTH_JUDGE_LIB:=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/health_judge.py}"
@@ -32,63 +27,23 @@ VAULT="${BOOTSTRAP_VAULT:-$HOME/Data/obsidian}"
 # 外部脳ヘルス（設計 v1.2 §5）＝①観測記録 → ②判定機 → ③描画。
 # ---------------------------------------------------------------------------
 
-# write_health_observation — ①観測記録（health-observation/1）を書く（D-6）。
-# 引数: $1=required（改行区切り・LOCAL_ONLY を除く必読集合） $2=missing（改行区切り・想定外の欠落）。
-# 前セッション＝最後に観測記録を書いたセッション（既存ファイルの session_id。無ければ null）。
-# `injected`＝recall_valid_rows ≥ 1 → true／reads_rows ≥ 1 ∧ recall_valid_rows == 0 → false／それ以外 → null。
-# 書けたら HEALTH_OBS_PATH=$HEALTH_OBSERVATION_FILE・HEALTH_OBS_WRITE_FAILED=0。
+# 必読の読込検査だけを保存する。想起は共通 observe が扱う。
 # 書けなければ（F-9）一時ファイルへ書いて判定は続け、HEALTH_OBS_WRITE_FAILED=1。
 HEALTH_OBS_PATH=""
 HEALTH_OBS_WRITE_FAILED=0
 HEALTH_OBS_TMP=""
 write_health_observation() {
   local required_nl="$1" missing_nl="$2"
-  local prev_sid="" counts reads_rows=0 recall_valid=0 recall_err=0 injected="null" root_readable="false"
-  local observed_at json tmp
+  local root_readable="false" observed_at json tmp
   [ -d "$VAULT" ] && [ -r "$VAULT" ] && root_readable="true"
-  if [ -f "$HEALTH_OBSERVATION_FILE" ]; then
-    prev_sid="$(jq -r 'if type == "object" then (.session_id // empty) else empty end' "$HEALTH_OBSERVATION_FILE" 2>/dev/null)"
-  fi
-  if [ -n "$prev_sid" ]; then
-    # reads: 2 列目が前 sid の行数／recall: 2 列目が前 sid かつ 3 列目非空（候補提示＋heartbeat）／ERROR 行: 2 列目 ERROR かつ 4 列目が前 sid。
-    # awk 1 回（存在するログだけを渡す＝外部プロセスを増やさない）。
-    local awk_prog='
-        FILENAME == reads { if ($2 == sid) r++; next }
-        { if ($2 == sid && $3 != "") v++; else if ($2 == "ERROR" && $4 == sid) e++ }
-        END { printf "%d\t%d\t%d\n", r, v, e }'
-    counts=""
-    if [ -f "$VAULT_READS_LOG" ] && [ -f "$VAULT_RECALL_LOG" ]; then
-      counts="$(awk -F '\t' -v sid="$prev_sid" -v reads="$VAULT_READS_LOG" "$awk_prog" "$VAULT_READS_LOG" "$VAULT_RECALL_LOG" 2>/dev/null)"
-    elif [ -f "$VAULT_READS_LOG" ]; then
-      counts="$(awk -F '\t' -v sid="$prev_sid" -v reads="$VAULT_READS_LOG" "$awk_prog" "$VAULT_READS_LOG" 2>/dev/null)"
-    elif [ -f "$VAULT_RECALL_LOG" ]; then
-      counts="$(awk -F '\t' -v sid="$prev_sid" -v reads="$VAULT_READS_LOG" "$awk_prog" "$VAULT_RECALL_LOG" 2>/dev/null)"
-    fi
-    if [ -n "$counts" ]; then
-      reads_rows="${counts%%$'\t'*}"; counts="${counts#*$'\t'}"
-      recall_valid="${counts%%$'\t'*}"; recall_err="${counts#*$'\t'}"
-      case "$reads_rows" in ''|*[!0-9]*) reads_rows=0 ;; esac
-      case "$recall_valid" in ''|*[!0-9]*) recall_valid=0 ;; esac
-      case "$recall_err" in ''|*[!0-9]*) recall_err=0 ;; esac
-    fi
-    if [ "$recall_valid" -ge 1 ]; then
-      injected="true"
-    elif [ "$reads_rows" -ge 1 ]; then
-      injected="false"
-    fi
-  fi
   observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
   json="$(jq -n --arg at "$observed_at" --arg sid "$SESSION_ID" --arg src "$HOOK_SOURCE" \
     --argjson root "$root_readable" --arg required "$required_nl" --arg missing "$missing_nl" \
-    --arg prev "$prev_sid" --argjson reads "$reads_rows" --argjson valid "$recall_valid" \
-    --argjson err "$recall_err" --argjson injected "$injected" \
     '{schema: "health-observation/1", observed_at: $at, session_id: $sid, source: $src,
       load: {vault_root_readable: $root,
              required: ($required | split("\n") | map(select(length > 0))),
-             missing: ($missing | split("\n") | map(select(length > 0)))},
-      recall_prev: {session_id: (if $prev == "" then null else $prev end), reads_rows: $reads,
-                    recall_valid_rows: $valid, recall_error_rows: $err, injected: $injected}}' 2>/dev/null)"
-  [ -n "$json" ] || json='{"schema":"health-observation/1","load":null,"recall_prev":null}'
+             missing: ($missing | split("\n") | map(select(length > 0)))}}' 2>/dev/null)"
+  [ -n "$json" ] || json='{"schema":"health-observation/1","load":null}'
   tmp="$HEALTH_OBSERVATION_FILE.tmp.$$"
   if mkdir -p "$(dirname "$HEALTH_OBSERVATION_FILE")" 2>/dev/null \
      && printf '%s\n' "$json" > "$tmp" 2>/dev/null \
@@ -129,8 +84,7 @@ def inv_text: .sources.inventory as $i
 def load_text: .sources.load as $l
   | if ($l.observed | not) then "none" elif $l.vault_root_readable == false then "root_unreadable"
     elif ($l.missing_count // 0) > 0 then "missing(\($l.missing_count))" else "ok" end;
-def recall_text: .sources.recall as $r
-  | if ($r.observed | not) then "none" else "observed(injected=\(if $r.injected == null then "null" else ($r.injected | tostring) end))" end;
+def recall_text: .sources.recall | to_entries | map("\(.key)=\(.value)") | join(",");
 ("【外部脳ヘルス】stage=\(.stage) items=\(.n_items) judged_at=\(.judged_at) maintenance=\(maint_text) inventory=\(inv_text) load=\(load_text) recall=\(recall_text)"
   + (if .extras.now_injected then " now=injected" else "" end)),
 (.items[] | "- [\(.n)] source=\(.source | src_label) severity=\(.severity) "
@@ -138,8 +92,7 @@ def recall_text: .sources.recall as $r
      elif .source == "inventory" then "kind=\(.kind | na) target=\(.target | na) detail=\(.detail | q) actor=\(.actor | na) "
      elif .source == "load" then "target=\(.target | na) result=\(.result | na) actor=\(.actor | na) "
      else "result=\(.result | na) actor=\(.actor | na) " end)
-  + "ok_when=\(.ok_when | q) ack=\(.ack | ack_text) log=\(.log_ref | na)"),
-(if .extras.reads_log_stale == true then "INFO:reads_log_stale" else empty end)
+  + "ok_when=\(.ok_when | q) ack=\(.ack | ack_text) log=\(.log_ref | na)")
 '
 
 # compute_health_section — ②判定機 → ③描画。グローバルへ置く:
@@ -158,14 +111,11 @@ compute_health_section() {
   fi
   py="$(command -v python3 2>/dev/null)"
   [ -n "$py" ] || py="/usr/bin/python3"
-  verdict="$("$py" "$HEALTH_JUDGE_LIB" judge \
+  verdict="$("$py" "$HEALTH_JUDGE_LIB" observe \
     --last-run "$MAINTENANCE_LAST_RUN_FILE" \
     --inventory-latest "$VAULT_INVENTORY_LOG_DIR/latest.json" \
     --observation "$HEALTH_OBS_PATH" \
-    --recall-log "$VAULT_RECALL_LOG" \
-    --reads-log "$VAULT_READS_LOG" \
     --plist "$MAINTENANCE_PLIST_FILE" \
-    --recall-stale-days "$VAULT_AGENT_LOG_STALE_DAYS" \
     ${HEALTH_JUDGE_NOW:+--now "$HEALTH_JUDGE_NOW"} 2>/dev/null)"
   rc=$?
   if [ "$rc" != "0" ] || [ -z "$verdict" ]; then
@@ -177,15 +127,6 @@ compute_health_section() {
     HEALTH_SECTION="【外部脳ヘルス】判定不能（health_judge.py: 出力が health-verdict/1 として読めません）"
     return 0
   fi
-  # ヘルス源外（SO-8・L-3）: HEALTH_RENDER_JQ が末尾に出す印 1 行（extras.reads_log_stale が
-  # true のときだけ）を剥がしてヘルス節の外の ℹ️ 行へ写す（段階に影響しない）。json.dump の区切り
-  # 文字列一致に頼らない＝判定機の出力形式の変更に対して脆くしない（外部プロセス +0）。
-  case "$rendered" in
-    *$'\n'INFO:reads_log_stale)
-      HEALTH_INFO_LINE="ℹ️ vault-reads.tsv に直近 ${VAULT_AGENT_LOG_STALE_DAYS} 日の有効な記録なし（ヘルス源外・段階に影響しない）"
-      rendered="${rendered%$'\n'INFO:reads_log_stale}"
-      ;;
-  esac
   HEALTH_SECTION="$rendered"
   if [ "$HEALTH_OBS_WRITE_FAILED" = "1" ]; then
     HEALTH_SECTION="${HEALTH_SECTION}

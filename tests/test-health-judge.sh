@@ -54,8 +54,8 @@ judge_fixture() {
   # shellcheck disable=SC2086
   python3 "$JUDGE" judge \
     --last-run "$d/last-run.json" --inventory-latest "$d/latest.json" \
-    --observation "$d/observation.json" --recall-log "$d/vault-recall.tsv" \
-    --reads-log "$d/vault-reads.tsv" --now "$(cat "$d/now")" --tz Asia/Tokyo \
+    --observation "$d/observation.json" \
+    --now "$(cat "$d/now")" --tz Asia/Tokyo \
     $plist_args "$@" > "$WORKDIR/verdict.json" 2> "$WORKDIR/verdict.err"
 }
 

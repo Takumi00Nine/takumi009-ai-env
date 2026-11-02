@@ -93,78 +93,19 @@ run_inventory() {
   cat "$(ls "$vault_home/.claude/logs/vault-inventory"/20*.md | sort | tail -1)"
 }
 
-echo "=== aliasesの欠落を検出する ==="
+echo "=== 旧ログと aliases を検査材料にしない ==="
 {
   VAULT_HOME="$(mktemp -d)"
   V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-
-  write_note "$V" "Knowledge/no-alias-note.md" "date: 2026-01-01"
-  write_note "$V" "Knowledge/good-alias-note.md" \
-    $'date: 2026-01-01\naliases:\n  - specific-term-abc\n  - もうひとつの具体的な語'
-
+  make_clean_vault "$V"
+  write_note "$V" "Knowledge/no-alias.md" "date: 2026-01-01"
+  mkdir -p "$VAULT_HOME/.claude/logs"
+  printf '2000-01-01T00:00:00Z\tsess\tKnowledge/no-alias.md\n' > "$VAULT_HOME/.claude/logs/vault-reads.tsv"
+  cp "$VAULT_HOME/.claude/logs/vault-reads.tsv" "$VAULT_HOME/.claude/logs/vault-recall.tsv"
   out="$(run_inventory "$VAULT_HOME")"
-  assert_contains "aliasesが無いノートが§9に載る" "$out" "Knowledge/no-alias-note.md"
-  assert_not_contains "aliasesがあるノートは§9に載らない" "$out" "Knowledge/good-alias-note.md\`"
-  assert_not_contains "README.mdは§9の対象外（フォルダ全体では0件想定だが個別にも見る）" "$out" "Knowledge/README.md"
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== ログ不在では未読を断定しない ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  write_note "$V" "Knowledge/untracked-note.md" $'date: 2026-01-01\naliases:\n  - untracked-note-alias'
-
-  out="$(run_inventory "$VAULT_HOME")"
-  assert_contains "ログ蓄積中メッセージが出る（断定しない）" "$out" "ログ蓄積中（まだ記録がありません）"
-  assert_not_contains "ログが無いのに個別ノートを未読断定しない" "$out" "untracked-note.md\`（"
-
-  rm -rf "$VAULT_HOME"
-}
-
-echo "=== 蓄積済みログの未読判定と提示無視率 ==="
-{
-  VAULT_HOME="$(mktemp -d)"
-  V="$VAULT_HOME/Data/obsidian"
-  make_base_vault "$V"
-  write_note "$V" "Knowledge/old-unread.md" $'date: 2026-01-01\naliases:\n  - old-unread-alias'
-  write_note "$V" "Knowledge/recent-read.md" $'date: 2026-01-01\naliases:\n  - recent-read-alias'
-  write_note "$V" "Knowledge/recalled-often.md" $'date: 2026-01-01\naliases:\n  - recalled-often-alias'
-
-  LOGDIR="$V/../.claude-logs-mature"
-  mkdir -p "$LOGDIR"
-  # 最古エントリ=100日前（これがlog_startとなり、90日以上のログ蓄積=確定判定に切り替わる）
-  printf '%s\tsess1\tKnowledge/old-unread.md\n' "$(d_ts -100)" > "$LOGDIR/vault-reads.tsv"
-  printf '%s\tsess1\tKnowledge/recent-read.md\n' "$(d_ts -5)" >> "$LOGDIR/vault-reads.tsv"
-  # recalled-often は「提示されるだけで一度もReadされない」ノート（C-2修正の主眼）。
-  # 3回提示されるが reads.tsv には一度も現れないため、未読確定リストにも出て
-  # 提示無視率ワーストにも「読まれた率0%」で出るはず（旧実装はrecallも
-  # last_seenへ混ぜていたため未読リストから隠れてしまっていた＝バグだった）。
-  # 提示無視率ワースト側は既定30日の時間窓で集計するため、窓内(-30日以内)の
-  # 日付にする（2026-07-10 敵対的レビュー2回目 N-2 対応の窓導入に追従。
-  # 未読確定判定は reads.tsv 側の90日成熟＝old-unread の記録だけで見るため無関係）。
-  # 3回の提示はそれぞれ別セッション(sess1a/1b/1c)にする（2026-07-13 round3対応で
-  # 提示無視率の分母が (session_id, ノート) 単位に正規化されたため、同一セッション
-  # 内の複数提示は1回に集約される＝ここで3回として数えたいなら別セッションが必要）。
-  {
-    printf '%s\tsess1a\tKnowledge/recalled-often.md\tmatched-key\n' "$(d_ts -20)"
-    printf '%s\tsess1b\tKnowledge/recalled-often.md\tmatched-key\n' "$(d_ts -15)"
-    printf '%s\tsess1c\tKnowledge/recalled-often.md\tmatched-key\n' "$(d_ts -10)"
-  } > "$LOGDIR/vault-recall.tsv"
-
-  out="$(VAULT_READS_LOG="$LOGDIR/vault-reads.tsv" VAULT_RECALL_LOG="$LOGDIR/vault-recall.tsv" \
-    HOME="$VAULT_HOME" python3 "$SCRIPT" >/dev/null && \
-    cat "$(ls "$VAULT_HOME/.claude/logs/vault-inventory"/20*.md | sort | tail -1)")"
-
-  assert_not_contains "ログが十分溜まっていれば「ログ蓄積中」の注記は出ない" "$out" "ログ蓄積中"
-  assert_contains "100日未読のノートが確定リストに出る" "$out" "Knowledge/old-unread.md\`（100日未読）"
-  assert_not_contains "5日前に読まれたノートは対象外" "$out" "Knowledge/recent-read.md\`（"
-  assert_contains "提示無視率ワーストにrecalled-oftenが読まれた率0%で出る" \
-    "$out" "Knowledge/recalled-often.md\` — 提示3回中 読まれた率0%"
-
+  assert_not_contains "aliases 欠落を表示しない" "$out" "aliases が無いノート"
+  assert_not_contains "旧ログが残っても未読を表示しない" "$out" "未読ノート"
+  assert_not_contains "旧ログが残っても提示無視率を表示しない" "$out" "提示無視率"
   rm -rf "$VAULT_HOME"
 }
 

@@ -35,7 +35,7 @@ PROFILE_PATH="/nonexistent-dir/profile.md"
 hook_env() {
   local obs; obs="$(mktemp -d "$WORK/obs.XXXXXX")/session-observation.json"
   BOOTSTRAP_VAULT="$VAULT_DIR" BOOTSTRAP_TEAMS_DIR="${TEAMS_DIR:-/nonexistent-teams-dir}" \
-    VAULT_READS_LOG="/nonexistent-dir/vault-reads.tsv" VAULT_RECALL_LOG="/nonexistent-dir/vault-recall.tsv" \
+    VAULT_RECALL_LOG="$HOME/.claude/logs/vault-recall.jsonl" \
     VAULT_INVENTORY_LOG_DIR="${INV_DIR_OVR:-/nonexistent-dir/vault-inventory}" \
     MAINTENANCE_LAST_RUN_FILE="${LAST_RUN_OVR:-/nonexistent-dir/last-run.json}" \
     MAINTENANCE_PLIST_FILE="/nonexistent-dir/com.takumi009.maintenance.plist" \

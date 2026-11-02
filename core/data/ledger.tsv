@@ -13,11 +13,14 @@
 # 部品・スイートを足すときは、この台帳に 1 行足す（v1.1 FR-14）。v1.2 FR-20＝v1.1 の後に足す部品・スイートは台帳の行だけでよい（移動表の行は求めない）。
 
 # ===== AI Brain =====
+part	ai-brain/connect/leader-hooks/connection_probe.py	ai-brain	connect	leader-hooks	ai-brain.recall-connections	配置済みリーダーフックの接続観測	-	-
+part	ai-brain/data/recall.json	ai-brain	data	-	-	想起の設定	-	-
 part	ai-brain/executor/vault-recall.sh	ai-brain	executor	-	ai-brain.recall	想起（UserPromptSubmit）	-	link:$HOME/.claude/hooks/vault-recall.sh
 part	ai-brain/executor/bootstrap-vault.sh	ai-brain	executor	-	ai-brain.bootstrap	読込（合成器の寄与・枠 must-read・health）	-	-
 part	ai-brain/executor/vault-read-log.sh	ai-brain	executor	-	ai-brain.read-log	読取記録（PostToolUse Read）	-	link:$HOME/.claude/hooks/vault-read-log.sh
 part	ai-brain/executor/health_judge.py	ai-brain	executor	-	ai-brain.health-judge	ヘルス判定機（Dock が照会）	-	-
 part	ai-brain/executor/keyword_recall_helper.py	ai-brain	executor	-	-	想起補助	-	-
+part	ai-brain/executor/recall_runtime.py	ai-brain	executor	-	-	想起の期限・提示記録と独立期待観測	-	-
 part	ai-brain/executor/backup-vault.sh	ai-brain	executor	-	ai-brain.backup	バックアップ（LaunchAgent の起動対象）	-	-
 part	ai-brain/executor/maintenance.sh	ai-brain	executor	-	ai-brain.maintenance	週次メンテ（LaunchAgent の起動対象）	-	-
 part	ai-brain/executor/maintenance-kick.sh	ai-brain	executor	-	ai-brain.maintenance-kick	メンテの手動起動	-	-
@@ -127,7 +130,8 @@ suite	tests/test-personal-link-check.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-vault-inventory.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-vault-lib.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-vault-read-log.sh	ai-brain	-	-	-	-	-	-
-suite	tests/test-vault-recall.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-recall-situations.sh	ai-brain	-	-	-	-	-	-
+suite	tests/test-recall-flow.sh	ai-brain	-	-	-	-	-	-
 suite	tests/test-agent-definitions.sh	team	-	-	-	-	-	-
 suite	tests/test-claude-exec.sh	team	-	-	-	-	-	-
 suite	tests/test-codex-boot-read.sh	team	-	-	-	-	-	-

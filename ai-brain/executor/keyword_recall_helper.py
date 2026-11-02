@@ -143,10 +143,18 @@ def load_recall_config(path=None, **overrides):
     VAULT_RECALL_KEYWORD_BUDGET_MS、最後に呼出元の引数で上書きする。
     """
     config_path = path or os.environ.get("VAULT_RECALL_CONFIG") or RECALL_CONFIG_PATH
-    config = json.loads(pathlib.Path(config_path).read_text(encoding="utf-8"))
+    config = json.loads(pathlib.Path(RECALL_CONFIG_PATH).read_text(encoding="utf-8"))
+    if pathlib.Path(config_path) != pathlib.Path(RECALL_CONFIG_PATH):
+        config.update(json.loads(pathlib.Path(config_path).read_text(encoding="utf-8")))
     env_names = {"max_items": "VAULT_RECALL_MAX_ITEMS",
                  "threshold": "VAULT_RECALL_THRESHOLD",
                  "budget_ms": "VAULT_RECALL_KEYWORD_BUDGET_MS"}
+    for key, env_name in (("log_path", "VAULT_RECALL_LOG"),
+                          ("health_path", "HEALTH_RECALL_OBSERVATION_FILE")):
+        if env_name in os.environ:
+            config[key] = os.environ[env_name]
+        if key in config:
+            config[key] = os.path.expanduser(config[key])
     for key, env_name in env_names.items():
         if env_name in os.environ:
             config[key] = os.environ[env_name]

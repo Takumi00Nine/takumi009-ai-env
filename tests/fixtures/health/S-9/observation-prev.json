@@ -12,12 +12,5 @@
       "Preferences/vault-operation.md"
     ],
     "missing": []
-  },
-  "recall_prev": {
-    "session_id": null,
-    "reads_rows": 0,
-    "recall_valid_rows": 0,
-    "recall_error_rows": 0,
-    "injected": null
   }
 }

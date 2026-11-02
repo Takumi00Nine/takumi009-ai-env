@@ -35,6 +35,8 @@ The repository is split into 6 **functions** (what a human would choose to take 
 ```
 takumi009-ai-env/
 ├── ai-brain/                   # Vault bootstrap, recall, read-log, backup, weekly maintenance, public export
+│   ├── connect/                # Installed leader-hook configuration and trust observation
+│   │   └── leader-hooks/
 │   ├── executor/               # vault-recall.sh, vault-read-log.sh, bootstrap-vault.sh (SessionStart contribution), backup-vault.sh,
 │   │                           # maintenance.sh / maintenance-kick.sh, export-public-vault.sh, fragments-reviewed.sh, health_judge.py,
 │   │                           # the Vault detectors (fragments_log.py, maintenance_run_step.py, vault_inventory.py, vault_lib.py)
@@ -358,6 +360,8 @@ repo は人が取る単位＝**機能** 6 つに分かれ、各機能の内側�
 ```
 takumi009-ai-env/
 ├── ai-brain/                   # Vault の読込・想起・読取記録・バックアップ・週次メンテ・公開出力
+│   ├── connect/                # 配置済みリーダーフックの構成・信頼状態の観測
+│   │   └── leader-hooks/
 │   ├── executor/               # vault-recall.sh・vault-read-log.sh・bootstrap-vault.sh（SessionStart 合成器への寄与）・
 │   │                           # backup-vault.sh・maintenance.sh／maintenance-kick.sh・export-public-vault.sh・
 │   │                           # fragments-reviewed.sh・health_judge.py・Vault の検出器群
