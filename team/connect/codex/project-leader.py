@@ -13,10 +13,12 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
 import tomllib
+import unicodedata
 from collections import deque
 from datetime import datetime, timezone
 
@@ -203,10 +205,11 @@ def validate_coordination(state, project, data):
     try:
         event = data["event"]
         rows = {r["id"]: r for r in assignments(state)}
+        parent_thread = effective_parent_thread(state, project)
 
         def member(ident):
             row = rows.get(ident)
-            if row is None or row["parent_thread"] != project.get("thread_id"):
+            if row is None or row["parent_thread"] != parent_thread:
                 raise ValueError("assignment must belong to the same parent")
             return row
 
@@ -284,7 +287,7 @@ def validate_coordination(state, project, data):
                     returned = read_json(reference(data["ref"]))
                     returned["wrapper_reason"] = normalize_wrapper_reason(returned.get("wrapper_reason"))
                     keys = ("review", "scope_ref", "basis_ref", "wrapper_exit", "wrapper_reason", "wrapper_out_ref", "verifier_report_ref")
-                    if (returned["version"] != VERSION or returned["parent_thread"] != project.get("thread_id")
+                    if (returned["version"] != VERSION or returned["parent_thread"] != parent_thread
                             or any(returned[k] != data[k] for k in keys)):
                         raise ValueError("review return must match parent, review and basis")
                 else:
@@ -554,18 +557,45 @@ def current_thread(run):
     return run.get("thread_id", "")
 
 
+def effective_parent_thread(state, project, run=None):
+    """Resolve first-run thread.started evidence before the persisted project ID."""
+    if project.get("run"):
+        run = run if run is not None else read_json(state / "runs" / project["run"] / "run.json")
+        return current_thread(run) or project.get("thread_id", "")
+    return project.get("thread_id", "")
+
+
 def process_start(pid):
     return subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
-                          capture_output=True, text=True).stdout.strip()
+                          env=dict(os.environ, LC_ALL="C"), capture_output=True, text=True).stdout.strip()
+
+
+def process_start_key(value):
+    # New records use C locale; retain the Japanese ps format used by older records.
+    value = " ".join(value.split())
+    english = re.fullmatch(r"\S+ ([A-Z][a-z]{2}) (\d+) (\d{2}:\d{2}:\d{2}) (\d{4})", value)
+    japanese = re.fullmatch(r"[日月火水木金土] (\d+)/\s*(\d+) (\d{2}:\d{2}:\d{2}) (\d{4})", value)
+    if english:
+        month, day, clock, year = english.groups()
+        months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+        if month not in months:
+            return value
+        month = months.index(month) + 1
+    elif japanese:
+        month, day, clock, year = japanese.groups()
+    else:
+        return value  # Unknown representations must still match, never just the PID.
+    return int(year), int(month), int(day), clock
 
 
 def alive(pid, started):
     if not pid or not started:
         return False
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "stat=,lstart="], capture_output=True, text=True)
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "stat=,lstart="],
+                            env=dict(os.environ, LC_ALL="C"), capture_output=True, text=True)
     fields = result.stdout.strip().split(maxsplit=1)
     return (result.returncode == 0 and len(fields) == 2
-            and not fields[0].startswith("Z") and fields[1].strip() == started)
+            and not fields[0].startswith("Z") and process_start_key(fields[1]) == process_start_key(started))
 
 
 def observe(state, project, *, latest=None, rows=None):
@@ -605,7 +635,7 @@ def observe(state, project, *, latest=None, rows=None):
     result.update(status=status, run=project["run"], mode=run["mode"], pids=[pid for pid, _ in processes],
                   exit=code, out=str(out), log=str(log), report=report,
                   events=run["out"] + ".events.jsonl",
-                  thread_id=current_thread(run), recovery_attempted=project["recovery_attempted"],
+                  thread_id=effective_parent_thread(state, project, run), recovery_attempted=project["recovery_attempted"],
                   notification=(report or {}).get("notification", run.get("notification", "unknown")))
     # Never convert a parent's EXIT into a child's stopped/completed state.
     if status == "unconfirmed" or (run["mode"] == "recover" and not project.get("recovery_complete")):
@@ -790,10 +820,7 @@ def record(state, project, args):
                for value in data.values()):
             raise ValueError("assignment values must be single-line TSV fields")
         if Path(data["selection_ref"]).resolve() == state / "events.jsonl":
-            parent_thread = project.get("thread_id", "")
-            if project.get("run"):
-                parent_thread = current_thread(read_json(state / "runs" / project["run"] / "run.json")) or parent_thread
-            if data["parent_thread"] != parent_thread:
+            if data["parent_thread"] != effective_parent_thread(state, project):
                 raise ValueError("assignment must belong to the saved parent conversation")
             if any(row["worker"] == data["worker"] or row["address"] == data["address"] for row in rows):
                 raise ValueError("new assignments require a distinct worker and address; resume keeps its row")
@@ -946,9 +973,16 @@ def overview_issue(result, code, ref, message):
 
 def overview_note(path, result):
     # Use the Dock's frontmatter/Tasks reader, without its filtering or health frame.
-    fields = subprocess.run([lookup("dock.next-model"), "--read-note", str(path)],
-                            capture_output=True, text=True, check=True).stdout.split("\0")
-    project, status, next_action = fields[:3]
+    try:
+        fields = subprocess.run([lookup("dock.next-model"), "--read-note", str(path)],
+                                capture_output=True, text=True, check=True).stdout.split("\0")
+        project, status, next_action = fields[:3]
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        result["connection"] = "unconfirmed"
+        overview_issue(result, "record-error", path, error)
+        return None
+    if not project:
+        return "not-project"
     result.update(project_status=status or None, next=next_action or None)
     if project and project != result["project"]:
         overview_issue(result, "reference-mismatch", path, "frontmatter project differs from note slug")
@@ -1131,7 +1165,8 @@ def overview_project(result, route, shared=False):
 def overview_snapshot(args):
     directory, declarations = args.projects_dir, args.declarations
     try:
-        notes = {path.stem: path for path in directory.iterdir() if path.suffix == ".md" and path.is_file()}
+        notes = {path.stem: path for path in directory.iterdir()
+                 if path.suffix == ".md" and path.name.lower() != "readme.md" and path.is_file()}
     except OSError as error:
         raise ValueError(f"overview-source-error: {error}") from error
     result = dict(version=VERSION, mode="watch" if args.watch else "once",
@@ -1168,6 +1203,12 @@ def overview_snapshot(args):
             if note is None:
                 raise ValueError("declaration has no Projects note")
             route = overview_note(note, project)
+            if route == "not-project":
+                if slug not in workspaces:
+                    continue
+                project.update(note=None, evidence=[])
+                route = None
+                raise ValueError("declared slug has no project frontmatter in its note")
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             overview_issue(project, "unconnected", note, error)
         routes[slug] = route
@@ -1199,33 +1240,202 @@ def overview_snapshot(args):
     return result
 
 
-def overview_text(snapshot):
-    def count(value):
-        return str(value["exact"]) if value["exact"] is not None else f"{value['known']} known + unknown"
-    print(f"{snapshot['generated_at']} — {snapshot['totals']['project_count']} projects"
-          f" | current_started={count(snapshot['totals']['current_started'])}"
-          f" running={count(snapshot['totals']['running'])} cumulative_started={count(snapshot['totals']['cumulative_started'])}")
-    for project in snapshot["projects"]:
-        parent = project["parent"]
-        print(f"\n{project['project']} — {project['connection']} | parent={parent['status']} observed_at={parent['observed_at']}"
-              f" | current_started={count(project['counts']['current_started'])} running={count(project['counts']['running'])}"
-              f" cumulative_started={count(project['counts']['cumulative_started'])}")
-        print(f"  status={project['project_status']} next={project['next']} note={project['note']}"
-              f" state_dir={project['state_dir']} workspaces={project['declared_workspaces']}")
-        print(f"  parent: {json.dumps(parent, ensure_ascii=False)}")
-        print(f"  working_workers={project['working_workers']} working_complete={project['working_complete']}")
-        for worker in project["workers"]:
-            print(f"  worker {worker['assignment']}: {json.dumps(worker, ensure_ascii=False)}")
-        for topic in project["consultations"]:
-            print(f"  topic {topic['topic']}: {json.dumps(topic, ensure_ascii=False)}")
-        print(f"  coordination: {json.dumps(project['coordination'], ensure_ascii=False)}")
-        print(f"  evidence: {json.dumps(project['evidence'], ensure_ascii=False)}")
-        for issue in project["issues"]:
-            print(f"  issue: {json.dumps(issue, ensure_ascii=False)}")
-    for issue in snapshot["issues"]:
-        print(json.dumps(issue, ensure_ascii=False))
+def overview_label(value):
+    return {
+        "connected": "接続済", "preparing": "準備中", "unconnected": "未接続", "legacy": "従来経路",
+        "unconfirmed": "未確認", "not-started": "未起動", "not-applicable": "対象外",
+        "running": "実行中", "finished": "正常終了", "ended": "終了", "unknown": "未確認",
+        "working": "作業", "consulting": "相談", "consultation-wait": "相談待ち", "slot-wait": "枠待ち",
+        "stop-requested": "停止要求中", "stopped": "停止", "parent-wait": "親判断待ち", "user-wait": "本人判断待ち",
+        "done": "一旦終了", "replaced": "交代済", "unrecoverable": "再開不能", "last-recorded": "最終記録",
+        "unreceived": "未受領", "received": "受領後", "dependency-wait": "依存先待ち", "redirect": "宛先訂正",
+        "concluded": "結論済", "waiting": "待ち", "recorded": "記録済", "requested": "依頼済",
+        "adopted": "採用", "rejected": "却下", "held": "保留", "not-required": "不要",
+        "stopping": "停止確認中", "resuming": "再開許可済", "resumed": "再開済",
+    }.get(value, value or "未確認")
+
+
+def overview_details(project):
+    parent, coordination_view = project["parent"], project["coordination"]
+    print(f"\n詳細: {project['project']} | ノート={project['note']} | 状態記録={project['state_dir']}")
+    print(f"  親: {overview_label(parent['status'])} 観測={parent['observed_at'] or '未確認'}"
+          f" 終了値={parent['exit']} 会話={parent['thread_id'] or '未確認'}")
+    for worker in project["workers"]:
+        last = worker["last_recorded"] or {}
+        print(f"  担当 {worker['assignment']} ({'現担当' if worker['current'] else '旧担当'}):"
+              f" {worker['address']} {worker['role']} {overview_label(worker['work'])}/{overview_label(worker['execution'])}"
+              f" {overview_label(worker['certainty'])} 記録={worker['recorded_at'] or '未記録'}"
+              f" 最終状態={overview_label(last.get('work'))}/{overview_label(last.get('execution'))} 根拠={worker['ref']}")
+        print(f"    工程={worker['stage']} 範囲={worker['scope']} 成果={worker['artifact']} 交代元={worker['replaces'] or 'なし'}")
+    for topic in project["consultations"]:
+        print(f"  相談 {topic['topic']} {topic['subject']}: {','.join(topic['participants'])}"
+              f" {overview_label(topic['phase'])}/{overview_label(topic['reception'])} {overview_label(topic['certainty'])}"
+              f" {topic['rounds']}往復 記録={topic['recorded_at'] or '未記録'} 依存={','.join(topic['dependencies']) or 'なし'}"
+              f" 次={topic['next_action']} 根拠={topic['ref']}")
+        outcome = topic["outcome"]
+        if outcome:
+            print(f"    結論={outcome.get('conclusion')} 分類={outcome.get('classification')} 扱い={outcome.get('disposition')}"
+                  f" 理由={outcome.get('reason')} 判断={outcome.get('decision_ref')} 差分={', '.join(outcome.get('diff_refs', []))}"
+                  f" 次={outcome.get('next_action')}")
+    settings = coordination_view["settings"]
+    print(f"  連携: {overview_label(coordination_view['status'])} 理由={coordination_view['reason'] or 'なし'}"
+          f" 相談上限={settings['consultation_round_limit']} 設定={settings['ref']}")
+    for change in coordination_view["changes"]:
+        print(f"  変更 {change['change']}: {overview_label(change['phase'])} 対象={','.join(change['targets'])}"
+              f" 送信={','.join(change['sent']) or 'なし'} 受領={','.join(change['received']) or 'なし'}"
+              f" 停止確認={','.join(change['confirmed']) or 'なし'} 未確認={','.join(change['pending_targets']) or 'なし'}"
+              f" 再開={','.join(change['resumed']) or 'なし'} 記録={change['recorded_at']} 範囲={change.get('scope_ref')}")
+        for permission in change["permissions"]:
+            print(f"    再開許可: {','.join(permission['targets'])} 前提={permission['premises_ref']}"
+                  f" 範囲={permission['scope_ref']} 根拠={permission['ref']}")
+    for review in coordination_view["reviews"]:
+        print(f"  Claude確認 {review['review']}: {overview_label(review['state'])} 要否={review['required']}"
+              f" 理由={review['reason']} 記録={review['recorded_at']} 範囲={review['scope_ref']} 基準={review['basis_ref']}"
+              f" 依頼={review.get('request_ref')} 終了値={review.get('wrapper_exit')} 終了理由={review.get('wrapper_reason')}"
+              f" 結果={review.get('wrapper_out_ref')} 報告={review.get('verifier_report_ref')} 判断={review.get('decision_ref')}")
+    report = parent["report"]
+    if report:
+        print(f"  親の要約: {report.get('summary')} | 判断待ち: {'; '.join(report.get('pending', [])) or 'なし'}"
+              f" | 理由: {report.get('reason')}")
+        print(f"  読了: {', '.join(report.get('read_notes', [])) or 'なし'} | 記録先: {', '.join(report.get('written_notes', [])) or 'なし'}")
+    print(f"  案件status={project['project_status']} 次={project['next']} 宣言={','.join(project['declared_workspaces']) or 'なし'}")
+    for ref in dict.fromkeys(project["evidence"] + parent["evidence"]):
+        print(f"  根拠: {ref}")
+    for issue in project["issues"]:
+        print(f"  診断 {issue['code']}: {issue['message']} | 確認先={issue['ref']}")
+
+
+def display_width(text):
+    return sum(0 if unicodedata.combining(char) else
+               2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in text)
+
+
+def clip_display(text, width):
+    if display_width(text) <= width:
+        return text
+    shown = ""
+    for char in text:
+        if display_width(shown + char + "…") > width:
+            break
+        shown += char
+    return shown + "…"
+
+
+def overview_row(cells, width):
+    if display_width(" | ".join(cells)) <= width:
+        return " | ".join(cells)
+    # Counts are immutable. Preserve status and uncertainty even when other values shorten.
+    protected = ["", cells[1], cells[2].split()[0], cells[3], "", "", ""]
+    for index, text in enumerate(cells):
+        for flag in ("現在未確認", "未確認", "未記録", "未観測"):
+            if flag in text and flag not in protected[index]:
+                protected[index] += (" " if protected[index] else "") + flag
+    limits = [display_width(text) for text in cells]
+    minimum = [display_width(required) + (required != text) for required, text in zip(protected, cells)]
+    minimum[0] = limits[0]  # Keep project identity before shortening descriptive fields.
+    overflow = sum(limits) + len(cells) - 1 - width  # Compact separators need one column.
+    while overflow > 0:
+        index = max(range(len(cells)), key=lambda i: limits[i] - minimum[i])
+        reduction = min(overflow, limits[index] - minimum[index])
+        if reduction <= 0:
+            short_name = min(limits[0], display_width(cells[0][:1] + "…"))
+            if minimum[0] > short_name:
+                minimum[0] = short_name
+                continue
+            break  # Never remove counts or uncertainty to fit an impossibly narrow terminal.
+        limits[index] -= reduction
+        overflow -= reduction
+    shown = []
+    for text, limit, required in zip(cells, limits, protected):
+        if display_width(text) <= limit:
+            shown.append(text)
+        else:
+            body = text[len(required):] if text.startswith(required) else " " + text.replace(required, "", 1)
+            shown.append(required + clip_display(body, limit - display_width(required)))
+    return "|".join(shown)
+
+
+def overview_time_label(value, display_date):
+    if not value:
+        return "未観測"
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return value
+    return stamp.strftime("%H:%M:%SZ" if stamp.date().isoformat() == display_date else "%Y-%m-%d %H:%M:%SZ")
+
+
+def overview_text(snapshot, args):
+    labels = (("現担当", "current_started"), ("実行中", "running"), ("累計", "cumulative_started"))
+    totals = snapshot["totals"]
+    print(f"{snapshot['generated_at']} UTC | {totals['project_count']}案件")
+    print("三段の確認済み人数: " + "／".join(f"{label} {totals[key]['known']}人" for label, key in labels)
+          + "（従来経路の人数は含まない）")
+    print("未確定の案件数: " + "／".join(f"{label} {len(totals[key]['unknown_projects'])}件" for label, key in labels))
+    print("全案件の総人数は未確定" if any(totals[key]["exact"] is None for _, key in labels) else "全案件の確定合計")
     if not snapshot["discovery_complete"]:
-        print("discovery_complete=false; totals are incomplete")
+        print("案件の列挙自体も未確認")
+    width = shutil.get_terminal_size().columns
+    display_date = snapshot["generated_at"][:10]
+    print("人数は確認済み分（＋未確認は不明分）。…は省略、--detailsで確認。")
+    visible = [p for p in snapshot["projects"] if args.all or p["connection"] not in ("unconnected", "legacy")]
+    print("案件 | 接続 | 親/観測 | 現担当/実行中/累計 | 各人の状態 | 相談 | 最終記録")
+    for project in visible:
+        parent, coordination_view = project["parent"], project["coordination"]
+        counts = [str(project["counts"][key]["exact"]) if project["counts"][key]["exact"] is not None
+                  else f"{project['counts'][key]['known']}＋未確認" for _, key in labels]
+        workers = [w for w in project["workers"] if w["current"]]
+        work = [f"{w['assignment']}:" + ("現在未確認" if w["certainty"] == "unconfirmed" else
+                f"{overview_label(w['work'])}/{overview_label(w['execution'])}") for w in workers]
+        topics = []
+        for topic in project["consultations"]:
+            if topic["active"]:
+                state = ("現在未確認" if topic["certainty"] == "unconfirmed" else overview_label(topic["reception"]))
+                phase = overview_label(topic["phase"]) if topic["phase"] in ("parent-wait", "user-wait") else ""
+                topics.append(f"{topic['topic']} {','.join(topic['participants'])} {state} {phase}".strip())
+        recorded = [w["recorded_at"] for w in workers] + [t["recorded_at"] for t in project["consultations"]]
+        dates = [overview_time_label(date, display_date) for date in sorted({date for date in recorded if date})]
+        span = (dates[0] if len(dates) == 1 else f"{dates[0]}〜{dates[-1]}") if dates else "未確認"
+        if any(date is None for date in recorded):
+            span += "＋未記録"
+        consultation = "; ".join(topics) or ("なし" if coordination_view["status"] == "recorded" else "未確認")
+        work_text = " ".join(work) or ("なし" if project["working_complete"] else "未確認")
+        parent_text = overview_label(parent["status"])
+        if parent["observed_at"]:
+            parent_text += " " + overview_time_label(parent["observed_at"], display_date)
+        print(overview_row([project["project"], overview_label(project["connection"]), parent_text,
+                            "/".join(counts), work_text, consultation, span], width))
+    if not args.all:
+        for connection in ("unconnected", "legacy"):
+            slugs = [p["project"] for p in snapshot["projects"] if p["connection"] == connection]
+            if not slugs:
+                continue
+            prefix = f"{overview_label(connection)} {len(slugs)}件: "
+            shown = []
+            for slug in slugs:
+                candidate = shown + [slug]
+                suffix = f" (人数不明;省略{len(slugs) - len(candidate)}件;--all)"
+                if display_width(prefix + ', '.join(candidate) + suffix) > width:
+                    break
+                shown.append(slug)
+            omitted = len(slugs) - len(shown)
+            print(prefix + ", ".join(shown) + f" (人数不明;省略{omitted}件;--all)")
+    for project in visible:
+        reasons = []
+        if project["connection"] == "unconfirmed" or project["parent"]["status"] == "unconfirmed":
+            reasons.append("状態未確認")
+        if (project["parent"]["report"] or {}).get("pending") or any(
+                t["phase"] in ("parent-wait", "user-wait") for t in project["consultations"]):
+            reasons.append("判断待ち")
+        if any(c["pending_targets"] for c in project["coordination"]["changes"]):
+            reasons.append("停止確認待ち")
+        if reasons:
+            print(f"確認: {project['project']} {','.join(reasons)} | 確認先={project['state_dir'] or project['note']} (--details)")
+    if snapshot["issues"]:
+        print("一覧の診断: " + "; ".join(f"{i['message']} 確認先={i['ref']}" for i in snapshot["issues"]))
+    if args.details:
+        for project in visible:
+            overview_details(project)
 
 
 def positive_interval(value):
@@ -1257,7 +1467,7 @@ def overview(args):
             else:
                 if args.watch and sys.stdout.isatty():
                     print("\033[2J\033[H", end="")
-                overview_text(snapshot)
+                overview_text(snapshot, args)
             sys.stdout.flush()
             if not args.watch:
                 return
@@ -1276,6 +1486,8 @@ def main():
                                   default=Path(os.environ.get("CMUX_TASK_STATE", str(Path.home() / ".config/cmux-task-watch/workspaces.json"))))
     overview_command.add_argument("--format", choices=("text", "json"), default="text")
     overview_command.add_argument("--watch", action="store_true")
+    overview_command.add_argument("--all", action="store_true", help="show unconnected and legacy projects individually in text")
+    overview_command.add_argument("--details", action="store_true", help="show recorded worker and coordination details in text")
     overview_command.add_argument("--interval", type=positive_interval)
     for name in ("init", "start", "resume", "recover", "status", "collect", "assign", "event", "report", "worker-prepare", "display", "view", "_run"):
         command = commands.add_parser(name)
