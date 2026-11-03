@@ -524,6 +524,7 @@ usage() {
 使い方:
   cmux-next-model.sh --list    番号・正式プロジェクト名・next値・区分（稼働中/待ち/保留）・待ち日時 の 5 列 TSV
   cmux-next-model.sh --frame   1 ティック分のフレーム（cmux-dock-frame/4）
+  cmux-next-model.sh --read-note PATH  指定ノートの project/status/next（NUL区切り、絞り込み・観測なし）
   cmux-next-model.sh --focus   宣言先の照会＝フォーカス中のワークスペースの宣言先 slug をちょうど 1 行（slug か空行）
                                Task 枠と同じ宣言記録（宣言 CLI の記録）に基づく。空行のときだけ stderr に理由 1 行
                                （cmux 応答なし／対象不明／宣言記録破損／未宣言）。rc は常に 0
@@ -538,6 +539,17 @@ EOF
 
 main() {
   command -v jq >/dev/null 2>&1 || { echo "jq が見つかりません。" >&2; exit 1; }
+
+  # Shared metadata reading for overview: no filtering, cmux, health or clock observation.
+  # NUL-delimited project/status/next fields retain spaces without a second parser.
+  if [ "${1:-}" = "--read-note" ]; then
+    [ $# -eq 2 ] || { usage; return 2; }
+    local fm key
+    read_note "$2" >/dev/null || return 2
+    fm="$(fm_extract < "$2")" || return 2
+    for key in project status next; do fm_field "$fm" "$key"; printf '\0'; done
+    return 0
+  fi
 
   local mode=""
   case "${1:-}" in

@@ -8,6 +8,7 @@ import argparse
 import csv
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -101,7 +102,7 @@ def structured_event(data):
         any(key in data for key in ("topic", "change", "review", "participants", "exchanges")))
 
 
-def coordination(state, project, unconfirmed=False):
+def coordination(state, unconfirmed=False):
     """Project explicit history, never session logs, into ongoing topics and stops."""
     settings = dict(ref=None, consultation_round_limit=None)
     result = dict(status="recorded", reason=None, settings=settings, topics=[], changes=[], reviews=[])
@@ -218,7 +219,7 @@ def validate_coordination(state, project, data):
             if key in data and (not isinstance(data[key], str) or not data[key].strip()):
                 raise ValueError(f"nonempty string required: {key}")
         reference(data["ref"])
-        previous = coordination(state, project)
+        previous = coordination(state)
         if event == "consult":
             required(data, ("topic", "subject", "scope_ref", "peer", "phase", "next_action"))
             reference(data["scope_ref"])
@@ -567,9 +568,10 @@ def alive(pid, started):
             and not fields[0].startswith("Z") and fields[1].strip() == started)
 
 
-def observe(state, project):
-    latest = read_json(state / "latest.json")
-    rows = assignments(state)
+def observe(state, project, *, latest=None, rows=None):
+    # Overview can retain readable parent evidence when a child record is damaged.
+    latest = read_json(state / "latest.json") if latest is None else latest
+    rows = assignments(state) if rows is None else rows
     replaced = {row["replaces"] for row in rows if row["replaces"]}
     result = {"version": VERSION, "project": project["project"], "status": "not-started",
               "workspace": project["workspace"], "surface": project["surface"],
@@ -577,7 +579,7 @@ def observe(state, project):
               "last_recorded": latest["workers"],
               "worker_records_status": "last-recorded", "thread_id": project.get("thread_id", "")}
     if not project.get("run"):
-        result["coordination"] = coordination(state, project)
+        result["coordination"] = coordination(state)
         return result
     run_dir = state / "runs" / project["run"]
     run = read_json(run_dir / "run.json")
@@ -608,7 +610,7 @@ def observe(state, project):
     # Never convert a parent's EXIT into a child's stopped/completed state.
     if status == "unconfirmed" or (run["mode"] == "recover" and not project.get("recovery_complete")):
         result["worker_records_status"] = "unconfirmed"
-    result["coordination"] = coordination(state, project, result["worker_records_status"] == "unconfirmed")
+    result["coordination"] = coordination(state, result["worker_records_status"] == "unconfirmed")
     return result
 
 
@@ -816,7 +818,7 @@ def record(state, project, args):
                 review = data["claude_review"]
                 collected = any(r["review"] == review["review"] and r["basis_ref"] == review["basis_ref"]
                                 and r["state"] in ("received", "adopted", "rejected")
-                                for r in coordination(state, project)["reviews"])
+                                for r in coordination(state)["reviews"])
                 if review["required"] and not collected and review["review"] not in data["pending"]:
                     raise ValueError("required review must remain pending until collected")
             except (OSError, ValueError, KeyError, TypeError) as error:
@@ -934,9 +936,347 @@ def view(state, args):
         time.sleep(args.interval)
 
 
+def overview_time():
+    return now().replace("+00:00", "Z")
+
+
+def overview_issue(result, code, ref, message):
+    result["issues"].append(dict(code=code, ref=str(ref) if ref is not None else None, message=str(message)))
+
+
+def overview_note(path, result):
+    # Use the Dock's frontmatter/Tasks reader, without its filtering or health frame.
+    fields = subprocess.run([lookup("dock.next-model"), "--read-note", str(path)],
+                            capture_output=True, text=True, check=True).stdout.split("\0")
+    project, status, next_action = fields[:3]
+    result.update(project_status=status or None, next=next_action or None)
+    if project and project != result["project"]:
+        overview_issue(result, "reference-mismatch", path, "frontmatter project differs from note slug")
+        result["connection"] = "unconfirmed"
+        return None
+    section, references = False, []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if re.match(r"^#{1,2}\s", line):
+            section = bool(re.fullmatch(r"##[ \t]+正本の所在[ \t]*", line))
+        elif section and re.match(r"^[ \t]*-[ \t]*状態記録", line):
+            references.append(line)
+    if len(references) != 1:
+        raise ValueError("exactly one 状態記録 reference required in 正本の所在")
+    line = references[0]
+    if line == "- 状態記録: 従来経路":
+        return "legacy"
+    match = re.fullmatch(r"- 状態記録: (準備中|三段) \[state\]\(<([^<>\r\n]+)>\)", line)
+    if not match:
+        raise ValueError("invalid 状態記録 reference")
+    raw = match[2]
+    if (re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", raw) or "$" in raw or "`" in raw
+            or raw.startswith("~") and not raw.startswith("~/")):
+        raise ValueError("local literal state path required")
+    state = Path(raw).expanduser()
+    result["state_dir"] = os.path.abspath(path.parent / state)
+    return match[1]
+
+
+def overview_rows(state, result):
+    rows, complete = [], True
+    try:
+        with (state / "assignments.tsv").open(encoding="utf-8", newline="") as stream:
+            reader = csv.DictReader(stream, delimiter="\t")
+            if reader.fieldnames != ASSIGN_COLUMNS:
+                raise ValueError("invalid assignment columns")
+            for row in reader:
+                if (None in row or None in row.values() or any(row.get(key) in (None, "") for key in
+                                       ("id", "worker", "address", "parent_thread"))
+                        or row["version"] != str(VERSION) or any(row["id"] == r["id"] for r in rows)):
+                    complete = False
+                else:
+                    rows.append(row)
+        ids = {row["id"] for row in rows}
+        if any(row["replaces"] and row["replaces"] not in ids for row in rows):
+            complete = False
+        if not complete:
+            raise ValueError("incomplete assignment rows or replacement relation")
+    except (OSError, ValueError, csv.Error) as error:
+        complete = False
+        overview_issue(result, "record-error", state / "assignments.tsv", error)
+    return rows, complete
+
+
+def overview_project(result, route, shared=False):
+    if route is None:
+        return result
+    if route == "legacy":
+        result["connection"] = "legacy"
+        result["parent"]["status"] = "not-applicable"
+        overview_issue(result, "legacy", result["note"], "explicit legacy route; native worker counts unknown")
+        return result
+    state = Path(result["state_dir"])
+    if shared:
+        result["connection"] = "unconfirmed"
+        overview_issue(result, "reference-mismatch", state, "state directory shared by different projects")
+        return result
+    try:
+        empty = not state.exists() or (state.is_dir() and not any(state.iterdir()))
+        if route == "準備中" and empty:
+            result.update(connection="preparing", working_complete=True)
+            result["parent"]["status"] = "not-started"
+            result["counts"] = {key: dict(known=0, exact=0) for key in result["counts"]}
+            return result
+    except OSError as error:
+        overview_issue(result, "record-error", state, error)
+    result["connection"] = "connected"
+    project = None
+    try:
+        project = read_json(state / "project.json")
+        if project["version"] != VERSION or project["project"] != result["project"]:
+            overview_issue(result, "reference-mismatch", state / "project.json", "project or version mismatch")
+            result["connection"] = "unconfirmed"
+            return result
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        project = None
+        overview_issue(result, "record-error", state / "project.json", error)
+        result["connection"] = "unconfirmed"
+    rows, complete = overview_rows(state, result)
+    if not complete:
+        result["connection"] = "unconfirmed"
+    latest = dict(workers={})
+    try:
+        latest = read_json(state / "latest.json")
+        if latest["version"] != VERSION or not isinstance(latest["workers"], dict):
+            raise ValueError("invalid latest worker records")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        latest = dict(workers={})
+        result["connection"] = "unconfirmed"
+        overview_issue(result, "record-error", state / "latest.json", error)
+    observation = None
+    if project is not None:
+        try:
+            observation = observe(state, project, latest=latest, rows=rows)
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+            result["connection"] = "unconfirmed"
+            overview_issue(result, "record-error", state, error)
+        parent = result["parent"]
+        parent.update(observed_at=overview_time(), thread_id=project.get("thread_id"))
+        parent["evidence"] = [str(state / "project.json")]
+        if project.get("run"):
+            try:
+                directory = state / "runs" / project["run"]
+                parent["evidence"] += [str(directory / name) for name in ("run.json", "wrapper.log", "report.json")]
+                # A corrupt child/run record must not hide an independently readable saved report.
+                parent["report"] = read_json(directory / "report.json")
+            except (OSError, ValueError, TypeError):
+                pass
+        if observation:
+            parent.update(status="unconfirmed" if observation["worker_records_status"] == "unconfirmed" else observation["status"],
+                          thread_id=observation["thread_id"] or None,
+                          exit=observation.get("exit"), report=observation.get("report"))
+    uncertain = result["parent"]["status"] == "unconfirmed" or (
+        observation is not None and observation["worker_records_status"] == "unconfirmed")
+    # Explicit history is independent of project registration and parent observation.
+    # Retain readable topics/stops/reviews as last records even without project.json.
+    result["coordination"] = (observation["coordination"] if observation else
+                              coordination(state, unconfirmed=uncertain))
+    if uncertain:
+        overview_issue(result, "parent-unconfirmed", state, "parent execution unconfirmed; child states are last records")
+    replaced = {row["replaces"] for row in rows if row["replaces"]}
+    for row in rows:
+        event = latest["workers"].get(row["worker"])
+        if not isinstance(event, dict):
+            event = None
+        valid = (event is not None and event.get("execution") in ("running", "ended", "unknown")
+                 and event.get("work") in WORK_STATES and event.get("recorded_at") and event.get("ref"))
+        confirmed = bool(valid and not uncertain)
+        worker = {key: row[key] for key in ("worker", "address", "role", "stage", "scope", "artifact", "parent_thread")}
+        worker.update(assignment=row["id"], current=row["id"] not in replaced, replaces=row["replaces"] or None,
+                      execution=event["execution"] if confirmed else "unknown",
+                      work=event["work"] if confirmed else "unconfirmed",
+                      certainty="last-recorded" if confirmed else "unconfirmed",
+                      recorded_at=(event or {}).get("recorded_at"), ref=(event or {}).get("ref"), last_recorded=event)
+        result["workers"].append(worker)
+        if not valid:
+            overview_issue(result, "record-error", state / "latest.json", f"missing/invalid worker event: {row['id']}")
+        if event and event.get("event") == "consult" and not structured_event(event):
+            overview_issue(result, "record-error", event.get("ref"), "unstructured consultation cannot establish a topic")
+    current = [worker for worker in result["workers"] if worker["current"]]
+    running = sum(worker["execution"] == "running" for worker in current)
+    running_complete = complete and not uncertain and all(worker["execution"] != "unknown" for worker in current)
+    cumulative = len({(row["parent_thread"], row["address"]) for row in rows})
+    result["counts"] = dict(current_started=dict(known=len(current), exact=len(current) if complete else None),
+                            running=dict(known=running, exact=running if running_complete else None),
+                            cumulative_started=dict(known=cumulative, exact=cumulative if complete else None))
+    result["working_workers"] = [worker["assignment"] for worker in current if worker["work"] == "working"]
+    result["working_complete"] = complete and not uncertain and all(
+        w["certainty"] == "last-recorded" and w["work"] != "unconfirmed" for w in current)
+    coordination_view = result["coordination"]
+    for topic in sorted(coordination_view["topics"], key=lambda item: item["topic"]):
+        consultation = {key: topic.get(key) for key in ("topic", "subject", "participants", "phase", "dependencies",
+                                                       "rounds", "recorded_at", "ref", "outcome", "next_action")}
+        kind = (topic.get("receipt") or {}).get("kind")
+        reception = ("concluded" if topic["phase"] == "concluded" else
+                     "unreceived" if topic.get("receipt") is None else
+                     "received" if kind == "answering" else kind)
+        consultation.update(reception=reception, active=reception not in ("concluded", "redirect"),
+                            certainty="last-recorded" if coordination_view["status"] == "recorded" and not uncertain else "unconfirmed")
+        result["consultations"].append(consultation)
+    if coordination_view["status"] != "recorded":
+        overview_issue(result, "record-error", state / "events.jsonl", coordination_view["reason"])
+        if coordination_view["reason"] == "record-error":
+            result["connection"] = "unconfirmed"
+    if route == "準備中" and result["connection"] == "connected":
+        overview_issue(result, "preparing-reference", result["note"], "registered state takes precedence over preparing reference")
+    result["evidence"] += [str(state / name) for name in ("project.json", "assignments.tsv", "latest.json", "events.jsonl")]
+    return result
+
+
+def overview_snapshot(args):
+    directory, declarations = args.projects_dir, args.declarations
+    try:
+        notes = {path.stem: path for path in directory.iterdir() if path.suffix == ".md" and path.is_file()}
+    except OSError as error:
+        raise ValueError(f"overview-source-error: {error}") from error
+    result = dict(version=VERSION, mode="watch" if args.watch else "once",
+                  interval_seconds=args.interval if args.watch else None,
+                  sources=dict(projects_dir=str(directory), declarations=str(declarations)),
+                  discovery_complete=True, projects=[], totals={}, issues=[])
+    workspaces = {}
+    try:
+        if declarations.exists():
+            declared = read_json(declarations)
+            if declared["version"] != VERSION or not isinstance(declared["workspaces"], dict):
+                raise ValueError("invalid declaration record")
+            for workspace, slug in declared["workspaces"].items():
+                if not isinstance(slug, str) or not slug or Path(slug).name != slug or slug in (".", ".."):
+                    raise ValueError("invalid declared slug")
+                workspaces.setdefault(slug, []).append(workspace)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        result["discovery_complete"] = False
+        overview_issue(result, "declaration-error", declarations, error)
+    routes = {}
+    for slug in sorted(notes.keys() | workspaces.keys()):
+        note = notes.get(slug)
+        project = dict(project=slug, note=str(note) if note else None,
+                       declared_workspaces=sorted(workspaces.get(slug, [])), state_dir=None,
+                       connection="unconnected", project_status=None, next=None,
+                       parent=dict(status="unconfirmed", observed_at=None, thread_id=None, exit=None, report=None, evidence=[]),
+                       counts={key: dict(known=0, exact=None) for key in ("current_started", "running", "cumulative_started")},
+                       workers=[], working_workers=[], working_complete=False, consultations=[],
+                       coordination=dict(status="unconfirmed", reason="unconnected", settings=dict(ref=None,
+                           consultation_round_limit=None), topics=[], changes=[], reviews=[]),
+                       evidence=[str(note)] if note else [], issues=[])
+        route = None
+        try:
+            if note is None:
+                raise ValueError("declaration has no Projects note")
+            route = overview_note(note, project)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            overview_issue(project, "unconnected", note, error)
+        routes[slug] = route
+        result["projects"].append(project)
+    states = [Path(project["state_dir"]).resolve() for project in result["projects"] if project["state_dir"]]
+    for project in result["projects"]:
+        shared = project["state_dir"] and states.count(Path(project["state_dir"]).resolve()) > 1
+        try:
+            overview_project(project, routes[project["project"]], shared)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError, subprocess.SubprocessError) as error:
+            # Malformed individual records must not suppress other projects or claim current work.
+            overview_issue(project, "record-error", project["state_dir"], error)
+            project["connection"] = "unconfirmed"
+            project["parent"]["status"] = "unconfirmed"
+            project["counts"]["running"] = dict(known=0, exact=None)
+            project.update(working_workers=[], working_complete=False)
+            for worker in project["workers"]:
+                worker.update(execution="unknown", work="unconfirmed", certainty="unconfirmed")
+            for topic in project["consultations"]:
+                topic["certainty"] = "unconfirmed"
+            project["coordination"].update(status="unconfirmed", reason="record-error")
+    result["totals"]["project_count"] = len(result["projects"])
+    for key in ("current_started", "running", "cumulative_started"):
+        known = sum(project["counts"][key]["known"] for project in result["projects"])
+        unknown = [project["project"] for project in result["projects"] if project["counts"][key]["exact"] is None]
+        result["totals"][key] = dict(known=known, exact=known if not unknown and result["discovery_complete"] else None,
+                                     unknown_projects=unknown)
+    result["generated_at"] = overview_time()
+    return result
+
+
+def overview_text(snapshot):
+    def count(value):
+        return str(value["exact"]) if value["exact"] is not None else f"{value['known']} known + unknown"
+    print(f"{snapshot['generated_at']} — {snapshot['totals']['project_count']} projects"
+          f" | current_started={count(snapshot['totals']['current_started'])}"
+          f" running={count(snapshot['totals']['running'])} cumulative_started={count(snapshot['totals']['cumulative_started'])}")
+    for project in snapshot["projects"]:
+        parent = project["parent"]
+        print(f"\n{project['project']} — {project['connection']} | parent={parent['status']} observed_at={parent['observed_at']}"
+              f" | current_started={count(project['counts']['current_started'])} running={count(project['counts']['running'])}"
+              f" cumulative_started={count(project['counts']['cumulative_started'])}")
+        print(f"  status={project['project_status']} next={project['next']} note={project['note']}"
+              f" state_dir={project['state_dir']} workspaces={project['declared_workspaces']}")
+        print(f"  parent: {json.dumps(parent, ensure_ascii=False)}")
+        print(f"  working_workers={project['working_workers']} working_complete={project['working_complete']}")
+        for worker in project["workers"]:
+            print(f"  worker {worker['assignment']}: {json.dumps(worker, ensure_ascii=False)}")
+        for topic in project["consultations"]:
+            print(f"  topic {topic['topic']}: {json.dumps(topic, ensure_ascii=False)}")
+        print(f"  coordination: {json.dumps(project['coordination'], ensure_ascii=False)}")
+        print(f"  evidence: {json.dumps(project['evidence'], ensure_ascii=False)}")
+        for issue in project["issues"]:
+            print(f"  issue: {json.dumps(issue, ensure_ascii=False)}")
+    for issue in snapshot["issues"]:
+        print(json.dumps(issue, ensure_ascii=False))
+    if not snapshot["discovery_complete"]:
+        print("discovery_complete=false; totals are incomplete")
+
+
+def positive_interval(value):
+    try:
+        number = float(value)
+        if math.isfinite(number) and number > 0:
+            return number
+    except (ValueError, TypeError, OverflowError):
+        pass
+    raise argparse.ArgumentTypeError("interval must be positive and finite")
+
+
+def overview(args):
+    if args.watch and args.interval is None:
+        try:
+            path = Path(os.environ.get("AIENV_TEAM_WORKFLOW_CONFIG") or lookup("team.workflow-settings")).expanduser()
+            config = read_json(path)
+            value = config["overview_interval_seconds"]
+            if config["version"] != VERSION or type(value) not in (int, float):
+                raise ValueError("invalid overview interval settings")
+            args.interval = positive_interval(value)
+        except (OSError, ValueError, KeyError, TypeError, argparse.ArgumentTypeError, subprocess.SubprocessError) as error:
+            raise ValueError(f"overview-settings-error: {error}") from error
+    try:
+        while True:
+            snapshot = overview_snapshot(args)
+            if args.format == "json":
+                print(json.dumps(snapshot, ensure_ascii=False))
+            else:
+                if args.watch and sys.stdout.isatty():
+                    print("\033[2J\033[H", end="")
+                overview_text(snapshot)
+            sys.stdout.flush()
+            if not args.watch:
+                return
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    overview_command = commands.add_parser("overview", help="read all projects without controlling their workers")
+    overview_command.add_argument("--projects-dir", type=Path,
+                                  default=Path(os.environ.get("CMUX_NEXT_VAULT", str(Path.home() / "Data/obsidian"))) / "Projects")
+    overview_command.add_argument("--declarations", type=Path,
+                                  default=Path(os.environ.get("CMUX_TASK_STATE", str(Path.home() / ".config/cmux-task-watch/workspaces.json"))))
+    overview_command.add_argument("--format", choices=("text", "json"), default="text")
+    overview_command.add_argument("--watch", action="store_true")
+    overview_command.add_argument("--interval", type=positive_interval)
     for name in ("init", "start", "resume", "recover", "status", "collect", "assign", "event", "report", "worker-prepare", "display", "view", "_run"):
         command = commands.add_parser(name)
         command.add_argument("--state-dir", type=Path, required=True)
@@ -961,6 +1301,14 @@ def main():
         if name == "_run":
             command.add_argument("--run-id", required=True)
     args = parser.parse_args()
+    if args.command == "overview":
+        args.projects_dir = args.projects_dir.expanduser().absolute()
+        args.declarations = args.declarations.expanduser().absolute()
+        try:
+            overview(args)
+        except KeyboardInterrupt:
+            sys.exit(130)
+        return
     state = args.state_dir.resolve()
     # Operational data must stay outside public program repositories (including worktrees).
     if any((parent / ".git").exists() for parent in (state, *state.parents)):

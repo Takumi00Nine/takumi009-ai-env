@@ -1,4 +1,5 @@
 {
   "version": 1,
-  "consultation_round_limit": 3
+  "consultation_round_limit": 3,
+  "overview_interval_seconds": 2
 }

@@ -50,8 +50,8 @@ part	team/connect/claude-code/inprocess-gate.sh	team	connect	claude-code	-	委�
 part	team/connect/claude-code/delegation-gate-v2.sh	team	connect	claude-code	-	委任の柵	-	link:$HOME/.claude/hooks/delegation-gate-v2.sh
 part	team/connect/claude-code/profile-status.sh	team	connect	claude-code	team.session-status	合成器の寄与（枠 opening・directive5・machine_role 保留・profile-warning）	-	-
 part	team/connect/codex/codex-exec.sh	team	connect	codex	team.codex-exec	Codex の口	-	-
-part	team/connect/codex/project-leader.py	team	connect	codex	team.project-leader	親の切り離し起動・記録・回収・一度だけの復旧・非対話表示	-	-
-part	team/data/workflow.json	team	data	-	team.workflow-settings	案件内の相談往復上限の共通設定	-	-
+part	team/connect/codex/project-leader.py	team	connect	codex	team.project-leader	親の切り離し起動・記録・回収・一度だけの復旧・案件別表示と全案件の読取一覧	-	-
+part	team/data/workflow.json	team	data	-	team.workflow-settings	案件内の相談往復上限と全案件一覧の更新間隔の共通設定	-	-
 part	team/connect/codex/AGENTS.md	team	connect	codex	-	Codex ワーカーの作法	-	link:$HOME/.codex/AGENTS.md
 part	team/connect/codex/config.toml	team	connect	codex	-	Codex の設定雛形	-	gen:$HOME/.codex/config.toml
 part	team/connect/codex/hooks.json	team	connect	codex	-	Codex の登録	-	link:$HOME/.codex/hooks.json
@@ -78,7 +78,7 @@ part	notify/connect/cmux/deliver.sh	notify	connect	cmux	-	cmux 通知の送り�
 part	notify/connect/code27/deliver.sh	notify	connect	code27	-	CODE27 取次の消去（応答だけ）	answer	-
 
 # ===== Dock =====
-part	dock/executor/cmux-next-model.sh	dock	executor	-	dock.next-model	供給（dotfiles の既定供給パス）	-	-
+part	dock/executor/cmux-next-model.sh	dock	executor	-	dock.next-model	供給（dotfiles の既定供給パス）・指定ノートのメタデータ読取	-	-
 part	dock/executor/cmux-task-model.sh	dock	executor	-	dock.task-model	供給（dotfiles の既定供給パス）	-	-
 part	dock/executor/cmux-task-declare.sh	dock	executor	-	dock.task-declare	宣言 CLI（メンテが照会）	-	-
 part	dock/executor/lib-cmux-workspace.sh	dock	executor	-	-	共有 lib	-	-

@@ -252,11 +252,35 @@ python3 "$LEADER" resume --state-dir "$STATE" --prompt-file "$REPLY" --usage-ref
 
 `start` launches through `nohup` in a separate session and returns immediately. Its first request stops at the work-list proposal. `resume` keeps the saved conversation, cwd, model, effort and sandbox, and refuses a running parent. Save additional requests in project work and relay them at the next report boundary. Before **every** launch/resume/recovery, the Mac leader checks the existing usage source against the applicable stop point. `--usage-ref` requires a nonempty local record of that check; it does not interpret quota numbers or reselect a model. Human approval, child stop confirmation and read receipts remain the leaders' responsibilities.
 
-At the start of each turn, inspect each registered project's `status`: `not-started/running/finished/unconfirmed`, summary, pending decisions, paths and PIDs. A single command listing all projects is stage 4. `collect` requires no live parent process, `EXIT:0`, a nonempty final response and a saved report checkpoint. Nonzero exit, or missing exit with no live runner/wrapper/Codex, means `unconfirmed`; old child records stay last records, never inferred from the parent's log. Before ending its report, the parent executes `report`, which saves the summary and calls the existing `notify.send` with a 📣 title regardless of presence. This command is the parent's notification action: do not call the mouth separately for the same report. Repeated saves in the same run retain the first notification attempt; the exit handler only records the outcome. Delivery failure remains `unknown`; the saved report can still be collected next turn. Notification does not start a Mac-leader turn or prove a human saw the report.
+At the start of each turn, use `overview` to find pending decisions, finished parents and unconfirmed states, then inspect the necessary project's `status` or `collect`. `collect` requires no live parent process, `EXIT:0`, a nonempty final response and a saved report checkpoint. Nonzero exit, or missing exit with no live runner/wrapper/Codex, means `unconfirmed`; old child records stay last records, never inferred from the parent's log. Before ending its report, the parent executes `report`, which saves the summary and calls the existing `notify.send` with a 📣 title regardless of presence. This command is the parent's notification action: do not call the mouth separately for the same report. Repeated saves in the same run retain the first notification attempt; the exit handler only records the outcome. Delivery failure remains `unknown`; the saved report can still be collected next turn. Notification does not start a Mac-leader turn or prove a human saw the report.
 
 `recover --state-dir "$STATE" --prompt-file "$RECOVERY_REQUEST" --usage-ref "$NEW_USAGE_CHECK"` permits **one** recovery attempt, in the saved conversation, after the old processes end. It asks only to inspect every assignee's execution, stopping point, differences and unfinished work, and restore records without new production. Normal resume stays blocked until the parent records `recovery-complete` and exits successfully with a report. A failed attempt stays unconfirmed and returns to the Mac leader; there is no restart daemon.
 
 Restore a closed screen by creating a replacement with the same `view --watch` command, declaring the project there, then calling `display --state-dir "$STATE" --workspace "$NEW_WORKSPACE_UUID" --surface "$NEW_LEFT_SURFACE"`. This changes only the display mapping; it never starts/resumes Codex. The existing right column remains available for artifacts. `view` shows recent execution events, wrapper results and the latest report; `--lines` and `--interval` control the display (interval defaults to `AIENV_LEADER_VIEW_INTERVAL`, otherwise 5 seconds).
+
+#### All-project overview (stage 4)
+
+```bash
+python3 "$LEADER" overview
+python3 "$LEADER" overview --watch --interval 1
+python3 "$LEADER" overview --projects-dir "$PROJECTS_DIR" --declarations "$DECLARATIONS" --format json
+```
+
+`overview` takes no `--state-dir`. It reads the union of direct `Projects/*.md` notes and version-1 workspace declarations, including paused/completed/closed projects and notes without a screen declaration. Defaults are `$CMUX_NEXT_VAULT/Projects` (otherwise `$HOME/Data/obsidian/Projects`) and `$CMUX_TASK_STATE` (otherwise `$HOME/.config/cmux-task-watch/workspaces.json`), matching the existing Dock sources. Duplicate workspace declarations produce one project row. Under the existing `## 正本の所在` heading, put **exactly one** of these reference lines, alongside the other canonical links:
+
+```markdown
+- 状態記録: 準備中 [state](<../../output/example-state/>)
+- 状態記録: 三段 [state](<../../output/example-state/>)
+- 状態記録: 従来経路
+```
+
+Choose one line; the relative path is illustrative. Local absolute paths, paths relative to the note's directory and `~/` are accepted without command or variable expansion. The Mac leader writes the planned location with `準備中` when creating the project. After registration, the parent verifies the actual location and changes the line to `三段`; it also verifies references after moves and at closing, reporting changes to the Mac leader. Only explicit preparing references to absent/empty directories mean not-started and zero workers. Valid registered records override a stale preparing label. Missing, malformed or ambiguous references are unconnected; damaged/mismatched/shared state is unconfirmed; an explicit legacy route has unknown native-worker counts. The reader never repairs notes or records.
+
+Text is the default. `--format json` returns one version-1 JSON object per display, including in watch mode (NDJSON). `--watch` displays immediately, rereads records and observes each parent's PID/start time, exit and report on every frame, then waits the interval. A positive finite `--interval` overrides `overview_interval_seconds` in `team/data/workflow.json` (default 2, resolved through `team.workflow-settings`; tests can use `AIENV_TEAM_WORKFLOW_CONFIG`). Missing/invalid interval settings fail only when watch needs that default. The existing `view` interval is unchanged. Non-TTY text has no screen-control escapes; Ctrl-C exits 130 and affects only the reader.
+
+Each project exposes parent observations/report, all assignment rows, last worker events, latest consultations by topic, stop/permission/review records, evidence and issues. Display time and parent observation time use UTC `Z`; child record times remain unchanged. Parent uncertainty makes child current states unconfirmed while preserving their last records; a finished parent does not imply finished children. Counts distinguish registered current children, running children and cumulative children (deduplicated by parent conversation and actual address). Each has `known` and `exact`; uncertain totals have null `exact`, with `unknown_projects`, and declaration corruption also sets `discovery_complete:false`. Individual record failures retain other readable information. Missing or corrupt `project.json` leaves readable consultation, stop and review history available as unconfirmed last records. An unreadable Projects directory or required interval setting exits 1 with `overview-source-error` or `overview-settings-error`; invalid arguments exit 2.
+
+Use pending decisions, consultation outcomes/next actions and review states to choose which existing `collect` to run. Overview performs no model calls, conversation reads, cmux queries, starts/resumes/recovery, notifications, prune or state/Projects/Tasks/declaration writes. It creates no service or separate state registry and does not replace approval or report collection. Real acceptance and rollout remain the project leader's work.
 
 #### Local record contract, version 1
 
@@ -717,7 +741,7 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 
 - `init` は案件フォルダ・ノート・宣言・表示先を確認し、目的と発言参照、候補名・モデル・思考量・選択根拠、表示先を保存します。親の既定方針どおり `--sandbox danger-full-access` を明示し、作業場所外の状態記録とProjectsノートへ保存できるようにします。担当範囲は依頼文で指定し、cwdは対象worktreeに絞ります。`start` は `nohup` と別セッションで切り離して返り、初回依頼には一覧案の報告までという境界を付けます。
 - `resume` は同じ会話・作業場所・モデル・思考量・sandboxを維持します。本人の承認と理由は依頼ファイルで同じ親へ渡します。実行中の親には追加投入せず、追加依頼を案件workへ保存して次の報告区切りで渡します。起動・再開・復旧のたび、マックリーダーが既存の使用率を照会して停止点と照合し、確認記録を `--usage-ref` で渡します。CLIはその記録の存在を確認し、枠の数値判定やモデルの選び直しは行いません。
-- ターン冒頭に各案件の `status` で未起動・実行中・終了・状態未確認と、要約・判断待ち・保存先を読みます。全案件を一コマンドで出す一覧は段階4です。`collect` は親のプロセス不在・`EXIT:0`・空でない最終報告・保存済みの要約を確認して回収します。通知だけでは回収せず、親の終了から子の停止を推測しません。
+- ターン冒頭に `overview` で全案件の判断待ち・終了・状態未確認を拾い、必要な案件の `status`・`collect` で詳しく確認します。`collect` は親のプロセス不在・`EXIT:0`・空でない最終報告・保存済みの要約を確認して回収します。通知だけでは回収せず、親の終了から子の停止を推測しません。
 - 親は報告終了前に在席・離席を問わず `report` を実行します。要約を保存してから既存の口 `notify.send` へ📣を渡す処理を、このコマンドにまとめています。同じ報告で口を別途呼ばず、同じ実行での再保存も最初の通知試行を引き継ぎます。終了側は結果の記録だけを行います。通知失敗は `unknown` のまま残り、次のターンに判断待ちと報告を回収できます。口の成功は本人の閲覧確認ではなく、マックリーダーのターンも起動しません。
 - 非0終了、またはプロセス不在で終了値が欠けた場合は状態未確認です。旧実行が止まり、枠を再確認した後だけ `recover` で同じ親を **一度だけ** 再開できます。新規制作を始めず、全担当の実行有無・停止位置・差分・書きかけを確認して記録を直す依頼を付けます。親の `recovery-complete` 明示記録と正常終了・報告が揃うまで通常再開はできません。復旧失敗は未確認を保って返し、再試行や常駐再起動は行いません。
 - 左の既存端末で `view --watch` を起動すると、登録前は準備中、起動後は最近の実行イベント・終了結果・最新報告を表示します。入力欄は作りません。画面を閉じても親は継続します。表示の復旧は画面作成・宣言後の `display` による対応先の変更だけで、親を複製しません。成果表示は既存の右列を使います。表示間隔は `--interval` または `AIENV_LEADER_VIEW_INTERVAL`（既定5秒）、行数は `--lines` で変えられます。
@@ -727,6 +751,30 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 親は報告を終える前に `report --file <JSON>` で `summary/pending/reason/read_notes/written_notes`（要約・判断待ち配列・終了理由・読了文書配列・書いたノート配列）を保存します。記録は親の判断を残す口で、子を検査・停止する仕組みや新しい権限サービスではありません。全対象の停止と必要な承認・再検証、本人承認、必読の実際の読了はリーダーが根拠と照合します。
 
 締め後も担当表・状態履歴と最終形・要約と終了結果を残し、案件ノートから参照します。生の依頼文・Codexイベントとエラーログ・診断ログを永久保存する意味ではありません。生ログを整理しても、`run.json` の保存会話から記録を読めます。成果末尾の「次の工程の体制」は対象範囲／次の工程／必要人数を表し、実担当とは分けます。締めで親が人数と相談の結論の要点を案件ノートへ移します。このCLIはVaultを書きません。実cmuxへの通知到達、実際の利用枠、親の異常終了時の子の実態、本人承認を含む受入確認はプロジェクトリーダーの実環境確認として残ります。
+
+#### 全案件の一覧（段階4）
+
+```bash
+python3 "$LEADER" overview
+python3 "$LEADER" overview --watch --interval 1
+python3 "$LEADER" overview --projects-dir "$PROJECTS_DIR" --declarations "$DECLARATIONS" --format json
+```
+
+`overview` に `--state-dir` は不要です。Projects直下の `*.md` と版1の案件宣言の和集合を読み、paused/completed/closedや宣言解除後の案件も残します。同じ案件の複数画面は一行にまとめます。既定の読取先は既存Dockと同じ `$CMUX_NEXT_VAULT/Projects`（未指定は `$HOME/Data/obsidian/Projects`）と `$CMUX_TASK_STATE`（未指定は `$HOME/.config/cmux-task-watch/workspaces.json`）。案件ノートの既存 `## 正本の所在` に、他の正本リンクと併せて次の**いずれか一行だけ**を書きます。
+
+```markdown
+- 状態記録: 準備中 [state](<../../output/example-state/>)
+- 状態記録: 三段 [state](<../../output/example-state/>)
+- 状態記録: 従来経路
+```
+
+相対パスは例です。ローカル絶対パス・ノートのあるディレクトリからの相対パス・`~/` を使え、変数やコマンドは展開しません。立ち上げ時にマックリーダーが予定先と「準備中」を記し、登録後は親が実際の保存先を確かめ「三段」へ更新します。移動・締めの参照確認も親が行い、対応の変更をマックリーダーへ報告します。明示された準備中で保存先が未作成・空の場合だけ親未起動・0人です。有効な登録記録は古い準備中表記に優先します。参照なし・不正・複数は未接続、記録の欠落・案件不一致・別案件との保存先共用は未確認、明示の従来経路は内蔵ワーカー人数不明として区別します。一覧はノートや記録を修復しません。
+
+既定はtext、`--format json` は単発・継続とも一回につき版1のJSONオブジェクト一行（継続はNDJSON）です。`--watch` は即時表示し、各回で記録を読み直し、親のPIDと開始時刻・終了値・報告を観測してから指定秒待ちます。正の有限値の `--interval` を省略した継続表示だけ、台帳キー `team.workflow-settings` の `team/data/workflow.json` にある `overview_interval_seconds`（既定2）を使います。隔離試験では `AIENV_TEAM_WORKFLOW_CONFIG` を指定できます。必要な既定設定が不正なら終了1で、黙って補いません。単発・明示間隔ではその項目は不要です。案件別 `view` の間隔は従来どおりです。非TTYのtextに画面制御文字は出さず、Ctrl-Cは読取だけを終了130で終えます。
+
+親の観測と保存報告、交代済みを含む担当表、子の最終記録、論点ごとの最新相談と受領・結論・依存待ち、停止・許可・Claude確認、根拠と診断を返します。表示時点と親の観測時点はUTCの `Z`、子の記録時点は元の日時を保ちます。親が未確認なら子の現在も未確認とし、元の記録は残します。親の正常終了から子の終了を推測しません。人数は現担当の起動済み・実行中・累計（同じ親会話と実宛先を重複除外）を区別し、`known` は確認済み分、`exact:null` は不明分ありです。合計の `unknown_projects` と、宣言破損時の `discovery_complete:false` も確認します。一案件の破損で他の読めた情報を捨てません。`project.json` が欠落・破損しても、読める相談・停止・確認履歴を現在未確認の最終記録として残します。Projects入口の失敗は `overview-source-error`、必要な間隔設定の失敗は `overview-settings-error` で終了1、引数不正は終了2です。
+
+マックリーダーは判断待ち・相談の結論と次の一手・確認状態から必要な案件を選び、従来の `collect` で終了値と最終報告を回収します。一覧は承認・回収の代わりにはならず、モデル・全会話・cmuxへの問い合わせ、親子の起動・再開・復旧、通知・prune、state・宣言・Projects/Tasksへの書き込みを行いません。新しい常駐収集や別台帳は作りません。実受入と本番導入は親の確認として残ります。
 
 ### 案件内の内蔵ワーカー（段階2・メイン機）
 
