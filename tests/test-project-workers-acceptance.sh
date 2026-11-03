@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 段階2の外部契約（stage2-contract §2〜7）。実装本体をimportせずCLIで確認する。
+# 段階2・3の外部契約。実装本体をimportせずCLIで確認する。
 # A7a/A7b/A13/A6と結果回収。内蔵操作・実読了・枠解放は親の実環境確認へ。
 # fixtureはこのファイル内で生成し、実Vault・個人設定・外部サービスを使わない。
 # 実行: bash tests/test-project-workers-acceptance.sh
@@ -218,6 +218,292 @@ class Fixture:
             env=self.env, capture_output=True, text=True, timeout=30)
         assert (result.returncode == 0) if code == 0 else (result.returncode != 0), result.stderr
         return result.stdout + result.stderr
+
+
+def stage3_setup(f, ready=True):
+    # 段階1・2だけで担当表を用意し、追加機能の成功をfixtureの前提にしない。
+    f.workflow = write_json(f.root / 'workflow.json', dict(version=1, consultation_round_limit=3))
+    f.env['AIENV_TEAM_WORKFLOW_CONFIG'] = str(f.workflow)
+    f.seed(ready=ready)
+    for ident in ('b', 'c'):
+        row = f.row(ident)
+        row['scope'] = 'separate fixture scope ' + ident
+        f.record('assign', row)
+
+
+def stage3_event(f, name, ident='a', **fields):
+    value = f.event(name)
+    value.update(assignment=None if ident == 'parent' else ident,
+                 worker='parent' if ident == 'parent' else 'fixture-worker-' + ident)
+    value.update(fields)
+    saved = f.record('event', value)
+    assert all(saved[key] == item for key, item in value.items()), saved
+    return saved
+
+
+def stage3_consult(f, **fields):
+    value = dict(peer='fixture-worker-b', topic='topic-a', subject='fixture question',
+        scope_ref=str(f.request_ref), participants=['a', 'b'], phase='open', exchanges=[],
+        receipt=None, dependencies=[], outcome=None, next_action='await substantive reply',
+        work='consultation-wait')
+    value.update(fields)
+    return stage3_event(f, 'consult', **value)
+
+
+def stage3_request_stop(f, change='change-a', targets=('a', 'c')):
+    return stage3_event(f, 'stop-request', 'b', change=change, topic='topic-a', owner='b',
+        targets=list(targets), scope_ref=str(f.request_ref), reason='fixture upstream change',
+        sent_refs=[dict(assignment=ident, ref=str(f.operation_ref)) for ident in targets],
+        next_action='await stop confirmations', work='stop-requested')
+
+
+def stage3_confirm(f, ident='a', change='change-a', incomplete=False):
+    return stage3_event(f, 'stop-confirm', ident, change=change, targets=[ident],
+        position='fixture file boundary', touched_refs=[str(f.artifact)], incomplete=incomplete,
+        execution_ref=str(f.operation_ref), execution='ended', work='stopped')
+
+
+def stage3_permit(f, change='change-a', targets=('a', 'c')):
+    permission = write_json(f.work / (change + '-permission.json'), {'fixture': 'permission'})
+    return stage3_event(f, 'resume-permitted', 'parent', change=change, targets=list(targets),
+        ref=str(permission), premises_ref=str(f.handoff), scope_ref=str(f.request_ref),
+        decision_ref=str(f.stop_ref), recheck_ref=str(f.report_ref))
+
+
+def stage3_read(f):
+    before = snapshot(f.state)
+    views = [f.view(command) for command in ('status', 'collect')]
+    assert all(value['version'] == 1 for value in views), views
+    assert views[0]['coordination'] == views[1]['coordination'], views
+    assert snapshot(f.state) == before, 'coordination read changed state records'
+    return views[0]['coordination']
+
+
+def test_stage3_legacy_and_settings(f):
+    # A6補足/A10/A12・§3/4: 旧記録・既存列を保ち、共通設定を参照する。
+    stage3_setup(f)
+    value = stage3_read(f)
+    assert value['status'] == 'recorded', value
+    assert value['settings'] == dict(ref=str(f.workflow), consultation_round_limit=3), value
+    assert value['topics'] == value['changes'] == value['reviews'] == [], value
+    assert list(csv.DictReader((f.state / 'assignments.tsv').open(), delimiter='\t').fieldnames) == columns
+    # 差し替えを外した場合も、既定値は台帳が指す1か所から来る。
+    del f.env['AIENV_TEAM_WORKFLOW_CONFIG']
+    result = subprocess.run(['bash', str(repo / 'core/assembly/ledger-tool.sh'),
+        'lookup', 'team.workflow-settings'], env=f.env, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    settings_path = Path(result.stdout.strip())
+    assert json.loads(settings_path.read_text()) == dict(version=1, consultation_round_limit=3)
+    assert stage3_read(f)['settings'] == dict(ref=str(settings_path), consultation_round_limit=3)
+
+
+def test_stage3_consultation(f):
+    # A1/A3/A5・§4: 実在する別範囲の相手を除外せず、受領・訂正・待ちを往復にしない。
+    stage3_setup(f)
+    consult = stage3_consult(f)
+    topic = stage3_read(f)['topics'][0]
+    assert topic['receipt'] is None and topic['rounds'] == 0, topic
+    for kind in ('answering', 'redirect', 'dependency-wait'):
+        if kind == 'dependency-wait':
+            stage3_consult(f, topic='topic-b', phase='waiting', dependencies=['topic-a'])
+        consult.update(receipt=dict(assignment='b', kind=kind, ref=str(f.operation_ref)),
+                       phase='waiting', dependencies=['topic-b'] if kind == 'dependency-wait' else [],
+                       next_action='resend same topic to assignment c' if kind == 'redirect' else 'await reply')
+        f.record('event', consult)
+        topic = next(t for t in stage3_read(f)['topics'] if t['topic'] == 'topic-a')
+        assert topic['receipt']['kind'] == kind and topic['rounds'] == 0, topic
+        assert topic['dependencies'] == consult['dependencies'] and topic['outcome'] is None, topic
+    pairs = [dict(proposal_id='m' + str(i), reply_id='m' + str(i+1),
+                  proposal_summary='fixture proposal', reply_summary='fixture counterproposal')
+             for i in range(1, 4)]
+    consult.update(subject='renamed fixture question', peer='fixture-worker-c', participants=['a', 'c'],
+                   receipt=None, exchanges=pairs, phase='parent-wait', dependencies=[],
+                   next_action='parent decides disagreement and stopped scope')
+    f.record('event', consult)
+    stage3_consult(f, topic='topic-b', phase='waiting', dependencies=['topic-a'])
+    topics = {t['topic']: t for t in stage3_read(f)['topics']}
+    assert topics['topic-a']['rounds'] == 3 and topics['topic-b']['rounds'] == 0, topics
+    assert topics['topic-a']['phase'] == 'parent-wait' and not topics['topic-a']['over_limit'], topics
+    assert topics['topic-a']['exchanges'] == pairs and topics['topic-a']['limit'] == 3, topics
+    # 設定変更でも既存の組を消さない。違反が起きた事実も隠さない。
+    write_json(f.workflow, dict(version=1, consultation_round_limit=2))
+    topic = next(t for t in stage3_read(f)['topics'] if t['topic'] == 'topic-a')
+    assert (topic['rounds'], topic['limit'], topic['over_limit']) == (3, 2, True), topic
+    consult['exchanges'] = pairs + [dict(proposal_id='m4', reply_id='m5',
+        proposal_summary='fixture excess proposal', reply_summary='fixture excess reply')]
+    f.record('event', consult)
+    assert next(t for t in stage3_read(f)['topics'] if t['topic'] == 'topic-a')['rounds'] == 4
+
+
+def test_stage3_peer_binding(f, kind):
+    # A5・§4/8: 範囲の意味は判定しないが、宛先の実在・同じ親の所属は確かめる。
+    stage3_setup(f)
+    if kind == 'foreign-parent':
+        path = f.state / 'assignments.tsv'
+        with path.open() as stream:
+            rows = list(csv.DictReader(stream, delimiter='\t'))
+        next(row for row in rows if row['id'] == 'b')['parent_thread'] = 'fixture-other-parent'
+        with path.open('w', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=columns, delimiter='\t')
+            writer.writeheader()
+            writer.writerows(rows)
+    value = dict(f.event('consult'),
+        peer='fixture-worker-b' if kind == 'foreign-parent' else 'fixture-absent-worker',
+        topic='topic-a', subject='fixture',
+        scope_ref=str(f.request_ref), participants=['a', 'b'], phase='open', exchanges=[],
+        receipt=None, dependencies=[], outcome=None, next_action='parent checks destination')
+    before = snapshot(f.state)
+    result = f.record('event', value, code=1)
+    assert not result.stdout.strip() and 'project-leader: invalid-coordination:' in result.stderr, result
+    assert snapshot(f.state) == before
+
+
+def test_stage3_decision(f, classification, disposition):
+    # A2/A4/A8/A10・§4: 結論・差分・判断者と有効／撤回／保留を保存する。
+    stage3_setup(f)
+    outcome = dict(classification=classification, conclusion='fixture conclusion', reason='fixture reason',
+        disposition=disposition, decision_ref=str(f.stop_ref), diff_refs=[str(f.artifact)],
+        next_action='fixture approved action or condition for resumption')
+    stage3_consult(f, phase='concluded', outcome=outcome)
+    decision = stage3_event(f, 'decision', 'parent', topic='topic-a', classification=classification,
+        disposition=disposition, reason=outcome['reason'], decider='user' if classification == 'purpose-policy' else 'parent',
+        decision_ref=str(f.stop_ref), diff_refs=outcome['diff_refs'], next_action=outcome['next_action'])
+    value = stage3_read(f)
+    assert value['topics'][0]['outcome'] == outcome, value
+    assert json.loads((f.state / 'events.jsonl').read_text().splitlines()[-1]) == decision
+
+
+def test_stage3_stop_states(f):
+    # A2/A11・§4/5: 送信・受領・実行終了・書きかけ・全停止を混ぜない。
+    stage3_setup(f)
+    stage3_consult(f)
+    stage3_request_stop(f)
+    change = stage3_read(f)['changes'][0]
+    assert set(change['sent']) == {'a', 'c'} and change['received'] == change['confirmed'] == [], change
+    assert set(change['pending_targets']) == {'a', 'c'} and not change['all_stopped'], change
+    stage3_event(f, 'stop-received', change='change-a', targets=['a'],
+                 received_ref=str(f.operation_ref), work='stop-requested')
+    stage3_confirm(f)
+    stage3_confirm(f, 'c', incomplete=True)
+    change = stage3_read(f)['changes'][0]
+    assert change['received'] == change['confirmed'] == ['a'], change
+    assert change['pending_targets'] == ['c'] and not change['all_stopped'], change
+    # 一旦終了した対象cは受領を偽らず、停止位置と終了の確認だけで停止を確定する。
+    stage3_confirm(f, 'c')
+    change = stage3_read(f)['changes'][0]
+    assert change['all_stopped'] and change['phase'] == 'stopped' and not change['pending_targets'], change
+    assert change['received'] == ['a'] and set(change['confirmed']) == {'a', 'c'}, change
+
+
+def test_stage3_stopped_prepare(f, ready):
+    # A11・§5: 全停止や相談終了は再開許可ではない。相談だけの呼び戻しは同じ宛先。
+    stage3_setup(f, ready=ready)
+    stage3_consult(f)
+    stage3_request_stop(f, targets=('a',))
+    stage3_confirm(f)
+    blocked = f.prepare(f.request('resume'), code=3, reason='resume-not-permitted')
+    assert blocked['coordination']['waiting_for_permission'] is True, blocked
+    value = f.prepare(f.request('resume', purpose='consultation'))
+    assert value['phase'] == ('consultation' if ready else 'read-confirmation'), value
+    assert (value['operation'], value['target'], value['model'], value['reasoning_effort']) == (
+        'followup', 'fixture-address-a', 'fixture-model', 'high'), value
+    assert value['coordination']['topics'] == ['topic-a'] and value['coordination']['changes'] == ['change-a'], value
+    assert '停止中・親の再開許可待ち。確認・議論・停止位置の報告だけ。制作・修正を始めない' in value['message']
+    assert 'topic-a' in value['message'] and 'change-a' in value['message'], value
+    if ready:
+        prepared_ref = write_json(f.work / 'consultation-prepared.json', value)
+        selection = {key: value[key] for key in ('usage', 'selection_sources')}
+        selection.update(candidate='fixture-code', model='fixture-model', effort='high')
+        stage3_event(f, 'worker-started', prepare_ref=str(prepared_ref), selection=selection,
+                     execution='running', work='consulting')
+        stage3_event(f, 'worker-finished', report_ref=str(f.report_ref), artifact_refs=[str(f.artifact)],
+                     prepare_ref=str(prepared_ref))
+        stage3_confirm(f)
+        f.prepare(f.request('resume'), code=3, reason='resume-not-permitted')
+
+
+def test_stage3_permissions(f):
+    # A2/A11・§5: 許可はchange・対象・前提・範囲に限り有効。別の停止を解除しない。
+    stage3_setup(f)
+    stage3_consult(f)
+    for change in ('change-a', 'change-b'):
+        stage3_request_stop(f, change, targets=('a',))
+        stage3_confirm(f, change=change)
+    stage3_permit(f, targets=('a',))
+    f.prepare(f.request('resume'), code=3, reason='resume-not-permitted')
+    permission = stage3_permit(f, 'change-b', targets=('a',))
+    value = f.prepare(f.request('resume'))
+    assert not value['coordination']['waiting_for_permission'], value
+    stage3_event(f, 'work-resumed', change='change-b', targets=['a'],
+                 permission_ref=permission['ref'], position='fixture resumed boundary',
+                 execution='running', work='working')
+    changes = {c['change']: c for c in stage3_read(f)['changes']}
+    assert changes['change-b']['phase'] == 'resumed' and changes['change-b']['resumed'] == ['a'], changes
+    assert not changes['change-b']['all_stopped'], changes
+    assert changes['change-b']['permissions'] == [dict(targets=['a'], ref=permission['ref'],
+        premises_ref=str(f.handoff), scope_ref=str(f.request_ref))], changes
+
+
+def test_stage3_unconfirmed(f, cause):
+    # A3/A11・§8: 共通設定不明や親の異常終了を停止完了・作業許可にしない。
+    stage3_setup(f)
+    stage3_consult(f)
+    if cause == 'settings':
+        f.workflow.write_text('{invalid fixture json')
+        # 設定不正でも緊急の停止要求・結果の保存は妨げない。
+        stage3_request_stop(f, targets=('a',))
+    else:
+        (f.state / 'runs/1/wrapper.log').write_text('EXIT:1\n')
+    value = f.view()['coordination']
+    assert value['status'] == 'unconfirmed', value
+    if cause == 'settings':
+        assert value['reason'] == 'settings-unreadable', value
+        assert value['settings']['consultation_round_limit'] is None, value
+        assert value['topics'][0]['limit'] is None and value['topics'][0]['over_limit'] is None, value
+    f.prepare(f.request('resume', purpose='consultation'), code=3, reason='coordination-unconfirmed')
+
+
+def test_stage3_review(f, trigger):
+    # A9/A12・§6: 要否は親の明示入力。2条件・迷う場合を記録し、回収と採否を分ける。
+    stage3_setup(f)
+    review = dict(review='review-a', required=True, triggers=[trigger], scope_ref=str(f.request_ref),
+        basis_ref=str(f.handoff), request_ref=str(f.request_ref), reason='fixture review needed')
+    report = dict(summary='fixture same-family review; additional review pending', pending=['review-a'],
+        reason='fixture review boundary', read_notes=[], written_notes=[], claude_review=review)
+    f.record('report', report)
+    stage3_event(f, 'quality-review', 'parent', **review, state='requested')
+    value = stage3_read(f)['reviews'][0]
+    assert all(value[key] == item for key, item in review.items()) and value['state'] == 'requested', value
+    assert f.view('collect')['report']['claude_review'] == review
+    assert 'review-a' in f.view('collect')['report']['pending']
+    if trigger == 'release':
+        wrapper = write_json(f.work / 'wrapper-result.json', {'result': 'fixture final response'})
+        returned = dict(version=1, review='review-a', parent_thread='fixture-parent',
+            scope_ref=review['scope_ref'], basis_ref=review['basis_ref'], wrapper_exit=0,
+            wrapper_reason='completed', wrapper_out_ref=str(wrapper), verifier_report_ref=str(f.report_ref))
+        return_ref = write_json(f.work / 'review-return.json', returned)
+        fields = {key: returned[key] for key in ('wrapper_exit', 'wrapper_reason',
+                                               'wrapper_out_ref', 'verifier_report_ref')}
+        stage3_event(f, 'quality-review', 'parent', **review, **fields, ref=str(return_ref), state='received')
+        value = stage3_read(f)['reviews'][0]
+        assert value['state'] == 'received' and value['basis_ref'] == returned['basis_ref'], value
+        assert all(value[key] == item for key, item in fields.items()), value
+        stage3_event(f, 'quality-review', 'parent', **review, **fields, state='adopted',
+                     decision_ref=str(f.stop_ref))
+        assert stage3_read(f)['reviews'][0]['decision_ref'] == str(f.stop_ref)
+
+
+def test_stage3_review_missing(f):
+    # A9・§6: stdoutや正常終了だけで一覧の全文を回収済みにしない。
+    stage3_setup(f)
+    wrapper = write_json(f.work / 'wrapper-result.json', {'result': 'fixture report location only'})
+    stage3_event(f, 'quality-review', 'parent', review='review-a', required=True, triggers=['release'],
+        scope_ref=str(f.request_ref), basis_ref=str(f.handoff), request_ref=str(f.request_ref),
+        state='held', wrapper_exit=0, wrapper_reason='report-missing', wrapper_out_ref=str(wrapper),
+        verifier_report_ref=None, reason='fixture full findings missing', next_action='retrieve findings before decision')
+    value = stage3_read(f)['reviews'][0]
+    assert value['state'] == 'held' and value['required'] and value['verifier_report_ref'] is None, value
+    assert value['reason'] and value['next_action'], value
 
 
 def test_candidates(f):
@@ -630,6 +916,11 @@ def test_sub_placement(f):
 
 
 cases = [
+    ('STAGE3/A6補足/A10/A12: 旧記録・既存列と共通設定の参照を維持', test_stage3_legacy_and_settings),
+    ('STAGE3/A1/A3/A5: 受領・訂正・依存待ちと往復・論点名・上限を区別', test_stage3_consultation),
+    ('STAGE3/A2/A11: 複数対象の送信・受領・書きかけ・全停止を区別', test_stage3_stop_states),
+    ('STAGE3/A2/A11: 許可は同じchange・対象・前提・範囲にだけ効く', test_stage3_permissions),
+    ('STAGE3/A9: 全文結果欠落は正常終了でもheldを保つ', test_stage3_review_missing),
     ('fixture: 模擬候補・枠・版1記録は既存CLIで利用できる', test_fixture),
     ('A13/§2: 候補JSONの解決値・枠と従来TSVの互換', test_candidates),
     ('§2: 候補なし・解決異常もJSONと理由を返して終了0', test_unresolved),
@@ -650,6 +941,22 @@ cases = [
     ('§4: 未登録workerと担当表の不一致は記録しない', test_event_binding),
 ]
 # 行数・空入力の網羅はせず、契約で保留が必要な振る舞いを各1件。
+for kind in ('absent', 'foreign-parent'):
+    cases.append((f'STAGE3/A5: {kind} の相手をinvalid-coordinationで拒否・記録不変',
+                  lambda f, k=kind: test_stage3_peer_binding(f, k)))
+for classification, disposition in (('requirements-scope', 'effective'),
+                                    ('purpose-policy', 'withdrawn'), ('unresolved', 'held')):
+    cases.append((f'STAGE3/A2/A4/A8/A10: {classification}/{disposition} の結論・判断・差分を保持',
+                  lambda f, c=classification, d=disposition: test_stage3_decision(f, c, d)))
+for ready in (True, False):
+    cases.append((f'STAGE3/A11: 読了確認{ready}で停止中のworkを保留し相談条件を引き継ぐ',
+                  lambda f, r=ready: test_stage3_stopped_prepare(f, r)))
+for cause in ('settings', 'parent'):
+    cases.append((f'STAGE3/A3/A11: {cause} 不明時は停止や許可を推定しない',
+                  lambda f, c=cause: test_stage3_unconfirmed(f, c)))
+for trigger in ('irreversible-design', 'release', 'uncertain'):
+    cases.append((f'STAGE3/A9/A12: {trigger} の追加確認要否・依頼・回収・裁定を記録',
+                  lambda f, t=trigger: test_stage3_review(f, t)))
 for reason in ('quota-exhausted', 'resume-unavailable'):
     cases.append((f'REPLACEMENT/R8/A7b: {reason} で同職種への交代と引継ぎを保持',
                   lambda f, r=reason: test_replace(f, r)))
