@@ -128,6 +128,31 @@ echo "=== 1. 全項目クリーン（陰性コントロール・フルスキャ�
   rm -rf "$REPO_DIR" "$VAULT_DIR" "$WORK"
 }
 
+echo "=== worktree の最上位は監査でき、サブディレクトリは拒否する ==="
+{
+  REPO_DIR="$(mktemp -d)"
+  VAULT_DIR="$(mktemp -d)"
+  WORK="$(mktemp -d)"
+  WORKTREE_DIR="$WORK/checkout"
+  make_fake_repo "$REPO_DIR"
+  commit_all "$REPO_DIR" "initial clean commit"
+  git -C "$REPO_DIR" worktree add -q --detach "$WORKTREE_DIR"
+  [[ -f "$WORKTREE_DIR/.git" ]]
+
+  rc=0
+  run_audit "$WORKTREE_DIR" "$VAULT_DIR" "$WORK" --quick || rc=$?
+  assert_eq "worktree --quick は成功" "0" "$rc"
+
+  rc=0
+  REPO="$WORKTREE_DIR/core" VAULT="$VAULT_DIR" \
+    "$BASH_BIN" "$WORKTREE_DIR/core/executor/audit.sh" --quick \
+    >"$WORK/stdout.log" 2>"$WORK/stderr.log" || rc=$?
+  assert_eq "作業ツリーの途中は終了2で拒否" "2" "$rc"
+
+  git -C "$REPO_DIR" worktree remove "$WORKTREE_DIR"
+  rm -rf "$REPO_DIR" "$VAULT_DIR" "$WORK"
+}
+
 echo "=== 2. NG語が履歴にのみ残っている場合、フルスキャンで検知し--quickでは検知しない ==="
 {
   REPO_DIR="$(mktemp -d)"

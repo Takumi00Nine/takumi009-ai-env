@@ -75,7 +75,9 @@ if [[ "$QUICK" -eq 0 ]]; then
 fi
 
 [[ -d "$REPO" ]] || fail_setup "REPO が見つかりません: $REPO"
-[[ -d "$REPO/.git" ]] || fail_setup "REPO が git リポジトリではありません: $REPO"
+REPO_TOP="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" \
+  || fail_setup "REPO が git リポジトリではありません: $REPO"
+[[ "$REPO" -ef "$REPO_TOP" ]] || fail_setup "REPO が git 作業ツリーの最上位ではありません: $REPO"
 
 # NG 語ファイルの既定（NGWORDS_FILE を与えないとき）。旧既定にだけあれば項目 1 を❌にする
 # （移す 1 コマンドは解決時に標準エラーへ出る）。
