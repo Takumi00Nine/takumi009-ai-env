@@ -19,8 +19,9 @@ passed = 0
 with tempfile.TemporaryDirectory(prefix='project-leader-test-') as temporary:
     root = Path(temporary)
     home, binary, prefs = root / 'home', root / 'bin', root / 'prefs'
+    worktree = root / 'worktree'
     project, state = root / 'project', root / 'project/output/team'
-    for directory in (home, binary, prefs, project / 'docs', project / 'work', project / 'output'):
+    for directory in (home, binary, prefs, worktree, project / 'docs', project / 'work', project / 'output'):
         directory.mkdir(parents=True, exist_ok=True)
     note = root / 'vault/Projects/example.md'
     note.parent.mkdir(parents=True)
@@ -30,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='project-leader-test-') as temporary:
         (prefs / (name + '.md')).write_text('fixture ' + name)
     (binary / 'cmux').write_text('''#!/bin/sh
 if [ "$1" = read-screen ]; then exit 0; fi
-if [ "$1" = notify ]; then printf '%s\\n' "$*" >> "$HOME/notices"; exit 0; fi
+if [ "$1" = notify ]; then printf '%s\\n' "$3" >> "$HOME/notices"; exit 0; fi
 exit 9
 ''')
     (binary / 'osascript').write_text('#!/bin/sh\nexit 0\n')
@@ -39,6 +40,11 @@ exit 9
 import json, os, pathlib, subprocess, sys, time
 root = pathlib.Path(os.environ['LEADER_TEST_ROOT'])
 prompt = sys.stdin.read()
+# This fixture task writes state and its Projects note outside -C. Reject
+# restricted modes instead of silently pretending those writes were allowed.
+if sys.argv[sys.argv.index('-s') + 1] != 'danger-full-access':
+    print('fixture: external record/note writes denied by sandbox', file=sys.stderr)
+    sys.exit(13)
 with (root / 'calls.jsonl').open('a') as stream:
     stream.write(json.dumps({'argv':sys.argv[1:], 'prompt':prompt,
         'worker':os.environ.get('AIENV_CODEX_WORKER'),
@@ -47,11 +53,16 @@ print(json.dumps({'type':'thread.started', 'thread_id':'fixture-thread'}), flush
 while (root / 'wait').exists():
     time.sleep(.05)
 state = pathlib.Path(os.environ['LEADER_TEST_STATE'])
+note = pathlib.Path(os.environ['LEADER_TEST_NOTE'])
+note.write_text(note.read_text() + '\\nfixture parent update')
 command = [sys.executable, os.environ['LEADER_TEST_CLI']]
 report = root / 'report.json'
 report.write_text(json.dumps({'summary':'fixture summary','pending':['approval'],
     'reason':'fixture boundary','read_notes':['fixture'],'written_notes':[]}))
 subprocess.run(command + ['report','--state-dir',str(state),'--file',str(report)], check=True, stdout=subprocess.DEVNULL)
+subprocess.run(command + ['report','--state-dir',str(state),'--file',str(report)], check=True, stdout=subprocess.DEVNULL)
+notices = pathlib.Path(os.environ['HOME']) / 'notices'
+(root / 'before-exit-notices').write_text(str(len(notices.read_text().splitlines()) if notices.exists() else 0))
 if (root / 'recover-ok').exists():
     event = root / 'recovered.json'
     event.write_text(json.dumps({'actor':'parent','worker':'parent','event':'recovery-complete',
@@ -67,7 +78,8 @@ sys.exit(3 if (root / 'error').exists() else 0)
     env = dict(os.environ, HOME=str(home), PATH=str(binary) + os.pathsep + os.environ['PATH'],
                AIENV_PREFERENCES_DIR=str(prefs), CMUX_TASK_STATE=str(declaration),
                CMUX_TASK_CMUX_BIN=str(binary / 'cmux'), AIENV_NOTIFY_WAIT_SECS='1',
-               LEADER_TEST_ROOT=str(root), LEADER_TEST_STATE=str(state), LEADER_TEST_CLI=str(cli))
+               LEADER_TEST_ROOT=str(root), LEADER_TEST_STATE=str(state), LEADER_TEST_CLI=str(cli),
+               LEADER_TEST_NOTE=str(note))
     # Never inherit selected components, a real ledger, or a real notification log.
     for key in ('AIENV_LEDGER','AIENV_COMPONENTS_FILE','AIENV_NOTIFY_LOG','CMUX_SOCKET_PATH',
                 'CMUX_BUNDLED_CLI_PATH','CMUX_WORKSPACE_ID','CMUX_SURFACE_ID'):
@@ -113,10 +125,10 @@ sys.exit(3 if (root / 'error').exists() else 0)
     usage, prompt = root / 'usage.md', root / 'request.md'
     usage.write_text('fixture usage checked; above stop point')
     prompt.write_text('fixture request')
-    init_args = ['--project','example','--project-dir',project,'--cwd',project,'--note',note,
+    init_args = ['--project','example','--project-dir',project,'--cwd',worktree,'--note',note,
                  '--goal','fixture goal','--source','fixture input reference','--workspace','fixture-workspace',
                  '--surface','fixture-surface','--candidate','fixture-candidate','--model','fixture-model',
-                 '--effort','high','--selection-ref',usage,'--sandbox','read-only']
+                 '--effort','high','--selection-ref',usage,'--sandbox','danger-full-access']
     # Registration cannot bypass the existing note/declaration prerequisites.
     note.unlink()
     invoke('init', *init_args, ok=False)
@@ -125,6 +137,13 @@ sys.exit(3 if (root / 'error').exists() else 0)
     invoke('init', *init_args)
     assert invoke('status')['status'] == 'not-started'
     check('registration preserves the note-before-parent boundary')
+
+    for sandbox in ('read-only', 'workspace-write'):
+        denied = subprocess.run([str(binary / 'codex'), 'exec', '-s', sandbox],
+                                input='fixture request', env=env, capture_output=True, text=True)
+        assert denied.returncode == 13 and 'writes denied' in denied.stderr
+    assert not (root / 'calls.jsonl').exists()
+    check('fake Codex detects restricted modes before writing external state or notes')
 
     assignment = dict(id='a1',stage='implementation',scope='fixture scope',artifact='fixture artifact',
                       role='implementer',worker='fixture-worker',address='fixture-address',parent_thread='fixture-thread',
@@ -157,8 +176,15 @@ sys.exit(3 if (root / 'error').exists() else 0)
     assert all(str(prefs / (name + '.md')) in call['prompt'] for name in notes)
     assert 'core-worker.md' not in call['prompt'] and 'worker-role-implementer.md' not in call['prompt']
     assert '本人承認前' in call['prompt']
+    assert '同じ報告で通知口を別途呼ばない' in call['prompt']
+    assert call['argv'][call['argv'].index('-s')+1] == 'danger-full-access'
+    assert call['argv'][call['argv'].index('-C')+1] == str(worktree.resolve())
+    assert 'fixture parent update' in note.read_text()
     assert '📣 example' in (home / 'notices').read_text()
     check('detached run refuses a duplicate and collects EXIT plus report after notification')
+    assert (root / 'before-exit-notices').read_text() == '1'
+    assert len((home / 'notices').read_text().splitlines()) == 1
+    check('parent report notifies once before exit, including repeated report saves')
 
     # A changed display only changes the mapping, never starts another Codex process.
     before = (root / 'calls.jsonl').read_text()

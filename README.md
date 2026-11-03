@@ -233,7 +233,7 @@ LEADER="$PWD/team/connect/codex/project-leader.py"
 python3 "$LEADER" view --state-dir "$STATE" --watch
 ```
 
-The viewer shows “preparing” before registration. From the Mac leader's terminal, after creating and declaring the project screen:
+The viewer shows “preparing” before registration. The standard parent policy requires explicitly passing `--sandbox danger-full-access`, so the parent can write private state and the Projects note outside its cwd. Keep its assigned scope in the request and its cwd limited to the target worktree. From the Mac leader's terminal, after creating and declaring the project screen:
 
 ```bash
 python3 "$LEADER" init --state-dir "$STATE" --project "$SLUG" \
@@ -241,7 +241,7 @@ python3 "$LEADER" init --state-dir "$STATE" --project "$SLUG" \
   --goal "Approved goal" --source "$GOAL_REFERENCE" \
   --workspace "$WORKSPACE_UUID" --surface "$LEFT_SURFACE" \
   --candidate "$CANDIDATE" --model "$MODEL" --effort "$EFFORT" \
-  --selection-ref "$SELECTION_REFERENCE" --sandbox workspace-write
+  --selection-ref "$SELECTION_REFERENCE" --sandbox danger-full-access
 python3 "$LEADER" start --state-dir "$STATE" --prompt-file "$REQUEST" --usage-ref "$USAGE_CHECK"
 python3 "$LEADER" status --state-dir "$STATE"
 python3 "$LEADER" collect --state-dir "$STATE"
@@ -251,7 +251,7 @@ python3 "$LEADER" resume --state-dir "$STATE" --prompt-file "$REPLY" --usage-ref
 
 `start` launches through `nohup` in a separate session and returns immediately. Its first request stops at the work-list proposal. `resume` keeps the saved conversation, cwd, model, effort and sandbox, and refuses a running parent. Save additional requests in project work and relay them at the next report boundary. Before **every** launch/resume/recovery, the Mac leader checks the existing usage source against the applicable stop point. `--usage-ref` requires a nonempty local record of that check; it does not interpret quota numbers or reselect a model. Human approval, child stop confirmation and read receipts remain the leaders' responsibilities.
 
-At the start of each turn, inspect each registered project's `status`: `not-started/running/finished/unconfirmed`, summary, pending decisions, paths and PIDs. A single command listing all projects is stage 4. `collect` requires no live parent process, `EXIT:0`, a nonempty final response and a saved report checkpoint. Nonzero exit, or missing exit with no live runner/wrapper/Codex, means `unconfirmed`; old child records stay last records, never inferred from the parent's log. Every report boundary calls the existing `notify.send` with a 📣 title regardless of presence. Delivery failure remains `unknown`; the saved report can still be collected next turn. Notification does not start a Mac-leader turn or prove a human saw the report.
+At the start of each turn, inspect each registered project's `status`: `not-started/running/finished/unconfirmed`, summary, pending decisions, paths and PIDs. A single command listing all projects is stage 4. `collect` requires no live parent process, `EXIT:0`, a nonempty final response and a saved report checkpoint. Nonzero exit, or missing exit with no live runner/wrapper/Codex, means `unconfirmed`; old child records stay last records, never inferred from the parent's log. Before ending its report, the parent executes `report`, which saves the summary and calls the existing `notify.send` with a 📣 title regardless of presence. This command is the parent's notification action: do not call the mouth separately for the same report. Repeated saves in the same run retain the first notification attempt; the exit handler only records the outcome. Delivery failure remains `unknown`; the saved report can still be collected next turn. Notification does not start a Mac-leader turn or prove a human saw the report.
 
 `recover --state-dir "$STATE" --prompt-file "$RECOVERY_REQUEST" --usage-ref "$NEW_USAGE_CHECK"` permits **one** recovery attempt, in the saved conversation, after the old processes end. It asks only to inspect every assignee's execution, stopping point, differences and unfinished work, and restore records without new production. Normal resume stays blocked until the parent records `recovery-complete` and exits successfully with a report. A failed attempt stays unconfirmed and returns to the Mac leader; there is no restart daemon.
 
@@ -266,7 +266,7 @@ Restore a closed screen by creating a replacement with the same `view --watch` c
 | `project.json` | Project folder/note, agreed goal/source, display, saved selection/conversation, latest run and recovery attempt flag. `init` creates it; lifecycle and `display` update it. |
 | `assignments.tsv` | Append-only table with header `version id stage scope artifact role worker address parent_thread candidate model effort selection_ref replaces handoff_ref state_ref`. `assign` requires `id` through `selection_ref`; a replacement uses a new id plus `replaces` and `handoff_ref`. Earlier authors/addresses remain; `state_ref` is filled automatically. |
 | `events.jsonl` / `latest.json` | Explicit state history and latest event per worker. `event` requires `actor:"parent"`, `event`, `worker`, `execution`, `work`, `ref`. Execution is `running/ended/unknown`; work is `working/consulting/consultation-wait/slot-wait/stop-requested/stopped/parent-wait/user-wait/done/replaced/unrecoverable/unconfirmed`. `consult` adds `peer`; `stop-request/stop-confirm/resume-permitted` add `targets`. Record decision, approval and recheck references alongside the evidence. |
-| `runs/<n>/` | Per-invocation prompt, runner/wrapper/Codex process information, wrapper result, Codex events/errors and final report. `run.json` retains the thread and delivery outcome. The parent saves `report.json` with `report`: `summary`, `pending` (array), `reason`, `read_notes` (array), `written_notes` (array). Empty arrays mean none. |
+| `runs/<n>/` | Per-invocation prompt, runner/wrapper/Codex process information, wrapper result, Codex events/errors and final report. `run.json` retains the thread and delivery outcome. The parent saves `report.json` with `report`: `summary`, `pending` (array), `reason`, `read_notes` (array), `written_notes` (array). Empty arrays mean none. The command adds `notification_attempted` and `notification`, then makes one delivery attempt per run after saving. |
 
 Example event input: `{"actor":"parent","event":"stop-confirm","worker":"worker-a","execution":"ended","work":"stopped","targets":["worker-a"],"ref":"stop-report-reference"}`. Recovery completion uses `worker:"parent"`, `event:"recovery-complete"` and its verification reference. Events record the parent's judgement; this CLI does not stop or inspect children. The parent must establish that all targets stopped and required approvals/rechecks exist before recording resume permission.
 
@@ -628,10 +628,10 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 
 目的・ゴールの決定→案件の `docs/work/output` と初期Projectsノート（Tasksは見出しだけ）→案件のcmux画面→既存 `cmux-task-declare.sh set` による宣言、の後に親を登録します。具体的なコマンドと版1の列・キーは上の英語節「Detached project leaders」の例・表を参照してください。`--state-dir` は案件outputの非公開ディレクトリで受け、プログラムの保管庫を含む **すべてのgit保管庫の外** に置きます。実案件名・会話・報告はこの公開repoへ置きません。
 
-- `init` は案件フォルダ・ノート・宣言・表示先を確認し、目的と発言参照、候補名・モデル・思考量・選択根拠、表示先を保存します。`start` は `nohup` と別セッションで切り離して返り、初回依頼には一覧案の報告までという境界を付けます。
+- `init` は案件フォルダ・ノート・宣言・表示先を確認し、目的と発言参照、候補名・モデル・思考量・選択根拠、表示先を保存します。親の既定方針どおり `--sandbox danger-full-access` を明示し、作業場所外の状態記録とProjectsノートへ保存できるようにします。担当範囲は依頼文で指定し、cwdは対象worktreeに絞ります。`start` は `nohup` と別セッションで切り離して返り、初回依頼には一覧案の報告までという境界を付けます。
 - `resume` は同じ会話・作業場所・モデル・思考量・sandboxを維持します。本人の承認と理由は依頼ファイルで同じ親へ渡します。実行中の親には追加投入せず、追加依頼を案件workへ保存して次の報告区切りで渡します。起動・再開・復旧のたび、マックリーダーが既存の使用率を照会して停止点と照合し、確認記録を `--usage-ref` で渡します。CLIはその記録の存在を確認し、枠の数値判定やモデルの選び直しは行いません。
 - ターン冒頭に各案件の `status` で未起動・実行中・終了・状態未確認と、要約・判断待ち・保存先を読みます。全案件を一コマンドで出す一覧は段階4です。`collect` は親のプロセス不在・`EXIT:0`・空でない最終報告・保存済みの要約を確認して回収します。通知だけでは回収せず、親の終了から子の停止を推測しません。
-- 報告終了時は在席・離席を問わず、保存後に既存の口 `notify.send` へ📣を渡します。通知失敗は `unknown` のまま残り、次のターンに判断待ちと報告を回収できます。口の成功は本人の閲覧確認ではなく、マックリーダーのターンも起動しません。
+- 親は報告終了前に在席・離席を問わず `report` を実行します。要約を保存してから既存の口 `notify.send` へ📣を渡す処理を、このコマンドにまとめています。同じ報告で口を別途呼ばず、同じ実行での再保存も最初の通知試行を引き継ぎます。終了側は結果の記録だけを行います。通知失敗は `unknown` のまま残り、次のターンに判断待ちと報告を回収できます。口の成功は本人の閲覧確認ではなく、マックリーダーのターンも起動しません。
 - 非0終了、またはプロセス不在で終了値が欠けた場合は状態未確認です。旧実行が止まり、枠を再確認した後だけ `recover` で同じ親を **一度だけ** 再開できます。新規制作を始めず、全担当の実行有無・停止位置・差分・書きかけを確認して記録を直す依頼を付けます。親の `recovery-complete` 明示記録と正常終了・報告が揃うまで通常再開はできません。復旧失敗は未確認を保って返し、再試行や常駐再起動は行いません。
 - 左の既存端末で `view --watch` を起動すると、登録前は準備中、起動後は最近の実行イベント・終了結果・最新報告を表示します。入力欄は作りません。画面を閉じても親は継続します。表示の復旧は画面作成・宣言後の `display` による対応先の変更だけで、親を複製しません。成果表示は既存の右列を使います。表示間隔は `--interval` または `AIENV_LEADER_VIEW_INTERVAL`（既定5秒）、行数は `--lines` で変えられます。
 

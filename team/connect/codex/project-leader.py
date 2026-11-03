@@ -142,7 +142,7 @@ def observe(state, project):
                   exit=code, out=str(out), log=str(log), report=report,
                   events=run["out"] + ".events.jsonl",
                   thread_id=current_thread(run), recovery_attempted=project["recovery_attempted"],
-                  notification=run.get("notification", "unknown"))
+                  notification=(report or {}).get("notification", run.get("notification", "unknown")))
     # Never convert a parent's EXIT into a child's stopped/completed state.
     if status == "unconfirmed" or (run["mode"] == "recover" and not project.get("recovery_complete")):
         result["worker_records_status"] = "unconfirmed"
@@ -179,7 +179,9 @@ def launch(state, project, args):
              f"目的・ゴール: {project['goal']}\n本人指定の参照: {project['source']}\n"
              f"担当表: {state / 'assignments.tsv'}\n状態履歴: {state / 'events.jsonl'}\n"
              f"報告を終える前に要約・判断待ち・終了理由・読了文書・書いたノート一覧を保存する。\n"
-             f"保存コマンド（プレースホルダーを実ファイルに置換）: {report_command}\n")
+             f"保存・📣通知コマンド（プレースホルダーを実ファイルに置換）: {report_command}\n"
+             "この report コマンドが親による既存の口への通知を兼ねる。在席・離席を問わず報告終了前に実行し、"
+             "同じ報告で通知口を別途呼ばない。\n")
     if args.command == "start":
         intro += "初回は作業一覧・見積り・停止点・体制の報告まで。本人承認前の実作業・ワーカー起動には進まない。\n"
     if args.command == "recover":
@@ -227,17 +229,10 @@ def run_parent(state, project, run_id):
     project = read_json(state / "project.json")
     project["thread_id"] = run["thread_id"]
     save(state / "project.json", project)
-    save(directory / "run.json", run)
     report_file = directory / "report.json"
     report = read_json(report_file) if report_file.exists() else {}
-    reason = report.get("reason", "状態未確認（報告記録なし、または異常終了）")
-    try:
-        result = subprocess.run([lookup("notify.send"), "call", "ask", f"📣 {project['project']}",
-                                 f"{reason}\n報告先: {run['out']}\n終了値: {code}"],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        run["notification"] = "sent" if result.returncode == 0 else "unknown"
-    except (OSError, ValueError):
-        run["notification"] = "unknown"
+    # The parent already notified through report before exiting. Only retain its outcome.
+    run["notification"] = report.get("notification", "unknown")
     save(directory / "run.json", run)
 
 
@@ -258,8 +253,23 @@ def record(state, project, args):
         for key in ("pending", "read_notes", "written_notes"):
             if not isinstance(data[key], list):
                 raise ValueError(f"array required: {key}")
-        data.update(version=VERSION, recorded_at=now())
-        save(state / "runs" / project["run"] / "report.json", data)
+        directory = state / "runs" / project["run"]
+        report_file = directory / "report.json"
+        previous = read_json(report_file) if report_file.exists() else {}
+        data.update(version=VERSION, recorded_at=now(), notification_attempted=True,
+                    notification=previous.get("notification", "unknown"))
+        # Save summary/decision waits before the parent's single notification attempt.
+        save(report_file, data)
+        if not previous.get("notification_attempted"):
+            run = read_json(directory / "run.json")
+            try:
+                result = subprocess.run([lookup("notify.send"), "call", "ask", f"📣 {project['project']}",
+                                         f"{data['reason']}\n報告先: {run['out']}"],
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                data["notification"] = "sent" if result.returncode == 0 else "unknown"
+            except (OSError, ValueError):
+                data["notification"] = "unknown"
+            save(report_file, data)
     else:
         required(data, ("actor", "event", "worker", "execution", "work", "ref"))
         if data["actor"] != "parent":
@@ -352,7 +362,8 @@ def main():
             for key in ("project", "project-dir", "cwd", "note", "goal", "source", "workspace", "surface",
                         "candidate", "model", "effort", "selection-ref"):
                 command.add_argument("--" + key, required=True)
-            command.add_argument("--sandbox", choices=("read-only", "workspace-write", "danger-full-access"), required=True)
+            command.add_argument("--sandbox", choices=("read-only", "workspace-write", "danger-full-access"),
+                                 required=True, help="親の既定方針: danger-full-access を明示（保管庫外の記録・案件ノートの保存用）")
         if name in ("start", "resume", "recover"):
             command.add_argument("--prompt-file", required=True)
             command.add_argument("--usage-ref", required=True)
