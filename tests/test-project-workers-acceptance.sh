@@ -294,9 +294,16 @@ def test_role_definition_source(f, source):
     write_json(f.state / 'project.json', project)
     home_definition = f.codex_agents / (role + '.toml')
     project_definition = cwd / '.codex/agents' / home_definition.name
-    if source == 'project':
+    if source in ('project', 'invalid-project'):
+        # C2: 両方を残し、ホーム優先への退行を採用元の記録で検出する。
         project_definition.parent.mkdir(parents=True)
-        home_definition.replace(project_definition)
+        project_definition.write_text(home_definition.read_text())
+        if source == 'invalid-project':
+            # C5: 案件側のnameが不正なら、正常なホーム側へ逃げずに拒否する。
+            project_definition.write_text(project_definition.read_text().replace(
+                'name = "test-writer"', 'name = "wrong-role"'))
+            f.prepare(f.request(), code=1, reason='invalid-role-definition')
+            return
     elif source == 'missing':
         home_definition.unlink()
         f.prepare(f.request(), code=1, reason='invalid-role-definition')
@@ -590,7 +597,7 @@ for mode, h5, d7, reason in (
 for execution, reason in (('running', 'already-running'), ('unknown', 'execution-unconfirmed')):
     cases.append((f'A7a/A7b: 旧実行{execution}なら再開も交代も保留',
                   lambda f, e=execution, r=reason: test_execution(f, e, r)))
-for source in ('project', 'home', 'missing'):
+for source in ('project', 'home', 'missing', 'invalid-project'):
     cases.append((f'ROLE-SOURCE: {source} の職種定義で準備・採用元記録、両方なければ拒否',
                   lambda f, s=source: test_role_definition_source(f, s)))
 for kind in ('reference', 'route', 'unresolved', 'resume-selection', 'replace-reason'):
