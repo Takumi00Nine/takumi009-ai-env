@@ -373,9 +373,9 @@ def test_execution(f, execution, reason):
     f.prepare(f.request('replace'), code=3, reason=reason)
 
 
-def test_replace(f):
+def test_replace(f, reason):
     f.seed()
-    value = f.prepare(f.request('replace'))
+    value = f.prepare(f.request('replace', reason=reason))
     assert (value['mode'], value['operation'], value['target'], value['phase']) == (
         'replace', 'spawn', None, 'read-confirmation')
     replacement = value['assignment']
@@ -391,6 +391,36 @@ def test_replace(f):
     assert result['current_assignment_ids'] == ['b']
     assert result['assignments'][0]['address'] == 'fixture-address-a'
     assert result['assignments'][1]['replaces'] == 'a'
+
+
+def test_context_limit_rejected(f, command):
+    # R8/A7b: 文脈上限は新しい交代準備・利用不能記録の理由にしない。
+    f.seed()
+    if command == 'worker-prepare':
+        f.prepare(f.request('replace', reason='context-limit'), code=1, reason='invalid-request')
+    else:
+        before = snapshot(f.state)
+        f.record('event', f.event('worker-unavailable', reason='context-limit'), code=1)
+        assert snapshot(f.state) == before, 'rejected context-limit event changed state records'
+
+
+def test_legacy_context_limit(f):
+    # R8/A7a: 過去の記録は新規入力の検証口を通さず用意し、読めることを確かめる。
+    f.seed()
+    old = f.event('worker-unavailable', reason='context-limit')
+    old.update(version=1, recorded_at=datetime.now(timezone.utc).isoformat(), run='1')
+    with (f.state / 'events.jsonl').open('a') as stream:
+        stream.write(json.dumps(old) + '\n')
+    write_json(f.state / 'latest.json', {'version': 1, 'workers': {'fixture-worker-a': old}})
+    before = snapshot(f.state)
+    for command in ('status', 'collect'):
+        value = f.view(command)
+        assert value['last_recorded']['fixture-worker-a'] == old, value
+        assert value['current_assignment_ids'] == ['a'], value
+    value = f.prepare(f.request('resume'))
+    assert (value['operation'], value['target'], value['phase']) == (
+        'followup', 'fixture-address-a', 'task'), value
+    assert snapshot(f.state) == before, 'reading legacy context-limit records changed state'
 
 
 def test_invalid_prepare(f, kind):
@@ -607,7 +637,7 @@ cases = [
     ('A7a: 同じ宛先・選択値を保持し枠を再照会、必要時は読了再確認', test_resume),
     ('A13: 過去の読了記録がなければ再開も確認だけ', test_missing_reading),
     ('A7a: 定義変更で保存値を上書きせず再開保留', test_definition_change),
-    ('A7b/A6: 同職種への交代、引継ぎ・旧担当・現担当を保持', test_replace),
+    ('REPLACEMENT/R8/A7a: 過去のcontext-limit記録を読み同じワーカーを再開', test_legacy_context_limit),
     ('A6/A7a: 相談優先の待ち順と未起動行なし、同じ宛先への復帰', test_queue),
     ('A6/結果回収: 選択履歴・全文報告・成果・親の未承認をstatus/collectへ', test_collect),
     ('§4: 再開時の枠・設定参照の転記不一致を拒否し、準備結果の一致だけを記録', test_started_selection),
@@ -620,6 +650,12 @@ cases = [
     ('§4: 未登録workerと担当表の不一致は記録しない', test_event_binding),
 ]
 # 行数・空入力の網羅はせず、契約で保留が必要な振る舞いを各1件。
+for reason in ('quota-exhausted', 'resume-unavailable'):
+    cases.append((f'REPLACEMENT/R8/A7b: {reason} で同職種への交代と引継ぎを保持',
+                  lambda f, r=reason: test_replace(f, r)))
+for command in ('worker-prepare', 'event'):
+    cases.append((f'REPLACEMENT/R8/A7b: {command} は新しいcontext-limit入力を拒否・記録不変',
+                  lambda f, c=command: test_context_limit_rejected(f, c)))
 for mode, h5, d7, reason in (
     ('new', 25, 70, 'stop-point'), ('resume', None, None, 'usage-unavailable'),
     ('replace', 0, 0, 'quota-exhausted')):
