@@ -285,6 +285,28 @@ def test_resume(f):
     assert f.prepare(f.request('resume', confirm_reading=True))['phase'] == 'read-confirmation'
 
 
+def test_role_definition_source(f, source):
+    # ROLE-SOURCE: project.json の cwd を使い、探索用の追加引数は渡さない。
+    project = json.loads((f.state / 'project.json').read_text())
+    cwd = f.work / 'checkout'
+    cwd.mkdir()
+    project['cwd'] = str(cwd)
+    write_json(f.state / 'project.json', project)
+    home_definition = f.codex_agents / (role + '.toml')
+    project_definition = cwd / '.codex/agents' / home_definition.name
+    if source == 'project':
+        project_definition.parent.mkdir(parents=True)
+        home_definition.replace(project_definition)
+    elif source == 'missing':
+        home_definition.unlink()
+        f.prepare(f.request(), code=1, reason='invalid-role-definition')
+        return
+    value = f.prepare(f.request())
+    expected = project_definition if source == 'project' else home_definition
+    # 記録のフィールド名は縛らず、採用した定義ファイルを結果から識別できること。
+    assert json.dumps(str(expected)) in json.dumps(value), f'definition source not recorded: {expected}'
+
+
 def test_missing_reading(f):
     f.seed(ready=False)
     value = f.prepare(f.request('resume'))
@@ -342,9 +364,6 @@ def test_invalid_prepare(f, kind):
     elif kind == 'route':
         request['candidate'] = 'fixture-claude'
         reason = 'wrong-route'
-    elif kind == 'role-definition':
-        (f.codex_agents / (role + '.toml')).unlink()
-        reason = 'invalid-role-definition'
     elif kind == 'unresolved':
         request['candidate'] = 'not-configured'
         reason = 'candidate-unresolved'
@@ -571,7 +590,10 @@ for mode, h5, d7, reason in (
 for execution, reason in (('running', 'already-running'), ('unknown', 'execution-unconfirmed')):
     cases.append((f'A7a/A7b: 旧実行{execution}なら再開も交代も保留',
                   lambda f, e=execution, r=reason: test_execution(f, e, r)))
-for kind in ('reference', 'route', 'role-definition', 'unresolved', 'resume-selection', 'replace-reason'):
+for source in ('project', 'home', 'missing'):
+    cases.append((f'ROLE-SOURCE: {source} の職種定義で準備・採用元記録、両方なければ拒否',
+                  lambda f, s=source: test_role_definition_source(f, s)))
+for kind in ('reference', 'route', 'unresolved', 'resume-selection', 'replace-reason'):
     cases.append((f'§3/§7: 不正な準備 {kind} は指定エラー・記録不変',
                   lambda f, k=kind: test_invalid_prepare(f, k)))
 for kind in ('notes', 'role', 'prohibitions'):
