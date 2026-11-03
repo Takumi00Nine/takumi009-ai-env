@@ -268,6 +268,36 @@ def assert_count(count, known, exact):
     assert (count['known'], count['exact']) == (known, exact), count
 
 
+def assert_text_information(text, value):
+    # MAJOR 3: 桁幅・全体一致ではなく、誰の何の状態かと数値の意味を突合する。
+    lines = text.splitlines()
+    assert lines and value['generated_at'] in lines[0], text
+    for key, count in value['totals'].items():
+        if key == 'project_count':
+            continue
+        match = re.search(r'\b' + key + r'\s*[:=]\s*(.*?)(?=\s+(?:current_started|running|cumulative_started)\s*[:=]|$)', lines[0])
+        assert match, (key, text)
+        shown = match.group(1)
+        assert re.search(r'\b' + str(count['known']) + r'\b', shown), (count, shown)
+        if count['exact'] is None:
+            assert re.search(r'unknown|未確認|未確定', shown), shown
+    for project in value['projects']:
+        heading = next((line for line in lines if re.match(r'^\s*' + re.escape(project['project']) + r'\b', line)), '')
+        assert project['parent']['status'] in heading and project['parent']['observed_at'] in heading, heading
+        for worker in project['workers']:
+            line = next((line for line in lines if worker['address'] in line), '')
+            for key in ('execution', 'work', 'certainty'):
+                assert re.search(r'(?<![\w-])' + re.escape(worker[key]) + r'(?![\w-])', line), (worker, line)
+            if worker['recorded_at']:
+                assert worker['recorded_at'] in line, line
+        for topic in project['consultations']:
+            line = next((line for line in lines if topic['topic'] in line and topic['subject'] in line), '')
+            for term in [*topic['participants'], topic['reception'], topic['certainty']]:
+                assert re.search(r'(?<![\w-])' + re.escape(term) + r'(?![\w-])', line), (topic, line)
+            assert topic['recorded_at'] in line, line
+    assert '\x1b' not in text, text
+
+
 def test_basic(f):
     # A14/R20/A12: 重複宣言をまとめ、宣言のない案件も含めた4人と根拠・報告。
     value = f.json()
@@ -300,9 +330,7 @@ def test_basic(f):
     assert beta['coordination']['changes'][0]['permissions'] == [], beta
     assert beta['coordination']['reviews'][0]['state'] == 'requested', beta
     text = f.run().stdout
-    for term in ('alpha', 'beta', 'a', 'b', 'c', 'd', '4'):
-        assert re.search(r'(?<![A-Za-z0-9])' + re.escape(term) + r'(?![A-Za-z0-9])', text), text
-    assert '\x1b' not in text, text
+    assert_text_information(text, value)
 
 
 def test_connections(f):
@@ -407,17 +435,55 @@ def test_partial_record(f):
 
 
 def test_unknown_worker(f):
-    # §4: 子1人の記録欠落は未確認。確認済みrunningだけをknownへ残す。
+    # MAJOR 4・§4: aが不明でも同案件のbはrunning。knownを0に丸めない。
     path = f.states['alpha'] / 'latest.json'
     latest = json.loads(path.read_text())
-    del latest['workers']['fixture-worker-b']
+    del latest['workers']['fixture-worker-a']
     write_json(path, latest)
     value = f.json()
     alpha = projects(value)['alpha']
-    worker = next(w for w in alpha['workers'] if w['assignment'] == 'b')
+    worker = next(w for w in alpha['workers'] if w['assignment'] == 'a')
     assert worker['certainty'] == 'unconfirmed' and worker['last_recorded'] is None, worker
-    assert_count(value['totals']['running'], 1, None)
+    b = next(w for w in alpha['workers'] if w['assignment'] == 'b')
+    assert b['execution'] == 'running' and b['certainty'] == 'last-recorded', b
+    assert_count(alpha['counts']['running'], 1, None)
+    assert_count(value['totals']['running'], 2, None)
     assert value['totals']['running']['unknown_projects'] == ['alpha'], value
+    # MAJOR 3: 未確認もtextに残し、「計2人」と確定表示しない。
+    assert_text_information(f.run().stdout, value)
+
+
+def test_missing_project_history(f):
+    # MAJOR 1・§5/A10/A12: 登録破損は有効な相談・停止・確認履歴まで消さない。
+    state = f.states['beta']
+    events = [json.loads(line) for line in (state / 'events.jsonl').read_text().splitlines()]
+    topic = dict(f.event('beta', 'c', 'ended', 'consultation-wait'), event='consult',
+        topic='topic-history', subject='fixture historical discussion', scope_ref=str(state / 'evidence.json'),
+        peer='fixture-worker-d', participants=['c', 'd'], phase='waiting', exchanges=[],
+        receipt=dict(assignment='d', kind='answering', ref=str(state / 'evidence.json')),
+        dependencies=[], outcome=None, next_action='fixture await answer')
+    f.save_events('beta', [*events, topic])
+    (state / 'project.json').write_text('{broken fixture')
+    value = f.json()
+    beta = projects(value)['beta']
+    assert beta['connection'] == 'unconfirmed' and beta['parent']['status'] == 'unconfirmed', beta
+    assert any(issue['code'] == 'record-error' for issue in beta['issues']), beta
+    coordination = beta['coordination']
+    assert coordination['status'] == 'unconfirmed', coordination
+    assert len(coordination['topics']) == len(coordination['changes']) == len(coordination['reviews']) == 1, coordination
+    assert coordination['topics'][0]['topic'] == 'topic-history', coordination
+    change = coordination['changes'][0]
+    assert change['change'] == 'change-a' and change['sent'] == ['d'] and change['confirmed'] == ['d'], change
+    assert change['permissions'] == [], change
+    review = coordination['reviews'][0]
+    assert review['review'] == 'review-a' and review['state'] == 'requested', review
+    assert len(beta['consultations']) == 1, beta
+    consultation = beta['consultations'][0]
+    assert consultation['participants'] == ['c', 'd'] and consultation['reception'] == 'received', consultation
+    assert consultation['certainty'] == 'unconfirmed' and consultation['recorded_at'] == recorded, consultation
+    assert consultation['ref'] == topic['ref'] and consultation['next_action'] == topic['next_action'], consultation
+    assert all(w['certainty'] == 'unconfirmed' and w['last_recorded'] for w in beta['workers']), beta
+    assert_count(projects(value)['alpha']['counts']['running'], 1, 1)
 
 
 def test_declaration_error(f):
@@ -543,6 +609,7 @@ cases = [
     ('A14/A10: 論点ごとに未受領・受領・依存先待ち・宛先訂正・結論を区別', test_consultations),
     ('§5: 一案件の破損でも他案件と確認済み合計・保存報告を残す', test_partial_record),
     ('§4: 子の記録欠落時も確認済みrunningだけをknownへ', test_unknown_worker),
+    ('MAJOR 1: project.json破損でも相談・停止・確認履歴を現在未確認の最終記録として残す', test_missing_project_history),
     ('§3/5: 宣言破損でもノートの案件を残し列挙不完全を表示', test_declaration_error),
     ('A10: 生ログ退役後も担当・結論・未決・次の一手を保存記録から辿る', test_retired_logs),
     ('§2: 単発に既定間隔は不要、明示0とwatch設定欠落は区別', test_interval_errors),

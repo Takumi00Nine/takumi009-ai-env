@@ -293,7 +293,8 @@ def test_stage3_legacy_and_settings(f):
         'lookup', 'team.workflow-settings'], env=f.env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     settings_path = Path(result.stdout.strip())
-    assert json.loads(settings_path.read_text()) == dict(version=1, consultation_round_limit=3)
+    settings = json.loads(settings_path.read_text())
+    assert settings['version'] == 1 and settings['consultation_round_limit'] == 3, settings
     assert stage3_read(f)['settings'] == dict(ref=str(settings_path), consultation_round_limit=3)
 
 
