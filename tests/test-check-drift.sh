@@ -408,6 +408,70 @@ vault_commit_at() {
     git -C "$vault" commit -q -m "$msg"
 }
 
+# CC-1/CC-2: Codex職種定義に対応するexternal-cli候補の有無。
+# 候補名の接頭辞や診断タグは固定せず、職種の報告とdrift件数を見る。
+test_codex_candidates() {
+  local REPO HOME_DIR out role_drifts
+  local AIENV_LOCAL_PROFILE_PATH AIENV_MODEL_DEFS_FILE AIENV_PROFILE_RESOLVE_LIB
+  local AIENV_AGENTS_DIR AIENV_PRIVATE_REPO
+  echo "=== CC-1/CC-2. Codex職種の候補あり／なし ==="
+  REPO="$(mktemp -d)"
+  HOME_DIR="$(mktemp -d)"
+  export AIENV_LOCAL_PROFILE_PATH="$HOME_DIR/.config/takumi009-ai-env/profile.md"
+  export AIENV_MODEL_DEFS_FILE="$HOME_DIR/.config/takumi009-ai-env/models.conf"
+  export AIENV_PROFILE_RESOLVE_LIB="$REPO/team/executor/profile_resolve.py"
+  export AIENV_AGENTS_DIR="$REPO/team/rules/agents"
+  export AIENV_PRIVATE_REPO="$HOME_DIR/private-repo"
+  make_fake_repo "$REPO"
+  install_fake_home "$REPO" "$HOME_DIR"
+  mkdir -p "$REPO/team/rules/codex-agents" "$HOME_DIR/Data/obsidian/Preferences"
+  cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
+  cp "$REPO_ROOT/team/rules/codex-agents/researcher.toml" "$REPO/team/rules/codex-agents/researcher.toml"
+  mkdir -p "$HOME_DIR/.codex/agents"
+  ln -s "$REPO/team/rules/codex-agents/researcher.toml" "$HOME_DIR/.codex/agents/researcher.toml"
+  cp "$REPO/team/rules/agents/sample-agent.md" "$REPO/team/rules/agents/researcher.md"
+  ln -s "$REPO/team/rules/agents/researcher.md" "$HOME_DIR/.claude/agents/researcher.md"
+  cp "$REPO_ROOT/team/connect/claude-code/role_candidates.py" "$REPO/team/connect/claude-code/role_candidates.py"
+  cat >> "$AIENV_MODEL_DEFS_FILE" <<'EOF'
+
+[native-worker]
+provider=external
+execution=external-cli
+model=gpt-6.1-sol
+effort=medium
+EOF
+  sed '/^machine_role:/i\
+role.researcher: configured model=t-sonnet-high,native-worker
+' "$AIENV_LOCAL_PROFILE_PATH" > "$AIENV_LOCAL_PROFILE_PATH.tmp"
+  mv "$AIENV_LOCAL_PROFILE_PATH.tmp" "$AIENV_LOCAL_PROFILE_PATH"
+
+  out="$(run_check_json "$REPO" "$HOME_DIR")" || true
+  assert_eq_num "CC-1: external-cli候補があればdriftなし" \
+    "$(json_field "$(last_line "$out")" total_drift)" "0"
+  role_drifts="$(printf '%s\n' "$out" | grep '^  - .*researcher' || true)"
+  assert_not_contains "CC-1: 候補のある職種を報告しない" "$role_drifts" "researcher"
+
+  # Claude候補を残し、external-cli候補だけを外す。
+  sed 's/model=t-sonnet-high,native-worker/model=t-sonnet-high/' \
+    "$AIENV_LOCAL_PROFILE_PATH" > "$AIENV_LOCAL_PROFILE_PATH.tmp"
+  mv "$AIENV_LOCAL_PROFILE_PATH.tmp" "$AIENV_LOCAL_PROFILE_PATH"
+  out="$(run_check_json "$REPO" "$HOME_DIR")" || true
+  assert_eq_num "CC-2: 候補がない職種をdrift 1件に数える" \
+    "$(json_field "$(last_line "$out")" total_drift)" "1"
+  role_drifts="$(printf '%s\n' "$out" | grep '^  - .*researcher' || true)"
+  assert_contains "CC-2: 対象職種を既存のdrift形式で報告する" "$role_drifts" "researcher"
+  assert_not_contains "CC-2: 候補の定義名は出さない" "$out" "t-sonnet-high"
+  rm -rf "$REPO" "$HOME_DIR"
+}
+
+# test-writerが追加ケースだけを実行できる入口（既存の--recall-onlyと同様）。
+if [ "${1:-}" = "--codex-candidates-only" ]; then
+  test_codex_candidates
+  echo "=== summary: $PASS passed, $FAIL failed ==="
+  [[ "$FAIL" -eq 0 ]]
+  exit $?
+fi
+
 echo "=== 1. 全項目ズレ無し（陰性コントロール） ==="
 {
   REPO="$(mktemp -d)"
@@ -729,5 +793,6 @@ EOF
 }
 
 echo
+test_codex_candidates
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
