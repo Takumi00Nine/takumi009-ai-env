@@ -229,7 +229,8 @@ def test_candidates(f):
     assert {v['candidate'] for v in values} == {'fixture-code', 'fixture-other', 'fixture-claude'}
     code = next(v for v in values if v['candidate'] == 'fixture-code')
     assert code == dict(role=role, candidate='fixture-code', route='external-cli',
-                       model='fixture-model', effort='high', ok='ok', h5=80, d7=70)
+                       model='fixture-model', effort='high', ok='ok', h5=80, d7=70,
+                       not_applicable_windows=[])
     legacy = f.run('--role', role, script=candidates_cli, json_output=False)
     rows = list(csv.DictReader(legacy.stdout.splitlines(), delimiter='\t'))
     assert legacy.stdout.splitlines()[0] == 'role\tdef\troute\tpass\tok\th5\td7'
@@ -334,6 +335,36 @@ def test_deferred(f, mode, h5, d7, reason):
     else:
         f.usage(h5=h5, d7=d7)
     f.prepare(f.request(mode), code=3, reason=reason)
+
+
+def test_usage_windows(f, scenario):
+    # USAGE-WINDOW: 正規の取得口を模擬キャッシュから通し、適用外と取得不能を区別する。
+    path = f.cache / 'codex-cache.json'
+    cache = json.loads(path.read_text())
+    cache['five_hour'] = dict(used_percent=None, resets_at_epoch=None)
+    cache['reset_credits'] = dict(available_count=0, reset_scope=['five_hour', 'seven_day'], credits=[])
+    cache['seven_day']['used_percent'] = 100 if scenario == 'exhausted' else 29
+    if scenario == 'error':
+        del cache['fetched_at']
+    elif scenario == 'stale':
+        cache['fetched_at'] = 1
+    write_json(path, cache)
+    before = path.read_bytes()
+    snapshot_cli = repo / 'usage/executor/usage_snapshot.py'
+    snapshot_value = f.run('--json', script=snapshot_cli)
+    pool = next(p for p in snapshot_value['pools'] if p['pool_ref'] == 'codex-subscription')
+    assert pool['usage_state'] == (scenario if scenario in ('error', 'stale') else 'ok'), pool
+    if scenario not in ('error', 'stale'):
+        assert [w['window'] for w in pool['windows']] == ['seven_day'], pool
+    if scenario in ('error', 'stale'):
+        f.prepare(f.request(), code=3, reason='usage-unavailable')
+    else:
+        value = f.prepare(f.request(), code=3 if scenario == 'exhausted' else 0,
+                          reason='quota-exhausted' if scenario == 'exhausted' else None)
+        assert value['usage']['h5'] is None, value
+        assert value['usage']['d7'] == (0 if scenario == 'exhausted' else 71), value
+        assert value['usage']['not_applicable_windows'] == ['five_hour'], value
+    assert path.read_bytes() == before, 'worker-prepare rewrote usage cache'
 
 
 def test_execution(f, execution, reason):
@@ -600,6 +631,9 @@ for execution, reason in (('running', 'already-running'), ('unknown', 'execution
 for source in ('project', 'home', 'missing', 'invalid-project'):
     cases.append((f'ROLE-SOURCE: {source} の職種定義で準備・採用元記録、両方なければ拒否',
                   lambda f, s=source: test_role_definition_source(f, s)))
+for scenario in ('ready', 'error', 'stale', 'exhausted'):
+    cases.append((f'USAGE-WINDOW: 5h適用外/{scenario} は適用窓と取得状態で判定',
+                  lambda f, s=scenario: test_usage_windows(f, s)))
 for kind in ('reference', 'route', 'unresolved', 'resume-selection', 'replace-reason'):
     cases.append((f'§3/§7: 不正な準備 {kind} は指定エラー・記録不変',
                   lambda f, k=kind: test_invalid_prepare(f, k)))
