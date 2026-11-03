@@ -614,6 +614,38 @@ def test_stage3_exchange_rejected(f, kind):
     stage3_reject(f, value)
 
 
+def test_stage3_wrapper_reason(f, case):
+    # A9/WRAPPER-REASON: 親が読み替えず、RETURNとイベントに同じREASONを渡す。
+    stage3_setup(f)
+    value = stage3_review_result(f)
+    returned = json.loads(Path(value['ref']).read_text())
+    if case == 'absent':
+        del value['wrapper_reason']
+        del returned['wrapper_reason']
+    else:
+        reason = None if case == 'null' else '' if case == 'empty' else '-'
+        value['wrapper_reason'] = returned['wrapper_reason'] = reason
+    if case == 'nonzero':
+        value['wrapper_exit'] = returned['wrapper_exit'] = 1
+    write_json(Path(value['ref']), returned)
+    if case == 'nonzero':
+        # 理由なしでも非0終了はreceivedにできず、判断待ちを維持する。
+        stage3_reject(f, value)
+        assert stage3_read(f)['reviews'][0]['state'] == 'requested'
+        value.update(state='held', reason='fixture wrapper failed', next_action='parent decides retry')
+        saved = f.record('event', value)
+        assert saved['wrapper_exit'] == 1 and stage3_read(f)['reviews'][0]['state'] == 'held'
+    else:
+        saved = f.record('event', value)
+        assert saved['state'] == 'received', saved
+        # 正規化先の値は実装側に委ね、親側の手変換や仮の理由は要求しない。
+        assert saved.get('wrapper_reason') in ('-', None, ''), saved
+        adopted = f.record('event', dict(saved, state='adopted', decision_ref=str(f.stop_ref)))
+        assert adopted['state'] == 'adopted', adopted
+        review = stage3_read(f)['reviews'][0]
+        assert review['state'] == 'adopted' and review.get('wrapper_reason') == saved.get('wrapper_reason'), review
+
+
 def test_candidates(f):
     # §2: resolved values, no automatic choice, and legacy TSV agree.
     data = f.run('--profile', f.profile, '--agents-dir', f.agents,
@@ -1052,6 +1084,9 @@ cases = [
     ('§4: 未登録workerと担当表の不一致は記録しない', test_event_binding),
 ]
 # 行数・空入力の網羅はせず、契約で保留が必要な振る舞いを各1件。
+for case in ('dash', 'null', 'empty', 'absent', 'nonzero'):
+    cases.append((f'WRAPPER-REASON/A9: {case} を変換せず返却し正常受領と失敗保留を区別',
+                  lambda f, c=case: test_stage3_wrapper_reason(f, c)))
 for state in ('adopted', 'rejected'):
     cases.append((f'STAGE3-FIX/MAJOR3/A9: receivedと異なる結果の{state}を拒否・記録不変',
                   lambda f, s=state: test_stage3_review_changed_result(f, s)))
