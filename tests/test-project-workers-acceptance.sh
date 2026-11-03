@@ -638,8 +638,8 @@ def test_stage3_wrapper_reason(f, case):
     else:
         saved = f.record('event', value)
         assert saved['state'] == 'received', saved
-        # 正規化先の値は実装側に委ね、親側の手変換や仮の理由は要求しない。
-        assert saved.get('wrapper_reason') in ('-', None, ''), saved
+        # READMEの定義どおり、理由なしは保存時に「-」へ揃える。
+        assert saved['wrapper_reason'] == '-', saved
         adopted = f.record('event', dict(saved, state='adopted', decision_ref=str(f.stop_ref)))
         assert adopted['state'] == 'adopted', adopted
         review = stage3_read(f)['reviews'][0]
