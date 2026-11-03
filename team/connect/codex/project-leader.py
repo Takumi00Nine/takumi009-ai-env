@@ -140,6 +140,7 @@ def coordination(state, project, unconfirmed=False):
                     topic=event["topic"], owner=event["owner"], targets=[], sent=[], received=[],
                     confirmed=[], permissions=[], resumed=[]))
                 change["targets"] = list(dict.fromkeys(change["targets"] + event["targets"]))
+                change["scope_ref"] = event["scope_ref"]
                 change["sent"] = list(dict.fromkeys(change["sent"] + [r["assignment"] for r in event["sent_refs"]]))
                 change["recorded_at"] = event["recorded_at"]
             elif name in ("stop-received", "stop-confirm", "resume-permitted", "work-resumed"):
@@ -274,6 +275,11 @@ def validate_coordination(state, project, data):
                             or any(returned[k] != data[k] for k in keys)):
                         raise ValueError("review return must match parent, review and basis")
                 else:
+                    result_keys = ("wrapper_exit", "wrapper_reason", "wrapper_out_ref", "verifier_report_ref")
+                    if old is None or old["state"] not in ("received", "adopted", "rejected"):
+                        raise ValueError("record a verified receipt before deciding the review")
+                    if any(old[key] != data[key] for key in result_keys):
+                        raise ValueError("review decision must use the received result")
                     reference(data["decision_ref"])
             if data["state"] == "held":
                 required(data, ("next_action",))
@@ -290,8 +296,10 @@ def validate_coordination(state, project, data):
                 reference(data["scope_ref"])
                 if change and (change["owner"] != data["owner"] or not set(change["targets"]) <= set(targets)):
                     raise ValueError("preserve stop owner and targets")
-                if change and change["permissions"] and set(targets) != set(change["targets"]):
-                    raise ValueError("new targets after permission require a new change")
+                if change and change["permissions"] and (
+                        set(targets) != set(change["targets"]) or data["scope_ref"] != change["scope_ref"]
+                        or data["topic"] != change["topic"]):
+                    raise ValueError("changed targets or scope after permission require a new change")
                 for sent in data["sent_refs"]:
                     if sent["assignment"] not in targets:
                         raise ValueError("unknown sent target")
@@ -310,7 +318,11 @@ def validate_coordination(state, project, data):
                     string_list(data, "touched_refs")
                     reference(data["execution_ref"])
                 elif event == "resume-permitted":
-                    if not change["all_stopped"] or previous["status"] != "recorded" or data["work"] != "parent-wait":
+                    stopped = set(change["confirmed"])
+                    # A permitted resumption does not invalidate the other targets' stops.
+                    accounted = stopped | set(change["resumed"])
+                    if (not set(change["targets"]) <= accounted or not set(targets) <= stopped
+                            or previous["status"] != "recorded" or data["work"] != "parent-wait"):
                         raise ValueError("confirm all stops before permission")
                     for key in ("premises_ref", "scope_ref", "decision_ref", "recheck_ref"):
                         reference(data[key])
