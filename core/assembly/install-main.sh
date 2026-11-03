@@ -711,6 +711,10 @@ else
   if PROFILE_COPY_ERR="$(cp "$PROFILE_SAMPLE_SRC" "$profile_tmp" 2>&1 1>/dev/null)"; then
     mv "$profile_tmp" "$AIENV_LOCAL_PROFILE_PATH"
     log "ローカル実体プロファイルの雛形を作成しました: $AIENV_LOCAL_PROFILE_PATH <- ${PROFILE_SAMPLE_SRC}（team/data/profile.md.sampleをそのままコピー）"
+    # 初回に機役割が確定したので、その条件を含めた配置一覧を取り直す。
+    ALL_LIST="$(ledger_tool_or_fail "プロファイル作成後の配置を導けません" placement --all)"
+    SEL_LIST="$(ledger_tool_or_fail "プロファイル作成後の選択から配置を導けません" placement)"
+    SEL_PLACES="$(printf '%s\n' "$SEL_LIST" | cut -f2)"
   else
     rm -f "$profile_tmp"
     warn "team/data/profile.md.sampleを読み取れませんでした（無い・checkout破損・権限不足等の可能性）。雛形コピーをskipします: ${PROFILE_SAMPLE_SRC}（詳細: ${PROFILE_COPY_ERR}）"
@@ -731,13 +735,6 @@ AGENTS_NEWLY_PLACED=()
 CODEX_AGENTS_SRC_DIR="$DIR/team/rules/codex-agents"
 CODEX_AGENTS_DEST_DIR=""
 CODEX_AGENTS_NEWLY_PLACED=()
-CODEX_AGENTS_ENABLED=0
-if [ "$IS_SUB_DELEGATE" != "1" ]; then
-  machine_directive="$(python3 "$AIENV_PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null || true)"
-  case $'\t'"$machine_directive"$'\t' in
-    *$'\tMACHINE_ROLE:main\t'*) CODEX_AGENTS_ENABLED=1 ;;
-  esac
-fi
 
 # run_part <実体> <置き場> — 接続フォルダの配置手順を引数なしで実行する（置き場はその手順が置くもの）。
 run_part() {
@@ -772,7 +769,8 @@ while IFS=$'\t' read -r how place src fn; do
   new_codex_agent=""
   case "$src" in
     "$CODEX_AGENTS_SRC_DIR"/*)
-      [ "$CODEX_AGENTS_ENABLED" = "1" ] || continue
+      # 機役割条件は placement で適用済み。明示的なサブ用呼び出しも従来どおり配らない。
+      [ "$IS_SUB_DELEGATE" != "1" ] || continue
       CODEX_AGENTS_DEST_DIR="$(dirname "$place")"
       if [ "$DRY_RUN" != "1" ] && [ ! -e "$place" ] && [ ! -L "$place" ]; then
         new_codex_agent="$(basename "$place" .toml)"
@@ -883,7 +881,7 @@ cleanup_deselected() {
   local how place src fn p bak
   while IFS=$'\t' read -r how place src fn; do
     [ -n "$how" ] || continue
-    case "$src" in "$CODEX_AGENTS_SRC_DIR"/*) [ "$CODEX_AGENTS_ENABLED" = "1" ] || continue ;; esac
+    case "$src" in "$CODEX_AGENTS_SRC_DIR"/*) [ "$IS_SUB_DELEGATE" != "1" ] || continue ;; esac
     case "$NL$SEL_PLACES$NL" in *"$NL$place$NL"*) continue ;; esac
     if [ "$how" = "link" ]; then
       if [ -L "$place" ] && [ "$(readlink "$place")" = "$src" ]; then

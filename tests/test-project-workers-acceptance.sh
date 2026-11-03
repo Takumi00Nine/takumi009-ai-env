@@ -402,7 +402,7 @@ def test_queue(f):
 
 def test_collect(f):
     f.assign()
-    prepared = f.prepared()
+    prepared = json.loads(f.prepare_ref.read_text())
     selection = {k: prepared[k] for k in ('usage', 'selection_sources')}
     selection.update(candidate='fixture-code', model='fixture-model', effort='high')
     started = f.event('worker-started', prepare_ref=str(f.prepare_ref), selection=selection)
@@ -431,6 +431,26 @@ def test_collect(f):
     assert history[0]['selection'] == selection
     assert history[0]['version'] == 1 and history[0]['run'] == '1' and history[0]['recorded_at']
     assert f.view()['assignments'][0]['selection_ref'] == str(f.state / 'events.jsonl')
+
+
+def test_started_selection(f):
+    f.seed()
+    stale_usage = json.loads(f.prepare_ref.read_text())['usage']
+    f.usage(h5=63, d7=52)
+    prepared = f.prepare(f.request('resume'))
+    write_json(f.prepare_ref, prepared)
+    selection = {key: prepared['assignment'][key] for key in ('candidate', 'model', 'effort')}
+    selection.update({key: prepared[key] for key in ('usage', 'selection_sources')})
+    # 再開時の転記違いを各項目で拒否し、履歴・最終形を更新しない。
+    for key, stale in (('usage', stale_usage), ('selection_sources', [str(f.work / 'old-models.conf')])):
+        before = snapshot(f.state)
+        started = f.event('worker-started', prepare_ref=str(f.prepare_ref),
+                          selection=dict(selection, **{key: stale}))
+        started.update(execution='running')
+        f.record('event', started, code=1)
+        assert snapshot(f.state) == before, key
+    started['selection'] = selection
+    assert f.record('event', started)['selection'] == selection
 
 
 def test_missing_result(f, kind):
@@ -504,6 +524,24 @@ def test_install_without_team(f):
     assert not list(f.codex_agents.glob('*.toml'))
 
 
+def test_sub_placement(f):
+    for path in f.codex_agents.iterdir():
+        path.unlink()
+    f.profile.write_text(f.profile.read_text().replace('value=main', 'value=sub'))
+    f.install('--select', 'team,core', '--sub-delegate')
+    assert not list(f.codex_agents.glob('*.toml')), 'sub installation deployed Codex agents'
+    for extra in ([], ['--all']):
+        result = subprocess.run(['bash', str(repo / 'core/assembly/ledger-tool.sh'), 'placement', *extra],
+                                env=f.env, capture_output=True, text=True, check=True, timeout=20)
+        rows = [line.split('\t') for line in result.stdout.splitlines()]
+        assert not any('/codex-agents/' in row[2] for row in rows), extra
+        assert any('/.claude/agents/' in row[1] for row in rows), extra
+    drift = subprocess.run(['bash', str(repo / 'core/assembly/check-drift.sh'), '--managed-symlinks-only'],
+                           env=f.env, capture_output=True, text=True, timeout=20)
+    assert drift.returncode == 0, drift.stdout + drift.stderr
+    assert 'drift: 0件' in drift.stdout
+
+
 cases = [
     ('fixture: 模擬候補・枠・版1記録は既存CLIで利用できる', test_fixture),
     ('A13/§2: 候補JSONの解決値・枠と従来TSVの互換', test_candidates),
@@ -515,11 +553,13 @@ cases = [
     ('A7b/A6: 同職種への交代、引継ぎ・旧担当・現担当を保持', test_replace),
     ('A6/A7a: 相談優先の待ち順と未起動行なし、同じ宛先への復帰', test_queue),
     ('A6/結果回収: 選択履歴・全文報告・成果・親の未承認をstatus/collectへ', test_collect),
+    ('§4: 再開時の枠・設定参照の転記不一致を拒否し、準備結果の一致だけを記録', test_started_selection),
     ('互換: 段階1の追加項目なし入力を回収', test_legacy),
     ('A13: 既存職種と同じ参照TOML・3キー、モデル固定なし', test_definitions),
     ('A13: main/team配置・既存ファイル退避・Claude配置維持・Codexリンク切れ報告', test_install),
     ('A13: dry-runはCodex配置計画だけを示しHOMEを変えない', test_install_dry),
     ('A13: team未選択ではCodex職種を配置しない', test_install_without_team),
+    ('A13: subの配置・全機能導出・drift検査はCodex職種を同じ条件で除外', test_sub_placement),
     ('§4: 未登録workerと担当表の不一致は記録しない', test_event_binding),
 ]
 # 行数・空入力の網羅はせず、契約で保留が必要な振る舞いを各1件。

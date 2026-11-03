@@ -17,7 +17,8 @@
 #                                exit 0 あり／1 該当なし／2 台帳異常／3 該当が全件実体異常
 #   ledger-tool.sh placement [--all]  配置の一覧＝「<仕方><TAB><置き場><TAB><実体の絶対パス><TAB><機能>」を台帳の行順に
 #                                （フォルダ単位の行は直下の各ファイルへ同名で展開・置き場の `$HOME` は展開）。
-#                                --all＝選択を読まず全部入り。exit 0／2 台帳異常・選択の異常（stderr に固定文 1 行）
+#                                --all＝選択を読まず全機能。機役割による配置対象の除外は --all でも適用する。
+#                                exit 0／2 台帳異常・選択の異常（stderr に固定文 1 行）
 #   ledger-tool.sh select [<機能名,…|all>]  引数なし＝今の選択（all か保存された値）を 1 行。
 #                                引数あり＝検査して保存（同じフォルダの一時ファイル→rename・all＝ファイルを消す）。
 #                                exit 0／1 保存できない（一時ファイルは消す）／2 選択が不正（何も変えない）
@@ -34,7 +35,8 @@
 #   AIENV_COMPONENTS_FILE＝選択のファイル（既定＝~/.config/takumi009-ai-env/components.env）。
 # 隔離: ⑦ と live-set は repo の複製を一時 HOME に置き、README のメイン機手順（雛形の複写→全部入り→常駐の登録）を
 #   SKIP_LAUNCHCTL=1・LAUNCHCTL_TIMEOUT_SECS=1・偽 launchctl／osascript／cmux で走らせる（実 HOME・実 launchd に触れない）。
-# 依存: bash 3.2・awk・git・python3（標準 lib）。照会・導出・選択は shell と awk だけで行う（python を起動しない）。
+# 依存: bash 3.2・awk・git・python3（標準 lib）。機役割限定の配置は既存 resolver で確認する。
+# それ以外の照会・導出・選択は shell と awk だけで行う。
 
 set -uo pipefail
 
@@ -68,6 +70,7 @@ COMPONENTS_FILE="${AIENV_COMPONENTS_FILE:-$HOME/$CONFIG_HOME_REL/components.env}
 COMPONENTS_KEY="AIENV_COMPONENTS"                  # 選択のファイルの唯一のキー（値＝機能名のカンマ区切り）
 SELECT_ALL="all"                                   # 全部入りを明示する語（保存はファイルを消すこと）
 ALWAYS_FUNCTION="core"                             # 選択に依らず常に含む機能
+MAIN_ONLY_PART="team/rules/codex-agents/"           # 機役割限定の配置条件は placement だけが持つ
 
 usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; }
 
@@ -210,12 +213,21 @@ scan_ok() {
 
 # placement [--all] — 配置先ごとに 1 行（設計 §3.2）。フォルダ単位の行は直下の各ファイル（隠しファイルを除く）へ同名で展開する。
 placement() {
-  local tag spec rel fn how place f
+  local tag spec rel fn how place f machine_directive
   SEL=""
   if [ "${1:-}" != "--all" ]; then read_selection || return "$RC_LEDGER_BAD"; fi
   scan_ok place - "$SEL" || return $?
   while IFS=$'\t' read -r tag spec rel fn; do
     [ -n "$tag" ] || continue
+    if [ "$rel" = "$MAIN_ONLY_PART" ]; then
+      machine_directive="$(python3 "${AIENV_PROFILE_RESOLVE_LIB:-$ROOT/team/executor/profile_resolve.py}" resolve \
+        "${AIENV_LOCAL_PROFILE_PATH:-$HOME/$CONFIG_HOME_REL/profile.md}" \
+        --agents-dir "${AIENV_AGENTS_DIR:-$ROOT/team/rules/agents}" 2>/dev/null)" || machine_directive=""
+      case $'\t'"$machine_directive"$'\t' in
+        *$'\tMACHINE_ROLE:main\t'*) ;;
+        *) continue ;;
+      esac
+    fi
     how="${spec%%:*}"
     place="$HOME${spec#*:\$HOME}"
     case "$rel" in

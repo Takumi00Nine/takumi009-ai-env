@@ -37,7 +37,7 @@ part	ai-brain/assembly/com.takumi009.maintenance.plist	ai-brain	assembly	-	-	Lau
 
 # ===== Team =====
 part	team/rules/agents/	team	rules	-	-	職種定義	-	link:$HOME/.claude/agents/
-part	team/rules/codex-agents/	team	rules	-	-	Codex職種の名前・用途・必読参照（メイン機のみ）	-	link:$HOME/.codex/agents/
+part	team/rules/codex-agents/	team	rules	-	-	Codex職種の名前・用途・必読参照（placementがmain確認時だけ導出）	-	link:$HOME/.codex/agents/
 part	team/data/profile.md.sample	team	data	-	-	配役表の雛形	-	-
 part	team/data/models.conf.sample	team	data	-	-	モデル定義の雛形	-	-
 part	team/executor/profile_resolve.py	team	executor	-	team.profile-resolve	解決器	-	-

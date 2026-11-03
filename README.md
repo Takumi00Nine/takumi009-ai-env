@@ -108,7 +108,7 @@ Generation/updating is done by `ai-brain/executor/export-public-vault.sh` (detai
 
 Every tracked component (file or folder), every test suite, and every "calling the human" site is looked up through this one TSV file (columns: kind, path, function, layer, provider, key, note, notices, placement). `core/assembly/ledger-tool.sh check` re-derives the real tree (via `git ls-files`), the old→new move map (`core/data/moves.tsv`), and this README's own Structure section, and reports any mismatch as a single line each. The move map records the v1.1 split: parts and suites that existed at v1.1 have a row there, while parts and suites added after v1.1 (e.g. `tests/test-notify.sh`) need only their ledger row and are not added to the move map. The same tool's `lookup <key>` is how one component calls into another function without naming it directly (e.g. "the AI Brain health judge", "the Dock declaration CLI") — a missing key is a planned no-op, a broken ledger or a missing/non-executable target is reported with a fixed `LEDGER: …` line. The 8th column, **notices**, is filled only on Notify's senders (`call.alert`, `call.usage`, `call.ask`, `answer`, comma-separated; a bare `call` takes every call), and `route <notice>` returns the senders for one notice (`<destination><TAB><path>`, in ledger order) — that is how the mouth finds where to deliver without naming any destination. Adding a part or a suite always means adding one row here (FR-14).
 
-The 9th column, **placement**, says where the installer puts the part: `-` (not placed) or `<how>:<where>` (multiple entries may be separated by whitespace) — how = `link` (a symlink to the part; a folder row links each file under it), `gen` (a generated file with `$HOME` filled in), `run` (run the part, a setup script, which places its own files); where = a live location starting with `$HOME/`. `ledger-tool.sh placement [--all]` lists the placement of the selected functions (`<how><TAB><where><TAB><part><TAB><function>`, in ledger order; `--all` = every function). The installer, hook registration, the cleanup of unselected functions, and `check-drift.sh` use only this list.
+The 9th column, **placement**, says where the installer puts the part: `-` (not placed) or `<how>:<where>` (multiple entries may be separated by whitespace) — how = `link` (a symlink to the part; a folder row links each file under it), `gen` (a generated file with `$HOME` filled in), `run` (run the part, a setup script, which places its own files); where = a live location starting with `$HOME/`. `ledger-tool.sh placement [--all]` lists the placement of the selected functions (`<how><TAB><where><TAB><part><TAB><function>`, in ledger order; `--all` = every function). Machine-role exclusions also apply with `--all`: Codex worker definitions appear only when the existing resolver confirms `main`. The installer, hook registration, the cleanup of unselected functions, and `check-drift.sh` use this same filtered list.
 
 **Selecting functions**: `core/assembly/install-main.sh --select ai-brain,core` places only the named functions (comma-separated, from `ai-brain`, `team`, `usage`, `notify`, `dock`, `core`; Core is always included) and saves the choice to `~/.config/takumi009-ai-env/components.env` as `AIENV_COMPONENTS=ai-brain,core` (path overridable with `AIENV_COMPONENTS_FILE`). No file = everything; `--select all` goes back to everything by deleting the file. Without `--select` the installer keeps the saved selection; `install-sub.sh --select …` passes it on, and `update-sub.sh` (no arguments) always uses the saved one. Lookups (`lookup`, `route`, `placement`) treat unselected functions' rows as absent. To undo, run the installer again with the previous selection spelled out. The installer never runs `launchctl`: the end of its output lists the LaunchAgent install commands for the selected functions and the unload commands for the unselected ones (each marked if already done).
 
@@ -305,7 +305,7 @@ Keep the same record filenames, version and table columns. For stage 2, `selecti
 
 | Event | Execution / work and extra fields |
 |---|---|
-| `worker-started` | `running / parent-wait` or `working`; `prepare_ref`, native-result `ref`, `selection:{candidate,model,effort,usage,selection_sources}` copied from preparation. Each resume retains its fresh usage check. |
+| `worker-started` | `running / parent-wait` or `working`; `prepare_ref`, native-result `ref`, `selection:{candidate,model,effort,usage,selection_sources}` copied from preparation. Usage (including `checked_at`) and setting references must also equal the preparation result. Each resume retains its fresh usage check. |
 | `worker-ready` | `ended / parent-wait`; matching `role`, all three note names in `read_notes`, nonempty `prohibitions`; `ref` is the original confirmation. |
 | `worker-finished` | `ended / parent-wait`; `report_ref`, `artifact_refs` (empty if none), `prepare_ref`. Save the full native response in the designated report file, check actual artifacts against the assignment, then record it. Existing files pointing to another result must get a new destination, never an overwrite. |
 | `worker-done` | `ended / done`; `handoff_ref` for verification, required checks and parent acceptance. |
@@ -314,7 +314,7 @@ Keep the same record filenames, version and table columns. For stage 2, `selecti
 
 The parent records consultation ahead of production in the wait queue without raising product limits or treating a queue record as a reservation. Check usage again before retrying. Replacement creates a distinct worker/address and row with `replaces/handoff_ref`, retaining the old author. Confirm the reason and old execution against evidence; hand over artifacts, assignments, effective decisions and reasons, conclusions, unresolved items, stopping point and next action. An operation that succeeded but failed to record must be recovered at its known address, not spawned again.
 
-`status/collect` retain event additions and optional report `worker_refs` (assignment ids). The parent's `pending` must include missing results, incomplete reads and pending judgements. Execution completion does not approve artifacts; the parent's collection rules remain unchanged. Run `bash tests/test-project-workers-acceptance.sh` for the isolated 32-case acceptance suite. Actual value delivery/retention, reading/prohibition compliance, return after parent resume, slot release and failure recovery still require the project leader's small real-environment trial in project work.
+`status/collect` retain event additions and optional report `worker_refs` (assignment ids). The parent's `pending` must include missing results, incomplete reads and pending judgements. Execution completion does not approve artifacts; the parent's collection rules remain unchanged. Run `bash tests/test-project-workers-acceptance.sh` for the isolated 34-case acceptance suite. Actual value delivery/retention, reading/prohibition compliance, return after parent resume, slot release and failure recovery still require the project leader's small real-environment trial in project work.
 
 ### Vault Backup Operations
 
@@ -553,7 +553,7 @@ Vault への記録はすべてリーダー自身が行う。
 
 全部品（ファイル・フォルダ）・全スイート・本人を呼ぶ全箇所は、この TSV 1 本（列＝種類・パス・機能・層・提供元・鍵・備考・知らせ・配置）から引けます。`core/assembly/ledger-tool.sh check` が、実フォルダ（`git ls-files` から導出）・移動表（`core/data/moves.tsv`）・この README の構成節それぞれと突合し、食い違いを 1 件 1 行で報告します。移動表は v1.1 の分割の記録で、v1.1 時点の部品・スイートには行がありますが、v1.1 より後に足した部品・スイート（例＝`tests/test-notify.sh`）は台帳の行だけで、移動表には足しません。同じツールの `lookup <鍵>` が、他機能の部品名を書かずに呼ぶ経路です（例＝「AI Brain のヘルス判定機」「Dock の宣言 CLI」）。鍵が無ければ予定された省略、台帳異常・実体異常は固定文 `LEDGER: …` で報告します。8 列目「知らせ」は Notify の送り手の行だけが持ち（`call.alert`・`call.usage`・`call.ask`・`answer` のカンマ区切り。`call` だけなら全ての呼出）、`route <知らせ>` がその知らせの送り手を台帳の行順に返します（`<届け先><TAB><パス>`）＝口は届け先の名前を持たずにこれで引きます。部品・スイートを足すときは、この台帳に 1 行を足します（FR-14）。
 
-9 列目「配置」は、組立がその部品をどこへ置くか＝`-`（置かない）か `<仕方>:<置き場>`（空白区切りで複数可）。仕方＝`link`（部品への symlink。フォルダの行は配下の各ファイルを同名で）・`gen`（`$HOME` を埋めた生成物）・`run`（部品＝配置手順を実行し、手順が自分で置く）。置き場は `$HOME/` で始まるライブ位置。`ledger-tool.sh placement [--all]` が選択の機能の配置一覧を台帳の行順に返します（`<仕方><TAB><置き場><TAB><実体><TAB><機能>`。`--all`＝全機能）。組立・フックの登録・選択外の機能の掃除・`check-drift.sh` はこの一覧だけを使います。
+9 列目「配置」は、組立がその部品をどこへ置くか＝`-`（置かない）か `<仕方>:<置き場>`（空白区切りで複数可）。仕方＝`link`（部品への symlink。フォルダの行は配下の各ファイルを同名で）・`gen`（`$HOME` を埋めた生成物）・`run`（部品＝配置手順を実行し、手順が自分で置く）。置き場は `$HOME/` で始まるライブ位置。`ledger-tool.sh placement [--all]` が選択の機能の配置一覧を台帳の行順に返します（`<仕方><TAB><置き場><TAB><実体><TAB><機能>`。`--all`＝全機能）。機役割による除外は `--all` にも適用し、Codex職種定義は既存resolverでmainと確認できたときだけ含めます。組立・フックの登録・選択外の機能の掃除・`check-drift.sh` は同じ絞り込み済み一覧を使います。
 
 **機能の選択**: `core/assembly/install-main.sh --select ai-brain,core` は名指した機能だけを置き（カンマ区切り。`ai-brain`・`team`・`usage`・`notify`・`dock`・`core` から。Core は常に含む）、選択を `~/.config/takumi009-ai-env/components.env` に `AIENV_COMPONENTS=ai-brain,core` として保存します（パスは `AIENV_COMPONENTS_FILE` で上書き可）。ファイルが無い＝全部入り。`--select all` はファイルを消して全部入りへ戻します。`--select` なしは保存済みの選択のまま。`install-sub.sh --select …` は同じ引数を渡し、`update-sub.sh`（引数なし）は常に保存済みの選択で組み立てます。照会（`lookup`・`route`・`placement`）は選択外の機能の行を無いものとして扱います。戻すときは前の選択を明示して組立を再実行します。組立は `launchctl` を実行しません＝出力の末尾に、選択の機能の常駐の登録コマンドと選択外の機能の常駐の解除コマンドを毎回示します（済みならその旨を添える）。
 
@@ -708,7 +708,7 @@ readyの結果は担当表用の `assignment`、今回照会した `usage`、設
 
 | イベント | 実行／仕事・追加項目 |
 |---|---|
-| `worker-started` | running／parent-wait または working。`prepare_ref`・操作結果のref・準備結果から写す `selection:{candidate,model,effort,usage,selection_sources}`。再開ごとの枠確認も履歴へ残す |
+| `worker-started` | running／parent-wait または working。`prepare_ref`・操作結果のref・準備結果から写す `selection:{candidate,model,effort,usage,selection_sources}`。usage（checked_atを含む）と設定参照も準備結果との一致を検査。再開ごとの枠確認を履歴へ残す |
 | `worker-ready` | ended／parent-wait。職種一致・必読3本の文書名 `read_notes`・非空の `prohibitions`。refは確認の原文 |
 | `worker-finished` | ended／parent-wait。`report_ref/artifact_refs/prepare_ref`。親が内蔵の最終応答を指定先へ全文保存し、担当表と実成果を突合して記録。成果なしは空配列。既存の別結果を上書きせず新しい保存先を指定 |
 | `worker-done` | ended／done。検証・必要な確認・親の了承の `handoff_ref` |
@@ -717,7 +717,7 @@ readyの結果は担当表用の `assignment`、今回照会した `usage`、設
 
 親が相談を制作より先の待ち順に記録し、製品上限は増やしません。枠待ちは予約や起動成功ではなく、再試行前も準備口で利用枠を確認します。交代だけ新しい個体・宛先・行に `replaces/handoff_ref` を付け、旧作成者を保持します。操作に成功して記録だけ失敗した場合は、既知の宛先の記録を復旧し、新しい子を作り直しません。
 
-`status/collect` は追加項目を保持し、親reportの任意の `worker_refs`（担当行id配列）も返します。未回収・読了不足・判断待ちは親のpendingへ残します。実行終了と成果の了承は別で、親の回収条件は段階1のままです。`bash tests/test-project-workers-acceptance.sh` が隔離した32件の受入試験です。内蔵経路への値の到達・保持、実読了と禁止事項の遵守、親再開後の復帰、枠解放・障害復元は、親が案件workの小さな試し案件で確認する範囲として残ります。
+`status/collect` は追加項目を保持し、親reportの任意の `worker_refs`（担当行id配列）も返します。未回収・読了不足・判断待ちは親のpendingへ残します。実行終了と成果の了承は別で、親の回収条件は段階1のままです。`bash tests/test-project-workers-acceptance.sh` が隔離した34件の受入試験です。内蔵経路への値の到達・保持、実読了と禁止事項の遵守、親再開後の復帰、枠解放・障害復元は、親が案件workの小さな試し案件で確認する範囲として残ります。
 
 ### Vault バックアップの運用
 

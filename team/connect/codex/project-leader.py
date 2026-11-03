@@ -431,6 +431,7 @@ def validate_worker_event(state, data):
                 or prepared.get("status") != "ready"
                 or prepared["assignment"]["id"] != row["id"]
                 or Path(row["selection_ref"]).resolve() != state / "events.jsonl"
+                or any(selection[key] != prepared[key] for key in ("usage", "selection_sources"))
                 or any(selection[key] != row[key] or selection[key] != prepared["assignment"][key]
                        for key in ("candidate", "model", "effort"))):
             raise ValueError("started selection must match preparation and assignment")
