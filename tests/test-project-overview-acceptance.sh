@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 
 repo = Path(sys.argv[1])
 cli = repo / 'team/connect/codex/project-leader.py'
@@ -121,7 +122,7 @@ from pathlib import Path
 import sys
 control = Path(os.environ['OVERVIEW_TEST_CONTROL'])
 with (control / 'ps-calls').open('a') as stream:
-    stream.write(json.dumps(sys.argv[1:]) + '\\n')
+    stream.write(json.dumps(dict(argv=sys.argv[1:], locale=os.environ.get('LC_ALL'))) + '\\n')
 args = sys.argv[1:]
 assert '-p' in args and '-o' in args, args
 pid = args[args.index('-p') + 1]
@@ -595,11 +596,11 @@ def test_source_failure(f):
     assert list(projects(value)) == ['alpha'] and projects(value)['alpha']['connection'] == 'unconnected', value
 
 
-def test_locale_observation(f, legacy=False):
+def test_locale_observation(f, legacy=False, reverse=False):
     # trial-s4 B: 実ロケールの導入有無に依存せず、psだけがロケール差を再現する。
     english, japanese = 'Tue Nov  3 00:00:00 2026', '火 11/ 3 00:00:00 2026'
     write_json(f.processes, {'41001': {'C': english, 'ja': japanese}, '41002': 'fixture beta start'})
-    f.env['LC_ALL'] = 'ja_JP.UTF-8'
+    f.env['LC_ALL'] = 'C' if reverse else 'ja_JP.UTF-8'
     # 起動時の保存口を通し、実プロセス起動や実psを使わない。
     code = 'import runpy,sys; m=runpy.run_path(sys.argv[1]); print(m["process_start"](41001))'
     result = subprocess.run([sys.executable, '-c', code, str(cli)], env=f.env,
@@ -609,8 +610,12 @@ def test_locale_observation(f, legacy=False):
     run = json.loads(path.read_text())
     run['wrapper_started'] = japanese if legacy else result.stdout.strip()
     write_json(path, run)
-    f.env['LC_ALL'] = 'C'
+    f.env['LC_ALL'] = 'ja_JP.UTF-8' if reverse else 'C'
     alpha = projects(f.json())['alpha']
+    if reverse:
+        calls = [json.loads(line) for line in (f.control / 'ps-calls').read_text().splitlines()]
+        observations = [call for call in calls if 'stat=,lstart=' in call['argv']]
+        assert observations and all(call['locale'] == 'C' for call in observations), observations
     if not legacy:
         assert alpha['parent']['status'] == 'running', alpha
         assert run['wrapper_started'] == english, run
@@ -627,6 +632,8 @@ def test_locale_observation(f, legacy=False):
 
 def test_compact_text(f):
     # trial-s4 C・§9.2/9.3: 通常表は1案件1行。生ダンプ・名前と数だけでは通らない。
+    # 全項目の対応は広い端末で確認し、狭い端末の省略・人数保持は別の代表例へ。
+    f.env['COLUMNS'] = '300'
     value = f.json()
     text = f.run().stdout
     assert '三段の確認済み人数' in text and '未確定の案件数' in text, text
@@ -651,6 +658,32 @@ def test_compact_text(f):
     assert re.search(r'a\s*[,/／・↔ -]\s*b', rows['alpha']), rows
     assert 'topic-z' not in rows['alpha'], rows
     assert not re.search(r'["\'](?:last_recorded|parent_thread|scope_ref)["\']\s*:', text), text
+
+
+def test_terminal_width(f):
+    # 第4巡 MAJOR 3・§9.2: 論理行数だけでなく日本語2桁の表示幅を測る。
+    f.env['COLUMNS'] = '100'
+    path = f.states['alpha'] / 'latest.json'
+    latest = json.loads(path.read_text())
+    del latest['workers']['fixture-worker-a']
+    write_json(path, latest)
+    value = f.json()
+    assert_count(projects(value)['alpha']['counts']['running'], 1, None)
+    text = f.run().stdout
+    for slug in ('alpha', 'beta'):
+        rows = [line for line in text.splitlines() if re.match(r'^\s*\|?\s*' + slug + r'\b', line)]
+        assert len(rows) == 1, (slug, text)
+        row = rows[0]
+        width = sum(0 if unicodedata.combining(c) else
+                    2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in row)
+        assert width <= int(f.env['COLUMNS']), (slug, width, row)
+        counts = re.search(r'(?<!\d)2\s*[/／]\s*([^/／|]+)\s*[/／]\s*2(?!\d)', row)
+        assert counts and re.search(r'(?<!\d)1(?!\d)', counts.group(1)), row
+        if slug == 'alpha':
+            assert '未確認' in counts.group(1) and '現在未確認' in row, row
+        else:
+            assert counts.group(1).strip() == '1', row
+    assert '全案件の総人数は未確定' in text, text
 
 
 def test_project_selection_and_all(f):
@@ -705,6 +738,8 @@ def test_watch_source_failure(f):
 cases = [
     ('TRIAL-S4/B: jaで保存しCで観測しても同じPIDは生存一致', test_locale_observation),
     ('TRIAL-S4/B: 保存済みja文字列を読み、PID再利用を生存扱いしない', lambda f: test_locale_observation(f, True)),
+    ('TRIAL-S4/B: C保存・ja観測でaliveのC固定漏れも拒否', lambda f: test_locale_observation(f, reverse=True)),
+    ('TRIAL-S4/C: COLUMNS=100の表示幅で人数と現在未確認を省略しない', test_terminal_width),
     ('TRIAL-S4/C: 通常表の1案件1行・人数の言葉・各人・相談・時点', test_compact_text),
     ('TRIAL-S4/C: 対象選別・未接続まとめ・allとJSONの不変', test_project_selection_and_all),
     ('A14/R20/A12: 2案件4人・相談組・作業中・報告・時点をJSONとtextへ', test_basic),

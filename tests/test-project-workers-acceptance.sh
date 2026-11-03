@@ -665,24 +665,39 @@ def test_first_running_coordination(f, kind):
     ps.chmod(0o755)
     stage3_setup(f)
     assert f.view()['status'] == 'running'
+
+    def read_running():
+        before = snapshot(f.root)
+        value = f.view('status')
+        assert snapshot(f.root) == before, 'status changed inputs or state records'
+        assert value['status'] == 'running' and value['thread_id'] == 'fixture-parent', value
+        return value['coordination']
+
     if kind == 'consult':
         stage3_consult(f)
+        assert read_running()['topics'][0]['receipt'] is None
         stage3_consult(f, receipt=dict(assignment='b', kind='answering', ref=str(f.operation_ref)))
+        assert read_running()['topics'][0]['receipt']['kind'] == 'answering'
         outcome = dict(classification='detail', conclusion='fixture conclusion', reason='fixture reason',
             disposition='effective', decision_ref=None, diff_refs=[], next_action='fixture next')
         stage3_consult(f, phase='concluded', outcome=outcome,
             receipt=dict(assignment='b', kind='answering', ref=str(f.operation_ref)))
-        topic = stage3_read(f)['topics'][0]
+        topic = read_running()['topics'][0]
         assert topic['phase'] == 'concluded' and topic['outcome'] == outcome, topic
     elif kind == 'stop':
         stage3_request_stop(f, targets=('a',))
+        change = read_running()['changes'][0]
+        assert change['sent'] == ['a'] and change['confirmed'] == [], change
         stage3_confirm(f)
-        change = stage3_read(f)['changes'][0]
+        change = read_running()['changes'][0]
         assert change['sent'] == change['confirmed'] == ['a'] and change['all_stopped'], change
     else:
         returned = stage3_review_result(f)
         saved = f.record('event', returned)
-        assert saved['state'] == 'received' and stage3_read(f)['reviews'][0]['state'] == 'received', saved
+        review = read_running()['reviews'][0]
+        assert saved['state'] == review['state'] == 'received', saved
+        assert all(review[key] == returned[key] for key in
+                   ('review', 'scope_ref', 'basis_ref', 'wrapper_out_ref', 'verifier_report_ref')), review
     assert json.loads(project_path.read_text())['thread_id'] == '', 'must not require a parent exit to persist the thread'
 
 
