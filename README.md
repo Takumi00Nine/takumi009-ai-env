@@ -318,7 +318,43 @@ Keep the same record filenames, version and table columns. For stage 2, `selecti
 
 The parent records consultation ahead of production in the wait queue without raising product limits or treating a queue record as a reservation. Check usage again before retrying. Replacement creates a distinct worker/address and row with `replaces/handoff_ref`, retaining the old author. Confirm the reason and old execution against evidence; hand over artifacts, assignments, effective decisions and reasons, conclusions, unresolved items, stopping point and next action. An operation that succeeded but failed to record must be recovered at its known address, not spawned again.
 
-`status/collect` retain event additions and optional report `worker_refs` (assignment ids). The parent's `pending` must include missing results, incomplete reads and pending judgements. Execution completion does not approve artifacts; the parent's collection rules remain unchanged. Run `bash tests/test-project-workers-acceptance.sh` for the isolated 34-case acceptance suite. Actual value delivery/retention, reading/prohibition compliance, return after parent resume, slot release and failure recovery still require the project leader's small real-environment trial in project work.
+`status/collect` retain event additions and optional report `worker_refs` (assignment ids). The parent's `pending` must include missing results, incomplete reads and pending judgements. Execution completion does not approve artifacts; the parent's collection rules remain unchanged. Run `bash tests/test-project-workers-acceptance.sh` for the isolated acceptance suite. Actual value delivery/retention, reading/prohibition compliance, return after parent resume, slot release and failure recovery still require the project leader's small real-environment trial in project work.
+
+### Consultation, stops and additional review (stage 3)
+
+Use the existing `event/report/status/collect/worker-prepare` commands. The parent alone writes records; workers use native `send_message` for live peers and prepared `followup_task` for ended peers. Send stop signals immediately, then record the results. Delivery does not establish receipt, stopped execution or permission. Receivers decide whether a question belongs to their scope; the CLI checks assignment/worker membership in the same parent, without filtering by the meaning of scope.
+
+`team/data/workflow.json`, resolved by ledger key `team.workflow-settings`, owns `consultation_round_limit`. `AIENV_TEAM_WORKFLOW_CONFIG` replaces its path for isolated tests. Change the limit only after the requirements decision. Missing/invalid settings give `coordination.status:"unconfirmed"`, reason `settings-unreadable`, and a null limit; no fallback value is inserted. Stop signals and reports can still be saved. Data-layer ledger keys require readable files; executable keys retain their execution checks.
+
+Keep version 1, assignment columns and existing event fields (`actor:"parent",event,worker,execution,work,ref`). Structured child events add `assignment`; parent events use `worker:"parent",assignment:null`. Targets and participants are assignment ids. References identify saved evidence; new references must exist. Old unstructured events remain readable but do not prove structured consultation or stops.
+
+| Event | Additional fields |
+|---|---|
+| `consult` | `assignment,peer,topic,subject,scope_ref,participants,phase,exchanges,receipt,dependencies,outcome,next_action`. `peer` is a worker; `phase` is `open/waiting/parent-wait/user-wait/concluded`. |
+| `decision` | `topic` or `change`, `classification,disposition,reason,decider,decision_ref,diff_refs,next_action`. Classifications: `detail/requirements-scope/purpose-policy/unresolved`; dispositions: `effective/withdrawn/held`. |
+| `stop-request` | `assignment,change,topic,owner,targets,scope_ref,reason,sent_refs:[{assignment,ref}]`. Preserve the full target list on additions. |
+| `stop-received` | `assignment,change,targets:[self],received_ref`; receipt evidence is separate from sending. |
+| `stop-confirm` | `assignment,change,targets:[self],position,touched_refs,incomplete,execution_ref`. Only `ended/stopped`, no incomplete work and execution evidence establish a stop. |
+| `resume-permitted` | `change,targets,premises_ref,scope_ref,decision_ref,recheck_ref`. Requires all targets stopped; each permission has a distinct `ref`. |
+| `work-resumed` | `assignment,change,targets:[self],permission_ref,position`, with `running/working`; the permission must match that change and target. |
+| `quality-review` | Review requirement and result fields described below; parent work is `parent-wait/user-wait`. |
+
+Each `consult` stores the whole topic at that point. Use stable `topic` ids through renaming, redirection and replacement. `exchanges` is an ordered array of `{proposal_id,reply_id,proposal_summary,reply_summary}`. Preserve earlier pairs and count each substantive reply once; a counterproposal reply can be the next proposal. Receipt, redirection, resend and dependency-wait notices are not rounds. `receipt` is null or `{assignment,kind,ref}`, with `answering/redirect/dependency-wait`; `dependencies` names topics. `outcome` is null or `{classification,conclusion,reason,disposition,decision_ref,diff_refs,next_action}`; a detail can have null `decision_ref`. Summaries retain content and reasons after raw messages are retired. At the limit, unresolved topics go to the parent before another round. The CLI records explicit facts rather than judging message meaning; an actual excess remains visible as `over_limit:true`.
+
+`status/collect` add `coordination:{status,reason,settings,topics,changes,reviews}`. Topics include `rounds/limit/over_limit/recorded_at`. Changes retain separate `sent/received/confirmed/pending_targets`, `permissions`, `resumed`, `all_stopped` and phase `stopping/stopped/resuming/resumed`. Permissions contain `targets/ref/premises_ref/scope_ref`. Full history preserves unresolved topics and stops when a worker's latest event changes. Parent failure makes coordination unconfirmed and leaves values as last recorded evidence. Corrupt history reports `record-error`. The existing `view` prints topic rounds and decision/stop waits; reads never write state.
+
+Add optional `purpose:"work"` (default) or `"consultation"` to preparation. Its `coordination` contains `status`, related topic/change ids and `waiting_for_permission`. Work on an unpermitted target returns exit 3 / `resume-not-permitted`; an unconfirmed coordination dependency returns `coordination-unconfirmed` (usage is null if not checked yet). Owners also wait for all target stops before making the spreading change. Consultation keeps the same address/model/effort and refreshes usage. After reading confirmation, its phase is `consultation`; `worker-started` then permits `running/consulting`. A stopped worker's message explicitly allows only checking, discussion and stop reporting while awaiting the parent's permission. Reading confirmation remains first when needed. Consultation completion does not release a stop. Agreement and all-stopped do not grant permission; another unpermitted change still blocks work. New stop premises require a new change id.
+
+For additional Claude review, the parent includes `claude_review:{review,required,triggers,scope_ref,basis_ref,request_ref,reason}` in its report and records the same data in `quality-review`. Triggers are `irreversible-design/release/uncertain`: hard-to-reverse design or technology choices, readiness to publish/deploy/seek final user approval, or doubt about either condition. Keep required, uncollected reviews in `pending`. `required:false` allows null `request_ref` with an explanation. States are `not-required/requested/received/adopted/rejected/held`; received means collected, not adopted. Adoption/rejection requires `decision_ref`; held retains a reason and next action. State the separate Codex worker's same-family verification in both the artifact and parent report.
+
+The Mac leader uses the existing verifier candidate/usage lookup and these existing entry points:
+
+```text
+team/connect/claude-code/claude-exec.sh --role verifier --prompt-file REQUEST --out WRAPPER_JSON --task-id REVIEW_ID --model-def CANDIDATE
+python3 team/connect/codex/project-leader.py resume --state-dir STATE --prompt-file RETURN --usage-ref USAGE
+```
+
+REQUEST asks for read-only findings, no artifact edits or test execution, and names a findings file distinct from unused WRAPPER_JSON. Wrapper stdout is `SESSION_ID/OUT/REASON/EXIT`; the final response is WRAPPER_JSON's `result`. Collect the full findings file, not just a returned location. RETURN is project-work JSON with `version:1,review,parent_thread,scope_ref,basis_ref,wrapper_exit,wrapper_reason,wrapper_out_ref,verifier_report_ref`; a missing report uses null and remains held. The parent checks the same conversation/review/basis and records returned fields in `quality-review`, then decides adoption. Nonzero exit or missing response/findings cannot become received or approved. This CLI never launches Claude. Existing cost approval, review/test separation, closing gates and final user approval remain in force. Native delivery, receipt versus editing order and actual Claude collection still need a private project-work trial.
 
 ### Vault Backup Operations
 
@@ -727,7 +763,43 @@ readyの結果は担当表用の `assignment`、今回照会した `usage`、設
 
 親が相談を制作より先の待ち順に記録し、製品上限は増やしません。枠待ちは予約や起動成功ではなく、再試行前も準備口で利用枠を確認します。交代だけ新しい個体・宛先・行に `replaces/handoff_ref` を付け、旧作成者を保持します。操作に成功して記録だけ失敗した場合は、既知の宛先の記録を復旧し、新しい子を作り直しません。
 
-`status/collect` は追加項目を保持し、親reportの任意の `worker_refs`（担当行id配列）も返します。未回収・読了不足・判断待ちは親のpendingへ残します。実行終了と成果の了承は別で、親の回収条件は段階1のままです。`bash tests/test-project-workers-acceptance.sh` が隔離した34件の受入試験です。内蔵経路への値の到達・保持、実読了と禁止事項の遵守、親再開後の復帰、枠解放・障害復元は、親が案件workの小さな試し案件で確認する範囲として残ります。
+`status/collect` は追加項目を保持し、親reportの任意の `worker_refs`（担当行id配列）も返します。未回収・読了不足・判断待ちは親のpendingへ残します。実行終了と成果の了承は別で、親の回収条件は段階1のままです。`bash tests/test-project-workers-acceptance.sh` が隔離した受入試験です。内蔵経路への値の到達・保持、実読了と禁止事項の遵守、親再開後の復帰、枠解放・障害復元は、親が案件workの小さな試し案件で確認する範囲として残ります。
+
+### 直接相談・停止・追加確認（段階3）
+
+既存の `event/report/status/collect/worker-prepare` を使います。記録を書くのは親だけです。子は実行中の相手へ内蔵 `send_message`、終了済みの同じ相手へ準備済みの `followup_task` を使います。停止合図は即座に送り、その結果を記録します。送信・受領・停止・再開許可は別です。担当範囲の意味は受信者が判断し、CLIは同じ親の担当表idとworkerの実在だけを照合します。配送サービスは増やしません。
+
+共通上限は `team/data/workflow.json` の `consultation_round_limit` 一か所です。台帳キー `team.workflow-settings` で参照し、隔離試験は `AIENV_TEAM_WORKFLOW_CONFIG` でパスを差し替えます。値の変更は要件の変更判断を経ます。設定不明なら `coordination.status:unconfirmed`・理由 `settings-unreadable`・上限nullとし、既定値へ戻しません。緊急の停止・結果保存は妨げません。台帳のdata層の鍵は読取可能性、それ以外の実行部品の鍵は従来どおり実行可能性を確認します。
+
+版1・担当表の列・イベントの既存必須項目 `actor:parent/event/worker/execution/work/ref` は維持します。追加形式の子イベントに `assignment`、親イベントに `worker:parent,assignment:null` を付けます。targetsとparticipantsは担当表idです。refは保存済み根拠を指し、新しい入力時に存在を確かめます。構造のない古い相談・停止も読めますが、段階3の証拠へ補完しません。
+
+| イベント | 追加項目 |
+|---|---|
+| `consult` | `assignment/peer/topic/subject/scope_ref/participants/phase/exchanges/receipt/dependencies/outcome/next_action`。peerはworker、phaseは `open/waiting/parent-wait/user-wait/concluded` |
+| `decision` | topicまたはchangeと `classification/disposition/reason/decider/decision_ref/diff_refs/next_action`。分類は `detail/requirements-scope/purpose-policy/unresolved`、扱いは `effective/withdrawn/held` |
+| `stop-request` | `assignment/change/topic/owner/targets/scope_ref/reason/sent_refs:[{assignment,ref}]`。対象追加は全一覧を追記 |
+| `stop-received` | `assignment/change/targets:[本人]/received_ref`。送信とは別の受領証拠 |
+| `stop-confirm` | `assignment/change/targets:[本人]/position/touched_refs/incomplete/execution_ref`。ended・stopped・書きかけなし・実行結果が揃って停止確定 |
+| `resume-permitted` | `change/targets/premises_ref/scope_ref/decision_ref/recheck_ref`。全対象の停止確認後、許可ごとに別のref |
+| `work-resumed` | `assignment/change/targets:[本人]/permission_ref/position`、running・working。同じchangeと対象の許可に対応 |
+| `quality-review` | 下記の追加確認の要否・結果。親のworkはparent-waitまたはuser-wait |
+
+consultはその時点の論点全体を保存します。表示名・宛先訂正・交代でもtopicは変えません。exchangesは `{proposal_id,reply_id,proposal_summary,reply_summary}` の順序つき配列で、過去の組を保ち、同じ内容のある返答を二重に数えません。対案を兼ねるreplyを次のproposalにできます。受領・訂正・再送・依存先待ちだけの通知は往復へ入れません。receiptはnullまたは `{assignment,kind,ref}`（kindは `answering/redirect/dependency-wait`）、dependenciesは待ち先topic配列です。outcomeはnullまたは `{classification,conclusion,reason,disposition,decision_ref,diff_refs,next_action}`。detailのdecision_refはnullでよく、要約には原文整理後も残る内容・理由を書きます。上限で不一致なら次の往復前に親へ上げます。CLIは文章の意味を判定せず明示記録を数え、実際に上限超過が起きた事実も `over_limit:true` として残します。
+
+status/collectは `coordination:{status,reason,settings,topics,changes,reviews}` を追加します。論点に `rounds/limit/over_limit/recorded_at`、変更に `sent/received/confirmed/pending_targets/permissions/resumed/all_stopped` と `stopping/stopped/resuming/resumed` のphaseを返します。permissionsは `targets/ref/premises_ref/scope_ref` を保持します。workerの最新イベントが変わっても、履歴から未決論点・停止を保持します。親の異常時はunconfirmedとして最終記録を示し、現在の停止や許可を推定しません。履歴不明は `record-error` です。既存viewに論点の往復・判断待ち・停止待ちを短く表示し、読み取りで状態は変えません。
+
+準備依頼に `purpose:work`（省略時）または `consultation` を足せます。結果のcoordinationはstatus・関係するtopic/changeのid・waiting_for_permissionです。未許可の停止対象へのworkは終了3・`resume-not-permitted`、連携の根拠を確認できない依存は `coordination-unconfirmed` で保留します（枠照会前ならusageはnull）。変更側も全対象の停止確認までは波及変更を待ちます。相談は同じ宛先・モデル・思考量で毎回枠を確認し、読了済みならphase:consultation、worker-startedはrunning・consultingを認めます。停止中の依頼文には「停止中・親の再開許可待ち。確認・議論・停止位置の報告だけ。制作・修正を始めない」を明記します。読了未確認なら確認が先です。相談終了・合意・全停止は再開許可ではありません。別changeの未許可停止は残り、前提が変わる再停止は新しいchangeで扱います。
+
+追加Claude確認は、親reportの `claude_review:{review,required,triggers,scope_ref,basis_ref,request_ref,reason}` と同内容のquality-reviewに残します。triggersは `irreversible-design/release/uncertain`。戻すのが大変な設計・技術選定、公開push・実環境導入・本人最終確認の直前、または該当するか迷う場合です。必要かつ未回収ならpendingにも残します。required:falseならrequest_refはnullでよく、不要の理由を書きます。状態は `not-required/requested/received/adopted/rejected/held`。receivedは回収済み・採否未裁定で、adopted/rejectedにdecision_ref、heldに理由・次の一手を残します。成果と親報告の両方に「作成とは別のCodexワーカーによる同系統の検証」と明記します。
+
+起動はマックリーダーが既存verifier候補・枠確認を経て、既存の入口で行います。
+
+```text
+team/connect/claude-code/claude-exec.sh --role verifier --prompt-file REQUEST --out WRAPPER_JSON --task-id REVIEW_ID --model-def CANDIDATE
+python3 team/connect/codex/project-leader.py resume --state-dir STATE --prompt-file RETURN --usage-ref USAGE
+```
+
+REQUESTに通読・指摘のみ、成果物変更・テスト実行なしと指定し、指摘一覧の保存先を未使用のWRAPPER_JSONとは別にします。stdoutは `SESSION_ID/OUT/REASON/EXIT` の4行、最終応答はWRAPPER_JSONのresultです。場所だけの応答で全文を得た扱いにせず、指定一覧を回収します。RETURNは案件workのJSONで `version:1,review,parent_thread,scope_ref,basis_ref,wrapper_exit,wrapper_reason,wrapper_out_ref,verifier_report_ref` を持ちます。結果欠落ならverifier_report_refはnullで保留です。親が同じ会話・確認id・対象版を突合し、返却項目をquality-reviewへ記録してから採否を裁定します。非0終了・応答や一覧の欠落を回収済み・合格にしません。CodexからClaudeは起動しません。見積りの承認、検証と実走の分離、締めの2ゲート・本人最終確認は維持します。実際の内蔵送達・受領と編集順・Claude結果回収は、案件workの試し案件での確認が残ります。
 
 ### Vault バックアップの運用
 

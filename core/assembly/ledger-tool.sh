@@ -10,6 +10,7 @@
 #                                  ① part ② suite ③ coupling ④ provider-leak ⑤ moves ⑥ forward ⑦ live ⑧ readme
 #                                  （「配置」列・置き場の重複・run の実体・雛形のフックの命令は part 行で報告）
 #   ledger-tool.sh lookup <鍵>   鍵→「<repo ルート>/<パス>」を台帳の行順に 1 行ずつ。
+#                                data層は読取可能性、それ以外は実行可能性を確認。
 #                                exit 0 あり／1 鍵なし（stderr なし）／2 台帳異常／3 実体異常（2・3 は stderr に固定文 1 行）
 #   ledger-tool.sh route <知らせ>  知らせ（例＝call.ask・answer）→「<届け先><TAB><repo ルート>/<パス>」を台帳の行順に。
 #                                対象＝8 列目「知らせ」に、その知らせか種別だけ（call は call.* 全部）を持つ part 行。
@@ -150,7 +151,7 @@ select_cmd() {
 
 # ---------------------------------------------------------------- 照会（lookup・route）・導出（placement・residents）
 # ledger_scan <key|route|place|resident> <鍵|知らせ|-> <選択（SEL・空＝全部入り）> — 台帳の形式を検証し、
-# 選択に入る機能の当たった part 行を行順に出す＝key・route「HIT<TAB><提供元><TAB><パス>」／
+# 選択に入る機能の当たった part 行を行順に出す＝key「HIT<TAB><提供元><TAB><パス><TAB><層>」・routeは層なし／
 # place「HIT<TAB><配置><TAB><パス><TAB><機能>」／resident「HIT<TAB><install|plist><TAB><パス><TAB><機能>」
 # （resident は選択で絞らない）。形式不正は「BAD<TAB><原因>」1 行。台帳を読めなければ固定文を stderr に出して RC_LEDGER_BAD。
 ledger_scan() {
@@ -186,7 +187,7 @@ ledger_scan() {
     mode == "resident" && $6 ~ agent_re { print "HIT\tinstall\t" $2 "\t" $3 }
     mode == "resident" && $4 == "assembly" && $2 ~ /\.plist$/ { print "HIT\tplist\t" $2 "\t" $3 }
     sel != "" && index(sel, " " $3 " ") == 0 { next }
-    mode == "key" && $6 == q { print "HIT\t" $5 "\t" $2; next }
+    mode == "key" && $6 == q { print "HIT\t" $5 "\t" $2 "\t" $4; next }
     mode == "place" && $9 != "-" {
       for (p = 1; p <= np; p++) print "HIT\t" places[p] "\t" $2 "\t" $3
       next
@@ -261,11 +262,15 @@ $SCAN
 EOF
 }
 
-# part_ok <鍵|知らせ> <パス> — 実体が実在して実行可能なら 0。そうでなければ固定文を stderr に 1 行出して 1。
+# part_ok <鍵|知らせ> <パス> [層] — dataの鍵は読取可能、それ以外は実行可能な実体を返す。
 part_ok() {
   local p="$ROOT/$2"
   if [ ! -e "$p" ]; then
     printf '%s part %s %s 実体が無い\n' "$MSG_HEAD" "$1" "$2" >&2; return 1
+  fi
+  if [ "${3:-}" = "data" ]; then
+    if [ -f "$p" ] && [ -r "$p" ]; then return 0; fi
+    printf '%s part %s %s 読取可能でない\n' "$MSG_HEAD" "$1" "$2" >&2; return 1
   fi
   if [ -d "$p" ] || [ ! -x "$p" ]; then
     printf '%s part %s %s 実行可能でない\n' "$MSG_HEAD" "$1" "$2" >&2; return 1
@@ -275,12 +280,12 @@ part_ok() {
 # query <key|route> <鍵|知らせ> — 照会 2 つの共通の流れ（選択の外の機能の行は無いものとして扱う）。
 # key は 1 行でも実体異常なら 3、route は実体異常の行だけを除き、全件が除かれたら 3。
 query() {
-  local mode="$1" q="$2" hits="" tag prov val
+  local mode="$1" q="$2" hits="" tag prov val layer
   read_selection || return "$RC_LEDGER_BAD"
   scan_ok "$mode" "$q" "$SEL" || return $?
   [ -n "$SCAN" ] || return "$RC_NO_KEY"
-  while IFS=$'\t' read -r tag prov val; do
-    if part_ok "$q" "$val"; then
+  while IFS=$'\t' read -r tag prov val layer; do
+    if part_ok "$q" "$val" "$layer"; then
       if [ "$mode" = "key" ]; then hits="$hits$ROOT/$val"$'\n'; else hits="$hits$prov	$ROOT/$val"$'\n'; fi
     elif [ "$mode" = "key" ]; then
       return "$RC_PART_BAD"
@@ -479,8 +484,9 @@ def check_static(ledger, moves):
             m = KEY_RE.match(r.key)
             if not m or m.group(1) != r.func:
                 why.append("鍵 %s が <機能>.<働き> でない" % r.key)
-            if exists and (p.endswith("/") or not os.access(full(p), os.X_OK)):
-                why.append("鍵 %s の実体が実行可能でない" % r.key)
+            access = os.R_OK if r.layer == "data" else os.X_OK
+            if exists and (p.endswith("/") or not os.access(full(p), access)):
+                why.append("鍵 %s の実体が%sでない" % (r.key, "読取可能" if r.layer == "data" else "実行可能"))
         if r.notice != "-":
             if not notice_ok(r.notice):
                 why.append("知らせ %s が語彙外" % r.notice)

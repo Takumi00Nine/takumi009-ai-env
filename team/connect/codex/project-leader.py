@@ -31,6 +31,8 @@ WORK_STATES = ("working consulting consultation-wait slot-wait stop-requested st
 REPLACEMENT_REASONS = ("quota-exhausted", "resume-unavailable")
 WORKER_EVENTS = ("worker-started", "worker-ready", "worker-finished", "worker-done",
                  "worker-slot-wait", "worker-unavailable")
+COORDINATION_EVENTS = ("consult", "decision", "stop-request", "stop-received", "stop-confirm",
+                       "resume-permitted", "work-resumed", "quality-review")
 
 
 def now():
@@ -93,6 +95,251 @@ def reference(value):
     return path
 
 
+def structured_event(data):
+    return data.get("event") in COORDINATION_EVENTS and (
+        data["event"] in ("decision", "stop-received", "work-resumed", "quality-review") or
+        any(key in data for key in ("topic", "change", "review", "participants", "exchanges")))
+
+
+def coordination(state, project, unconfirmed=False):
+    """Project explicit history, never session logs, into ongoing topics and stops."""
+    settings = dict(ref=None, consultation_round_limit=None)
+    result = dict(status="recorded", reason=None, settings=settings, topics=[], changes=[], reviews=[])
+    try:
+        settings["ref"] = str(Path(os.environ.get("AIENV_TEAM_WORKFLOW_CONFIG") or
+                                   lookup("team.workflow-settings")).expanduser())
+        config = read_json(Path(settings["ref"]))
+        limit = config["consultation_round_limit"]
+        if config["version"] != VERSION or type(limit) is not int or limit <= 0:
+            raise ValueError("positive consultation_round_limit required")
+        settings["consultation_round_limit"] = limit
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        result.update(status="unconfirmed", reason="settings-unreadable")
+    topics, changes, reviews = {}, {}, {}
+    try:
+        history = [json.loads(line) for line in (state / "events.jsonl").read_text().splitlines() if line.strip()]
+        for event in history:
+            name = event["event"]
+            if event.get("execution") in ("running", "unknown"):
+                for change in changes.values():
+                    if event.get("assignment") in change["targets"]:
+                        change["confirmed"] = [i for i in change["confirmed"] if i != event["assignment"]]
+            if not structured_event(event):
+                continue  # Old unstructured events do not establish stage 3 evidence.
+            if name == "consult":
+                topic = dict(event)
+                limit = settings["consultation_round_limit"]
+                rounds = len(event["exchanges"])
+                topic.update(rounds=rounds, limit=limit,
+                             over_limit=None if limit is None else rounds > limit)
+                topics[event["topic"]] = topic
+            elif name == "quality-review":
+                reviews[event["review"]] = dict(event)
+            elif name == "stop-request":
+                change = changes.setdefault(event["change"], dict(change=event["change"],
+                    topic=event["topic"], owner=event["owner"], targets=[], sent=[], received=[],
+                    confirmed=[], permissions=[], resumed=[]))
+                change["targets"] = list(dict.fromkeys(change["targets"] + event["targets"]))
+                change["sent"] = list(dict.fromkeys(change["sent"] + [r["assignment"] for r in event["sent_refs"]]))
+                change["recorded_at"] = event["recorded_at"]
+            elif name in ("stop-received", "stop-confirm", "resume-permitted", "work-resumed"):
+                change = changes[event["change"]]
+                if name == "stop-received":
+                    change["received"] = list(dict.fromkeys(change["received"] + event["targets"]))
+                elif name == "stop-confirm":
+                    change["confirmed"] = [i for i in change["confirmed"] if i not in event["targets"]]
+                    if (event["execution"] == "ended" and event["work"] == "stopped"
+                            and event["incomplete"] is False and event["execution_ref"]):
+                        change["confirmed"] += event["targets"]
+                elif name == "resume-permitted":
+                    change["permissions"].append({key: event[key] for key in
+                                                 ("targets", "ref", "premises_ref", "scope_ref")})
+                else:
+                    change["resumed"] = list(dict.fromkeys(change["resumed"] + event["targets"]))
+                change["recorded_at"] = event["recorded_at"]
+    except (OSError, ValueError, KeyError, TypeError):
+        result.update(status="unconfirmed", reason="record-error")
+    for change in changes.values():
+        change["pending_targets"] = [i for i in change["targets"] if i not in change["confirmed"]]
+        change["all_stopped"] = bool(change["targets"]) and not change["pending_targets"] and not change["resumed"]
+        change["phase"] = ("resumed" if change["targets"] and set(change["resumed"]) == set(change["targets"]) else
+                           "resuming" if change["permissions"] else
+                           "stopped" if change["all_stopped"] else "stopping")
+    result.update(topics=list(topics.values()), changes=list(changes.values()), reviews=list(reviews.values()))
+    if unconfirmed:
+        result.update(status="unconfirmed", reason="parent-unconfirmed")
+    return result
+
+
+def waiting_for_permission(change, ident):
+    return ident in change["targets"] and not any(ident in p["targets"] for p in change["permissions"])
+
+
+def validate_review(data):
+    required(data, ("review", "triggers", "scope_ref", "basis_ref", "reason"))
+    if type(data.get("required")) is not bool or any(
+            trigger not in ("irreversible-design", "release", "uncertain")
+            for trigger in string_list(data, "triggers")):
+        raise ValueError("invalid review requirement/triggers")
+    for key in ("scope_ref", "basis_ref"):
+        reference(data[key])
+    if data["required"]:
+        reference(data.get("request_ref"))
+
+
+def validate_coordination(state, project, data):
+    """Validate new structured input; legacy history remains readable."""
+    try:
+        event = data["event"]
+        rows = {r["id"]: r for r in assignments(state)}
+
+        def member(ident):
+            row = rows.get(ident)
+            if row is None or row["parent_thread"] != project.get("thread_id"):
+                raise ValueError("assignment must belong to the same parent")
+            return row
+
+        parent = event in ("decision", "resume-permitted", "quality-review")
+        if "assignment" not in data or (parent and (data["assignment"] is not None or data["worker"] != "parent")):
+            raise ValueError("invalid coordination actor")
+        if not parent and member(data["assignment"])["worker"] != data["worker"]:
+            raise ValueError("assignment/worker mismatch")
+        for key in ("topic", "change", "subject", "position", "reason", "next_action"):
+            if key in data and (not isinstance(data[key], str) or not data[key].strip()):
+                raise ValueError(f"nonempty string required: {key}")
+        reference(data["ref"])
+        previous = coordination(state, project)
+        if event == "consult":
+            required(data, ("topic", "subject", "scope_ref", "peer", "phase", "next_action"))
+            reference(data["scope_ref"])
+            participants = string_list(data, "participants")
+            if data["assignment"] not in participants or not any(member(i)["worker"] == data["peer"] for i in participants):
+                raise ValueError("peer must be a participant in the same parent")
+            for ident in participants:
+                member(ident)
+            if data["phase"] not in ("open", "waiting", "parent-wait", "user-wait", "concluded"):
+                raise ValueError("invalid consultation phase")
+            string_list(data, "dependencies")
+            receipt = data["receipt"]
+            if receipt is not None:
+                if receipt["assignment"] not in participants or receipt["kind"] not in ("answering", "redirect", "dependency-wait"):
+                    raise ValueError("invalid receipt")
+                reference(receipt["ref"])
+            exchanges = data["exchanges"]
+            if not isinstance(exchanges, list):
+                raise ValueError("exchanges must be an ordered array")
+            replies = []
+            for pair in exchanges:
+                required(pair, ("proposal_id", "reply_id", "proposal_summary", "reply_summary"))
+                if any(not isinstance(pair[k], str) or not pair[k].strip() for k in
+                       ("proposal_id", "reply_id", "proposal_summary", "reply_summary")):
+                    raise ValueError("exchange ids and summaries must be nonempty strings")
+                replies.append(pair["reply_id"])
+            old = next((t for t in previous["topics"] if t["topic"] == data["topic"]), None)
+            if len(replies) != len(set(replies)) or (old and exchanges[:len(old["exchanges"])] != old["exchanges"]):
+                raise ValueError("preserve exchanges and count each reply once")
+            outcome = data["outcome"]
+            if outcome is not None:
+                required(outcome, ("classification", "conclusion", "reason", "disposition", "next_action"))
+                validate_decision(outcome)
+        elif event == "decision":
+            required(data, ("reason", "decider", "next_action"))
+            if not data.get("topic") and not data.get("change"):
+                raise ValueError("topic or change required")
+            validate_decision(data)
+            reference(data["decision_ref"])
+        elif event == "quality-review":
+            validate_review(data)
+            if data["work"] not in ("parent-wait", "user-wait"):
+                raise ValueError("review must preserve parent decision wait")
+            if data["state"] not in ("not-required", "requested", "received", "adopted", "rejected", "held"):
+                raise ValueError("invalid review state")
+            if (data["state"] == "not-required") == data["required"]:
+                raise ValueError("review state does not match requirement")
+            if data["state"] in ("received", "adopted", "rejected"):
+                old = next((r for r in previous["reviews"] if r["review"] == data["review"]), None)
+                if old and any(old[k] != data[k] for k in ("scope_ref", "basis_ref")):
+                    raise ValueError("review result must match the requested scope and basis")
+                required(data, ("wrapper_reason", "wrapper_out_ref", "verifier_report_ref"))
+                if data["wrapper_exit"] != 0:
+                    raise ValueError("failed review must remain held")
+                wrapper = read_json(reference(data["wrapper_out_ref"]))
+                if not isinstance(wrapper.get("result"), str) or not wrapper["result"].strip():
+                    raise ValueError("review final response missing")
+                reference(data["verifier_report_ref"])
+                if data["state"] == "received":
+                    returned = read_json(reference(data["ref"]))
+                    keys = ("review", "scope_ref", "basis_ref", "wrapper_exit", "wrapper_reason", "wrapper_out_ref", "verifier_report_ref")
+                    if (returned["version"] != VERSION or returned["parent_thread"] != project.get("thread_id")
+                            or any(returned[k] != data[k] for k in keys)):
+                        raise ValueError("review return must match parent, review and basis")
+                else:
+                    reference(data["decision_ref"])
+            if data["state"] == "held":
+                required(data, ("next_action",))
+        else:
+            required(data, ("change", "targets"))
+            targets = string_list(data, "targets")
+            for ident in targets:
+                member(ident)
+            change = next((c for c in previous["changes"] if c["change"] == data["change"]), None)
+            if event == "stop-request":
+                required(data, ("topic", "owner", "scope_ref", "reason"))
+                if data["owner"] != data["assignment"]:
+                    raise ValueError("stop request must identify its owner")
+                reference(data["scope_ref"])
+                if change and (change["owner"] != data["owner"] or not set(change["targets"]) <= set(targets)):
+                    raise ValueError("preserve stop owner and targets")
+                if change and change["permissions"] and set(targets) != set(change["targets"]):
+                    raise ValueError("new targets after permission require a new change")
+                for sent in data["sent_refs"]:
+                    if sent["assignment"] not in targets:
+                        raise ValueError("unknown sent target")
+                    reference(sent["ref"])
+            else:
+                if change is None or not set(targets) <= set(change["targets"]):
+                    raise ValueError("unknown change/targets")
+                if not parent and targets != [data["assignment"]]:
+                    raise ValueError("worker reports only its own stop/resume")
+                if event == "stop-received":
+                    reference(data["received_ref"])
+                elif event == "stop-confirm":
+                    required(data, ("position", "execution_ref"))
+                    if type(data["incomplete"]) is not bool:
+                        raise ValueError("incomplete must be boolean")
+                    string_list(data, "touched_refs")
+                    reference(data["execution_ref"])
+                elif event == "resume-permitted":
+                    if not change["all_stopped"] or previous["status"] != "recorded" or data["work"] != "parent-wait":
+                        raise ValueError("confirm all stops before permission")
+                    for key in ("premises_ref", "scope_ref", "decision_ref", "recheck_ref"):
+                        reference(data[key])
+                    if any(p["ref"] == data["ref"] for c in previous["changes"] for p in c["permissions"]):
+                        raise ValueError("permission requires a distinct reference")
+                elif event == "work-resumed":
+                    required(data, ("position", "permission_ref"))
+                    if ((data["execution"], data["work"]) != ("running", "working") or
+                            not any(p["ref"] == data["permission_ref"] and set(targets) <= set(p["targets"])
+                                    for p in change["permissions"])):
+                        raise ValueError("resume must match permission")
+                    if any(waiting_for_permission(other, ident)
+                           for other in previous["changes"] for ident in targets):
+                        raise ValueError("another change still requires permission")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError(f"invalid-coordination: {error}") from error
+
+
+def validate_decision(data):
+    if (data["classification"] not in ("detail", "requirements-scope", "purpose-policy", "unresolved")
+            or data["disposition"] not in ("effective", "withdrawn", "held")):
+        raise ValueError("invalid decision classification/disposition")
+    string_list(data, "diff_refs")
+    if data.get("decision_ref") is not None:
+        reference(data["decision_ref"])
+    elif data["classification"] != "detail":
+        raise ValueError("decision reference required")
+
+
 def worker_prepare(state, args):
     """Read-only preparation; the parent performs and records native operations."""
     code = "invalid-request"
@@ -102,6 +349,9 @@ def worker_prepare(state, args):
         mode = request["mode"]
         if mode not in ("new", "resume", "replace"):
             raise ValueError("mode must be new/resume/replace")
+        purpose = request.get("purpose", "work")
+        if purpose not in ("work", "consultation"):
+            raise ValueError("purpose must be work/consultation")
         stop = request["stop_remaining_percent"]
         if isinstance(stop, bool) or not isinstance(stop, (int, float)) or not 0 <= stop <= 100:
             raise ValueError("stop_remaining_percent must be between 0 and 100")
@@ -130,6 +380,12 @@ def worker_prepare(state, args):
         project = read_json(state / "project.json")
         if project["version"] != VERSION:
             raise ValueError("unsupported record version")
+        coordination_view = observe(state, project)["coordination"]
+        related = dict(status=coordination_view["status"], topics=[], changes=[], waiting_for_permission=False)
+        if coordination_view["status"] != "recorded" and (
+                coordination_view["reason"] != "settings-unreadable" or purpose == "consultation"):
+            return dict(version=VERSION, status="deferred", reason="coordination-unconfirmed", usage=None,
+                        coordination=related)
         rows = assignments(state)
         history = [json.loads(line) for line in (state / "events.jsonl").read_text().splitlines() if line.strip()]
         replaced = {row["replaces"] for row in rows if row["replaces"]}
@@ -146,6 +402,7 @@ def worker_prepare(state, args):
             execution = previous.get("execution", "unknown")
             if execution != "ended":
                 return dict(version=VERSION, status="deferred", usage=None,
+                            coordination=related,
                             reason="already-running" if execution == "running" else "execution-unconfirmed")
         if mode == "new":
             assignment = {key: request[key] for key in ("id", "stage", "scope", "artifact", "role", "candidate")}
@@ -158,6 +415,20 @@ def worker_prepare(state, args):
         code = "invalid-request"
         if not isinstance(role, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", role):
             raise ValueError("invalid role name")
+        ident = old["id"] if old else assignment["id"]
+        related["topics"] = [t["topic"] for t in coordination_view["topics"] if ident in t["participants"]]
+        relevant_changes = [c for c in coordination_view["changes"] if ident in c["targets"] or ident == c["owner"]]
+        related["changes"] = [c["change"] for c in relevant_changes]
+        if coordination_view["status"] != "recorded" and relevant_changes:
+            return dict(version=VERSION, status="deferred", reason="coordination-unconfirmed", usage=None,
+                        coordination=related)
+        waiting = any(waiting_for_permission(c, ident) for c in relevant_changes)
+        related["waiting_for_permission"] = waiting
+        owner_waiting = any(ident == c["owner"] and c["pending_targets"] and not c["permissions"]
+                            for c in relevant_changes)
+        if (waiting or owner_waiting) and purpose == "work":
+            return dict(version=VERSION, status="deferred", reason="resume-not-permitted", usage=None,
+                        coordination=related)
         # Reuse the existing candidate resolver and Usage presentation, including resets.
         code = "candidate-unresolved"
         spec = importlib.util.spec_from_file_location("team_candidates", lookup("team.role-candidates"))
@@ -171,7 +442,8 @@ def worker_prepare(state, args):
         selected, error = candidates.resolve_candidate(profile, agents, role, assignment["candidate"])
         if mode == "resume" and (error or any(selected[key] != old[key] for key in ("model", "effort"))
                                   or selected["route"] != "external-cli"):
-            return dict(version=VERSION, status="deferred", reason="resume-unavailable", usage=None)
+            return dict(version=VERSION, status="deferred", reason="resume-unavailable", usage=None,
+                        coordination=related)
         if error:
             raise ValueError(error)
         if selected["route"] != "external-cli":
@@ -204,10 +476,12 @@ def worker_prepare(state, args):
                   "usage-unavailable" if None in applicable else
                   "stop-point" if usage["h5"] is not None and usage["h5"] <= stop else None)
         if reason:
-            return dict(version=VERSION, status="deferred", reason=reason, usage=usage)
+            return dict(version=VERSION, status="deferred", reason=reason, usage=usage, coordination=related)
         confirmed = mode == "resume" and any(e.get("assignment") == old["id"] and
                     e["event"] == "worker-ready" for e in history)
         phase = "task" if confirmed and not request.get("confirm_reading", False) else "read-confirmation"
+        if phase == "task" and purpose == "consultation":
+            phase = "consultation"
         prefs = Path(os.environ.get("AIENV_PREFERENCES_DIR", "~/Data/obsidian/Preferences")).expanduser()
         code = "invalid-reference"
         notes = [reference(str(prefs / (name + ".md"))) for name in
@@ -218,9 +492,16 @@ def worker_prepare(state, args):
             message += f"旧担当と引き継ぎ: {old['id']} / {request['handoff_ref']}\n"
         if phase == "read-confirmation":
             message += "全文読了後、職種・読んだ必読文書名・やらないことの受け取り確認だけを返す。制作は始めない。\n"
+        elif phase == "consultation":
+            message += "依頼された確認・議論・報告だけを行う。制作・修正を始めない。\n"
         else:
             message += "依頼に従って担当範囲を進める。停止中・親の再開許可待ちは引き継ぎ、許可前に再開しない。本文が不足すれば作業前に必読を読み直す。\n"
+        message += (f"状態記録: {state / 'events.jsonl'}\n共通設定: {coordination_view['settings']['ref']}\n"
+                    f"論点: {', '.join(related['topics'])}\n変更: {', '.join(related['changes'])}\n")
+        if waiting:
+            message += "停止中・親の再開許可待ち。確認・議論・停止位置の報告だけ。制作・修正を始めない。\n"
         return dict(version=VERSION, status="ready", mode=mode, assignment=assignment,
+                    coordination=related,
                     usage=usage, selection_sources=sources,
                     role_definition_source=str(role_definition) if role_definition else None,
                     operation="followup" if mode == "resume" else "spawn",
@@ -271,6 +552,7 @@ def observe(state, project):
               "last_recorded": latest["workers"],
               "worker_records_status": "last-recorded", "thread_id": project.get("thread_id", "")}
     if not project.get("run"):
+        result["coordination"] = coordination(state, project)
         return result
     run_dir = state / "runs" / project["run"]
     run = read_json(run_dir / "run.json")
@@ -301,6 +583,7 @@ def observe(state, project):
     # Never convert a parent's EXIT into a child's stopped/completed state.
     if status == "unconfirmed" or (run["mode"] == "recover" and not project.get("recovery_complete")):
         result["worker_records_status"] = "unconfirmed"
+    result["coordination"] = coordination(state, project, result["worker_records_status"] == "unconfirmed")
     return result
 
 
@@ -436,7 +719,8 @@ def validate_worker_event(state, data):
         prepared = read_json(reference(data["prepare_ref"]))
         selection = data["selection"]
         required(selection, ("candidate", "model", "effort", "usage", "selection_sources"))
-        if (data["execution"] != "running" or data["work"] not in ("parent-wait", "working")
+        allowed_work = ("consulting",) if prepared.get("phase") == "consultation" else ("parent-wait", "working")
+        if (data["execution"] != "running" or data["work"] not in allowed_work
                 or prepared.get("status") != "ready"
                 or prepared["assignment"]["id"] != row["id"]
                 or Path(row["selection_ref"]).resolve() != state / "events.jsonl"
@@ -501,6 +785,17 @@ def record(state, project, args):
         for key in ("pending", "read_notes", "written_notes"):
             if not isinstance(data[key], list):
                 raise ValueError(f"array required: {key}")
+        if "claude_review" in data:
+            try:
+                validate_review(data["claude_review"])
+                review = data["claude_review"]
+                collected = any(r["review"] == review["review"] and r["basis_ref"] == review["basis_ref"]
+                                and r["state"] in ("received", "adopted", "rejected")
+                                for r in coordination(state, project)["reviews"])
+                if review["required"] and not collected and review["review"] not in data["pending"]:
+                    raise ValueError("required review must remain pending until collected")
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                raise ValueError(f"invalid-coordination: {error}") from error
         if "worker_refs" in data:
             ids = {row["id"] for row in assignments(state)}
             if any(ident not in ids for ident in string_list(data, "worker_refs")):
@@ -530,6 +825,8 @@ def record(state, project, args):
             raise ValueError("invalid execution/work state")
         if data["event"] in WORKER_EVENTS:
             validate_worker_event(state, data)
+        if structured_event(data):
+            validate_coordination(state, project, data)
         if data["event"] == "consult":
             required(data, ("peer",))
         if data["event"] in ("stop-request", "stop-confirm", "resume-permitted"):
@@ -592,6 +889,12 @@ def view(state, args):
                   "子の現在状態は未確認。保存記録は最終記録としてのみ参照。")
             if status.get("report"):
                 print(json.dumps(status["report"], ensure_ascii=False, indent=2))
+            coordination_view = status["coordination"]
+            print(f"連携: {coordination_view['status']} / {coordination_view['reason'] or '-'}")
+            for topic in coordination_view["topics"]:
+                print(f"論点 {topic['topic']}: {topic['rounds']}/{topic['limit']} {topic['phase']} — {topic['next_action']}")
+            for change in coordination_view["changes"]:
+                print(f"変更 {change['change']}: {change['phase']} 停止待ち={','.join(change['pending_targets'])}")
             for key in ("events", "log", "out"):
                 if key not in status:
                     continue
