@@ -6,6 +6,7 @@ worker inference, model selection, or Vault writes are performed here.
 """
 import argparse
 import csv
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import shlex
 import subprocess
 import sys
 import time
+import tomllib
 from collections import deque
 from datetime import datetime, timezone
 
@@ -25,6 +27,9 @@ ASSIGN_COLUMNS = ("version id stage scope artifact role worker address parent_th
                   "candidate model effort selection_ref replaces handoff_ref state_ref").split()
 WORK_STATES = ("working consulting consultation-wait slot-wait stop-requested stopped "
                "parent-wait user-wait done replaced unrecoverable unconfirmed").split()
+REPLACEMENT_REASONS = ("context-limit", "quota-exhausted", "resume-unavailable")
+WORKER_EVENTS = ("worker-started", "worker-ready", "worker-finished", "worker-done",
+                 "worker-slot-wait", "worker-unavailable")
 
 
 def now():
@@ -76,6 +81,147 @@ def check_display(project, workspace, surface):
 def assignments(state):
     with (state / "assignments.tsv").open(encoding="utf-8", newline="") as stream:
         return list(csv.DictReader(stream, delimiter="\t"))
+
+
+def reference(value):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("invalid-reference: nonempty file path required")
+    path = Path(value).expanduser().absolute()
+    if not path.is_file() or not path.stat().st_size:
+        raise ValueError(f"invalid-reference: nonempty file required: {path}")
+    return path
+
+
+def worker_prepare(state, args):
+    """Read-only preparation; the parent performs and records native operations."""
+    code = "invalid-request"
+    try:
+        request = read_json(Path(args.file))
+        required(request, ("mode", "request_ref", "stop_remaining_percent", "stop_ref"))
+        mode = request["mode"]
+        if mode not in ("new", "resume", "replace"):
+            raise ValueError("mode must be new/resume/replace")
+        stop = request["stop_remaining_percent"]
+        if isinstance(stop, bool) or not isinstance(stop, (int, float)) or not 0 <= stop <= 100:
+            raise ValueError("stop_remaining_percent must be between 0 and 100")
+        if not isinstance(request.get("confirm_reading", False), bool):
+            raise ValueError("confirm_reading must be boolean")
+        if mode == "new":
+            required(request, ("id", "role", "candidate", "stage", "scope", "artifact"))
+        else:
+            required(request, ("assignment",))
+            forbidden = ("role", "stage", "scope", "artifact", "model", "effort")
+            if mode == "resume":
+                forbidden += ("id", "candidate")
+            if any(key in request for key in forbidden):
+                raise ValueError("saved assignment fields cannot be overridden")
+            if mode == "replace":
+                required(request, ("id", "candidate", "reason", "old_execution_ref", "handoff_ref"))
+                if request["reason"] not in REPLACEMENT_REASONS:
+                    raise ValueError("invalid replacement reason")
+        code = "invalid-reference"
+        request_ref = reference(request["request_ref"])
+        stop_ref = reference(request["stop_ref"])
+        if mode == "replace":
+            reference(request["old_execution_ref"])
+            reference(request["handoff_ref"])
+        code = "record-error"
+        project = read_json(state / "project.json")
+        if project["version"] != VERSION:
+            raise ValueError("unsupported record version")
+        rows = assignments(state)
+        history = [json.loads(line) for line in (state / "events.jsonl").read_text().splitlines() if line.strip()]
+        replaced = {row["replaces"] for row in rows if row["replaces"]}
+        code = "invalid-request"
+        if mode != "resume" and any(row["id"] == request["id"] for row in rows):
+            raise ValueError("assignment id already exists")
+        old = None
+        if mode != "new":
+            code = "unknown-assignment"
+            old = next((row for row in rows if row["id"] == request["assignment"] and row["id"] not in replaced), None)
+            if old is None:
+                raise ValueError("current assignment required")
+            previous = next((e for e in reversed(history) if e["worker"] == old["worker"]), {})
+            execution = previous.get("execution", "unknown")
+            if execution != "ended":
+                return dict(version=VERSION, status="deferred", usage=None,
+                            reason="already-running" if execution == "running" else "execution-unconfirmed")
+        if mode == "new":
+            assignment = {key: request[key] for key in ("id", "stage", "scope", "artifact", "role", "candidate")}
+        else:
+            assignment = {key: old[key] for key in ("id", "stage", "scope", "artifact", "role", "candidate", "model", "effort")}
+            if mode == "replace":
+                assignment.update(id=request["id"], candidate=request["candidate"],
+                                  replaces=old["id"], handoff_ref=request["handoff_ref"])
+        role = assignment["role"]
+        code = "invalid-request"
+        if not isinstance(role, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", role):
+            raise ValueError("invalid role name")
+        # Reuse the existing candidate resolver and Usage presentation, including resets.
+        code = "candidate-unresolved"
+        spec = importlib.util.spec_from_file_location("team_candidates", lookup("team.role-candidates"))
+        candidates = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(candidates)
+        sys.path.insert(0, str(ROOT / "team/executor"))
+        import profile_resolve
+        profile = candidates._profile_path(None)
+        agents = candidates._agents_dir(None)
+        selected, error = candidates.resolve_candidate(profile, agents, role, assignment["candidate"])
+        if mode == "resume" and (error or any(selected[key] != old[key] for key in ("model", "effort"))
+                                  or selected["route"] != "external-cli"):
+            return dict(version=VERSION, status="deferred", reason="resume-unavailable", usage=None)
+        if error:
+            raise ValueError(error)
+        if selected["route"] != "external-cli":
+            raise ValueError("wrong-route: Codex external-cli candidate required")
+        if not selected["model"] or selected["model"] == "default" or not selected["effort"]:
+            raise ValueError("explicit model and effort required")
+        assignment.update(model=selected["model"], effort=selected["effort"])
+        sources = [str(Path(profile).absolute()), str(Path(profile_resolve.model_defs_path()).absolute())]
+        if mode != "resume":
+            code = "invalid-role-definition"
+            definition = tomllib.loads((Path.home() / ".codex/agents" / (role + ".toml")).read_text())
+            notes = ("absolute-rules", "core-worker", "worker-role-" + role)
+            if (set(definition) != {"name", "description", "developer_instructions"}
+                    or definition["name"] != role
+                    or not isinstance(definition["description"], str) or not definition["description"].strip()
+                    or not isinstance(definition["developer_instructions"], str)
+                    or not all(note + ".md" in definition["developer_instructions"] for note in notes)):
+                raise ValueError("reference-only role definition required")
+        code = "candidate-unresolved"
+        h5, d7 = candidates._usage_pair(candidates._run_usage_snapshot(), selected["route"])
+        usage = dict(checked_at=now(), h5=None if h5 == "-" else int(h5),
+                     d7=None if d7 == "-" else int(d7), stop_remaining_percent=stop,
+                     stop_ref=str(stop_ref), candidate=assignment["candidate"])
+        reason = ("quota-exhausted" if 0 in (usage["h5"], usage["d7"]) else
+                  "usage-unavailable" if None in (usage["h5"], usage["d7"]) else
+                  "stop-point" if usage["h5"] <= stop else None)
+        if reason:
+            return dict(version=VERSION, status="deferred", reason=reason, usage=usage)
+        confirmed = mode == "resume" and any(e.get("assignment") == old["id"] and
+                    e["event"] == "worker-ready" for e in history)
+        phase = "task" if confirmed and not request.get("confirm_reading", False) else "read-confirmation"
+        prefs = Path(os.environ.get("AIENV_PREFERENCES_DIR", "~/Data/obsidian/Preferences")).expanduser()
+        code = "invalid-reference"
+        notes = [reference(str(prefs / (name + ".md"))) for name in
+                 ("absolute-rules", "core-worker", "worker-role-" + role)]
+        message = (f"職種: {role}\n必読（着手前に全文読み、従う）: " + " → ".join(map(str, notes)) +
+                   f"\n担当表: {state / 'assignments.tsv'}\n依頼（背景・目的・向き・範囲・受入条件・成果と報告先・禁止事項）: {request_ref}\n")
+        if mode == "replace":
+            message += f"旧担当と引き継ぎ: {old['id']} / {request['handoff_ref']}\n"
+        if phase == "read-confirmation":
+            message += "全文読了後、職種・読んだ必読文書名・やらないことの受け取り確認だけを返す。制作は始めない。\n"
+        else:
+            message += "依頼に従って担当範囲を進める。停止中・親の再開許可待ちは引き継ぎ、許可前に再開しない。本文が不足すれば作業前に必読を読み直す。\n"
+        return dict(version=VERSION, status="ready", mode=mode, assignment=assignment,
+                    usage=usage, selection_sources=sources, operation="followup" if mode == "resume" else "spawn",
+                    target=old["address"] if mode == "resume" else None, agent_type=role,
+                    model=assignment["model"], reasoning_effort=assignment["effort"],
+                    fork_turns="none", phase=phase, message=message)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        if str(error).startswith(("invalid-reference:", "wrong-route:")):
+            raise ValueError(str(error)) from error
+        raise ValueError(f"{code}: {error}") from error
 
 
 def current_thread(run):
@@ -236,6 +382,80 @@ def run_parent(state, project, run_id):
     save(directory / "run.json", run)
 
 
+def string_list(data, key):
+    value = data[key]
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+        raise ValueError(f"array of nonempty strings required: {key}")
+    return value
+
+
+def validate_worker_event(state, data):
+    """Validate stage 2 additions before appending to the existing version 1 files."""
+    rows = {row["id"]: row for row in assignments(state)}
+    event = data["event"]
+    if "assignment" not in data:
+        raise ValueError("required field: assignment")
+    planned = event == "worker-slot-wait" and data["assignment"] is None
+    if planned:
+        required(data, ("planned_id", "request_ref"))
+        if (data["worker"], data["execution"], data["work"]) != ("parent", "running", "slot-wait"):
+            raise ValueError("unstarted slot wait must be recorded by parent")
+        if data["planned_id"] in rows:
+            raise ValueError("planned id already registered")
+        reference(data["request_ref"])
+    else:
+        row = rows.get(data["assignment"])
+        if row is None or row["worker"] != data["worker"]:
+            raise ValueError("assignment/worker mismatch")
+    reference(data["ref"])
+    if event == "worker-slot-wait":
+        required(data, ("queue_class", "queue_order", "blocked_by"))
+        if (data["queue_class"] not in ("consultation", "production")
+                or type(data["queue_order"]) is not int or data["queue_order"] <= 0
+                or any(ident not in rows for ident in string_list(data, "blocked_by"))):
+            raise ValueError("invalid queue class/order/dependencies")
+        if not planned and (data["execution"] not in ("ended", "unknown") or data["work"] != "slot-wait"):
+            raise ValueError("invalid worker slot wait state")
+    elif event == "worker-unavailable":
+        required(data, ("reason",))
+        if (data["reason"] not in REPLACEMENT_REASONS + ("stop-point", "usage-unavailable", "operation-failed")
+                or data["execution"] not in ("ended", "unknown")
+                or data["work"] not in ("parent-wait", "unrecoverable", "unconfirmed")):
+            raise ValueError("invalid unavailable reason/state")
+    elif event == "worker-started":
+        required(data, ("prepare_ref", "selection"))
+        prepared = read_json(reference(data["prepare_ref"]))
+        selection = data["selection"]
+        required(selection, ("candidate", "model", "effort", "usage", "selection_sources"))
+        if (data["execution"] != "running" or data["work"] not in ("parent-wait", "working")
+                or prepared.get("status") != "ready"
+                or prepared["assignment"]["id"] != row["id"]
+                or Path(row["selection_ref"]).resolve() != state / "events.jsonl"
+                or any(selection[key] != row[key] or selection[key] != prepared["assignment"][key]
+                       for key in ("candidate", "model", "effort"))):
+            raise ValueError("started selection must match preparation and assignment")
+    else:
+        expected_work = "done" if event == "worker-done" else "parent-wait"
+        if (data["execution"], data["work"]) != ("ended", expected_work):
+            raise ValueError("invalid worker result state")
+        if event == "worker-ready":
+            required(data, ("role", "read_notes", "prohibitions"))
+            notes = {Path(note).stem for note in string_list(data, "read_notes")}
+            if (data["role"] != row["role"] or not string_list(data, "prohibitions")
+                    or not {"absolute-rules", "core-worker", "worker-role-" + row["role"]} <= notes):
+                raise ValueError("role, all three read notes and prohibitions required")
+        elif event == "worker-finished":
+            required(data, ("report_ref", "artifact_refs", "prepare_ref"))
+            reference(data["report_ref"])
+            reference(data["prepare_ref"])
+            for value in string_list(data, "artifact_refs"):
+                if not Path(value).expanduser().exists():
+                    raise ValueError(f"artifact missing: {value}")
+        else:
+            required(data, ("handoff_ref",))
+            reference(data["handoff_ref"])
+
+
 def record(state, project, args):
     data = read_json(Path(args.file))
     if args.command == "assign":
@@ -245,6 +465,24 @@ def record(state, project, args):
             raise ValueError("assignment id already exists; append a new id and replaces link")
         if data.get("replaces") and data["replaces"] not in {row["id"] for row in rows}:
             raise ValueError("unknown replaced assignment")
+        if any(not isinstance(value, (str, int)) or any(c in str(value) for c in "\t\r\n")
+               for value in data.values()):
+            raise ValueError("assignment values must be single-line TSV fields")
+        if Path(data["selection_ref"]).resolve() == state / "events.jsonl":
+            parent_thread = project.get("thread_id", "")
+            if project.get("run"):
+                parent_thread = current_thread(read_json(state / "runs" / project["run"] / "run.json")) or parent_thread
+            if data["parent_thread"] != parent_thread:
+                raise ValueError("assignment must belong to the saved parent conversation")
+            if any(row["worker"] == data["worker"] or row["address"] == data["address"] for row in rows):
+                raise ValueError("new assignments require a distinct worker and address; resume keeps its row")
+            if data.get("replaces"):
+                old = next(row for row in rows if row["id"] == data["replaces"])
+                latest = read_json(state / "latest.json")["workers"].get(old["worker"], {})
+                if (any(row["replaces"] == old["id"] for row in rows) or old["role"] != data["role"]
+                        or latest.get("execution") != "ended"):
+                    raise ValueError("replacement requires current same-role assignment and ended execution")
+                reference(data.get("handoff_ref"))
         data.update(version=VERSION, state_ref=str(state / "events.jsonl"))
         with (state / "assignments.tsv").open("a", encoding="utf-8", newline="") as stream:
             csv.DictWriter(stream, fieldnames=ASSIGN_COLUMNS, delimiter="\t").writerow(data)
@@ -253,6 +491,10 @@ def record(state, project, args):
         for key in ("pending", "read_notes", "written_notes"):
             if not isinstance(data[key], list):
                 raise ValueError(f"array required: {key}")
+        if "worker_refs" in data:
+            ids = {row["id"] for row in assignments(state)}
+            if any(ident not in ids for ident in string_list(data, "worker_refs")):
+                raise ValueError("unknown worker_refs assignment")
         directory = state / "runs" / project["run"]
         report_file = directory / "report.json"
         previous = read_json(report_file) if report_file.exists() else {}
@@ -276,6 +518,8 @@ def record(state, project, args):
             raise ValueError("the parent records operation results and worker notifications")
         if data["execution"] not in ("running", "ended", "unknown") or data["work"] not in WORK_STATES:
             raise ValueError("invalid execution/work state")
+        if data["event"] in WORKER_EVENTS:
+            validate_worker_event(state, data)
         if data["event"] == "consult":
             required(data, ("peer",))
         if data["event"] in ("stop-request", "stop-confirm", "resume-permitted"):
@@ -355,7 +599,7 @@ def view(state, args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("init", "start", "resume", "recover", "status", "collect", "assign", "event", "report", "display", "view", "_run"):
+    for name in ("init", "start", "resume", "recover", "status", "collect", "assign", "event", "report", "worker-prepare", "display", "view", "_run"):
         command = commands.add_parser(name)
         command.add_argument("--state-dir", type=Path, required=True)
         if name == "init":
@@ -367,7 +611,7 @@ def main():
         if name in ("start", "resume", "recover"):
             command.add_argument("--prompt-file", required=True)
             command.add_argument("--usage-ref", required=True)
-        if name in ("assign", "event", "report"):
+        if name in ("assign", "event", "report", "worker-prepare"):
             command.add_argument("--file", required=True)
         if name == "display":
             command.add_argument("--workspace", required=True)
@@ -388,7 +632,9 @@ def main():
             parser.error("interval and lines must be positive")
         view(state, args)
         return
-    if args.command == "init":
+    if args.command == "worker-prepare":
+        result = worker_prepare(state, args)
+    elif args.command == "init":
         result = init(state, args)
     else:
         project = read_json(state / "project.json")
@@ -413,11 +659,13 @@ def main():
                     raise ValueError("collect requires EXIT:0, the final report and its saved summary")
                 result["final_report"] = Path(result["out"]).read_text(encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.command == "worker-prepare" and result["status"] == "deferred":
+        sys.exit(3)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"project-leader: {error}", file=sys.stderr)
         sys.exit(1)

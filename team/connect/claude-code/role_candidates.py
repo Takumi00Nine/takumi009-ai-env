@@ -26,6 +26,8 @@ stderr へ1行（設計 v1.1 §5.6）。
 （設計§4.1）。
 
 呼び方（README 2026-09-19）: Any role whose `tools:` frontmatter includes `Bash` can look up its own launch candidates (definition name, resolved route, pass/fail, and remaining usage) with `python3 ~/Workspace/Tools/takumi009-ai-env/team/connect/claude-code/role_candidates.py [--role <role>]` — an AI-facing command, not meant for interactive use.
+`--format json` adds resolved model/effort and numeric usage for native-worker
+preparation. Omission keeps the TSV contract; both formats remain presentation-only.
 """
 
 from __future__ import annotations
@@ -256,6 +258,46 @@ def build_output_lines(
     return out_lines, dropped
 
 
+def resolve_candidate(profile_path: str, agents_dir: str, role: str, candidate: str):
+    """Use the resolver's structured OK fields, never its shell argument string."""
+    proc = subprocess.run(
+        [sys.executable, PROFILE_RESOLVE_PY, "resolve-candidate", profile_path,
+         "--agents-dir", agents_dir, "--role", role, "--model-def", candidate],
+        capture_output=True, text=True,
+    )
+    if proc.returncode:
+        return None, (proc.stderr.splitlines() or ["INTERNAL_ERROR"])[0].split("\t")[0]
+    fields = proc.stdout.splitlines()[0].split("\t")
+    return dict(candidate=fields[1], model=fields[2], route=fields[3],
+                effort=fields[4] or None), None
+
+
+def build_json_output(rows, snapshot, role_filter, profile_path, agents_dir):
+    result = dict(version=1, candidates=[], unresolved=[])
+    for fields in rows:
+        if len(fields) < 6:
+            result["unresolved"].append("INTERNAL_ERROR")
+            continue
+        role, state, candidate, route, _, verdict = fields[:6]
+        if role_filter is not None and role != role_filter:
+            continue
+        if not candidate:
+            result["unresolved"].append(state)
+            continue
+        selected, error = resolve_candidate(profile_path, agents_dir, role, candidate)
+        if error:
+            result["unresolved"].append(error)
+        h5, d7 = _usage_pair(snapshot, route)
+        result["candidates"].append(dict(
+            role=role, candidate=candidate, route=route,
+            model=selected["model"] if selected else None,
+            effort=selected["effort"] if selected else None,
+            ok=_ok_value(verdict, h5, d7),
+            h5=None if h5 == "-" else int(h5), d7=None if d7 == "-" else int(d7)))
+    result["unresolved"] = list(dict.fromkeys(result["unresolved"]))
+    return result
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="role_candidates.py",
@@ -264,10 +306,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--profile", default=None, help="ローカル実体プロファイルのパス（既定はAIENV_LOCAL_PROFILE_PATHまたは~/.config/takumi009-ai-env/profile.md）")
     parser.add_argument("--agents-dir", default=None, help="職種定義の実配置ディレクトリ（既定は~/.claude/agents＝C-6）")
     parser.add_argument("--role", default=None, help="この職種の行だけに絞る（省略時は全職種）")
+    parser.add_argument("--format", choices=("tsv", "json"), default="tsv")
     args = parser.parse_args(argv)
 
     # ヘッダは常に出す（--role指定時・該当0件時・UNRESOLVED時も＝設計§4.3-1）。
-    print(HEADER)
+    if args.format == "tsv":
+        print(HEADER)
 
     try:
         profile_path = _profile_path(args.profile)
@@ -276,9 +320,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         rows, unresolved_code = _run_list_candidates(profile_path, agents_dir)
         if unresolved_code is not None:
             sys.stderr.write(f"UNRESOLVED\t{unresolved_code}\n")
+            if args.format == "json":
+                print(json.dumps(dict(version=1, candidates=[], unresolved=[unresolved_code])))
             return 0
 
         snapshot = _run_usage_snapshot()
+        if args.format == "json":
+            result = build_json_output(rows, snapshot, args.role, profile_path, agents_dir)
+            print(json.dumps(result, ensure_ascii=False))
+            for code in result["unresolved"]:
+                if code not in ("not_adopted", "unknown"):
+                    sys.stderr.write(f"UNRESOLVED\t{code}\n")
+            return 0
         lines, dropped = build_output_lines(rows, snapshot, args.role)
         for line in lines:
             print(line)
@@ -290,6 +343,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception:
         # 想定外例外（設計§4.6）。静かに0行を返さず、機械可読の1行を出す。
         sys.stderr.write("UNRESOLVED\tINTERNAL_ERROR\n")
+        if args.format == "json":
+            print(json.dumps(dict(version=1, candidates=[], unresolved=["INTERNAL_ERROR"])))
         return 0
 
 

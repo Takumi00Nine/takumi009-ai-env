@@ -46,7 +46,8 @@ takumi009-ai-env/
 │       └── vault-public/        # Snapshot of the Vault's public folders (see below)
 ├── team/                        # Worker launch, role definitions, cast/model resolution, delegation gates, the Codex connection
 │   ├── rules/
-│   │   └── agents/               # Worker role definitions (one .md per role)
+│   │   ├── agents/               # Claude worker role references (one .md per role)
+│   │   └── codex-agents/         # Codex worker role references (one .toml per role)
 │   ├── data/                     # profile.md.sample, models.conf.sample
 │   ├── executor/                 # profile_resolve.py (cast/model resolver)
 │   └── connect/
@@ -92,7 +93,7 @@ Note: the pre-v1.1 folders `claude/`, `codex/`, `scripts/`, `cmux/`, `config/`, 
 `team/rules/agents/` and this environment's workflow are built around three role words:
 
 - **Orchestrator (leader)**: The main session, using either Claude or Codex. It makes decisions, talks with the user, and directs the overall workflow — it delegates implementation/investigation/testing to workers rather than doing them itself.
-- **Worker**: A subagent launched from one of the role definitions under `team/rules/agents/` (one `.md` per role; the set is whatever the directory holds — currently requirements-analyst, system-designer, test-writer, implementer, verifier, test-runner, researcher, operator, adoption-critic). Adding or removing a role = editing that directory and the local profile only (contract and steps: see 日本語 §「職種定義の契約と設定変更の手順」).
+- **Worker**: A subagent launched from one of the role definitions under `team/rules/agents/` (one `.md` per role; the set is whatever the directory holds — currently requirements-analyst, system-designer, test-writer, implementer, verifier, test-runner, researcher, operator, adoption-critic). For native project workers, keep a reference-only TOML with the same role name under `team/rules/codex-agents/`. Adding or removing a role = editing the role references and the local profile (contract and steps: see 日本語 §「職種定義の契約と設定変更の手順」).
 - **Codex**: Can serve as the leader or a worker. When cast as the verifier, it is invoked via `team/connect/codex/codex-exec.sh` (a Bash wrapper around `codex exec`; continuation of a review thread uses the wrapper's `--resume` flag). Workers don't invoke it themselves — the orchestrator starts verification once a stage's deliverable is complete, and workers only apply the resulting findings.
 
 How a worker is launched (`resolve-candidate`, in-process `Agent` rejection, `claude-exec.sh`) — details = the comment at the top of `team/connect/claude-code/claude-exec.sh`.
@@ -272,6 +273,49 @@ Example event input: `{"actor":"parent","event":"stop-confirm","worker":"worker-
 
 Keep assignment/history/final snapshot and report/result records after closing, linked from the Projects note. Raw prompts, Codex event/error streams and runner diagnostic logs need not be permanent; the saved thread in `run.json` permits reading records after those raw files are retired. At closing, move the key points of each artifact's final “next-stage staffing” section into the project note: scope / next stage / required people and the consultation conclusion. These estimates stay separate from actual assignees. This tooling never writes the Vault. Live cmux delivery, real usage, parent-failure effects on children and human approvals still require the project leader's real-environment acceptance check.
 
+### Native project workers (stage 2, main machine)
+
+`install-main.sh` uses the ledger to link `team/rules/codex-agents/*.toml` into `$HOME/.codex/agents/` when the resolved machine role is `main` and `team` is selected. Sub installation does not deploy them. Each of the nine files contains only `name`, `description` and required-note references in `developer_instructions`; role bodies stay in Preferences, and models/effort stay in local candidate settings. This uses the [official custom-agent format](https://learn.chatgpt.com/docs/agent-configuration/subagents#custom-agents). Existing personal files use the normal managed-link backup; new placements and dangling managed links are reported as `CODEX AGENTS`. Dangling links are retained and cause nonzero exit. `--dry-run` only shows the plan. Definition updates do not establish that a running conversation has adopted them.
+
+The parent chooses an initial candidate using suitability, usage and plan size. JSON adds resolved values to the existing candidate lookup; omitting `--format` keeps the TSV contract and exit behavior:
+
+```bash
+python3 team/connect/claude-code/role_candidates.py --role "$ROLE" --format json
+python3 "$LEADER" worker-prepare --state-dir "$STATE" --file "$PREPARE_REQUEST" > "$PREPARED"
+```
+
+Candidate JSON is `{version:1,candidates:[...],unresolved:[...]}`. Entries contain `role/candidate/route/model/effort/ok/h5/d7`; unresolved values and unavailable usage are `null`. Empty roles keep their existing reason codes in `unresolved`. Lookup remains presentation-only and exits 0 even on resolution errors; inspect the JSON and stderr. `AIENV_LOCAL_PROFILE_PATH`, `AIENV_MODEL_DEFS_FILE`, `AIENV_USAGE_CACHE_DIR`, `--profile` and `--agents-dir` retain their meanings.
+
+`worker-prepare` reads the existing private version 1 state, checks the selected candidate and current usage, and returns preparation JSON without changing state or operating a worker. Put its request/result files in project work. Supply these request fields:
+
+| Mode | Required fields in addition to `mode` |
+|---|---|
+| All | `request_ref`, `stop_remaining_percent`, `stop_ref`. References must name nonempty files. The stop point comes from approved Tasks; the CLI adds no default. Optional `confirm_reading` is boolean, default false. |
+| `new` | Unused `id`, `role`, `candidate`, `stage`, `scope`, `artifact`. |
+| `resume` | Current `assignment` id; role/selection/scope fields cannot be overridden. The last explicit execution must be `ended`. |
+| `replace` | Current `assignment`, unused `id`, new `candidate`, `reason` (`context-limit/quota-exhausted/resume-unavailable`), `old_execution_ref`, lasting `handoff_ref`. Inherits the old role, stage, scope and artifact; requires the old execution to have ended. |
+
+The request reference supplies background, purpose, direction, scope, acceptance, artifact/report destinations and prohibitions. A ready result contains `assignment`, fresh `usage` (`checked_at/h5/d7/stop_remaining_percent/stop_ref/candidate`), `selection_sources` (profile/model-definition paths), `operation`, `target`, `agent_type`, `model`, `reasoning_effort`, `fork_turns:"none"`, `phase` and `message`. New/replacement preparation requires a reference-only installed role and an explicit Codex model and effort; it never executes resolver shell arguments or falls back to a default role/model. Resume uses the saved candidate, role, values and address, checks that definition still resolves identically, and refreshes usage. Absence from the native list does not erase an address.
+
+The parent performs native `spawn_agent` with the returned explicit role/selection and no inherited conversation, then appends the actual worker/address to `assign`. Resume uses `followup_task` on the same target and keeps the same table row; `send_message` alone does not restart an ended worker. Native calls are session tools, not new shell commands. The first `read-confirmation` message requests only the three full reads, role and prohibitions, with no production. Save its response and record `worker-ready`, then prepare `resume` and deliver its `task` message. Missing or explicitly requested reading confirmation repeats that phase on the same address. The parent checks actual reading; matching names alone cannot prove it. Wait for native notifications while children run, and confirm their execution has ended before ending the parent's run.
+
+Preparation exits 0 for `ready`, 3 for `deferred` with `reason` and `usage` (or null), 1 for input/reference/record errors (`project-leader: CODE: reason`), and 2 for CLI syntax errors. Deferred reasons are `already-running/execution-unconfirmed/resume-unavailable/quota-exhausted/usage-unavailable/stop-point`. Usage is checked for exhaustion, unavailable windows, then the 5h stop point. Deferral does not authorize replacement. If the subscription is exhausted, a new worker also waits.
+
+Keep the same record filenames, version and table columns. For stage 2, `selection_ref` points to the state's `events.jsonl`; the first `worker-started` for that assignment stores its initial selection. The parent adds `assignment` to these events, along with the existing `actor/event/worker/execution/work/ref`:
+
+| Event | Execution / work and extra fields |
+|---|---|
+| `worker-started` | `running / parent-wait` or `working`; `prepare_ref`, native-result `ref`, `selection:{candidate,model,effort,usage,selection_sources}` copied from preparation. Each resume retains its fresh usage check. |
+| `worker-ready` | `ended / parent-wait`; matching `role`, all three note names in `read_notes`, nonempty `prohibitions`; `ref` is the original confirmation. |
+| `worker-finished` | `ended / parent-wait`; `report_ref`, `artifact_refs` (empty if none), `prepare_ref`. Save the full native response in the designated report file, check actual artifacts against the assignment, then record it. Existing files pointing to another result must get a new destination, never an overwrite. |
+| `worker-done` | `ended / done`; `handoff_ref` for verification, required checks and parent acceptance. |
+| `worker-slot-wait` | `ended` or `unknown / slot-wait`; `queue_class:consultation/production`, positive `queue_order`, `blocked_by` assignment ids. Before an address exists, use `worker:"parent",assignment:null,execution:"running",work:"slot-wait"` plus unused `planned_id` and `request_ref`; create no fictitious assignment. |
+| `worker-unavailable` | `ended` or `unknown / parent-wait`, `unrecoverable` or `unconfirmed`; `reason` is a replacement reason or `stop-point/usage-unavailable/operation-failed`, supported by `ref`. Unknown execution cannot be replaced. |
+
+The parent records consultation ahead of production in the wait queue without raising product limits or treating a queue record as a reservation. Check usage again before retrying. Replacement creates a distinct worker/address and row with `replaces/handoff_ref`, retaining the old author. Confirm the reason and old execution against evidence; hand over artifacts, assignments, effective decisions and reasons, conclusions, unresolved items, stopping point and next action. An operation that succeeded but failed to record must be recovered at its known address, not spawned again.
+
+`status/collect` retain event additions and optional report `worker_refs` (assignment ids). The parent's `pending` must include missing results, incomplete reads and pending judgements. Execution completion does not approve artifacts; the parent's collection rules remain unchanged. Run `bash tests/test-project-workers-acceptance.sh` for the isolated 32-case acceptance suite. Actual value delivery/retention, reading/prohibition compliance, return after parent resume, slot release and failure recovery still require the project leader's small real-environment trial in project work.
+
 ### Vault Backup Operations
 
 `ai-brain/executor/backup-vault.sh` targets `$HOME/Data/obsidian`: if there are changes, it runs `git add -A && git commit` (message: `backup: YYYY-MM-DD HH:MM`), and pushes only if the `origin` remote is already configured (if not, it stops with a warning after committing). Details = the comment at the top of the script.
@@ -438,7 +482,8 @@ takumi009-ai-env/
 │       └── vault-public/        # Vault の公開フォルダのスナップショット（後述）
 ├── team/                        # ワーカー起動・職種定義・配役表とモデル定義の解決・委任の柵・Codex 接続
 │   ├── rules/
-│   │   └── agents/               # ワーカー役割定義（1 ファイル＝1 職種）
+│   │   ├── agents/               # Claudeワーカーの職種参照（1職種＝1 .md）
+│   │   └── codex-agents/         # Codexワーカーの職種参照（1職種＝1 .toml）
 │   ├── data/                     # profile.md.sample・models.conf.sample
 │   ├── executor/                 # profile_resolve.py（配役表・モデル定義の解決器）
 │   └── connect/
@@ -496,7 +541,7 @@ takumi009-ai-env/
 
 Vault への記録はすべてリーダー自身が行う。
 
-**設定変更の手順**（追加・削除・改名とも）: ① `team/rules/agents/<職種>.md` を書く／消す ② `~/.config/takumi009-ai-env/profile.md` の `role.<職種>: …` 行を足す／消す（`team/data/profile.md.sample` が当該職種を参照していればそちらも） ③ `bash tests/test-agent-definitions.sh` が exit 0（数秒） ④ 追加は `bash core/assembly/install-main.sh` を再実行して `~/.claude/agents/<職種>.md` を配置・削除は `rm ~/.claude/agents/<職種>.md`（dangling symlink の除去）。Agent 経路は次に起動するセッションから有効（起動中のセッションは追随しない）。ラッパー経路は即時。改名＝削除＋追加。コア規範が名指す職種（工程 9 職）の削除・改名は規範改訂を伴う通常の変更。
+**設定変更の手順**（追加・削除・改名とも）: ① `team/rules/agents/<職種>.md` を書く／消す。案件内のCodex職種は同名の参照だけの `team/rules/codex-agents/<職種>.toml` も揃える ② `~/.config/takumi009-ai-env/profile.md` の `role.<職種>: …` 行を足す／消す（`team/data/profile.md.sample` が当該職種を参照していればそちらも） ③ `bash tests/test-agent-definitions.sh` が exit 0（数秒） ④ 追加は `bash core/assembly/install-main.sh` を再実行して `~/.claude/agents/<職種>.md` を配置・削除は `rm ~/.claude/agents/<職種>.md`（dangling symlink の除去）。メイン機のCodex職種も同じ再配置・リンク切れ報告の扱いで、詳しくは「案件内の内蔵ワーカー」節。Agent 経路は次に起動するセッションから有効（起動中のセッションは追随しない）。ラッパー経路は即時。改名＝削除＋追加。コア規範が名指す職種（工程 9 職）の削除・改名は規範改訂を伴う通常の変更。
 
 ### 公開 Vault スナップショット（`ai-brain/data/vault-public/`）について
 
@@ -640,6 +685,39 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 親は報告を終える前に `report --file <JSON>` で `summary/pending/reason/read_notes/written_notes`（要約・判断待ち配列・終了理由・読了文書配列・書いたノート配列）を保存します。記録は親の判断を残す口で、子を検査・停止する仕組みや新しい権限サービスではありません。全対象の停止と必要な承認・再検証、本人承認、必読の実際の読了はリーダーが根拠と照合します。
 
 締め後も担当表・状態履歴と最終形・要約と終了結果を残し、案件ノートから参照します。生の依頼文・Codexイベントとエラーログ・診断ログを永久保存する意味ではありません。生ログを整理しても、`run.json` の保存会話から記録を読めます。成果末尾の「次の工程の体制」は対象範囲／次の工程／必要人数を表し、実担当とは分けます。締めで親が人数と相談の結論の要点を案件ノートへ移します。このCLIはVaultを書きません。実cmuxへの通知到達、実際の利用枠、親の異常終了時の子の実態、本人承認を含む受入確認はプロジェクトリーダーの実環境確認として残ります。
+
+### 案件内の内蔵ワーカー（段階2・メイン機）
+
+`install-main.sh` は台帳から `team/rules/codex-agents/*.toml` を導出し、機役割が `main`・team選択時だけ `$HOME/.codex/agents/` へリンクします。サブ機への追加配布は行いません。9職種の定義は `name/description/developer_instructions` の3キーで、本文は必読の参照だけです。職務本文はPreferences、モデル・思考量は既存のローカル候補設定に残します。[公式の職種形式](https://learn.chatgpt.com/docs/agent-configuration/subagents#custom-agents)を使い、通常ファイルの退避は既存の管理リンクと共通です。新規配置・管理下のリンク切れは `CODEX AGENTS` と報告し、リンク切れは削除せず非0終了します。`--dry-run` は計画表示だけです。更新が実行中の会話へ即時反映したとは扱いません。
+
+初回候補は親が向き・使用率・プランの枠の大きさから選びます。候補照会の `--format json` と、既存親CLIの `worker-prepare --state-dir "$STATE" --file "$PREPARE_REQUEST"` を使います（コマンド例・全項目表は上の英語節「Native project workers」）。候補JSONは `version:1,candidates,unresolved` を持ち、各候補は `role/candidate/route/model/effort/ok/h5/d7`、解決不能値・照会不能枠はnullです。候補なしの既存理由も保持します。省略時のTSV・設定の指定口は維持し、JSONも提示専用で終了0なので `unresolved` とstderrを確認します。
+
+準備口は状態を書かず、子の起動・呼び戻しも実行しません。依頼と準備結果は案件workへ保存します。全モードで `request_ref/stop_remaining_percent/stop_ref` が必須です。参照は存在する非空ファイルを渡し、停止点は承認済みTasksから供給します。CLIには別の既定値を置きません。依頼本文には背景・目的・向き・範囲・受入条件・成果と報告の保存先・禁止事項を含めます。
+
+- `new` は未使用の `id` と `role/candidate/stage/scope/artifact` を指定します。配置済みの参照だけの職種定義と、具体的なCodexモデル・思考量が必要です。起動引数の文字列を実行したり、既定の職種・モデルで代用したりしません。
+- `resume` は現担当の `assignment` だけを指定し、保存した職種・候補・モデル・思考量・宛先を使います。現在の定義で同じ指定を確認できなければ保留です。実行中は重ねて再開せず、最新の明示記録がendedの場合だけ準備します。一覧に不在でも宛先は捨てません。
+- `replace` は現担当の `assignment`、未使用の `id`、新しい `candidate`、理由 `context-limit/quota-exhausted/resume-unavailable`、`old_execution_ref/handoff_ref` を渡します。旧職種・工程・範囲・成果を継承し、旧実行終了が必須です。親が理由と終了の根拠を確認し、締め後も残る引き継ぎに成果・担当表・有効な判断と理由・結論・未決・停止位置・次の一手を含めます。
+
+readyの結果は担当表用の `assignment`、今回照会した `usage`、設定の参照 `selection_sources`、内蔵操作用の `operation/target/agent_type/model/reasoning_effort/fork_turns/phase/message` を返します。初回・交代は `spawn`・会話非継承、再開は同じtargetへの `followup` です。親は内蔵の `spawn_agent` へ職種・選択値・非継承を明示し、実際に返ったworker/addressを `assign` で追記します。呼び戻しは `followup_task` で、行を増やしません。単なる `send_message` で終了済みの相手が再開したとは扱いません。これらはセッション内の道具であり、子用のシェルラッパーは増やしません。
+
+最初の `read-confirmation` は必読3本の全文読了・職種・やらないことの受け取り確認だけを求め、制作を始めさせません。親が原文を保存して `worker-ready` を記録した後、resumeの準備を経て同じ宛先へ `task` を渡します。確認不足は実行終了を記録して同じ子へ不足を返します。履歴に読了確認がない再開、または `confirm_reading:true` は確認だけを繰り返します。停止中・親の再開許可待ちも引き継ぎます。実読了は親が照合し、文書名だけで証明済みにはしません。子の稼働中は内蔵通知を待ち、親だけ終了する前に対象の実行終了を確認します。
+
+準備の終了値はready＝0、保留＝3（`reason/usage`、未取得ならusageはnull）、入力・参照・記録の不正＝1（stderrに `project-leader: CODE: 理由`）、引数の誤り＝2です。保留理由は `already-running/execution-unconfirmed/resume-unavailable/quota-exhausted/usage-unavailable/stop-point`。利用枠は枠切れ→照会不能→5h停止点以下の順に判定します。停止点到達だけで交代せず、契約全体の枠切れなら新個体も待ちます。
+
+記録の版・ファイル名・担当表の列は維持します。段階2の `selection_ref` は状態ディレクトリのeventsを指し、その担当の最初の `worker-started` に初回選択を残します。既存のイベント必須項目に `assignment` を加え、次を記録します。
+
+| イベント | 実行／仕事・追加項目 |
+|---|---|
+| `worker-started` | running／parent-wait または working。`prepare_ref`・操作結果のref・準備結果から写す `selection:{candidate,model,effort,usage,selection_sources}`。再開ごとの枠確認も履歴へ残す |
+| `worker-ready` | ended／parent-wait。職種一致・必読3本の文書名 `read_notes`・非空の `prohibitions`。refは確認の原文 |
+| `worker-finished` | ended／parent-wait。`report_ref/artifact_refs/prepare_ref`。親が内蔵の最終応答を指定先へ全文保存し、担当表と実成果を突合して記録。成果なしは空配列。既存の別結果を上書きせず新しい保存先を指定 |
+| `worker-done` | ended／done。検証・必要な確認・親の了承の `handoff_ref` |
+| `worker-slot-wait` | endedまたはunknown／slot-wait。`queue_class:consultation/production`・正の整数 `queue_order`・待ち先id配列 `blocked_by`。宛先未取得なら `worker:parent,assignment:null,execution:running,work:slot-wait` と未使用の `planned_id/request_ref`。架空の担当行を作らない |
+| `worker-unavailable` | endedまたはunknown／parent-wait・unrecoverable・unconfirmed。交代理由3種か `stop-point/usage-unavailable/operation-failed` と根拠ref。unknownのまま交代しない |
+
+親が相談を制作より先の待ち順に記録し、製品上限は増やしません。枠待ちは予約や起動成功ではなく、再試行前も準備口で利用枠を確認します。交代だけ新しい個体・宛先・行に `replaces/handoff_ref` を付け、旧作成者を保持します。操作に成功して記録だけ失敗した場合は、既知の宛先の記録を復旧し、新しい子を作り直しません。
+
+`status/collect` は追加項目を保持し、親reportの任意の `worker_refs`（担当行id配列）も返します。未回収・読了不足・判断待ちは親のpendingへ残します。実行終了と成果の了承は別で、親の回収条件は段階1のままです。`bash tests/test-project-workers-acceptance.sh` が隔離した32件の受入試験です。内蔵経路への値の到達・保持、実読了と禁止事項の遵守、親再開後の復帰、枠解放・障害復元は、親が案件workの小さな試し案件で確認する範囲として残ります。
 
 ### Vault バックアップの運用
 

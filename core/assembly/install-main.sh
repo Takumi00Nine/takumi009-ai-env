@@ -728,6 +728,16 @@ log "選択: ${SELECT_VALUE}（Core は常に含む）"
 AGENTS_SRC_DIR="$DIR/team/rules/agents"
 AGENTS_DEST_DIR=""
 AGENTS_NEWLY_PLACED=()
+CODEX_AGENTS_SRC_DIR="$DIR/team/rules/codex-agents"
+CODEX_AGENTS_DEST_DIR=""
+CODEX_AGENTS_NEWLY_PLACED=()
+CODEX_AGENTS_ENABLED=0
+if [ "$IS_SUB_DELEGATE" != "1" ]; then
+  machine_directive="$(python3 "$AIENV_PROFILE_RESOLVE_LIB" resolve "$AIENV_LOCAL_PROFILE_PATH" --agents-dir "$AIENV_AGENTS_DIR" 2>/dev/null || true)"
+  case $'\t'"$machine_directive"$'\t' in
+    *$'\tMACHINE_ROLE:main\t'*) CODEX_AGENTS_ENABLED=1 ;;
+  esac
+fi
 
 # run_part <実体> <置き場> — 接続フォルダの配置手順を引数なしで実行する（置き場はその手順が置くもの）。
 run_part() {
@@ -759,7 +769,15 @@ while IFS=$'\t' read -r how place src fn; do
     continue
   fi
   new_agent=""
+  new_codex_agent=""
   case "$src" in
+    "$CODEX_AGENTS_SRC_DIR"/*)
+      [ "$CODEX_AGENTS_ENABLED" = "1" ] || continue
+      CODEX_AGENTS_DEST_DIR="$(dirname "$place")"
+      if [ "$DRY_RUN" != "1" ] && [ ! -e "$place" ] && [ ! -L "$place" ]; then
+        new_codex_agent="$(basename "$place" .toml)"
+      fi
+      ;;
     "$AGENTS_SRC_DIR"/*)
       AGENTS_DEST_DIR="$(dirname "$place")"
       if [ "$DRY_RUN" != "1" ] && [ ! -e "$place" ] && [ ! -L "$place" ]; then
@@ -775,6 +793,8 @@ while IFS=$'\t' read -r how place src fn; do
     PLACE_PENDING="$how:$place"$'\n'
   elif [ -n "$new_agent" ]; then
     AGENTS_NEWLY_PLACED+=("$new_agent")
+  elif [ -n "$new_codex_agent" ]; then
+    CODEX_AGENTS_NEWLY_PLACED+=("$new_codex_agent")
   fi
 done <<EOF
 $SEL_LIST
@@ -786,27 +806,33 @@ if [ -n "$PLACE_PENDING" ]; then
   exit 1
 fi
 
-if [ "$DRY_RUN" != "1" ]; then
-  if [ "${#AGENTS_NEWLY_PLACED[@]}" -gt 0 ]; then
-    log "AGENTS: 初回未配置 ${#AGENTS_NEWLY_PLACED[@]}件（正常・配置しました）: $(IFS=,; echo "${AGENTS_NEWLY_PLACED[*]}")"
+report_agents() {
+  local label="$1" source_dir="$2" dest_dir="$3" extension="$4" existing target
+  shift 4
+  if [ "$#" -gt 0 ]; then
+    log "$label: 初回未配置 $#件（正常・配置しました）: $(IFS=,; echo "$*")"
   fi
 
   # dangling 検出: aienv管理下（$AGENTS_SRC_DIR配下を指す）symlinkに限定して
   # 検査する（本スクリプトが関与しない他アプリ由来のsymlinkを誤検知しないため）。削除はしない。
-  AGENTS_DANGLING=()
-  for existing in ${AGENTS_DEST_DIR:+"$AGENTS_DEST_DIR"/*.md}; do
+  local dangling=()
+  for existing in ${dest_dir:+"$dest_dir"/*."$extension"}; do
     [ -L "$existing" ] || continue
     target="$(readlink "$existing")"
     case "$target" in
-      "$AGENTS_SRC_DIR"/*)
-        [ -e "$target" ] || AGENTS_DANGLING+=("$(basename "$existing" .md)")
+      "$source_dir"/*)
+        [ -e "$target" ] || dangling+=("$(basename "$existing" ."$extension")")
         ;;
     esac
   done
-  if [ "${#AGENTS_DANGLING[@]}" -gt 0 ]; then
-    log "AGENTS: dangling ${#AGENTS_DANGLING[@]}件（異常・repo から消えた定義のリンクが残っています。削除は本人が判断）: $(IFS=,; echo "${AGENTS_DANGLING[*]}")"
+  if [ "${#dangling[@]}" -gt 0 ]; then
+    log "$label: dangling ${#dangling[@]}件（異常・repo から消えた定義のリンクが残っています。削除は本人が判断）: $(IFS=,; echo "${dangling[*]}")"
     AIENV_DEFERRED_EXIT_CODE=1
   fi
+}
+if [ "$DRY_RUN" != "1" ]; then
+  report_agents AGENTS "$AGENTS_SRC_DIR" "$AGENTS_DEST_DIR" md ${AGENTS_NEWLY_PLACED[@]+"${AGENTS_NEWLY_PLACED[@]}"}
+  report_agents 'CODEX AGENTS' "$CODEX_AGENTS_SRC_DIR" "$CODEX_AGENTS_DEST_DIR" toml ${CODEX_AGENTS_NEWLY_PLACED[@]+"${CODEX_AGENTS_NEWLY_PLACED[@]}"}
 fi
 
 # Codex呼び出し経路のMCPサーバー登録ステップは2026-09-06 codex exec一本化に
@@ -857,6 +883,7 @@ cleanup_deselected() {
   local how place src fn p bak
   while IFS=$'\t' read -r how place src fn; do
     [ -n "$how" ] || continue
+    case "$src" in "$CODEX_AGENTS_SRC_DIR"/*) [ "$CODEX_AGENTS_ENABLED" = "1" ] || continue ;; esac
     case "$NL$SEL_PLACES$NL" in *"$NL$place$NL"*) continue ;; esac
     if [ "$how" = "link" ]; then
       if [ -L "$place" ] && [ "$(readlink "$place")" = "$src" ]; then

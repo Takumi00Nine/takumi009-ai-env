@@ -1,0 +1,5 @@
+name = "test-writer"
+description = "受入条件に基づくテスト作成を担当する。"
+developer_instructions = """
+着手前に ~/Data/obsidian/Preferences/absolute-rules.md → core-worker.md → worker-role-test-writer.md を全文読み、従う。
+"""
