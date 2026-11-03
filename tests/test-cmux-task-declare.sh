@@ -111,6 +111,37 @@ run_declare() {
   CMUX_TASK_VAULT="$VAULT" CMUX_TASK_STATE="$STATE_FILE" bash "$TARGET" "$@"
 }
 
+# A15（段階1・設計 §2/§10）: ノートを先に用意し、Tasks が見出しだけの
+# 初期ノートでも案件画面へ宣言できる。親の起動自体はこの CLI の責務外。
+echo "=== A15: 初期ノートの存在確認から案件宣言へ ==="
+reset_stub_state
+rc=0
+run_declare set stage1-example >/dev/null 2>&1 || rc=$?
+assert_true "A15: ノート不在なら宣言せず、cmux の照会にも進まない" \
+  "$([ "$rc" -ne 0 ] && [ ! -e "$STATE_FILE" ] && [ ! -s "$STUB_STATE/calls.log" ] && echo 1 || echo 0)"
+cat > "$VAULT/Projects/stage1-example.md" <<'EOF'
+---
+date: 2026-01-01
+status: active
+next: 親の作業一覧作成待ち
+---
+## 目的
+試験用の成果物を作る。
+## 守ること
+試験用の案件フォルダを使う。
+## 今どこ・次に何を
+目的とゴールが決まり、親の作業一覧作成を待っている。
+## 正本の所在
+案件フォルダ: ./stage1-example/
+## Tasks
+EOF
+before="$(shasum -a 256 "$VAULT/Projects/stage1-example.md")"
+rc=0
+run_declare set stage1-example >/dev/null 2>&1 || rc=$?
+assert_true "A15: Tasks が見出しだけでも宣言でき、ノートへ一覧を作り足さない" \
+  "$([ "$rc" -eq 0 ] && [ "$(run_declare list)" = "$(printf 'UUID-AAA\tstage1-example')" ] \
+     && [ "$before" = "$(shasum -a 256 "$VAULT/Projects/stage1-example.md")" ] && echo 1 || echo 0)"
+
 echo "=== 宣言・解除 ==="
 cat > "$VAULT/Projects/slug-a.md" <<'EOF'
 ---

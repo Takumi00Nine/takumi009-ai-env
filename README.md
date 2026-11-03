@@ -52,7 +52,7 @@ takumi009-ai-env/
 │   └── connect/
 │       ├── claude-code/          # claude-exec.sh, delegation-gate-v2.sh, inprocess-gate.sh,
 │       │                         # role_candidates.py, guard_common.sh
-│       └── codex/                # codex-exec.sh, AGENTS.md, hooks.json, config.toml template (generated)
+│       └── codex/                # codex-exec.sh, project-leader.py, AGENTS.md, hooks.json, config.toml template (generated)
 ├── usage/                        # Usage fetch, cache, injection into prompts
 │   ├── executor/                 # usage-fetch.sh, usage-source.sh, usage-inject.sh, usage-block.sh, usage_snapshot.py,
 │   │                             # usage-notify.sh (threshold judgement and notification state; sending goes through the mouth)
@@ -220,6 +220,57 @@ cmux Dock's "Project"/"Task" panes — details = `Decisions/2026-09-15-cmux-dock
 #### Declaring the project for a cmux workspace (`dock/executor/cmux-task-declare.sh`)
 
 The "Task" pane shows the Tasks section of the project declared for the **focused cmux workspace**. Declare once per workspace with `~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>` (the leader runs it, never the hook). The declaration is keyed by the workspace UUID, which cmux keeps across restarts: after a cmux restart the declaration is still alive in the same (restored) workspace, so nothing needs to be re-declared there. A new workspace (freshly opened, or not restored) starts undeclared — the SessionStart injection (the `declare6` line contributed by the Dock declaration-state part, shown through the `bootstrap-vault.sh`-registered composer) shows the declaration state of the calling workspace (`宣言済み: <slug>` / `未宣言` / `宣言状態 不明`, plus `宣言記録破損` when the record file is unreadable), so read that line and declare once when it says `未宣言`. `list` / `unset` / `prune` are the other subcommands (the weekly maintenance runs `prune`).
+
+### Detached project leaders (stage 1, main machine)
+
+`team/connect/codex/project-leader.py` manages one project and one saved parent conversation through the existing `codex-exec.sh --project-leader`. Every start/resume supplies references to the ten parent must-read notes; role bodies stay in Preferences. Worker calls retain `--role`, their three notes and `AIENV_CODEX_WORKER=1`. Parent SessionStart uses the parent reference without running the Mac leader's bootstrap.
+
+First agree on the goal, prepare the project's `docs/work/output` and initial Projects note (Tasks heading only), create the project's cmux screen, and declare it with `cmux-task-declare.sh set`. Register the parent only after that preparation. All paths below come from the caller. `$STATE` must be a **private directory in project output, outside every git repository**, including the program's repository. Do not put real project names, conversations or reports in this repository.
+
+```bash
+LEADER="$PWD/team/connect/codex/project-leader.py"
+# In the project's left terminal, or as cmux new-workspace --command:
+python3 "$LEADER" view --state-dir "$STATE" --watch
+```
+
+The viewer shows “preparing” before registration. From the Mac leader's terminal, after creating and declaring the project screen:
+
+```bash
+python3 "$LEADER" init --state-dir "$STATE" --project "$SLUG" \
+  --project-dir "$PROJECT" --cwd "$WORKTREE" --note "$NOTE" \
+  --goal "Approved goal" --source "$GOAL_REFERENCE" \
+  --workspace "$WORKSPACE_UUID" --surface "$LEFT_SURFACE" \
+  --candidate "$CANDIDATE" --model "$MODEL" --effort "$EFFORT" \
+  --selection-ref "$SELECTION_REFERENCE" --sandbox workspace-write
+python3 "$LEADER" start --state-dir "$STATE" --prompt-file "$REQUEST" --usage-ref "$USAGE_CHECK"
+python3 "$LEADER" status --state-dir "$STATE"
+python3 "$LEADER" collect --state-dir "$STATE"
+# Relay the user's approval, or an already-approved next stage, to the same parent:
+python3 "$LEADER" resume --state-dir "$STATE" --prompt-file "$REPLY" --usage-ref "$NEW_USAGE_CHECK"
+```
+
+`start` launches through `nohup` in a separate session and returns immediately. Its first request stops at the work-list proposal. `resume` keeps the saved conversation, cwd, model, effort and sandbox, and refuses a running parent. Save additional requests in project work and relay them at the next report boundary. Before **every** launch/resume/recovery, the Mac leader checks the existing usage source against the applicable stop point. `--usage-ref` requires a nonempty local record of that check; it does not interpret quota numbers or reselect a model. Human approval, child stop confirmation and read receipts remain the leaders' responsibilities.
+
+At the start of each turn, inspect each registered project's `status`: `not-started/running/finished/unconfirmed`, summary, pending decisions, paths and PIDs. A single command listing all projects is stage 4. `collect` requires no live parent process, `EXIT:0`, a nonempty final response and a saved report checkpoint. Nonzero exit, or missing exit with no live runner/wrapper/Codex, means `unconfirmed`; old child records stay last records, never inferred from the parent's log. Every report boundary calls the existing `notify.send` with a 📣 title regardless of presence. Delivery failure remains `unknown`; the saved report can still be collected next turn. Notification does not start a Mac-leader turn or prove a human saw the report.
+
+`recover --state-dir "$STATE" --prompt-file "$RECOVERY_REQUEST" --usage-ref "$NEW_USAGE_CHECK"` permits **one** recovery attempt, in the saved conversation, after the old processes end. It asks only to inspect every assignee's execution, stopping point, differences and unfinished work, and restore records without new production. Normal resume stays blocked until the parent records `recovery-complete` and exits successfully with a report. A failed attempt stays unconfirmed and returns to the Mac leader; there is no restart daemon.
+
+Restore a closed screen by creating a replacement with the same `view --watch` command, declaring the project there, then calling `display --state-dir "$STATE" --workspace "$NEW_WORKSPACE_UUID" --surface "$NEW_LEFT_SURFACE"`. This changes only the display mapping; it never starts/resumes Codex. The existing right column remains available for artifacts. `view` shows recent execution events, wrapper results and the latest report; `--lines` and `--interval` control the display (interval defaults to `AIENV_LEADER_VIEW_INTERVAL`, otherwise 5 seconds).
+
+#### Local record contract, version 1
+
+`assign`, `event`, and `report` take `--state-dir "$STATE" --file "$JSON_FILE"`. The parent writes records; workers read them. The CLI checks required fields on entry and adds version/time to events and reports; it does not implement a permissions service.
+
+| File | Contents and writes |
+|---|---|
+| `project.json` | Project folder/note, agreed goal/source, display, saved selection/conversation, latest run and recovery attempt flag. `init` creates it; lifecycle and `display` update it. |
+| `assignments.tsv` | Append-only table with header `version id stage scope artifact role worker address parent_thread candidate model effort selection_ref replaces handoff_ref state_ref`. `assign` requires `id` through `selection_ref`; a replacement uses a new id plus `replaces` and `handoff_ref`. Earlier authors/addresses remain; `state_ref` is filled automatically. |
+| `events.jsonl` / `latest.json` | Explicit state history and latest event per worker. `event` requires `actor:"parent"`, `event`, `worker`, `execution`, `work`, `ref`. Execution is `running/ended/unknown`; work is `working/consulting/consultation-wait/slot-wait/stop-requested/stopped/parent-wait/user-wait/done/replaced/unrecoverable/unconfirmed`. `consult` adds `peer`; `stop-request/stop-confirm/resume-permitted` add `targets`. Record decision, approval and recheck references alongside the evidence. |
+| `runs/<n>/` | Per-invocation prompt, runner/wrapper/Codex process information, wrapper result, Codex events/errors and final report. `run.json` retains the thread and delivery outcome. The parent saves `report.json` with `report`: `summary`, `pending` (array), `reason`, `read_notes` (array), `written_notes` (array). Empty arrays mean none. |
+
+Example event input: `{"actor":"parent","event":"stop-confirm","worker":"worker-a","execution":"ended","work":"stopped","targets":["worker-a"],"ref":"stop-report-reference"}`. Recovery completion uses `worker:"parent"`, `event:"recovery-complete"` and its verification reference. Events record the parent's judgement; this CLI does not stop or inspect children. The parent must establish that all targets stopped and required approvals/rechecks exist before recording resume permission.
+
+Keep assignment/history/final snapshot and report/result records after closing, linked from the Projects note. Raw prompts, Codex event/error streams and runner diagnostic logs need not be permanent; the saved thread in `run.json` permits reading records after those raw files are retired. At closing, move the key points of each artifact's final “next-stage staffing” section into the project note: scope / next stage / required people and the consultation conclusion. These estimates stay separate from actual assignees. This tooling never writes the Vault. Live cmux delivery, real usage, parent-failure effects on children and human approvals still require the project leader's real-environment acceptance check.
 
 ### Vault Backup Operations
 
@@ -393,7 +444,7 @@ takumi009-ai-env/
 │   └── connect/
 │       ├── claude-code/          # claude-exec.sh・delegation-gate-v2.sh・inprocess-gate.sh・
 │       │                         # role_candidates.py・guard_common.sh
-│       └── codex/                # codex-exec.sh・AGENTS.md・hooks.json・config.toml テンプレ（生成）
+│       └── codex/                # codex-exec.sh・project-leader.py・AGENTS.md・hooks.json・config.toml テンプレ（生成）
 ├── usage/                        # 使用率の取得・保存・発言への注入
 │   ├── executor/                 # usage-fetch.sh・usage-source.sh・usage-inject.sh・usage-block.sh・usage_snapshot.py・
 │   │                             # usage-notify.sh（閾値の判定と通知状態の記録。送る段は口へ）
@@ -570,6 +621,25 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 #### 案件宣言の使い方（`dock/executor/cmux-task-declare.sh`）
 
 「Task」枠は、**フォーカス中の cmux ワークスペース**に宣言された案件の Tasks 節を出す。宣言はワークスペースごとに 1 回＝`~/Workspace/Tools/takumi009-ai-env/dock/executor/cmux-task-declare.sh set <slug>`（実行はリーダー。フックは呼ばない）。宣言の鍵はワークスペースの UUID で、cmux は再起動を越えて UUID を保持する＝**cmux の再起動後も同じワークスペースでは宣言が生きている**ので、そこでは宣言し直さなくてよい。新しいワークスペース（新規に開いた・復元されなかった）は未宣言から始まる＝SessionStart の注入文（`bootstrap-vault.sh` の登録名で動く合成器が組む、Dock の宣言状態の寄与＝⑥の行）が呼び出し元ワークスペースの**宣言状態**（`宣言済み: <slug>`／`未宣言`／`宣言状態 不明`・記録が読めないときは `宣言記録破損` も）を出すので、その行を見て `未宣言` なら 1 回宣言する。他のサブコマンド＝`list`／`unset`／`prune`（週次メンテが `prune` を実行する）。
+
+### 切り離したプロジェクトリーダー（段階1・メイン機）
+
+`team/connect/codex/project-leader.py` が、既存の `codex-exec.sh --project-leader` を通じて案件ごとに一つの親を管理します。親には新規・再開とも10文書の必読参照を供給し、職種本文は Preferences に残します。既存ワーカーの `--role`・3文書・ワーカー扱いは維持します。親の SessionStart は親向け参照を使い、窓口の起動時処理は走らせません。
+
+目的・ゴールの決定→案件の `docs/work/output` と初期Projectsノート（Tasksは見出しだけ）→案件のcmux画面→既存 `cmux-task-declare.sh set` による宣言、の後に親を登録します。具体的なコマンドと版1の列・キーは上の英語節「Detached project leaders」の例・表を参照してください。`--state-dir` は案件outputの非公開ディレクトリで受け、プログラムの保管庫を含む **すべてのgit保管庫の外** に置きます。実案件名・会話・報告はこの公開repoへ置きません。
+
+- `init` は案件フォルダ・ノート・宣言・表示先を確認し、目的と発言参照、候補名・モデル・思考量・選択根拠、表示先を保存します。`start` は `nohup` と別セッションで切り離して返り、初回依頼には一覧案の報告までという境界を付けます。
+- `resume` は同じ会話・作業場所・モデル・思考量・sandboxを維持します。本人の承認と理由は依頼ファイルで同じ親へ渡します。実行中の親には追加投入せず、追加依頼を案件workへ保存して次の報告区切りで渡します。起動・再開・復旧のたび、マックリーダーが既存の使用率を照会して停止点と照合し、確認記録を `--usage-ref` で渡します。CLIはその記録の存在を確認し、枠の数値判定やモデルの選び直しは行いません。
+- ターン冒頭に各案件の `status` で未起動・実行中・終了・状態未確認と、要約・判断待ち・保存先を読みます。全案件を一コマンドで出す一覧は段階4です。`collect` は親のプロセス不在・`EXIT:0`・空でない最終報告・保存済みの要約を確認して回収します。通知だけでは回収せず、親の終了から子の停止を推測しません。
+- 報告終了時は在席・離席を問わず、保存後に既存の口 `notify.send` へ📣を渡します。通知失敗は `unknown` のまま残り、次のターンに判断待ちと報告を回収できます。口の成功は本人の閲覧確認ではなく、マックリーダーのターンも起動しません。
+- 非0終了、またはプロセス不在で終了値が欠けた場合は状態未確認です。旧実行が止まり、枠を再確認した後だけ `recover` で同じ親を **一度だけ** 再開できます。新規制作を始めず、全担当の実行有無・停止位置・差分・書きかけを確認して記録を直す依頼を付けます。親の `recovery-complete` 明示記録と正常終了・報告が揃うまで通常再開はできません。復旧失敗は未確認を保って返し、再試行や常駐再起動は行いません。
+- 左の既存端末で `view --watch` を起動すると、登録前は準備中、起動後は最近の実行イベント・終了結果・最新報告を表示します。入力欄は作りません。画面を閉じても親は継続します。表示の復旧は画面作成・宣言後の `display` による対応先の変更だけで、親を複製しません。成果表示は既存の右列を使います。表示間隔は `--interval` または `AIENV_LEADER_VIEW_INTERVAL`（既定5秒）、行数は `--lines` で変えられます。
+
+担当表は `assignments.tsv`、版付きの状態履歴は `events.jsonl`、最終形は `latest.json` です。親が `assign/event --file <JSON>` で書き、子は読みます。実際の工程・範囲・成果・職種・担当と宛先・選択根拠を対応づけ、交代は新しい行に `replaces` と引き継ぎ参照を付け、過去の担当を消しません。状態は実行と仕事を分け、相談の相手・停止対象・確認・判断待ち・再開許可を参照と時刻付きで残します。異常時の古い子の状態は現在の確定状態として表示しません。
+
+親は報告を終える前に `report --file <JSON>` で `summary/pending/reason/read_notes/written_notes`（要約・判断待ち配列・終了理由・読了文書配列・書いたノート配列）を保存します。記録は親の判断を残す口で、子を検査・停止する仕組みや新しい権限サービスではありません。全対象の停止と必要な承認・再検証、本人承認、必読の実際の読了はリーダーが根拠と照合します。
+
+締め後も担当表・状態履歴と最終形・要約と終了結果を残し、案件ノートから参照します。生の依頼文・Codexイベントとエラーログ・診断ログを永久保存する意味ではありません。生ログを整理しても、`run.json` の保存会話から記録を読めます。成果末尾の「次の工程の体制」は対象範囲／次の工程／必要人数を表し、実担当とは分けます。締めで親が人数と相談の結論の要点を案件ノートへ移します。このCLIはVaultを書きません。実cmuxへの通知到達、実際の利用枠、親の異常終了時の子の実態、本人承認を含む受入確認はプロジェクトリーダーの実環境確認として残ります。
 
 ### Vault バックアップの運用
 

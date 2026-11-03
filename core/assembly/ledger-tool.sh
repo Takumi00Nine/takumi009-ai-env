@@ -498,6 +498,8 @@ def check_static(ledger, moves):
         if r.path.startswith("Vault:"):
             if r.prov != "-":
                 why.append("発する側（Vault の規則ノート）の提供元は - であること（%s）" % r.prov)
+        elif r.prov == "-" and any(part.path == r.path for part in parts_rows):
+            pass  # 登録済みの呼出元部品。下流の取次と区別する。
         elif not NAME_RE.match(r.prov):
             why.append("下流の取次の届け先 %s が構文外" % r.prov)
         if not r.path.startswith(("Vault:", "~/", "/")) and not os.path.isfile(full(r.path)):

@@ -16,7 +16,9 @@ NOTES = (
 )
 
 context = ""
-if os.environ.get("AIENV_CODEX_WORKER") != "1":
+if os.environ.get("AIENV_CODEX_WORKER") != "1" and os.environ.get("AIENV_CODEX_PROJECT_LEADER") == "1":
+    context = "親の必読は起動依頼の10文書参照に従い、全文を読む。正本は core-workflow のプロジェクトリーダーの節。"
+elif os.environ.get("AIENV_CODEX_WORKER") != "1":
     sections = []
     missing = 0
     for note in NOTES:

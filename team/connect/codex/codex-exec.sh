@@ -19,6 +19,8 @@
 #     [--model <model>] [--effort <effort>] [--image <path>]...
 #
 # --image は繰り返し可（指定順に `codex exec -i <path>` として渡す。--resume でも有効）。
+# 親は --role の代わりに --project-leader を使う。切り離し・記録・回収の入口は
+# 同じフォルダの project-leader.py。--pid-file は管理CLIがCodexのPIDと開始時刻を受ける口。
 # 存在しないファイル・カンマを含むパスは不可（codex が -i の値をカンマで分割するため）で、
 # codex を起動せず exit 2。
 #
@@ -49,6 +51,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFERENCES_DIR="${AIENV_PREFERENCES_DIR:-$HOME/Data/obsidian/Preferences}"
 
 ROLE=""
+PROJECT_LEADER=0
+PID_FILE=""
 CWD=""
 SANDBOX=""
 OUT=""
@@ -62,10 +66,11 @@ IMAGES=()
 
 usage() {
   cat >&2 <<EOF
-使い方: $SCRIPT_NAME --role <職種名> --cwd <path> --sandbox read-only|workspace-write|danger-full-access \\
+使い方: $SCRIPT_NAME (--role <職種名> | --project-leader) --cwd <path> --sandbox read-only|workspace-write|danger-full-access \\
   --out <path> --prompt-file <file>|- \\
   [--search] [--resume <thread_id>] [--developer-instructions <file>] \\
   [--model <model>] [--effort <effort>] [--image <path>]...   (パスにカンマ不可)
+親の切り離し起動・回収: python3 $SCRIPT_DIR/project-leader.py --help
 EOF
 }
 
@@ -77,6 +82,11 @@ fail_usage() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project-leader)
+      PROJECT_LEADER=1; shift ;;
+    --pid-file)
+      [ $# -ge 2 ] || fail_usage "--pid-file には値が必要です"
+      PID_FILE="$2"; shift 2 ;;
     --role)
       [ $# -ge 2 ] || fail_usage "--role には値が必要です"
       ROLE="$2"; shift 2 ;;
@@ -116,13 +126,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$ROLE" ] || fail_usage "--role は必須です"
-case "$ROLE" in
-  *[!a-z0-9-]*) fail_usage "不明な職種: $ROLE" ;;
-esac
-[ -f "$SCRIPT_DIR/../../rules/agents/$ROLE.md" ] || fail_usage "不明な職種: $ROLE"
-ROLE_NOTE="$PREFERENCES_DIR/worker-role-$ROLE.md"
-[ -r "$ROLE_NOTE" ] && [ -s "$ROLE_NOTE" ] || fail_usage "職種ノートが読めないか空です: $ROLE_NOTE"
+if [ "$PROJECT_LEADER" = 1 ]; then
+  [ -z "$ROLE" ] || fail_usage "--project-leader と --role は併用できません"
+  LEADER_NOTES=(absolute-rules core-conduct core-workflow coding-delegation worker-role-prompts vault-operation codex-exec-worker session-handoff project-tasks-format cmux-notifications)
+  LEADER_PREFIX="着手前に次の文書を全文読み、従う。報告に読了文書名を載せる。"
+  for note in "${LEADER_NOTES[@]}"; do
+    path="$PREFERENCES_DIR/$note.md"
+    [ -r "$path" ] && [ -s "$path" ] || fail_usage "親の必読ノートが読めないか空です: $path"
+    LEADER_PREFIX="$LEADER_PREFIX"$'\n'"$path"
+  done
+else
+  [ -z "$PID_FILE" ] || fail_usage "--pid-file は親向けです"
+  [ -n "$ROLE" ] || fail_usage "--role は必須です"
+  case "$ROLE" in
+    *[!a-z0-9-]*) fail_usage "不明な職種: $ROLE" ;;
+  esac
+  [ -f "$SCRIPT_DIR/../../rules/agents/$ROLE.md" ] || fail_usage "不明な職種: $ROLE"
+  ROLE_NOTE="$PREFERENCES_DIR/worker-role-$ROLE.md"
+  [ -r "$ROLE_NOTE" ] && [ -s "$ROLE_NOTE" ] || fail_usage "職種ノートが読めないか空です: $ROLE_NOTE"
+fi
 
 [ -n "$CWD" ] || fail_usage "--cwd は必須です"
 [ -n "$SANDBOX" ] || fail_usage "--sandbox は必須です"
@@ -181,7 +203,11 @@ fi
 
 [ -n "$PROMPT" ] || fail_usage "依頼文が空です"
 
-PROMPT="着手前に $PREFERENCES_DIR/absolute-rules.md・$PREFERENCES_DIR/core-worker.md・$ROLE_NOTE を全文読み、従う。"$'\n\n'"$PROMPT"
+if [ "$PROJECT_LEADER" = 1 ]; then
+  PROMPT="$LEADER_PREFIX"$'\n\n'"$PROMPT"
+else
+  PROMPT="着手前に $PREFERENCES_DIR/absolute-rules.md・$PREFERENCES_DIR/core-worker.md・$ROLE_NOTE を全文読み、従う。"$'\n\n'"$PROMPT"
+fi
 
 command -v codex >/dev/null 2>&1 || fail_usage "codex コマンドが見つかりません（PATHを確認してください）"
 
@@ -244,9 +270,21 @@ RESUME_ARGS=()
 # `set -u` 下で「要素0個の配列」の `"${ARR[@]}"` 展開を unbound variable
 # 扱いにする既知の挙動があり、素の `"${ARR[@]}"` だと GLOBAL_OPTS/RESUME_ARGS
 # が空のときに落ちる（実測）。
-printf '%s' "$PROMPT" | AIENV_CODEX_WORKER=1 codex ${GLOBAL_OPTS[@]+"${GLOBAL_OPTS[@]}"} exec "${EXEC_OPTS[@]}" ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} - \
-  > "$EVENTS_FILE" 2> "$STDERR_FILE"
-CODEX_EXIT=$?
+if [ "$PROJECT_LEADER" = 1 ]; then
+  # 親はワーカー扱いを解除する。SessionStart も親の必読参照を使い、窓口の処理を走らせない。
+  printf '%s' "$PROMPT" | AIENV_CODEX_WORKER=0 AIENV_CODEX_PROJECT_LEADER=1 codex ${GLOBAL_OPTS[@]+"${GLOBAL_OPTS[@]}"} exec "${EXEC_OPTS[@]}" ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} - \
+    > "$EVENTS_FILE" 2> "$STDERR_FILE" &
+  CODEX_PID=$!
+  if [ -n "$PID_FILE" ]; then
+    { printf '%s\n' "$CODEX_PID"; ps -p "$CODEX_PID" -o lstart=; } > "$PID_FILE"
+  fi
+  wait "$CODEX_PID"
+  CODEX_EXIT=$?
+else
+  printf '%s' "$PROMPT" | AIENV_CODEX_WORKER=1 codex ${GLOBAL_OPTS[@]+"${GLOBAL_OPTS[@]}"} exec "${EXEC_OPTS[@]}" ${RESUME_ARGS[@]+"${RESUME_ARGS[@]}"} - \
+    > "$EVENTS_FILE" 2> "$STDERR_FILE"
+  CODEX_EXIT=$?
+fi
 
 # --- thread_id の抽出（events.jsonl の thread.started 行から）。
 # jq優先・無ければpython3・それも無ければ簡易sedへフォールバックする

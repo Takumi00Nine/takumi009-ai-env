@@ -2,7 +2,7 @@
 # 列＝種類<TAB>パス<TAB>機能<TAB>層<TAB>提供元<TAB>鍵<TAB>備考<TAB>知らせ<TAB>配置。ちょうど 9 列・値なし＝`-`。`#` 始まりと空行は読まない。
 #   種類＝part（部品）／suite（スイート）／notify（Notify 所在）。
 #   機能＝ai-brain・team・usage・notify・dock・core。層＝data・rules・executor・connect・assembly。
-#   提供元＝層が connect のときだけ（フォルダ名そのもの）。notify 行では役割で分ける＝発する側（Vault の規則ノート）は `-`・下流の取次は届け先名。
+#   提供元＝層が connect のときだけ（フォルダ名そのもの）。notify 行では役割で分ける＝発する側（Vault の規則ノート・repo 内の呼出元部品）は `-`・下流の取次は届け先名。
 #   知らせ＝Notify の送り手の行だけが受ける知らせを書く（`call`・`call.<区分>`・`answer` のカンマ区切り。区分＝alert・usage・ask）。他は `-`。
 #   配置＝組立がライブ位置に置くもの（v1.2 設計 §3.2）。`-`（置かない）か `<仕方>:<置き場>` の空白区切り。置き場は `$HOME/` で始まり、空白は含めない。
 #     仕方＝link（置き場に部品への symlink。フォルダ単位の行は置き場も末尾 `/`＝直下の各ファイルを同名で）・
@@ -49,6 +49,7 @@ part	team/connect/claude-code/inprocess-gate.sh	team	connect	claude-code	-	委�
 part	team/connect/claude-code/delegation-gate-v2.sh	team	connect	claude-code	-	委任の柵	-	link:$HOME/.claude/hooks/delegation-gate-v2.sh
 part	team/connect/claude-code/profile-status.sh	team	connect	claude-code	team.session-status	合成器の寄与（枠 opening・directive5・machine_role 保留・profile-warning）	-	-
 part	team/connect/codex/codex-exec.sh	team	connect	codex	team.codex-exec	Codex の口	-	-
+part	team/connect/codex/project-leader.py	team	connect	codex	team.project-leader	親の切り離し起動・記録・回収・一度だけの復旧・非対話表示	-	-
 part	team/connect/codex/AGENTS.md	team	connect	codex	-	Codex ワーカーの作法	-	link:$HOME/.codex/AGENTS.md
 part	team/connect/codex/config.toml	team	connect	codex	-	Codex の設定雛形	-	gen:$HOME/.codex/config.toml
 part	team/connect/codex/hooks.json	team	connect	codex	-	Codex の登録	-	link:$HOME/.codex/hooks.json
@@ -128,6 +129,7 @@ suite	tests/test-agent-definitions.sh	team	-	-	-	-	-	-
 suite	tests/test-claude-exec.sh	team	-	-	-	-	-	-
 suite	tests/test-codex-boot-read.sh	team	-	-	-	-	-	-
 suite	tests/test-codex-exec.sh	team	-	-	-	-	-	-
+suite	tests/test-project-leader.sh	team	-	-	-	親の管理CLIの内部不変条件（隔離fixture）	-	-
 suite	tests/test-config-samples.sh	team	-	-	-	-	-	-
 suite	tests/test-delegation-gate-v2.sh	team	-	-	-	-	-	-
 suite	tests/test-inprocess-gate.sh	team	-	-	-	-	-	-
@@ -160,8 +162,9 @@ suite	tests/test-shell-lib.sh	core	-	-	-	-	-	-
 suite	tests/test-update-sub.sh	core	-	-	-	-	-	-
 suite	tests/test-with-dotfiles.sh	core	-	-	-	-	-	-
 
-# ===== Notify 所在（repo 外で本人を呼ぶ箇所・FR-7。提供元列＝発する側は `-`・下流の取次は届け先名） =====
+# ===== Notify 所在（本人を呼ぶ箇所・FR-7。提供元列＝発する側は `-`・下流の取次は届け先名） =====
 notify	Vault:Preferences/cmux-notifications.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
+notify	team/connect/codex/project-leader.py	notify	-	-	-	親の報告終了を既存の口へ渡す（在席を問わない）	-	-
 notify	Vault:Preferences/core-conduct.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
 notify	Vault:Preferences/coding-delegation.md	notify	-	-	-	規則ノート（repo 外・発する側＝口を呼ぶ）	-	-
 notify	~/Workspace/Projects/navi-orchestrator/output/navi-orchestrator/code27-call	notify	-	code27	-	CODE27 発話取次（別 repo・下流の取次）	-	-
