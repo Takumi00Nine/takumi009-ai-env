@@ -28,7 +28,7 @@ ASSIGN_COLUMNS = ("version id stage scope artifact role worker address parent_th
                   "candidate model effort selection_ref replaces handoff_ref state_ref").split()
 WORK_STATES = ("working consulting consultation-wait slot-wait stop-requested stopped "
                "parent-wait user-wait done replaced unrecoverable unconfirmed").split()
-REPLACEMENT_REASONS = ("context-limit", "quota-exhausted", "resume-unavailable")
+REPLACEMENT_REASONS = ("quota-exhausted", "resume-unavailable")
 WORKER_EVENTS = ("worker-started", "worker-ready", "worker-finished", "worker-done",
                  "worker-slot-wait", "worker-unavailable")
 

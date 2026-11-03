@@ -295,7 +295,9 @@ For new/replacement workers, it looks for `.codex/agents/<role>.toml` under the 
 | All | `request_ref`, `stop_remaining_percent`, `stop_ref`. References must name nonempty files. The stop point comes from approved Tasks; the CLI adds no default. Optional `confirm_reading` is boolean, default false. |
 | `new` | Unused `id`, `role`, `candidate`, `stage`, `scope`, `artifact`. |
 | `resume` | Current `assignment` id; role/selection/scope fields cannot be overridden. The last explicit execution must be `ended`. |
-| `replace` | Current `assignment`, unused `id`, new `candidate`, `reason` (`context-limit/quota-exhausted/resume-unavailable`), `old_execution_ref`, lasting `handoff_ref`. Inherits the old role, stage, scope and artifact; requires the old execution to have ended. |
+| `replace` | Current `assignment`, unused `id`, new `candidate`, `reason` (`quota-exhausted/resume-unavailable`), `old_execution_ref`, lasting `handoff_ref`. Inherits the old role, stage, scope and artifact; requires the old execution to have ended. |
+
+Long conversations continue with the same worker using built-in compaction. New `replace` requests and `worker-unavailable` events reject `context-limit`; historical records with that reason remain readable and allow resuming the same worker.
 
 The request reference supplies background, purpose, direction, scope, acceptance, artifact/report destinations and prohibitions. A ready result contains `assignment`, fresh `usage` (`checked_at/h5/d7/stop_remaining_percent/stop_ref/candidate`), `selection_sources` (profile/model-definition paths), `operation`, `target`, `agent_type`, `model`, `reasoning_effort`, `fork_turns:"none"`, `phase` and `message`. New/replacement preparation requires a reference-only installed role and an explicit Codex model and effort; it never executes resolver shell arguments or falls back to a default role/model. Resume uses the saved candidate, role, values and address, checks that definition still resolves identically, and refreshes usage. Absence from the native list does not erase an address.
 
@@ -700,7 +702,9 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 
 - `new` は未使用の `id` と `role/candidate/stage/scope/artifact` を指定します。配置済みの参照だけの職種定義と、具体的なCodexモデル・思考量が必要です。起動引数の文字列を実行したり、既定の職種・モデルで代用したりしません。
 - `resume` は現担当の `assignment` だけを指定し、保存した職種・候補・モデル・思考量・宛先を使います。現在の定義で同じ指定を確認できなければ保留です。実行中は重ねて再開せず、最新の明示記録がendedの場合だけ準備します。一覧に不在でも宛先は捨てません。
-- `replace` は現担当の `assignment`、未使用の `id`、新しい `candidate`、理由 `context-limit/quota-exhausted/resume-unavailable`、`old_execution_ref/handoff_ref` を渡します。旧職種・工程・範囲・成果を継承し、旧実行終了が必須です。親が理由と終了の根拠を確認し、締め後も残る引き継ぎに成果・担当表・有効な判断と理由・結論・未決・停止位置・次の一手を含めます。
+- `replace` は現担当の `assignment`、未使用の `id`、新しい `candidate`、理由 `quota-exhausted/resume-unavailable`、`old_execution_ref/handoff_ref` を渡します。旧職種・工程・範囲・成果を継承し、旧実行終了が必須です。親が理由と終了の根拠を確認し、締め後も残る引き継ぎに成果・担当表・有効な判断と理由・結論・未決・停止位置・次の一手を含めます。
+
+会話が長くなっても内蔵の要約で同じワーカーを継続します。新しい `replace` 依頼・`worker-unavailable` 記録では `context-limit` を拒否しますが、その理由が残る過去の記録は読み取れ、同じワーカーを再開できます。
 
 初回・交代の職種定義は、`project.json` に保存された `cwd` 配下の `.codex/agents/<role>.toml` を先に探し、そのファイルがなければ `~/.codex/agents/<role>.toml` を使います。どちらにも同じ参照だけの検証を適用し、案件側の定義が不正なら拒否します。採用したファイルをreadyの `role_definition_source` に記録します（職種ファイルを再読込しないresumeではnull）。候補照会の `--agents-dir` は従来どおりClaudeの定義用で、この探索には使いません。
 
@@ -719,7 +723,7 @@ readyの結果は担当表用の `assignment`、今回照会した `usage`、設
 | `worker-finished` | ended／parent-wait。`report_ref/artifact_refs/prepare_ref`。親が内蔵の最終応答を指定先へ全文保存し、担当表と実成果を突合して記録。成果なしは空配列。既存の別結果を上書きせず新しい保存先を指定 |
 | `worker-done` | ended／done。検証・必要な確認・親の了承の `handoff_ref` |
 | `worker-slot-wait` | endedまたはunknown／slot-wait。`queue_class:consultation/production`・正の整数 `queue_order`・待ち先id配列 `blocked_by`。宛先未取得なら `worker:parent,assignment:null,execution:running,work:slot-wait` と未使用の `planned_id/request_ref`。架空の担当行を作らない |
-| `worker-unavailable` | endedまたはunknown／parent-wait・unrecoverable・unconfirmed。交代理由3種か `stop-point/usage-unavailable/operation-failed` と根拠ref。unknownのまま交代しない |
+| `worker-unavailable` | endedまたはunknown／parent-wait・unrecoverable・unconfirmed。交代理由2種か `stop-point/usage-unavailable/operation-failed` と根拠ref。unknownのまま交代しない |
 
 親が相談を制作より先の待ち順に記録し、製品上限は増やしません。枠待ちは予約や起動成功ではなく、再試行前も準備口で利用枠を確認します。交代だけ新しい個体・宛先・行に `replaces/handoff_ref` を付け、旧作成者を保持します。操作に成功して記録だけ失敗した場合は、既知の宛先の記録を復旧し、新しい子を作り直しません。
 
