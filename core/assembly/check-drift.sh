@@ -1629,6 +1629,43 @@ print('UNKNOWN_EXTRA' + chr(9) + unknown_extra)
     item_drift "[PROFILE-VALIDATION-FAILED] --check-profile はexit 0でしたが、既知の応答形式（OK行）と一致しない出力でした＝監視不能。詳細: ${CHECK_PROFILE_FIRST_LINE:-空}"
   else
     check_profile_drift_before=$TOTAL_DRIFT
+    # Codex職種定義の配置と同じく、resolverがmainと確認できた機だけ点検する。
+    # 候補の解釈はlist-candidatesへ委ね、値は診断に出さない。
+    case $'\t'"$CHECK_PROFILE_FIRST_LINE"$'\t' in
+      *$'\tMACHINE_ROLE:main\t'*)
+        codex_missing_roles="$(python3 - "$DIR" "$AIENV_LOCAL_PROFILE_PATH" <<'PY_CODEX_CANDIDATES'
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root, profile = sys.argv[1:]
+proc = subprocess.run(
+    [sys.executable, os.environ.get('AIENV_PROFILE_RESOLVE_LIB', root + '/team/executor/profile_resolve.py'),
+     'list-candidates', profile, '--agents-dir',
+     os.environ.get('AIENV_AGENTS_DIR', root + '/team/rules/agents')],
+    capture_output=True, text=True,
+)
+if proc.returncode:
+    sys.exit(1)
+rows = [line.split('\t') for line in proc.stdout.splitlines()]
+for definition in sorted(Path(root, 'team/rules/codex-agents').glob('*.toml')):
+    candidates = [row for row in rows if row[0] == definition.stem and row[2]]
+    # 未指定・unknown・not_adoptedは既存のプロファイル点検に任せる。
+    if candidates and not any(row[3] == 'external-cli' for row in candidates):
+        print(definition.stem)
+PY_CODEX_CANDIDATES
+        )"
+        if [ "$?" -ne 0 ]; then
+          item_drift "[CODEX-CANDIDATES-CHECK-FAILED] Codex職種の候補を照会できませんでした"
+        else
+          while IFS= read -r codex_role; do
+            [ -n "$codex_role" ] || continue
+            item_drift "[CODEX-CANDIDATE-MISSING] ${codex_role}"
+          done <<< "$codex_missing_roles"
+        fi
+        ;;
+    esac
     if [ -n "$CP_ADVISORY" ]; then
       IFS=',' read -ra cp_advisory_items <<< "$CP_ADVISORY"
       for cp_item in "${cp_advisory_items[@]}"; do

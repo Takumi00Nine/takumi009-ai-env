@@ -11,11 +11,11 @@ role.navi:                 unknown
 role.requirements-analyst: configured model=opus-high,codex-astra-low
 role.system-designer:      configured model=opus-medium,opus-high,codex-astra-low
 role.test-writer:          configured model=sonnet-medium,sonnet-high,opus-medium,opus-high,codex-sol-medium
-role.test-runner:          configured model=haiku
-role.adoption-critic:      configured model=opus-high,fable-high
+role.test-runner:          configured model=haiku,codex-terra-low
+role.adoption-critic:      configured model=opus-high,fable-high,codex-sol-high
 role.implementer:          configured model=sonnet-medium,sonnet-high,opus-medium,opus-high,codex-sol-medium
-role.researcher:           configured model=haiku,sonnet-medium,sonnet-high,fable-high
-role.operator:             configured model=haiku,sonnet-low,sonnet-medium,sonnet-high
+role.researcher:           configured model=haiku,sonnet-medium,sonnet-high,fable-high,codex-sol-medium
+role.operator:             configured model=haiku,sonnet-low,sonnet-medium,sonnet-high,codex-sol-medium
 role.verifier:             configured model=opus-high,codex-sol-high,codex-terra-medium
 role.ja-doc:               unknown
 team_mode:        configured value=full

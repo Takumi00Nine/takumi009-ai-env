@@ -372,6 +372,8 @@ core/assembly/check-drift.sh
 
 Checks the following 5 points and lists them (**it does not exit 1 even if drift is detected** = a report tool for manual checking): ① managed symlinks and the generated `~/.claude/settings.json`, ② the generated `~/.codex/config.toml`, ③ uncommitted changes in this repository, ④ `ai-brain/data/vault-public/Preferences` vs. the real Vault (informational only), ⑤ the Vault-backup / private-patch remote is still **private** on GitHub. ① and ② use the ledger's placement list for the selected functions (② only when the list has the Codex config). Details = the comment at the top of the script.
 
+On the main machine, also checks that each role under `team/rules/codex-agents/*.toml` has an `external-cli` candidate in the local profile, reporting only the role name when missing; unresolved profiles and unknown roles follow the existing profile checks.
+
 Two modes do return an exit code:
 
 - `core/assembly/check-drift.sh --managed-symlinks-only` — placement health check: every item of the placement list (`ledger-tool.sh placement`) is in place and every hook command registered in `~/.claude/settings.json` exists and is executable. 0 = healthy, 1 = something missing or wrong (`update-sub.sh` uses it too).
@@ -774,6 +776,8 @@ core/assembly/check-drift.sh
 ```
 
 以下5点を検査し、一覧表示します（**検知しても exit 1 にはしません**＝手動確認用のレポートツール）: ① symlink と生成物 `~/.claude/settings.json`、② 生成物 `~/.codex/config.toml`、③ 未commitの変更、④ `ai-brain/data/vault-public/Preferences` の差分（informational）、⑤ private repo の remote が **private** のままか。① と ② は台帳の配置一覧（選択の機能）を使います（② は一覧に Codex 設定があるときだけ）。詳細＝スクリプト冒頭のコメント。
+
+メイン機では、`team/rules/codex-agents/*.toml` の各職種にローカル実体プロファイルの `external-cli` 候補があるかも点検し、欠けていれば職種名だけを報告します。プロファイル未解決・職種 unknown は既存のプロファイル点検に従います。
 
 終了コードを持つモードが 2 つあります:
 
