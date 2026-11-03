@@ -288,6 +288,8 @@ Candidate JSON is `{version:1,candidates:[...],unresolved:[...]}`. Entries conta
 
 `worker-prepare` reads the existing private version 1 state, checks the selected candidate and current usage, and returns preparation JSON without changing state or operating a worker. Put its request/result files in project work. Supply these request fields:
 
+For new/replacement workers, it looks for `.codex/agents/<role>.toml` under the `cwd` saved in `project.json`, then falls back to `~/.codex/agents/<role>.toml` only when that file is absent. The same reference-only validation applies to either source; an invalid project definition is rejected. Ready results record the chosen file in `role_definition_source` (`null` on resume, which does not reload the role file). Candidate lookup's `--agents-dir` still refers to Claude definitions and does not control this search.
+
 | Mode | Required fields in addition to `mode` |
 |---|---|
 | All | `request_ref`, `stop_remaining_percent`, `stop_ref`. References must name nonempty files. The stop point comes from approved Tasks; the CLI adds no default. Optional `confirm_reading` is boolean, default false. |
@@ -699,6 +701,8 @@ cmux Dock の「Project」／「Task」枠の詳細＝Vault の `Decisions/2026-
 - `new` は未使用の `id` と `role/candidate/stage/scope/artifact` を指定します。配置済みの参照だけの職種定義と、具体的なCodexモデル・思考量が必要です。起動引数の文字列を実行したり、既定の職種・モデルで代用したりしません。
 - `resume` は現担当の `assignment` だけを指定し、保存した職種・候補・モデル・思考量・宛先を使います。現在の定義で同じ指定を確認できなければ保留です。実行中は重ねて再開せず、最新の明示記録がendedの場合だけ準備します。一覧に不在でも宛先は捨てません。
 - `replace` は現担当の `assignment`、未使用の `id`、新しい `candidate`、理由 `context-limit/quota-exhausted/resume-unavailable`、`old_execution_ref/handoff_ref` を渡します。旧職種・工程・範囲・成果を継承し、旧実行終了が必須です。親が理由と終了の根拠を確認し、締め後も残る引き継ぎに成果・担当表・有効な判断と理由・結論・未決・停止位置・次の一手を含めます。
+
+初回・交代の職種定義は、`project.json` に保存された `cwd` 配下の `.codex/agents/<role>.toml` を先に探し、そのファイルがなければ `~/.codex/agents/<role>.toml` を使います。どちらにも同じ参照だけの検証を適用し、案件側の定義が不正なら拒否します。採用したファイルをreadyの `role_definition_source` に記録します（職種ファイルを再読込しないresumeではnull）。候補照会の `--agents-dir` は従来どおりClaudeの定義用で、この探索には使いません。
 
 readyの結果は担当表用の `assignment`、今回照会した `usage`、設定の参照 `selection_sources`、内蔵操作用の `operation/target/agent_type/model/reasoning_effort/fork_turns/phase/message` を返します。初回・交代は `spawn`・会話非継承、再開は同じtargetへの `followup` です。親は内蔵の `spawn_agent` へ職種・選択値・非継承を明示し、実際に返ったworker/addressを `assign` で追記します。呼び戻しは `followup_task` で、行を増やしません。単なる `send_message` で終了済みの相手が再開したとは扱いません。これらはセッション内の道具であり、子用のシェルラッパーは増やしません。
 

@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 VERSION = 1
+CODEX_AGENTS_DIR = Path(".codex/agents")
 VIEW_INTERVAL = float(os.environ.get("AIENV_LEADER_VIEW_INTERVAL", "5"))
 ASSIGN_COLUMNS = ("version id stage scope artifact role worker address parent_thread "
                   "candidate model effort selection_ref replaces handoff_ref state_ref").split()
@@ -165,6 +166,7 @@ def worker_prepare(state, args):
         sys.path.insert(0, str(ROOT / "team/executor"))
         import profile_resolve
         profile = candidates._profile_path(None)
+        # Candidate resolution uses Claude's directory; Codex TOMLs are checked below.
         agents = candidates._agents_dir(None)
         selected, error = candidates.resolve_candidate(profile, agents, role, assignment["candidate"])
         if mode == "resume" and (error or any(selected[key] != old[key] for key in ("model", "effort"))
@@ -178,9 +180,13 @@ def worker_prepare(state, args):
             raise ValueError("explicit model and effort required")
         assignment.update(model=selected["model"], effort=selected["effort"])
         sources = [str(Path(profile).absolute()), str(Path(profile_resolve.model_defs_path()).absolute())]
+        role_definition = None
         if mode != "resume":
             code = "invalid-role-definition"
-            definition = tomllib.loads((Path.home() / ".codex/agents" / (role + ".toml")).read_text())
+            role_definition = Path(project["cwd"]) / CODEX_AGENTS_DIR / (role + ".toml")
+            if not role_definition.exists():
+                role_definition = Path.home() / CODEX_AGENTS_DIR / (role + ".toml")
+            definition = tomllib.loads(role_definition.read_text())
             notes = ("absolute-rules", "core-worker", "worker-role-" + role)
             if (set(definition) != {"name", "description", "developer_instructions"}
                     or definition["name"] != role
@@ -214,7 +220,9 @@ def worker_prepare(state, args):
         else:
             message += "依頼に従って担当範囲を進める。停止中・親の再開許可待ちは引き継ぎ、許可前に再開しない。本文が不足すれば作業前に必読を読み直す。\n"
         return dict(version=VERSION, status="ready", mode=mode, assignment=assignment,
-                    usage=usage, selection_sources=sources, operation="followup" if mode == "resume" else "spawn",
+                    usage=usage, selection_sources=sources,
+                    role_definition_source=str(role_definition) if role_definition else None,
+                    operation="followup" if mode == "resume" else "spawn",
                     target=old["address"] if mode == "resume" else None, agent_type=role,
                     model=assignment["model"], reasoning_effort=assignment["effort"],
                     fork_turns="none", phase=phase, message=message)
