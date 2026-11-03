@@ -128,6 +128,8 @@ pid = args[args.index('-p') + 1]
 start = json.loads((control / 'processes.json').read_text()).get(pid)
 if start is None:
     sys.exit(1)
+if isinstance(start, dict):
+    start = start['C' if os.environ.get('LC_ALL') == 'C' else 'ja']
 field = args[args.index('-o') + 1]
 assert field in ('lstart=', 'stat=,lstart='), field
 print(start if field == 'lstart=' else 'S ' + start)
@@ -269,32 +271,33 @@ def assert_count(count, known, exact):
 
 
 def assert_text_information(text, value):
-    # MAJOR 3: 桁幅・全体一致ではなく、誰の何の状態かと数値の意味を突合する。
-    lines = text.splitlines()
-    assert lines and value['generated_at'] in lines[0], text
-    for key, count in value['totals'].items():
-        if key == 'project_count':
-            continue
-        match = re.search(r'\b' + key + r'\s*[:=]\s*(.*?)(?=\s+(?:current_started|running|cumulative_started)\s*[:=]|$)', lines[0])
-        assert match, (key, text)
-        shown = match.group(1)
-        assert re.search(r'\b' + str(count['known']) + r'\b', shown), (count, shown)
-        if count['exact'] is None:
-            assert re.search(r'unknown|未確認|未確定', shown), shown
+    # §9: 詳細でも生ダンプを使わず、通常表と合わせて各人・相談・時点を辿れる。
+    assert not re.search(r'["\'](?:last_recorded|parent_thread|scope_ref)["\']\s*:', text), text
+    assert '三段の確認済み人数' in text and '未確定の案件数' in text, text
+    states = dict(running='実行中', ended='終了', unknown='未確認', working='作業',
+        consulting='相談', **{'consultation-wait': '相談待ち', 'stopped': '停止',
+                            'unconfirmed': '未確認', 'last-recorded': '最終記録'})
     for project in value['projects']:
-        heading = next((line for line in lines if re.match(r'^\s*' + re.escape(project['project']) + r'\b', line)), '')
-        assert project['parent']['status'] in heading and project['parent']['observed_at'] in heading, heading
+        assert project['project'] in text, text
         for worker in project['workers']:
-            line = next((line for line in lines if worker['address'] in line), '')
-            for key in ('execution', 'work', 'certainty'):
-                assert re.search(r'(?<![\w-])' + re.escape(worker[key]) + r'(?![\w-])', line), (worker, line)
+            line = next((line for line in text.splitlines() if worker['address'] in line), '')
+            assert line, (worker, text)
+            for key in ('execution', 'work'):
+                assert worker[key] in line or states[worker[key]] in line, (worker, line)
             if worker['recorded_at']:
-                assert worker['recorded_at'] in line, line
+                assert worker['recorded_at'] in line or (
+                    worker['recorded_at'][:10] in text and worker['recorded_at'][11:19] in line), line
         for topic in project['consultations']:
-            line = next((line for line in lines if topic['topic'] in line and topic['subject'] in line), '')
-            for term in [*topic['participants'], topic['reception'], topic['certainty']]:
-                assert re.search(r'(?<![\w-])' + re.escape(term) + r'(?![\w-])', line), (topic, line)
-            assert topic['recorded_at'] in line, line
+            line = next((line for line in text.splitlines() if topic['topic'] in line and topic['subject'] in line), '')
+            assert line, (topic, text)
+            assert all(re.search(r'(?<![\w-])' + re.escape(i) + r'(?![\w-])', line)
+                       for i in topic['participants']), line
+            labels = dict(received='受領', concluded='結論', unreceived='未受領',
+                          **{'dependency-wait': '依存', 'redirect': '訂正'})
+            assert topic['reception'] in line or labels[topic['reception']] in line, line
+            assert topic['certainty'] in line or states[topic['certainty']] in line, line
+    if any(p['counts']['running']['exact'] is None for p in value['projects']):
+        assert '未確認' in text and '全案件の総人数は未確定' in text, text
     assert '\x1b' not in text, text
 
 
@@ -329,7 +332,7 @@ def test_basic(f):
     assert beta['coordination']['changes'][0]['confirmed'] == ['d'], beta
     assert beta['coordination']['changes'][0]['permissions'] == [], beta
     assert beta['coordination']['reviews'][0]['state'] == 'requested', beta
-    text = f.run().stdout
+    text = f.run('--details').stdout
     assert_text_information(text, value)
 
 
@@ -450,7 +453,7 @@ def test_unknown_worker(f):
     assert_count(value['totals']['running'], 2, None)
     assert value['totals']['running']['unknown_projects'] == ['alpha'], value
     # MAJOR 3: 未確認もtextに残し、「計2人」と確定表示しない。
-    assert_text_information(f.run().stdout, value)
+    assert_text_information(f.run('--details').stdout, value)
 
 
 def test_missing_project_history(f):
@@ -592,6 +595,105 @@ def test_source_failure(f):
     assert list(projects(value)) == ['alpha'] and projects(value)['alpha']['connection'] == 'unconnected', value
 
 
+def test_locale_observation(f, legacy=False):
+    # trial-s4 B: 実ロケールの導入有無に依存せず、psだけがロケール差を再現する。
+    english, japanese = 'Tue Nov  3 00:00:00 2026', '火 11/ 3 00:00:00 2026'
+    write_json(f.processes, {'41001': {'C': english, 'ja': japanese}, '41002': 'fixture beta start'})
+    f.env['LC_ALL'] = 'ja_JP.UTF-8'
+    # 起動時の保存口を通し、実プロセス起動や実psを使わない。
+    code = 'import runpy,sys; m=runpy.run_path(sys.argv[1]); print(m["process_start"](41001))'
+    result = subprocess.run([sys.executable, '-c', code, str(cli)], env=f.env,
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    path = f.states['alpha'] / 'runs/1/run.json'
+    run = json.loads(path.read_text())
+    run['wrapper_started'] = japanese if legacy else result.stdout.strip()
+    write_json(path, run)
+    f.env['LC_ALL'] = 'C'
+    alpha = projects(f.json())['alpha']
+    if not legacy:
+        assert alpha['parent']['status'] == 'running', alpha
+        assert run['wrapper_started'] == english, run
+    else:
+        # 旧ja記録は正規化して一致ならrunning、解釈不能なら明示の未確認を許す。
+        assert alpha['parent']['status'] in ('running', 'unconfirmed'), alpha
+        if alpha['parent']['status'] == 'unconfirmed':
+            assert alpha['issues'] and all(w['last_recorded'] for w in alpha['workers']), alpha
+    # 旧記録を無条件に生存扱いしない。別の開始時刻なら必ず未確認。
+    write_json(f.processes, {'41001': {'C': 'Wed Nov  4 00:00:00 2026',
+                                    'ja': '水 11/ 4 00:00:00 2026'}, '41002': 'fixture beta start'})
+    assert projects(f.json())['alpha']['parent']['status'] == 'unconfirmed'
+
+
+def test_compact_text(f):
+    # trial-s4 C・§9.2/9.3: 通常表は1案件1行。生ダンプ・名前と数だけでは通らない。
+    value = f.json()
+    text = f.run().stdout
+    assert '三段の確認済み人数' in text and '未確定の案件数' in text, text
+    known = next((line for line in text.splitlines() if '三段の確認済み人数' in line), '')
+    for label, key in (('現担当', 'current_started'), ('実行中', 'running'), ('累計', 'cumulative_started')):
+        assert re.search(label + r'\s*[:：]?\s*' + str(value['totals'][key]['known']) + r'\s*人', known), known
+    assert re.search(r'現担当.*実行中.*累計', text), text
+    assert all(label in text for label in ('案件', '接続', '親', '相談', '最終記録')), text
+    assert observed in text or ('2026-01-02' in text and 'UTC' in text and '00:00:00' in text), text
+    rows = {}
+    for slug in ('alpha', 'beta'):
+        matches = [line for line in text.splitlines() if re.match(r'^\s*\|?\s*' + slug + r'\b', line)]
+        assert len(matches) == 1, (slug, text)
+        rows[slug] = matches[0]
+        assert '実行中' in matches[0] and ('2026-01-01' in matches[0]), matches[0]
+        assert re.search(r'2\s*(?:人)?\s*[/／|]\s*1\s*(?:人)?\s*[/／|]\s*2', matches[0]), matches[0]
+    for ident, work, execution in (('a', '相談待ち', '終了'), ('b', '相談', '実行中'),
+                                  ('c', '作業', '実行中'), ('d', '停止', '終了')):
+        row = rows['alpha' if ident in ('a', 'b') else 'beta']
+        assert re.search(r'\b' + ident + r'\s*[:：]\s*' + work + r'[^|]*?' + execution, row), row
+    assert 'topic-a' in rows['alpha'] and '受領' in rows['alpha'], rows
+    assert re.search(r'a\s*[,/／・↔ -]\s*b', rows['alpha']), rows
+    assert 'topic-z' not in rows['alpha'], rows
+    assert not re.search(r'["\'](?:last_recorded|parent_thread|scope_ref)["\']\s*:', text), text
+
+
+def test_project_selection_and_all(f):
+    # trial-s4 C・§9.1/9.2/9.3: 案内・メモを数えず、宣言だけは残す。同じ素材でallも確認。
+    f.note('legacy', '従来経路', status='closed')
+    f.note('unlinked', None, status='paused')
+    f.note('missing', '三段', f.inputs / 'missing/output/team')
+    f.note('ReadMe', state=f.states['alpha'])  # project付きでも案内は対象外。
+    for slug in ('memo', 'declared-memo'):
+        (f.projects / (slug + '.md')).write_text('---\ntags: [fixture]\n---\nfixture memo\n')
+    write_json(f.declarations, dict(version=1, workspaces={
+        'fixture-screen': 'alpha', 'fixture-only': 'declared-only', 'fixture-memo': 'declared-memo'}))
+    value = f.json()
+    expected = {'alpha', 'beta', 'legacy', 'unlinked', 'missing', 'declared-only', 'declared-memo'}
+    assert set(projects(value)) == expected and value['totals']['project_count'] == 7, value
+    assert projects(value)['declared-memo']['connection'] == 'unconnected', value
+    for key, n in (('current_started', 4), ('running', 2), ('cumulative_started', 4)):
+        assert_count(value['totals'][key], n, None)
+        assert len(value['totals'][key]['unknown_projects']) == 5, value
+    # 表示オプションはJSONの内容・集計を変えない。
+    assert f.json('--all', '--details') == value
+    text = f.run().stdout
+    known = next((line for line in text.splitlines() if '三段の確認済み人数' in line), '')
+    for label, n in (('現担当', 4), ('実行中', 2), ('累計', 4)):
+        assert re.search(label + r'\s*[:：]?\s*' + str(n) + r'\s*人', known), known
+    for label, slugs in (('未接続', ['declared-memo', 'declared-only', 'unlinked']), ('従来経路', ['legacy'])):
+        lines = [line for line in text.splitlines() if re.match(r'^\s*' + label + r'\s+' + str(len(slugs)) + r'\s*件', line)]
+        assert len(lines) == 1 and all(slug in lines[0] for slug in slugs), text
+        assert '人数' in lines[0] and re.search('不明|未確認|未確定', lines[0]), lines
+        assert not any(re.match(r'^\s*\|?\s*' + slug + r'\b', line) for slug in slugs for line in text.splitlines()), text
+    assert any(re.match(r'^\s*\|?\s*missing\b', line) for line in text.splitlines()), text
+    unknown = next((line for line in text.splitlines() if '未確定の案件数' in line), '')
+    for label in ('現担当', '実行中', '累計'):
+        assert re.search(label + r'\s*[:：]?\s*5\s*件', unknown), unknown
+    assert '全案件の総人数は未確定' in text and '従来経路' in text, text
+    all_text = f.run('--all').stdout
+    assert next((line for line in all_text.splitlines() if '三段の確認済み人数' in line), '') == known, all_text
+    assert next((line for line in all_text.splitlines() if '未確定の案件数' in line), '') == unknown, all_text
+    for slug in expected:
+        assert len([line for line in all_text.splitlines() if re.match(r'^\s*\|?\s*' + slug + r'\b', line)]) == 1, all_text
+    assert not re.search(r'^\s*(未接続|従来経路)\s+\d+\s*件:', all_text, re.MULTILINE), all_text
+
+
 def test_watch_source_failure(f):
     # §5: watch途中の致命的失敗は完全な既出フレームだけを残して終了する。
     result = f.run('--format', 'json', '--watch', '--interval', '.25', code=1, frames=2,
@@ -601,6 +703,10 @@ def test_watch_source_failure(f):
 
 
 cases = [
+    ('TRIAL-S4/B: jaで保存しCで観測しても同じPIDは生存一致', test_locale_observation),
+    ('TRIAL-S4/B: 保存済みja文字列を読み、PID再利用を生存扱いしない', lambda f: test_locale_observation(f, True)),
+    ('TRIAL-S4/C: 通常表の1案件1行・人数の言葉・各人・相談・時点', test_compact_text),
+    ('TRIAL-S4/C: 対象選別・未接続まとめ・allとJSONの不変', test_project_selection_and_all),
     ('A14/R20/A12: 2案件4人・相談組・作業中・報告・時点をJSONとtextへ', test_basic),
     ('§3: 準備中0人・記録欠落・従来経路・未接続と全statusの列挙', test_connections),
     ('§2/3: 既存環境変数とHOME参照、宣言解除後のノートからの列挙', test_defaults_and_references),

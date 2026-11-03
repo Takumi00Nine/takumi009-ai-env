@@ -647,6 +647,45 @@ def test_stage3_wrapper_reason(f, case):
         assert review['state'] == 'adopted' and review.get('wrapper_reason') == saved.get('wrapper_reason'), review
 
 
+def test_first_running_coordination(f, kind):
+    # trial-s4 A: 初回実行中の正本はthread.started。終了・再開後だけの成功にしない。
+    project_path = f.state / 'project.json'
+    project = json.loads(project_path.read_text())
+    project['thread_id'] = ''
+    write_json(project_path, project)
+    directory = f.state / 'runs/1'
+    run = json.loads((directory / 'run.json').read_text())
+    run.update(thread_id='', wrapper_pid=41001, wrapper_started='fixture start')
+    write_json(directory / 'run.json', run)
+    Path(run['out'] + '.events.jsonl').write_text(json.dumps(
+        dict(type='thread.started', thread_id='fixture-parent')) + '\n')
+    (directory / 'wrapper.log').write_text('fixture running\n')
+    ps = f.binary / 'ps'
+    ps.write_text('#!/bin/sh\nprintf "S fixture start\\n"\n')
+    ps.chmod(0o755)
+    stage3_setup(f)
+    assert f.view()['status'] == 'running'
+    if kind == 'consult':
+        stage3_consult(f)
+        stage3_consult(f, receipt=dict(assignment='b', kind='answering', ref=str(f.operation_ref)))
+        outcome = dict(classification='detail', conclusion='fixture conclusion', reason='fixture reason',
+            disposition='effective', decision_ref=None, diff_refs=[], next_action='fixture next')
+        stage3_consult(f, phase='concluded', outcome=outcome,
+            receipt=dict(assignment='b', kind='answering', ref=str(f.operation_ref)))
+        topic = stage3_read(f)['topics'][0]
+        assert topic['phase'] == 'concluded' and topic['outcome'] == outcome, topic
+    elif kind == 'stop':
+        stage3_request_stop(f, targets=('a',))
+        stage3_confirm(f)
+        change = stage3_read(f)['changes'][0]
+        assert change['sent'] == change['confirmed'] == ['a'] and change['all_stopped'], change
+    else:
+        returned = stage3_review_result(f)
+        saved = f.record('event', returned)
+        assert saved['state'] == 'received' and stage3_read(f)['reviews'][0]['state'] == 'received', saved
+    assert json.loads(project_path.read_text())['thread_id'] == '', 'must not require a parent exit to persist the thread'
+
+
 def test_candidates(f):
     # §2: resolved values, no automatic choice, and legacy TSV agree.
     data = f.run('--profile', f.profile, '--agents-dir', f.agents,
@@ -1085,6 +1124,9 @@ cases = [
     ('§4: 未登録workerと担当表の不一致は記録しない', test_event_binding),
 ]
 # 行数・空入力の網羅はせず、契約で保留が必要な振る舞いを各1件。
+for kind in ('consult', 'stop', 'review'):
+    cases.append((f'TRIAL-S4/A: 初回の親実行中に{kind}を記録',
+                  lambda f, k=kind: test_first_running_coordination(f, k)))
 for case in ('dash', 'null', 'empty', 'absent', 'nonzero'):
     cases.append((f'WRAPPER-REASON/A9: {case} を変換せず返却し正常受領と失敗保留を区別',
                   lambda f, c=case: test_stage3_wrapper_reason(f, c)))
