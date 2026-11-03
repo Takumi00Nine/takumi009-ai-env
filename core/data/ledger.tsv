@@ -131,6 +131,7 @@ suite	tests/test-codex-boot-read.sh	team	-	-	-	-	-	-
 suite	tests/test-codex-exec.sh	team	-	-	-	-	-	-
 suite	tests/test-project-leader.sh	team	-	-	-	親の管理CLIの内部不変条件（隔離fixture）	-	-
 suite	tests/test-project-leader-acceptance.sh	team	-	-	-	段階1の資料・締め後の継続・報告と引継ぎの独立受入確認	-	-
+suite	tests/test-project-workers-acceptance.sh	team	-	-	-	段階2の候補・職種供給・呼び戻し・交代・結果回収の受入確認	-	-
 suite	tests/test-config-samples.sh	team	-	-	-	-	-	-
 suite	tests/test-delegation-gate-v2.sh	team	-	-	-	-	-	-
 suite	tests/test-inprocess-gate.sh	team	-	-	-	-	-	-
