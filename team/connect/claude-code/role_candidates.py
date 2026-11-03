@@ -172,29 +172,30 @@ def _run_usage_snapshot() -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _remaining_percent(snapshot: Optional[dict], pool_ref: str, window_name: str) -> str:
-    """設計§4.5。`-`（取得不能・stale等）または切り捨て整数の文字列。"""
+def _remaining_percent(snapshot: Optional[dict], pool_ref: str, window_name: str) -> tuple[Optional[int], bool]:
+    """Return remaining percent and whether the window is not applicable."""
     if snapshot is None:
-        return "-"
+        return None, False
     pools = snapshot.get("pools")
     if not isinstance(pools, list):
-        return "-"
+        return None, False
     pool = next(
         (p for p in pools if isinstance(p, dict) and p.get("pool_ref") == pool_ref), None
     )
     if pool is None or pool.get("usage_state") != "ok":
-        return "-"
+        return None, False
     windows = pool.get("windows")
     if not isinstance(windows, list):
-        return "-"
+        return None, False
     window = next(
         (w for w in windows if isinstance(w, dict) and w.get("window") == window_name), None
     )
     if window is None:
-        return "-"
+        # The snapshot omits inapplicable windows only in a valid, fresh pool.
+        return None, True
     remaining = window.get("remaining_percent")
     if not isinstance(remaining, (int, float)) or isinstance(remaining, bool):
-        return "-"
+        return None, False
     # 2026-10-24 改訂（出典＝~/Workspace/Projects/takumi009-ai-env/docs/usage-fetch-fix/usage-idle-fix-design.md
     # v3 §5.4）: リセット時刻が判定時刻（generated_at）以前（等号を含む）の窓は
     # 残量 100 として扱う＝提示の「リセット済・推定」と同じ定義を、`--json` を読む
@@ -202,28 +203,34 @@ def _remaining_percent(snapshot: Optional[dict], pool_ref: str, window_name: str
     epoch = window.get("resets_at_epoch")
     generated_at = snapshot.get("generated_at")
     if _is_whole_epoch(epoch) and _is_whole_epoch(generated_at) and epoch <= generated_at:
-        return ASSUMED_FULL_REMAINING
-    return str(math.floor(remaining))
+        return int(ASSUMED_FULL_REMAINING), False
+    return math.floor(remaining), False
+
+
+def _usage_details(snapshot: Optional[dict], route: str) -> dict:
+    usage = dict(h5=None, d7=None, not_applicable_windows=[])
+    pool_ref = POOL_FOR_ROUTE.get(route)
+    if pool_ref is not None:
+        for key, window in (("h5", "five_hour"), ("d7", "seven_day")):
+            usage[key], not_applicable = _remaining_percent(snapshot, pool_ref, window)
+            if not_applicable:
+                usage["not_applicable_windows"].append(window)
+    return usage
 
 
 def _usage_pair(snapshot: Optional[dict], route: str) -> tuple[str, str]:
-    pool_ref = POOL_FOR_ROUTE.get(route)
-    if pool_ref is None:
-        return "-", "-"
-    return (
-        _remaining_percent(snapshot, pool_ref, "five_hour"),
-        _remaining_percent(snapshot, pool_ref, "seven_day"),
-    )
+    usage = _usage_details(snapshot, route)
+    return tuple("-" if usage[key] is None else str(usage[key]) for key in ("h5", "d7"))
 
 
-def _ok_value(verdict: str, h5: str, d7: str) -> str:
+def _ok_value(verdict: str, h5: str | int | None, d7: str | int | None) -> str:
     """FR-17。`no`になるのは①その枠が上限（h5またはd7が0）②resolverが拒否
     （verdict!="OK"）——この2つだけ。`-`（取得不能・stale）は0と等しくない
     ので枠を理由に`no`にしない（FR-19）。
     """
     if verdict != "OK":
         return "no"
-    if h5 == "0" or d7 == "0":
+    if h5 in ("0", 0) or d7 in ("0", 0):
         return "no"
     return "ok"
 
@@ -287,13 +294,12 @@ def build_json_output(rows, snapshot, role_filter, profile_path, agents_dir):
         selected, error = resolve_candidate(profile_path, agents_dir, role, candidate)
         if error:
             result["unresolved"].append(error)
-        h5, d7 = _usage_pair(snapshot, route)
+        usage = _usage_details(snapshot, route)
         result["candidates"].append(dict(
             role=role, candidate=candidate, route=route,
             model=selected["model"] if selected else None,
             effort=selected["effort"] if selected else None,
-            ok=_ok_value(verdict, h5, d7),
-            h5=None if h5 == "-" else int(h5), d7=None if d7 == "-" else int(d7)))
+            ok=_ok_value(verdict, usage["h5"], usage["d7"]), **usage))
     result["unresolved"] = list(dict.fromkeys(result["unresolved"]))
     return result
 

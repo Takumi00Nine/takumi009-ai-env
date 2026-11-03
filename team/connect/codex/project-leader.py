@@ -195,13 +195,14 @@ def worker_prepare(state, args):
                     or not all(note + ".md" in definition["developer_instructions"] for note in notes)):
                 raise ValueError("reference-only role definition required")
         code = "candidate-unresolved"
-        h5, d7 = candidates._usage_pair(candidates._run_usage_snapshot(), selected["route"])
-        usage = dict(checked_at=now(), h5=None if h5 == "-" else int(h5),
-                     d7=None if d7 == "-" else int(d7), stop_remaining_percent=stop,
+        usage = dict(candidates._usage_details(candidates._run_usage_snapshot(), selected["route"]),
+                     checked_at=now(), stop_remaining_percent=stop,
                      stop_ref=str(stop_ref), candidate=assignment["candidate"])
-        reason = ("quota-exhausted" if 0 in (usage["h5"], usage["d7"]) else
-                  "usage-unavailable" if None in (usage["h5"], usage["d7"]) else
-                  "stop-point" if usage["h5"] <= stop else None)
+        applicable = [usage[key] for key, window in (("h5", "five_hour"), ("d7", "seven_day"))
+                      if window not in usage["not_applicable_windows"]]
+        reason = ("quota-exhausted" if 0 in applicable else
+                  "usage-unavailable" if None in applicable else
+                  "stop-point" if usage["h5"] is not None and usage["h5"] <= stop else None)
         if reason:
             return dict(version=VERSION, status="deferred", reason=reason, usage=usage)
         confirmed = mode == "resume" and any(e.get("assignment") == old["id"] and
