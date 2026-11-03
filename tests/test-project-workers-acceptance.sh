@@ -263,8 +263,8 @@ def stage3_confirm(f, ident='a', change='change-a', incomplete=False):
         execution_ref=str(f.operation_ref), execution='ended', work='stopped')
 
 
-def stage3_permit(f, change='change-a', targets=('a', 'c')):
-    permission = write_json(f.work / (change + '-permission.json'), {'fixture': 'permission'})
+def stage3_permit(f, change='change-a', targets=('a', 'c'), ref_name=None):
+    permission = write_json(f.work / (ref_name or change + '-permission.json'), {'fixture': 'permission'})
     return stage3_event(f, 'resume-permitted', 'parent', change=change, targets=list(targets),
         ref=str(permission), premises_ref=str(f.handoff), scope_ref=str(f.request_ref),
         decision_ref=str(f.stop_ref), recheck_ref=str(f.report_ref))
@@ -504,6 +504,114 @@ def test_stage3_review_missing(f):
     value = stage3_read(f)['reviews'][0]
     assert value['state'] == 'held' and value['required'] and value['verifier_report_ref'] is None, value
     assert value['reason'] and value['next_action'], value
+
+
+def stage3_reject(f, value):
+    before = snapshot(f.state)
+    result = f.record('event', value, code=1)
+    assert not result.stdout.strip() and 'project-leader: invalid-coordination:' in result.stderr, result
+    assert snapshot(f.state) == before, 'rejected coordination input changed state records'
+
+
+def test_stage3_scope_after_permission(f):
+    # MAJOR 1 / A11・§5: 同じ対象でも許可後の範囲変更には新しいchangeが必要。
+    stage3_setup(f)
+    stage3_consult(f)
+    request = stage3_request_stop(f)
+    for ident in ('a', 'c'):
+        stage3_confirm(f, ident)
+    stage3_permit(f)
+    scope = f.work / 'changed-scope.md'
+    scope.write_text('fixture changed premises and scope\n')
+    request['scope_ref'] = str(scope)
+    stage3_reject(f, request)
+    # 同じtopicに新しいchangeを設ければ記録でき、古い許可では制作できない。
+    request['change'] = 'change-b'
+    f.record('event', request)
+    f.prepare(f.request('resume'), code=3, reason='resume-not-permitted')
+
+
+def test_stage3_partial_resumption(f):
+    # MAJOR 2 / A11・§5: 許可済みaの再開は、未再開cの停止確認を無効にしない。
+    stage3_setup(f)
+    stage3_consult(f)
+    stage3_request_stop(f)
+    for ident in ('a', 'c'):
+        stage3_confirm(f, ident)
+    assert stage3_read(f)['changes'][0]['all_stopped']
+    first = stage3_permit(f, targets=('a',))
+    first_bytes = Path(first['ref']).read_bytes()
+    stage3_event(f, 'work-resumed', change='change-a', targets=['a'], permission_ref=first['ref'],
+                 position='fixture a resumed boundary', execution='running', work='working')
+    change = stage3_read(f)['changes'][0]
+    assert change['resumed'] == ['a'] and 'c' in change['confirmed'] and not change['all_stopped'], change
+    second = stage3_permit(f, targets=('c',), ref_name='change-a-c-permission.json')
+    assert second['ref'] != first['ref'] and Path(first['ref']).read_bytes() == first_bytes
+    stage3_event(f, 'work-resumed', 'c', change='change-a', targets=['c'], permission_ref=second['ref'],
+                 position='fixture c resumed boundary', execution='running', work='working')
+    change = stage3_read(f)['changes'][0]
+    assert set(change['resumed']) == {'a', 'c'} and change['phase'] == 'resumed', change
+    assert [p['targets'] for p in change['permissions']] == [['a'], ['c']], change
+
+
+def stage3_review_result(f):
+    review = dict(review='review-a', required=True, triggers=['release'], scope_ref=str(f.request_ref),
+        basis_ref=str(f.handoff), request_ref=str(f.request_ref), reason='fixture review needed')
+    requested = stage3_event(f, 'quality-review', 'parent', **review, state='requested')
+    wrapper = write_json(f.work / 'review-wrapper.json', {'result': 'fixture final response'})
+    returned = dict(version=1, review='review-a', parent_thread='fixture-parent',
+        scope_ref=review['scope_ref'], basis_ref=review['basis_ref'], wrapper_exit=0,
+        wrapper_reason='completed', wrapper_out_ref=str(wrapper), verifier_report_ref=str(f.report_ref))
+    return_ref = write_json(f.work / 'review-return.json', returned)
+    fields = {key: returned[key] for key in ('wrapper_exit', 'wrapper_reason',
+                                           'wrapper_out_ref', 'verifier_report_ref')}
+    return dict(requested, **fields, state='received', ref=str(return_ref))
+
+
+def test_stage3_review_skipped_receipt(f):
+    # MAJOR 3 / A9・§6: 正常な結果ファイルがあっても受領照合を飛ばして採用しない。
+    stage3_setup(f)
+    value = stage3_review_result(f)
+    value.update(state='adopted', decision_ref=str(f.stop_ref))
+    stage3_reject(f, value)
+
+
+def test_stage3_review_changed_result(f, state):
+    # MAJOR 3 / A9・§6: 採用・却下はreceivedで照合した同じ結果に結び付ける。
+    stage3_setup(f)
+    value = stage3_review_result(f)
+    f.record('event', value)
+    alternate = f.work / 'different-findings.md'
+    alternate.write_text('fixture different verifier findings\n')
+    value.update(state=state, decision_ref=str(f.stop_ref), verifier_report_ref=str(alternate))
+    stage3_reject(f, value)
+
+
+def test_stage3_review_missing_rejected(f, state):
+    # MAJOR 3 / A9・§6: 結果欠落をreceived/adoptedとして渡しても成功にしない。
+    stage3_setup(f)
+    value = stage3_review_result(f)
+    if state == 'adopted':
+        f.record('event', value)
+    value.update(state=state, decision_ref=str(f.stop_ref), verifier_report_ref=None)
+    returned = json.loads(Path(value['ref']).read_text())
+    returned.update(verifier_report_ref=None, wrapper_reason='report-missing')
+    value.update(wrapper_reason='report-missing',
+                 ref=str(write_json(f.work / 'review-return-missing.json', returned)))
+    stage3_reject(f, value)
+
+
+def test_stage3_exchange_rejected(f, kind):
+    # MAJOR 4 / A3・§4: 既存の組を削らず、同じreply_idを二度数えない。
+    stage3_setup(f)
+    first = dict(proposal_id='m1', reply_id='m2', proposal_summary='fixture proposal',
+                 reply_summary='fixture counterproposal')
+    value = stage3_consult(f, exchanges=[first])
+    if kind == 'remove':
+        value['exchanges'] = []
+    else:
+        value['exchanges'] = [first, dict(first, proposal_id='m3')]
+    stage3_reject(f, value)
 
 
 def test_candidates(f):
@@ -916,6 +1024,9 @@ def test_sub_placement(f):
 
 
 cases = [
+    ('STAGE3-FIX/MAJOR1/A11: 許可後の同じ対象のscope変更を拒否・記録不変', test_stage3_scope_after_permission),
+    ('STAGE3-FIX/MAJOR2/A11: aだけ許可・再開した後も未再開cを許可できる', test_stage3_partial_resumption),
+    ('STAGE3-FIX/MAJOR3/A9: requestedからreceivedを飛ばす採用を拒否・記録不変', test_stage3_review_skipped_receipt),
     ('STAGE3/A6補足/A10/A12: 旧記録・既存列と共通設定の参照を維持', test_stage3_legacy_and_settings),
     ('STAGE3/A1/A3/A5: 受領・訂正・依存待ちと往復・論点名・上限を区別', test_stage3_consultation),
     ('STAGE3/A2/A11: 複数対象の送信・受領・書きかけ・全停止を区別', test_stage3_stop_states),
@@ -941,6 +1052,15 @@ cases = [
     ('§4: 未登録workerと担当表の不一致は記録しない', test_event_binding),
 ]
 # 行数・空入力の網羅はせず、契約で保留が必要な振る舞いを各1件。
+for state in ('adopted', 'rejected'):
+    cases.append((f'STAGE3-FIX/MAJOR3/A9: receivedと異なる結果の{state}を拒否・記録不変',
+                  lambda f, s=state: test_stage3_review_changed_result(f, s)))
+for state in ('received', 'adopted'):
+    cases.append((f'STAGE3-FIX/MAJOR3/A9: 結果欠落の{state}を拒否・記録不変',
+                  lambda f, s=state: test_stage3_review_missing_rejected(f, s)))
+for kind in ('remove', 'duplicate-reply'):
+    cases.append((f'STAGE3-FIX/MAJOR4/A3: exchangesの{kind}更新を拒否・記録不変',
+                  lambda f, k=kind: test_stage3_exchange_rejected(f, k)))
 for kind in ('absent', 'foreign-parent'):
     cases.append((f'STAGE3/A5: {kind} の相手をinvalid-coordinationで拒否・記録不変',
                   lambda f, k=kind: test_stage3_peer_binding(f, k)))
