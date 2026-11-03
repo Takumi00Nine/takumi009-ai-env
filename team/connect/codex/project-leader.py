@@ -188,6 +188,15 @@ def validate_review(data):
         reference(data.get("request_ref"))
 
 
+def normalize_wrapper_reason(reason):
+    """Use the wrapper's no-reason marker for omitted, null or empty reasons."""
+    if reason is None or reason == "":
+        return "-"
+    if not isinstance(reason, str):
+        raise ValueError("wrapper_reason must be a string or null")
+    return reason
+
+
 def validate_coordination(state, project, data):
     """Validate new structured input; legacy history remains readable."""
     try:
@@ -251,6 +260,8 @@ def validate_coordination(state, project, data):
             reference(data["decision_ref"])
         elif event == "quality-review":
             validate_review(data)
+            if "wrapper_exit" in data or "wrapper_reason" in data:
+                data["wrapper_reason"] = normalize_wrapper_reason(data.get("wrapper_reason"))
             if data["work"] not in ("parent-wait", "user-wait"):
                 raise ValueError("review must preserve parent decision wait")
             if data["state"] not in ("not-required", "requested", "received", "adopted", "rejected", "held"):
@@ -261,7 +272,7 @@ def validate_coordination(state, project, data):
                 old = next((r for r in previous["reviews"] if r["review"] == data["review"]), None)
                 if old and any(old[k] != data[k] for k in ("scope_ref", "basis_ref")):
                     raise ValueError("review result must match the requested scope and basis")
-                required(data, ("wrapper_reason", "wrapper_out_ref", "verifier_report_ref"))
+                required(data, ("wrapper_out_ref", "verifier_report_ref"))
                 if data["wrapper_exit"] != 0:
                     raise ValueError("failed review must remain held")
                 wrapper = read_json(reference(data["wrapper_out_ref"]))
@@ -270,6 +281,7 @@ def validate_coordination(state, project, data):
                 reference(data["verifier_report_ref"])
                 if data["state"] == "received":
                     returned = read_json(reference(data["ref"]))
+                    returned["wrapper_reason"] = normalize_wrapper_reason(returned.get("wrapper_reason"))
                     keys = ("review", "scope_ref", "basis_ref", "wrapper_exit", "wrapper_reason", "wrapper_out_ref", "verifier_report_ref")
                     if (returned["version"] != VERSION or returned["parent_thread"] != project.get("thread_id")
                             or any(returned[k] != data[k] for k in keys)):
@@ -278,6 +290,7 @@ def validate_coordination(state, project, data):
                     result_keys = ("wrapper_exit", "wrapper_reason", "wrapper_out_ref", "verifier_report_ref")
                     if old is None or old["state"] not in ("received", "adopted", "rejected"):
                         raise ValueError("record a verified receipt before deciding the review")
+                    old = dict(old, wrapper_reason=normalize_wrapper_reason(old.get("wrapper_reason")))
                     if any(old[key] != data[key] for key in result_keys):
                         raise ValueError("review decision must use the received result")
                     reference(data["decision_ref"])
