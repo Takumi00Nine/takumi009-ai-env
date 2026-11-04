@@ -150,6 +150,13 @@ echo "=== MODE-TEAM: 配役表から開幕1行まで ==="
   expected='🧭 現在＝チームモード（私はマックリーダーとして、案件ごとにプロジェクトリーダーを立ててワーカーのチームに任せ、全体の把握とあなたとの取り次ぎをします）。他のモード＝単独／軽量。切り替えたいときは言ってください'
   assert_eq "MODE-TEAM: teamの開幕文は正本と一致する" "$expected" "${mode_line%%｜*}"
   sed 's/value=team/value=full/' "$MODE_PROFILE" > "$STATUS_HOME/old-full.md"
+  full_rc=0
+  full_resolved="$(resolve_v2 "$STATUS_HOME/old-full.md" 2>/dev/null)" || full_rc=$?
+  if [[ "$full_rc" -ne 0 && "$full_resolved" != OK* ]]; then
+    pass "MODE-TEAM: resolver自体がfullを非0終了・非OKで拒否する"
+  else
+    fail_case "MODE-TEAM: resolver自体がfullを拒否する (exit=$full_rc out=$full_resolved)"
+  fi
   ctx="$(run_status_with_profile "$STATUS_HOME/old-full.md")"
   mode_line="$(printf '%s\n' "$ctx" | sed -n '/^🧭 現在＝/p')"
   assert_contains "MODE-TEAM: fullを読み替えずモード未確定にする" "$mode_line" "現在＝モード未確定"
