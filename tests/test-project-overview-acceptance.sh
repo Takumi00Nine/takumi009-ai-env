@@ -727,6 +727,131 @@ def test_project_selection_and_all(f):
     assert not re.search(r'^\s*(未接続|従来経路)\s+\d+\s*件:', all_text, re.MULTILINE), all_text
 
 
+def test_note_mismatch_summary(f):
+    # D・§9.5: ノート由来の不一致だけをまとめ、接続後の記録異常は個別に残す。
+    f.env['COLUMNS'] = '300'
+    slugs = ('note-one', 'note-two')
+    for slug in slugs:
+        note = f.note(slug, state=f.inputs / slug / 'output/team')
+        note.write_text(note.read_text().replace('project: ' + slug, 'project: fixture-other'))
+    (f.states['beta'] / 'latest.json').write_text('{broken fixture')
+    value = f.json()
+    data = projects(value)
+    assert set(data) == {'alpha', 'beta', *slugs}, value
+    for slug in slugs:
+        item = data[slug]
+        assert item['connection'] == 'unconfirmed' and item['state_dir'] is None, item
+        assert any(i['code'] == 'reference-mismatch' and i['ref'] == str(f.projects / (slug + '.md'))
+                   for i in item['issues']), item
+    assert data['beta']['connection'] == 'unconfirmed' and data['beta']['state_dir'] == str(f.states['beta'])
+    assert f.json('--all', '--details') == value
+    text = f.run().stdout
+    summary = [line for line in text.splitlines()
+               if re.match(r'^\s*未確認[（(]参照の不一致など[）)]\s+2\s*件:', line)]
+    assert len(summary) == 1 and '--all' in summary[0], text
+    for slug in slugs:
+        assert text.count(slug) == 1 and slug in summary[0], text
+        assert not re.search(r'^\s*\|?\s*' + slug + r'\b|^\s*確認[:：]\s*' + slug + r'\b', text, re.MULTILINE), text
+    assert len(re.findall(r'^\s*\|?\s*beta\b', text, re.MULTILINE)) == 1, text
+    assert re.search(r'^\s*確認[:：]\s*beta\b', text, re.MULTILINE), text
+    for args in (('--all',), ('--details',)):
+        expanded = f.run(*args).stdout
+        for slug in slugs:
+            assert len(re.findall(r'^\s*\|?\s*' + slug + r'\b', expanded, re.MULTILINE)) == 1, expanded
+        assert not re.search(r'^\s*未確認[（(]参照の不一致など', expanded, re.MULTILINE), expanded
+        if '--details' in args:
+            assert 'reference-mismatch' in expanded and all(str(f.projects / (s + '.md')) in expanded for s in slugs), expanded
+
+
+def stopped_history(f):
+    # 既存version 1を直接用意。両人の受領・有効な停止確認と判断を残す。
+    state = f.states['alpha']
+    ref = str(state / 'evidence.json')
+    events = [dict(f.event('alpha', 'a', 'ended', 'stop-requested'), event='stop-request',
+        change='change-resume', topic='topic-stop', owner='a', targets=['a', 'b'], scope_ref=ref,
+        reason='fixture change', sent_refs=[dict(assignment=i, ref=ref) for i in ('a', 'b')],
+        next_action='fixture await stop')]
+    for ident in ('a', 'b'):
+        events.append(dict(f.event('alpha', ident, 'ended', 'stop-requested'), event='stop-received',
+            change='change-resume', targets=[ident], received_ref=ref))
+        events.append(dict(f.event('alpha', ident, 'ended', 'stopped'), event='stop-confirm',
+            change='change-resume', targets=[ident], position='fixture boundary', touched_refs=[ref],
+            incomplete=False, execution_ref=ref))
+    events.append(dict(f.event('alpha', 'a', 'ended', 'parent-wait'), event='decision',
+        assignment=None, worker='parent', change='change-resume', classification='detail',
+        disposition='effective', conclusion='fixture approved detail', reason='fixture reason',
+        decider='parent', decision_ref=ref, diff_refs=[], next_action='fixture permit resumption'))
+    report_path = state / 'runs/1/report.json'
+    report = json.loads(report_path.read_text())
+    write_json(report_path, dict(report, pending=[]))
+    f.save_events('alpha', events)
+    return events
+
+
+def test_resumed_change_not_waiting(f):
+    # E・§9.6: 過去の停止確認と現在の実行を混ぜず、再開途中・再開済みを待ちにしない。
+    events = stopped_history(f)
+    value = projects(f.json())['alpha']['coordination']
+    assert value['status'] == 'recorded', value
+    change = value['changes'][0]
+    assert change['phase'] == 'stopped' and change['all_stopped'] and change['confirmed'] == ['a', 'b'], change
+    assert change['pending_targets'] == [] and change['resumed'] == [], change
+    assert '停止確認待ち' not in f.run().stdout
+    displays = []
+    ref = str(f.states['alpha'] / 'evidence.json')
+    for index, ident in enumerate(('a', 'b')):
+        permission = str(write_json(f.states['alpha'] / ('permission-' + ident + '.json'), {'fixture': 'permission'}))
+        events.append(dict(f.event('alpha', ident, 'ended', 'parent-wait'), event='resume-permitted',
+            assignment=None, worker='parent', change='change-resume', targets=[ident], ref=permission,
+            premises_ref=ref, scope_ref=ref, decision_ref=ref, recheck_ref=ref))
+        events.append(dict(f.event('alpha', ident, 'running', 'working'), event='work-resumed',
+            change='change-resume', targets=[ident], permission_ref=permission, position='fixture resumed'))
+        f.save_events('alpha', events)
+        value = projects(f.json())['alpha']['coordination']
+        assert value['status'] == 'recorded', value
+        change = value['changes'][0]
+        assert change['phase'] == ('resuming' if index == 0 else 'resumed') and not change['all_stopped'], change
+        assert change['confirmed'] == (['b'] if index == 0 else []), change
+        assert change['pending_targets'] == change['resumed'] == list(('a', 'b')[:index + 1]), change
+        assert [p['targets'] for p in change['permissions']] == [[i] for i in ('a', 'b')[:index + 1]], change
+        displays.append((f.run().stdout, f.run('--details').stdout))
+    for normal, detail in displays:
+        assert '停止確認待ち' not in normal, normal
+        assert '有効な停止確認なし' in detail, detail
+    assert '再開途中' in displays[0][1] and '再開済み' in displays[1][1], displays
+
+
+def test_consultation_requires_stop_reconfirmation(f):
+    # E・§9.6: 許可前の相談で停止確認は失効。結論や通常の終了報告だけでは戻らない。
+    events = stopped_history(f)
+    state = f.states['alpha']
+    ref = str(state / 'evidence.json')
+    consult = dict(f.event('alpha', 'a', 'running', 'consulting'), event='consult', topic='topic-recheck',
+        subject='fixture stopped discussion', scope_ref=ref, peer='fixture-worker-b', participants=['a', 'b'],
+        phase='open', exchanges=[], receipt=None, dependencies=[], outcome=None, next_action='fixture answer')
+    events.append(consult)
+    f.save_events('alpha', events)
+    first = projects(f.json())['alpha']['coordination']['changes'][0]
+    assert first['confirmed'] == ['b'] and first['pending_targets'] == ['a'] and first['phase'] == 'stopping', first
+    events.append(dict(consult, execution='ended', work='consultation-wait', phase='concluded',
+        outcome=dict(classification='detail', conclusion='fixture conclusion', reason='fixture reason',
+            disposition='effective', decision_ref=None, diff_refs=[], next_action='fixture await permission')))
+    events.append(dict(f.event('alpha', 'a', 'ended', 'parent-wait'), event='worker-finished',
+        report_ref=ref, artifact_refs=[ref], prepare_ref=ref))
+    f.save_events('alpha', events)
+    value = projects(f.json())['alpha']
+    change = value['coordination']['changes'][0]
+    assert change['confirmed'] == ['b'] and change['pending_targets'] == ['a'], change
+    assert change['phase'] == 'stopping' and not change['all_stopped'] and not change['permissions'], change
+    assert not value['consultations'][0]['active'], value
+    assert '停止確認待ち' in f.run().stdout
+    events.append(dict(events[2]))  # aの明示stop-confirmを更新して初めて再確認が成立。
+    f.save_events('alpha', events)
+    change = projects(f.json())['alpha']['coordination']['changes'][0]
+    assert set(change['confirmed']) == {'a', 'b'} and change['pending_targets'] == [] and change['all_stopped'], change
+    assert '停止確認待ち' not in f.run().stdout
+
+
 def test_watch_source_failure(f):
     # §5: watch途中の致命的失敗は完全な既出フレームだけを残して終了する。
     result = f.run('--format', 'json', '--watch', '--interval', '.25', code=1, frames=2,
@@ -736,6 +861,9 @@ def test_watch_source_failure(f):
 
 
 cases = [
+    ('FIX2/D: ノート参照不一致だけまとめ、all・details・JSONでは個別', test_note_mismatch_summary),
+    ('FIX2/E: 停止確認→一人再開→全員再開は停止確認待ちにしない', test_resumed_change_not_waiting),
+    ('FIX2/E: 許可前の相談・結論・終了後も明示の停止再確認まで待ち', test_consultation_requires_stop_reconfirmation),
     ('TRIAL-S4/B: jaで保存しCで観測しても同じPIDは生存一致', test_locale_observation),
     ('TRIAL-S4/B: 保存済みja文字列を読み、PID再利用を生存扱いしない', lambda f: test_locale_observation(f, True)),
     ('TRIAL-S4/B: C保存・ja観測でaliveのC固定漏れも拒否', lambda f: test_locale_observation(f, reverse=True)),
