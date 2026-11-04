@@ -1251,7 +1251,7 @@ def overview_label(value):
         "unreceived": "未受領", "received": "受領後", "dependency-wait": "依存先待ち", "redirect": "宛先訂正",
         "concluded": "結論済", "waiting": "待ち", "recorded": "記録済", "requested": "依頼済",
         "adopted": "採用", "rejected": "却下", "held": "保留", "not-required": "不要",
-        "stopping": "停止確認中", "resuming": "再開許可済", "resumed": "再開済",
+        "stopping": "停止確認中", "resuming": "再開途中", "resumed": "再開済み",
     }.get(value, value or "未確認")
 
 
@@ -1283,7 +1283,7 @@ def overview_details(project):
     for change in coordination_view["changes"]:
         print(f"  変更 {change['change']}: {overview_label(change['phase'])} 対象={','.join(change['targets'])}"
               f" 送信={','.join(change['sent']) or 'なし'} 受領={','.join(change['received']) or 'なし'}"
-              f" 停止確認={','.join(change['confirmed']) or 'なし'} 未確認={','.join(change['pending_targets']) or 'なし'}"
+              f" 停止確認={','.join(change['confirmed']) or 'なし'} 有効な停止確認なし={','.join(change['pending_targets']) or 'なし'}"
               f" 再開={','.join(change['resumed']) or 'なし'} 記録={change['recorded_at']} 範囲={change.get('scope_ref')}")
         for permission in change["permissions"]:
             print(f"    再開許可: {','.join(permission['targets'])} 前提={permission['premises_ref']}"
@@ -1378,7 +1378,21 @@ def overview_text(snapshot, args):
     width = shutil.get_terminal_size().columns
     display_date = snapshot["generated_at"][:10]
     print("人数は確認済み分（＋未確認は不明分）。…は省略、--detailsで確認。")
-    visible = [p for p in snapshot["projects"] if args.all or p["connection"] not in ("unconnected", "legacy")]
+    mismatch_label = "未確認（参照の不一致など）"
+    groups = {"未接続": [], "従来経路": [], mismatch_label: []}
+    visible = []
+    for project in snapshot["projects"]:
+        group = None
+        if project["connection"] in ("unconnected", "legacy"):
+            group = overview_label(project["connection"])
+        elif (project["connection"] == "unconfirmed" and project["state_dir"] is None
+              and project["note"] and any(issue["code"] == "reference-mismatch" and
+                  issue["ref"] == project["note"] for issue in project["issues"])):
+            group = mismatch_label
+        if group is None or args.all or (args.details and group == mismatch_label):
+            visible.append(project)
+        else:
+            groups[group].append(project["project"])
     print("案件 | 接続 | 親/観測 | 現担当/実行中/累計 | 各人の状態 | 相談 | 最終記録")
     for project in visible:
         parent, coordination_view = project["parent"], project["coordination"]
@@ -1405,29 +1419,30 @@ def overview_text(snapshot, args):
             parent_text += " " + overview_time_label(parent["observed_at"], display_date)
         print(overview_row([project["project"], overview_label(project["connection"]), parent_text,
                             "/".join(counts), work_text, consultation, span], width))
-    if not args.all:
-        for connection in ("unconnected", "legacy"):
-            slugs = [p["project"] for p in snapshot["projects"] if p["connection"] == connection]
-            if not slugs:
-                continue
-            prefix = f"{overview_label(connection)} {len(slugs)}件: "
-            shown = []
-            for slug in slugs:
-                candidate = shown + [slug]
-                suffix = f" (人数不明;省略{len(slugs) - len(candidate)}件;--all)"
-                if display_width(prefix + ', '.join(candidate) + suffix) > width:
-                    break
-                shown.append(slug)
-            omitted = len(slugs) - len(shown)
-            print(prefix + ", ".join(shown) + f" (人数不明;省略{omitted}件;--all)")
+    for label, slugs in groups.items():
+        if not slugs:
+            continue
+        prefix = f"{label} {len(slugs)}件: "
+        shown = []
+        for slug in slugs:
+            candidate = shown + [slug]
+            suffix = f" (人数不明;省略{len(slugs) - len(candidate)}件;--all)"
+            if display_width(prefix + ', '.join(candidate) + suffix) > width:
+                break
+            shown.append(slug)
+        omitted = len(slugs) - len(shown)
+        print(prefix + ", ".join(shown) + f" (人数不明;省略{omitted}件;--all)")
     for project in visible:
         reasons = []
-        if project["connection"] == "unconfirmed" or project["parent"]["status"] == "unconfirmed":
+        coordination_view = project["coordination"]
+        if (project["connection"] == "unconfirmed" or project["parent"]["status"] == "unconfirmed"
+                or coordination_view["status"] == "unconfirmed"):
             reasons.append("状態未確認")
         if (project["parent"]["report"] or {}).get("pending") or any(
                 t["phase"] in ("parent-wait", "user-wait") for t in project["consultations"]):
             reasons.append("判断待ち")
-        if any(c["pending_targets"] for c in project["coordination"]["changes"]):
+        if coordination_view["status"] == "recorded" and any(
+                c["phase"] == "stopping" and c["pending_targets"] for c in coordination_view["changes"]):
             reasons.append("停止確認待ち")
         if reasons:
             print(f"確認: {project['project']} {','.join(reasons)} | 確認先={project['state_dir'] or project['note']} (--details)")
