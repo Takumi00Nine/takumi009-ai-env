@@ -4,7 +4,7 @@
 # 書式・状態値・各キーの意味は Vault の Preferences/profile-sample.md と README「導入手順」を参照。
 # ⚠️ 認証情報（AWS キー・トークン等）は書かない（毎セッション AI が読む）。
 # 使用率の月額プランの設定は README「使用率の見える化」を参照。
-schema_version: 7
+schema_version: 8
 profile_slug: authoring
 role.leader:               configured model=fable-high
 role.navi:                 unknown
@@ -18,7 +18,7 @@ role.researcher:           configured model=haiku,sonnet-medium,sonnet-high,fabl
 role.operator:             configured model=haiku,sonnet-low,sonnet-medium,sonnet-high,codex-sol-medium
 role.verifier:             configured model=opus-high,codex-sol-high,codex-terra-medium
 role.ja-doc:               unknown
-team_mode:        configured value=full
+team_mode:        configured value=team
 no_read_paths:    unavailable
 machine_role:     configured value=main
 ---

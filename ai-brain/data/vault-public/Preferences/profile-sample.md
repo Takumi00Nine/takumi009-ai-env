@@ -39,7 +39,7 @@ aliases:
 - 行の書式＝`<キー>: <状態> [属性=値 ...]`。状態は先頭に1語。属性は `名前=値` をスペース区切り（値にスペース・日本語は使わない）。行頭 `#` と、値の後ろの「スペース+#」以降は無視。⚠️ 認証情報は書かない（毎セッション AI が読む）。
 - `schema_version`＝この実体が追随しているスキーマ版（職種の行を足しても上げない。固定キー・文法・必須属性・enum が変わったときだけ）。`profile_slug`＝能力クラスの表示ラベル（`^[a-z0-9][a-z0-9-]*$`・判定には使わない）。
 - `role.<職種>`＝状態は `configured`（使う・`model=` で起動）／`unavailable`（使いたいが今は動かせない・何を使いたかったか残すため `model=` は書く）／`not_adopted`（このマシンでは使わない・属性なし）／`unknown`（未確定・属性なし＝保留して本人に確認）。行を書かない職種は `unknown` 扱い。`model=` はモデル定義ファイルの定義名をカンマ区切りで1つ以上（並び順に優先度は無い）。
-- 能力軸3キー＝`team_mode`（`configured value=solo|lean|full`）／`no_read_paths`（`configured value=~/… ` カンマ区切り・無ければ `unavailable`）／`machine_role`（`configured value=main|sub`＝機役割の唯一の正本）。各キー共通で `unavailable`／`unknown` も可。
+- 能力軸3キー＝`team_mode`（`configured value=solo|lean|team`。旧値 `full` は不正値＝「モード未確定」として扱う＝[[Decisions/2026-11-04-mode-solo-lean-team]]）／`no_read_paths`（`configured value=~/… ` カンマ区切り・無ければ `unavailable`）／`machine_role`（`configured value=main|sub`＝機役割の唯一の正本）。各キー共通で `unavailable`／`unknown` も可。
 - installer は実体が無いときだけサンプルを雛形としてコピーする（既にある実体は上書きしない）。実体は machine ごとのローカルファイル・repo 管理外。
 
 ## サンプル本文
@@ -54,7 +54,7 @@ aliases:
 |---|---|---|
 | `role.leader` | メイン機の実値（サンプルはメイン機の実運用値） | メイン機はそのまま使う。未確定・サブ機で変える場合は `core/assembly/install-main.sh`／`core/assembly/install-sub.sh`実行時の対話（設計§3.9）で確定させる |
 | `role.*`（leader以外） | `configured model=<定義名>[,<定義名>…]` | 自分のセッションで実際に起動する職種だけ`configured`にし、モデル定義ファイル（[[Preferences/model-definitions-sample]]）の定義名をカンマ区切りで1つ以上書く。使わない職種は`not_adopted`、判断保留は`unknown`のまま残す |
-| `team_mode` | `value=full` | このマシンの枠に合う既定体制を選ぶ（メイン機＝`full`・サブ機＝`lean` が目安）。迷ったら本人に確認する |
+| `team_mode` | `value=team` | このマシンの枠に合う既定体制を選ぶ（メイン機＝`team`・サブ機＝`lean` が目安）。迷ったら本人に確認する |
 | `no_read_paths` | `unavailable` | 読まない・検索しないパスが実在するかを確認し、無ければ`unavailable`にする |
 | `machine_role` | `configured value=main`（サンプルはメイン機の実値） | サンプルはメイン機の値のまま。**サブ機はコピー後に `configured value=sub` へ書き換える**（機構は推測しない） |
 

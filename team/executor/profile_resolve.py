@@ -66,7 +66,9 @@ from typing import Optional
 # §2.1・FR-1・FR-2・FR-13）: 本命が使えないときに機構が別の行を採用する
 # 層と、禁止モデルを列挙する固定キーをコードから撤去したのに合わせて
 # 6→7へ引き上げた（固定キー集合が変わったときだけ版を上げる規約どおり）。
-EXPECTED_SCHEMA_VERSION = 7
+# team_mode の enum を solo|lean|team へ変更。文法を共有する schema 6 以上は受理する。
+EXPECTED_SCHEMA_VERSION = 8
+MIN_SCHEMA_VERSION = 6
 
 META_KEYS = ("schema_version", "profile_slug")
 CAPABILITY_KEYS = (
@@ -132,8 +134,8 @@ IMPLEMENTED_HANDLERS = frozenset(
 # V8-b: 能力軸の value= 厳格形式（U-8裁定）。
 CAPABILITY_VALUE_PATTERNS = {
     # team_mode: この案件をどの体制で回すかの既定値（3モード体制-設計-2026-09-06.md
-    # §4.1a）。solo|lean|fullの1語のみ。
-    "team_mode": re.compile(r"^(?:solo|lean|full)$"),
+    # §4.1a）。solo|lean|teamの1語のみ。
+    "team_mode": re.compile(r"^(?:solo|lean|team)$"),
     # no_read_paths: 読まない・検索しないパスを`~/`表記の実パスでカンマ区切り
     # に列挙する（配役表-能力軸整理-設計-2026-09-07.md §3・要件FR-5。旧版の
     # 別名トークン方式は廃止）。実パスは大文字を含みうるため、本キーだけ
@@ -257,7 +259,7 @@ def gate_schema_version(path: str) -> None:
     ROLE_ATTR_NAMES検査に先に引っかかり、一般的な`T6`（「許可されない属性
     です」）になってしまう——これだとFR-15が要求する「理由から実体が旧版で
     あることが読める」を満たせない。そこで役割の行を厳格parseする<u>前</u>に
-    宣言versionだけを緩く読み、EXPECTED未満または欠落なら直ちに
+    宣言versionだけを緩く読み、MIN未満または欠落なら直ちに
     `T4-LEGACY`で止める（旧記法の構文がどうであれ、版だけで即座に弾く）。
     ⚠️ schema_versionの値がそもそも数値として不正（非数値・0以下）な場合は
     ここでは判定せず、通常のparse_v2→validate_meta()のT3へ委ねる
@@ -268,12 +270,12 @@ def gate_schema_version(path: str) -> None:
     if raw is None:
         raise ProfileError(
             "T4-LEGACY",
-            f"実体が旧版です（schema_versionの行がありません・このコードはschema {EXPECTED_SCHEMA_VERSION} のみを受理します）",
+            f"実体が旧版です（schema_versionの行がありません・このコードはschema {MIN_SCHEMA_VERSION} 以上を受理します）",
         )
-    if re.match(r"^[0-9]+$", raw) and int(raw) > 0 and int(raw) < EXPECTED_SCHEMA_VERSION:
+    if re.match(r"^[0-9]+$", raw) and 0 < int(raw) < MIN_SCHEMA_VERSION:
         raise ProfileError(
             "T4-LEGACY",
-            f"実体が旧版です（schema_version={int(raw)}・このコードはschema {EXPECTED_SCHEMA_VERSION} のみを受理します）",
+            f"実体が旧版です（schema_version={int(raw)}・このコードはschema {MIN_SCHEMA_VERSION} 以上を受理します）",
         )
 
 
@@ -436,10 +438,10 @@ def validate_meta(parsed: ParsedProfile) -> int:
         # schema_versionの行が無い実体はv1形式そのものなので、T3（メタ欠落）
         # ではなくT4-LEGACY（旧版）として扱う。FR-15の固定語「旧版」をここで
         # 満たす（5口すべてが同じコードに落ちる＝reconcile_schema_versionの
-        # declared<EXPECTED分岐と同じコード）。
+        # declared<MIN分岐と同じコード）。
         raise ProfileError(
             "T4-LEGACY",
-            f"実体が旧版です（schema_versionの行がありません・このコードはschema {EXPECTED_SCHEMA_VERSION} のみを受理します）",
+            f"実体が旧版です（schema_versionの行がありません・このコードはschema {MIN_SCHEMA_VERSION} 以上を受理します）",
         )
     if not re.match(r"^[0-9]+$", raw) or int(raw) <= 0:
         raise ProfileError("T3", "schema_versionの形式が不正です")
@@ -458,7 +460,7 @@ def reconcile_schema_version(parsed: ParsedProfile, declared: int) -> list[str]:
     （呼び出し側がstderr相当のwarningとして使う）。T5・T4-LEGACYはProfileErrorを
     送出する。
     2026-09-08 モデル定義ファイルと候補指定対応（同設計§3.1・§3.7・D-8）:
-    `declared < EXPECTED`の仮想補完分岐（欠落キーをunknownで補って通す・
+    `declared < MIN_SCHEMA_VERSION`の仮想補完分岐（欠落キーをunknownで補って通す・
     T4 advisory）を撤去した。役割の行の文法が`model=<定義名>[,…]`へ変わり、
     旧記法（`model=claude-opus-5-5`等）が新文法でも「定義名」として文法的に
     妥当に読めてしまうため、6未満はすべて`T4-LEGACY`で解決失敗にする
@@ -468,7 +470,7 @@ def reconcile_schema_version(parsed: ParsedProfile, declared: int) -> list[str]:
     warnings: list[str] = []
     known_present = set(parsed.meta) | set(parsed.capability)
 
-    if declared == EXPECTED_SCHEMA_VERSION:
+    if MIN_SCHEMA_VERSION <= declared <= EXPECTED_SCHEMA_VERSION:
         missing = sorted(
             k
             for k in FIXED_KEYS
@@ -479,12 +481,12 @@ def reconcile_schema_version(parsed: ParsedProfile, declared: int) -> list[str]:
     elif declared > EXPECTED_SCHEMA_VERSION:
         warnings.append("T4-PRIME:このマシンのコードが古い可能性があります（版がコードの期待より新しい）")
     else:
-        # declared < EXPECTED_SCHEMA_VERSION（schema_versionの行自体が無い
+        # declared < MIN_SCHEMA_VERSION（schema_versionの行自体が無い
         # ケースはvalidate_meta()が先にT4-LEGACYで捕まえるので、ここに来る
         # のは数値として書かれてはいるが6未満の実体だけ）。
         raise ProfileError(
             "T4-LEGACY",
-            f"実体が旧版です（schema_version={declared}・このコードはschema {EXPECTED_SCHEMA_VERSION} のみを受理します）",
+            f"実体が旧版です（schema_version={declared}・このコードはschema {MIN_SCHEMA_VERSION} 以上を受理します）",
         )
 
     if parsed.extras:
@@ -1035,11 +1037,11 @@ def model_effort_advisory(provider: str, model: str, effort: Optional[str]) -> O
 
 def determine_team_mode(parsed: ParsedProfile) -> str:
     """team_mode能力軸から`TEAM_MODE:`へ出す値を決める（3モード体制-設計-
-    2026-09-06.md §4.1の表）。`configured value=<solo|lean|full>`のときだけ
+    2026-09-06.md §4.1の表）。`configured value=<solo|lean|team>`のときだけ
     その値を返し、それ以外（unavailable/unknown/欠落からの仮想補完）は
     "unknown"を返す。⚠️ 新しい検査規則は作らない（FR-8）——ここに来る時点で
     validate_capability_keys()のV7/V8-bを通過済みなので、configuredの
-    valueは既にsolo|lean|fullのいずれかであることが保証されている。
+    valueは既にsolo|lean|teamのいずれかであることが保証されている。
     """
     line = parsed.capability.get("team_mode")
     if line is not None and line.state == "configured":

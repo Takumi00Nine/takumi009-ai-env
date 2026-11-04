@@ -671,6 +671,7 @@ def launch(state, project, args):
     report_command = shlex.join([sys.executable, str(Path(__file__).resolve()), "report",
                                  "--state-dir", str(state), "--file", "<report.json>"])
     intro = (f"案件ノートを最初に読む: {project['note']}\n"
+             "この案件はチームモード。プロジェクトリーダーとして案件内を采配し、core-workflow のチームモードの規則を適用する。\n"
              f"目的・ゴール: {project['goal']}\n本人指定の参照: {project['source']}\n"
              f"担当表: {state / 'assignments.tsv'}\n状態履歴: {state / 'events.jsonl'}\n"
              f"報告を終える前に要約・判断待ち・終了理由・読了文書・書いたノート一覧を保存する。\n"

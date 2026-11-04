@@ -17,25 +17,25 @@ STATUS_SELF_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # コア職種マニフェストの実体側入力。team/rules/agents。
 : "${AIENV_AGENTS_DIR:=${STATUS_SELF_DIR%/*/*/*}/team/rules/agents}"
 
-# 開幕1行（team_mode＝solo|lean|full|unknown）。builtin だけで書く（外部プロセスを起こさない）。
+# 開幕1行（team_mode＝solo|lean|team|unknown）。builtin だけで書く（外部プロセスを起こさない）。
 # 文面の正本＝Preferences/core-conduct.md §1。
-compose_team_mode_line() {   # $1 = solo|lean|full|unknown
+compose_team_mode_line() {   # $1 = solo|lean|team|unknown
   case "$1" in
-    solo) TEAM_MODE_LINE='🧭 現在＝単独モード（team_mode=solo）。正本: ~/Data/obsidian/Preferences/core-conduct.md §1' ;;
-    lean) TEAM_MODE_LINE='🧭 現在＝軽量モード（team_mode=lean）。正本: ~/Data/obsidian/Preferences/core-conduct.md §1' ;;
-    full) TEAM_MODE_LINE='🧭 現在＝フルモード（team_mode=full）。正本: ~/Data/obsidian/Preferences/core-conduct.md §1' ;;
-    *)    TEAM_MODE_LINE='🧭 現在＝モード未確定（team_mode=unknown）。正本: ~/Data/obsidian/Preferences/core-conduct.md §1' ;;
+    solo) TEAM_MODE_LINE='🧭 現在＝単独モード（リーダーが全工程を自分で行います。第三者検証はありません）。他のモード＝軽量／チーム。切り替えたいときは言ってください' ;;
+    lean) TEAM_MODE_LINE='🧭 現在＝軽量モード（実装者と検証職を置き、適用工程ごとに1巡で回します）。他のモード＝単独／チーム。切り替えたいときは言ってください' ;;
+    team) TEAM_MODE_LINE='🧭 現在＝チームモード（私はマックリーダーとして、案件ごとにプロジェクトリーダーを立ててワーカーのチームに任せ、全体の把握とあなたとの取り次ぎをします）。他のモード＝単独／軽量。切り替えたいときは言ってください' ;;
+    *)    TEAM_MODE_LINE='🧭 現在＝モード未確定（配役表の team_mode が読めません）。委任の前に本人へ確認します。' ;;
   esac
 }
 
 # DIRECTIVE ⑤（オーケストレーター行動則）をモード別に組み立てる（先頭に「⑤ 」を含む）。
-compose_team_mode_directive5() {   # $1 = solo|lean|full|unknown
+compose_team_mode_directive5() {   # $1 = solo|lean|team|unknown
   TEAM_MODE_DIRECTIVE5="⑤ team_mode=$1。正本: ~/Data/obsidian/Preferences/core-workflow.md §1・§2・§4・~/Data/obsidian/Preferences/coding-delegation.md・~/Data/obsidian/Preferences/vault-operation.md"
 }
 
 # テスト専用: BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY=1 なら開幕1行4本を1行1本で出して即終了する（本処理には進まない）。
 if [ "${BOOTSTRAP_PRINT_TEAM_MODE_LINES_ONLY:-0}" = "1" ]; then
-  for _tm_mode in solo lean full unknown; do
+  for _tm_mode in solo lean team unknown; do
     compose_team_mode_line "$_tm_mode"
     printf '%s\n' "$TEAM_MODE_LINE"
   done
@@ -64,7 +64,7 @@ is_v2_resolve_output_well_formed() {
     OK"$tab"*)
       [ "$rc" = "0" ] || return 1
       # TEAM_MODE: は schema_version の直後・MACHINE_ROLE: はその直後で、どちらも必須（位置を一意にする）。
-      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|full|unknown)${tab}MACHINE_ROLE:(main|sub|unknown|unavailable)(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${adv_code}(,${adv_code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
+      local re="^OK${tab}schema_version=[0-9]+${tab}TEAM_MODE:(solo|lean|team|unknown)${tab}MACHINE_ROLE:(main|sub|unknown|unavailable)(${tab}VACANT:${name}(,${name})*)?(${tab}VACANT_REASON:${name}=${code}(,${name}=${code})*)?(${tab}VACANT_UNKNOWN:${name}(,${name})*)?(${tab}ADVISORY:${adv_code}(,${adv_code})*)?(${tab}UNKNOWN_EXTRA:${key}(,${key})*)?\$"
       [[ "$s" =~ $re ]]
       ;;
     MINIMAL"$tab"*)
@@ -159,7 +159,7 @@ if [ "$profile_kind" = "OK" ] && [ "$profile_has_unknown_extra" = "0" ]; then
   tm_rest="${profile_status#*"$tm_pat"}"
   [ "$tm_rest" != "$profile_status" ] && team_mode="${tm_rest%%"$tm_tab"*}"
 fi
-case "$team_mode" in solo|lean|full) : ;; *) team_mode="unknown" ;; esac
+case "$team_mode" in solo|lean|team) : ;; *) team_mode="unknown" ;; esac
 compose_team_mode_line "$team_mode"
 compose_team_mode_directive5 "$team_mode"
 
