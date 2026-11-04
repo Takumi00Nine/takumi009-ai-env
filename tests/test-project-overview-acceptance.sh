@@ -852,6 +852,28 @@ def test_consultation_requires_stop_reconfirmation(f):
     assert '停止確認待ち' not in f.run().stdout
 
 
+def test_unconfirmed_coordination_not_stop_waiting(f):
+    # MINOR 1・§9.6: 設定が読めなければ、残ったpending_targetsだけで待ちを断定しない。
+    events = stopped_history(f)
+    state = f.states['alpha']
+    ref = str(state / 'evidence.json')
+    events.append(dict(f.event('alpha', 'a', 'running', 'consulting'), event='consult',
+        topic='topic-recheck', subject='fixture stopped discussion', scope_ref=ref,
+        peer='fixture-worker-b', participants=['a', 'b'], phase='open', exchanges=[],
+        receipt=None, dependencies=[], outcome=None, next_action='fixture answer'))
+    f.save_events('alpha', events)
+    before = projects(f.json())['alpha']['coordination']
+    assert before['status'] == 'recorded' and before['changes'][0]['pending_targets'] == ['a'], before
+    f.workflow.unlink()  # 存在しない模擬設定で読取不能を再現。実体・権限には依存しない。
+    coordination = projects(f.json())['alpha']['coordination']
+    assert coordination['status'] == 'unconfirmed' and coordination['reason'] == 'settings-unreadable', coordination
+    change = coordination['changes'][0]
+    assert change['phase'] == 'stopping' and change['pending_targets'] == ['a'], change
+    text = f.run().stdout
+    assert '状態未確認' in text, text
+    assert '停止確認待ち' not in text, text
+
+
 def test_watch_source_failure(f):
     # §5: watch途中の致命的失敗は完全な既出フレームだけを残して終了する。
     result = f.run('--format', 'json', '--watch', '--interval', '.25', code=1, frames=2,
@@ -861,6 +883,7 @@ def test_watch_source_failure(f):
 
 
 cases = [
+    ('FIX2/MINOR1: 設定読取不能では停止再確認待ちを断定せず状態未確認', test_unconfirmed_coordination_not_stop_waiting),
     ('FIX2/D: ノート参照不一致だけまとめ、all・details・JSONでは個別', test_note_mismatch_summary),
     ('FIX2/E: 停止確認→一人再開→全員再開は停止確認待ちにしない', test_resumed_change_not_waiting),
     ('FIX2/E: 許可前の相談・結論・終了後も明示の停止再確認まで待ち', test_consultation_requires_stop_reconfirmation),
