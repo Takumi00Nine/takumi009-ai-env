@@ -26,6 +26,12 @@ for f in "$PROFILE_SAMPLE" "$MODELS_SAMPLE"; do
 done
 
 echo "=== sample の解決 ==="
+schema="$(python3 "$LIB" print-schema-version "$PROFILE_SAMPLE")"
+if [ "$schema" = 8 ] && grep -Eq '^team_mode:[[:space:]]+configured value=team$' "$PROFILE_SAMPLE"; then
+  pass "MODE-TEAM/I7: 配布sampleはschema 8・team"
+else
+  fail_case "MODE-TEAM/I7: 配布sampleはschema 8・team"
+fi
 out="$(AIENV_MODEL_DEFS_FILE="$MODELS_SAMPLE" python3 "$LIB" resolve "$PROFILE_SAMPLE" --agents-dir "$AGENTS_DIR")"; rc=$?
 if [ "$rc" -eq 0 ] && [[ "$out" == OK* && "$out" == *TEAM_MODE:* && "$out" == *MACHINE_ROLE:* ]]; then
   pass "sample を resolver で解決できる"

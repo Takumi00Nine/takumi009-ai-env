@@ -89,7 +89,7 @@ make_sub_clone() {
   git -C "$sub" config user.email test@example.invalid
 }
 
-# make_sub_profile <home> [machine_role] — schema 7 の実体プロファイル＋models.conf
+# make_sub_profile <home> [machine_role] — schema 8 の実体プロファイル＋models.conf
 # を偽 HOME へ置く（既定＝machine_role: sub）。定義名は t- 接頭辞のダミー。
 make_sub_profile() {
   local home="$1" role="${2:-sub}"
@@ -101,9 +101,9 @@ model=claude-sonnet-5-5
 EOF
   cat > "$home/.config/takumi009-ai-env/profile.md" <<EOF
 ---
-schema_version: 7
+schema_version: 8
 profile_slug: test-update-sub-machine
-team_mode: configured value=full
+team_mode: configured value=team
 no_read_paths: unavailable
 machine_role: configured value=${role}
 role.leader: configured model=t-sonnet-high

@@ -29,9 +29,9 @@ mkdir -p "$BASE/agents"
 
 cat > "$BASE/profile.md" <<'EOF'
 ---
-schema_version: 7
+schema_version: 8
 profile_slug: fixture
-team_mode:        configured value=full
+team_mode:        configured value=team
 no_read_paths:    unavailable
 machine_role:     configured value=main
 role.leader:      configured model=t-opus-high
@@ -90,6 +90,16 @@ for spec in 'sonnet-noeffort subagent' 'codex-high external-cli'; do
   if [ "$rc" -eq 0 ] && [[ "$out" == OK* && "$out" == *"$2"* ]]; then pass "候補解決: $2"; else fail_case "候補解決: $2"; fi
 done
 echo "=== resolver の拒否 ==="
+assert_eq "MODE-TEAM/I7: resolverの期待schemaは8" "SCHEMA_VERSION:8" \
+  "$(python3 "$LIB" known-keys | sed -n '/^SCHEMA_VERSION:/p')"
+# enum追加で6以上の受入範囲を狭めない。旧版のfullに互換は与えない。
+sed -e 's/^schema_version:.*/schema_version: 6/' -e 's/value=team/value=lean/' "$BASE/profile.md" > "$WORK/schema6.md"
+rc=0; out="$(python3 "$LIB" resolve "$WORK/schema6.md" --agents-dir "$BASE/agents")" || rc=$?
+if [ "$rc" -eq 0 ] && [[ "$out" == OK* && "$out" == *TEAM_MODE:lean* ]]; then
+  pass "MODE-TEAM/I7: schema 6の有効なleanを受理する"
+else
+  fail_case "MODE-TEAM/I7: schema 6の有効なleanを受理する"
+fi
 sed 's/model=sonnet-noeffort,codex-high/model=undefined-def/' "$BASE/profile.md" > "$WORK/undefined.md"
 rc=0; out="$(python3 "$LIB" resolve "$WORK/undefined.md" --agents-dir "$BASE/agents")" || rc=$?
 if [ "$rc" -ne 0 ] && [[ "$out" != OK* && "$out" == *undefined-def* ]]; then pass "未定義モデルを拒否する"; else fail_case "未定義モデルを拒否する"; fi

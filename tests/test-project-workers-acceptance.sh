@@ -69,8 +69,8 @@ class Fixture:
             path = self.binary / command
             path.write_text('#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$FIXTURE_EXTERNAL_CALLS"\nexit 97\n')
             path.chmod(0o755)
-        self.profile.write_text('---\nschema_version: 7\nprofile_slug: fixture\n'
-            'team_mode: configured value=full\nno_read_paths: unavailable\n'
+        self.profile.write_text('---\nschema_version: 8\nprofile_slug: fixture\n'
+            'team_mode: configured value=team\nno_read_paths: unavailable\n'
             'machine_role: configured value=main\nrole.leader: configured model=fixture-claude\n'
             'role.test-writer: configured model=fixture-code,fixture-other,fixture-claude\n'
             'role.verifier: not_adopted\n---\n')

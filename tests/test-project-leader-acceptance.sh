@@ -280,7 +280,30 @@ def test_a15_reply(f):
     assert str(f.note) in call['prompt'] and 'fixture goal reference' in call['prompt']
 
 
+def test_team_mode_prompt(f):
+    # MODE-TEAM/受入: マシンの既定がlean・初回ノートが準備中でも依頼文で体制を伝える。
+    profile = f.root / 'profile.md'
+    profile.write_text('---\nschema_version: 8\nprofile_slug: fixture\n'
+        'team_mode: configured value=lean\nno_read_paths: unavailable\n'
+        'machine_role: configured value=main\nrole.leader: configured model=fixture-leader\n---\n')
+    models = f.root / 'models.conf'
+    models.write_text('[fixture-leader]\nprovider=anthropic-api\nmodel=claude-sonnet-5-5\neffort=high\n')
+    f.env.update(AIENV_LOCAL_PROFILE_PATH=str(profile), AIENV_MODEL_DEFS_FILE=str(models))
+    resolved = subprocess.run([sys.executable, str(repo / 'team/executor/profile_resolve.py'),
+        'resolve', str(profile)], env=f.env, capture_output=True, text=True, timeout=15)
+    assert resolved.returncode == 0 and 'TEAM_MODE:lean' in resolved.stdout, resolved.stderr
+    f.note.write_text('## 目的\nfixture goal\n## 正本の所在\n- 状態記録: 準備中 [state](<'
+        + os.path.relpath(f.state, f.note.parent) + '/>)\n## Tasks\n')
+    before_profile, before_note = profile.read_bytes(), f.note.read_bytes()
+    f.init()
+    f.execute()  # 既存fixtureのCodexだけが起動し、受け取った依頼文を保存する。
+    assert 'チームモード' in f.calls()[0]['prompt'], f.calls()[0]['prompt']
+    assert profile.read_bytes() == before_profile and f.note.read_bytes() == before_note
+    assert 'team_mode' not in json.loads((f.state / 'project.json').read_text())
+
+
 cases = [
+    ('MODE-TEAM: lean配役表と準備中ノートでも起動依頼文にチームモード', test_team_mode_prompt),
     ('A6: 体制見込みと実担当を分け、締め後も資料と記録を突合できる', test_a6),
     ('A6補足: 作成/実行の体制と担当・順序を残し、退役後はノートの要点を参照できる', test_a6_supplement),
     ('A10: 締め・生ログ整理後も記録を回収し、保存会話で継続できる', test_a10),

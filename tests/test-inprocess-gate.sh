@@ -37,9 +37,9 @@ BASE="$WORK/base"
 mkdir -p "$BASE"
 cat > "$BASE/profile.md" <<'EOF'
 ---
-schema_version: 7
+schema_version: 8
 profile_slug: fixture
-team_mode:        configured value=full
+team_mode:        configured value=team
 no_read_paths:    unavailable
 machine_role:     configured value=main
 role.implementer: configured model=sonnet-noeffort,codex-high

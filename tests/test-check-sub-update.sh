@@ -59,9 +59,9 @@ write_profile() {
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<EOF
 ---
-schema_version: 7
+schema_version: 8
 profile_slug: test-check-sub-update-machine
-team_mode: configured value=full
+team_mode: configured value=team
 no_read_paths: unavailable
 machine_role: ${mr}
 role.leader: configured model=t-sonnet-high

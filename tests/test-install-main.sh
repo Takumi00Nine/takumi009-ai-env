@@ -63,9 +63,9 @@ make_fake_home() {
   write_models_conf_at "$home/.config/takumi009-ai-env"
   cat > "$home/.config/takumi009-ai-env/profile.md" <<'EOF'
 ---
-schema_version: 7
+schema_version: 8
 profile_slug: test-install-main-machine
-team_mode: configured value=full
+team_mode: configured value=team
 no_read_paths: unavailable
 machine_role: configured value=main
 role.leader: configured model=t-sonnet-high

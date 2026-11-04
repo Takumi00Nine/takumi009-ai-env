@@ -186,9 +186,9 @@ write_clean_profile() {
   mkdir -p "$(dirname "$dest")"
   {
     echo "---"
-    echo "schema_version: 7"
+    echo "schema_version: 8"
     echo "profile_slug: test"
-    echo "team_mode: configured value=full"
+    echo "team_mode: configured value=team"
     echo "no_read_paths: unavailable"
     echo "role.leader: configured model=fable-1m-high"
     echo "role.navi: not_adopted"
@@ -333,9 +333,9 @@ write_v2_profile() {
   done
   {
     echo "---"
-    echo "schema_version: 7"
+    echo "schema_version: 8"
     echo "profile_slug: test"
-    echo "team_mode: configured value=full"
+    echo "team_mode: configured value=team"
     echo "no_read_paths: unavailable"
     echo "role.leader: ${leader_line}"
     for extra in "$@"; do

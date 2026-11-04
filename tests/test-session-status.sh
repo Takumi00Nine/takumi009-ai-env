@@ -67,9 +67,9 @@ make_ok_profile() {
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<'EOF'
 ---
-schema_version: 7
+schema_version: 8
 profile_slug: authoring
-team_mode:        configured value=full
+team_mode:        configured value=team
 no_read_paths:    unavailable
 machine_role:     configured value=main
 role.leader:      configured model=t-opus-high
@@ -138,10 +138,27 @@ resolve_v2() {
   python3 "$PROFILE_LIB" resolve "$path" --agents-dir "$agents_dir"
 }
 
+echo "=== MODE-TEAM: 配役表から開幕1行まで ==="
+{
+  MODE_PROFILE="$STATUS_HOME/mode-profile.md"
+  make_ok_profile "$MODE_PROFILE"
+  resolved="$(resolve_v2 "$MODE_PROFILE" 2>/dev/null || true)"
+  assert_contains "MODE-TEAM: resolverはteamを返す" "$resolved" "TEAM_MODE:team"
+  ctx="$(run_status_with_profile "$MODE_PROFILE")"
+  mode_line="$(printf '%s\n' "$ctx" | sed -n '/^🧭 現在＝/p')"
+  # 正本core-conduct §1のteam行。実Vaultは試験から読まない。
+  expected='🧭 現在＝チームモード（私はマックリーダーとして、案件ごとにプロジェクトリーダーを立ててワーカーのチームに任せ、全体の把握とあなたとの取り次ぎをします）。他のモード＝単独／軽量。切り替えたいときは言ってください'
+  assert_eq "MODE-TEAM: teamの開幕文は正本と一致する" "$expected" "${mode_line%%｜*}"
+  sed 's/value=team/value=full/' "$MODE_PROFILE" > "$STATUS_HOME/old-full.md"
+  ctx="$(run_status_with_profile "$STATUS_HOME/old-full.md")"
+  mode_line="$(printf '%s\n' "$ctx" | sed -n '/^🧭 現在＝/p')"
+  assert_contains "MODE-TEAM: fullを読み替えずモード未確定にする" "$mode_line" "現在＝モード未確定"
+}
+
 V2_BASE='---
-schema_version: 7
+schema_version: 8
 profile_slug: authoring
-team_mode:        configured value=full
+team_mode:        configured value=team
 no_read_paths:    unavailable
 machine_role:     configured value=main'
 

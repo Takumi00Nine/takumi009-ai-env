@@ -39,9 +39,9 @@ class RecallFlow(unittest.TestCase):
         profile.mkdir(parents=True)
         (profile / 'models.conf').write_text('[test]\nprovider=anthropic-api\nmodel=claude-sonnet-5-5\n')
         (profile / 'profile.md').write_text('''---
-schema_version: 7
+schema_version: 8
 profile_slug: recall-test
-team_mode: configured value=full
+team_mode: configured value=team
 no_read_paths: unavailable
 machine_role: configured value=main
 role.leader: configured model=test
