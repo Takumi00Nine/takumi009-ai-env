@@ -768,6 +768,10 @@ while IFS=$'\t' read -r how place src fn; do
   new_agent=""
   new_codex_agent=""
   case "$src" in
+    "$CODEX_AGENTS_SRC_DIR")
+      # フォルダごとリンク（Codex は職種ファイル自体のリンクを拒否するため・2026-11-04）。サブ用呼び出しは配らない。
+      [ "$IS_SUB_DELEGATE" != "1" ] || continue
+      ;;
     "$CODEX_AGENTS_SRC_DIR"/*)
       # 機役割条件は placement で適用済み。明示的なサブ用呼び出しも従来どおり配らない。
       [ "$IS_SUB_DELEGATE" != "1" ] || continue

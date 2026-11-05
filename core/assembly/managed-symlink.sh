@@ -46,6 +46,17 @@
 # sync_managed_symlink() が使う退避規則の実体。
 _backup_managed_dest() {
   local dest="$1" log_prefix="$2"
+  # フォルダごとリンクの置き場に実フォルダがある場合（Codex 職種の旧配置など・2026-11-04）は
+  # 中身ごと退避名へ移す（削除しない）。既に .pre-aienv.bak があれば時刻付きの別名にする。
+  if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+    local dir_bak="$dest.pre-aienv.bak"
+    [ ! -e "$dir_bak" ] || dir_bak="$dest.pre-aienv.bak.$(TZ=UTC date -u +%Y%m%dT%H%M%SZ)"
+    if ! mv "$dest" "$dir_bak"; then
+      return 1
+    fi
+    echo "[$log_prefix] backed up (folder): $dest -> $dir_bak"
+    return 0
+  fi
   if [ -e "$dest" ] && [ ! -L "$dest" ]; then
     if [ ! -e "$dest.pre-aienv.bak" ]; then
       if ! cp "$dest" "$dest.pre-aienv.bak"; then

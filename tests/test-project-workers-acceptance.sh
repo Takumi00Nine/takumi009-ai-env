@@ -1062,27 +1062,28 @@ def test_definitions(f):
 
 def test_install(f):
     # team/coreだけを選び、run配置・dotfiles・外部通知へ進まない。
-    destination = f.codex_agents / (role + '.toml')
-    destination.write_text('fixture existing personal file\n')
+    # Codex 職種はフォルダごとリンク（Codex は職種ファイル自体のリンクを拒否する・2026-11-04）。
+    existing = f.codex_agents / (role + '.toml')
+    existing.write_text('fixture existing personal file\n')
     log = f.install('--select', 'team,core')
-    source = repo / 'team/rules/codex-agents' / destination.name
-    assert destination.is_symlink() and destination.resolve() == source.resolve()
-    assert destination.with_name(destination.name + '.pre-aienv.bak').read_text() == 'fixture existing personal file\n'
-    assert 'codex' in log.lower() and role in log
+    source = repo / 'team/rules/codex-agents'
+    assert f.codex_agents.is_symlink() and f.codex_agents.resolve() == source.resolve()
+    backup = f.codex_agents.with_name(f.codex_agents.name + '.pre-aienv.bak')
+    assert (backup / existing.name).read_text() == 'fixture existing personal file\n'
+    assert 'codex' in log.lower()
+    for path in source.glob('*.toml'):
+        assert not (f.codex_agents / path.name).is_symlink(), path.name
     for path in (repo / 'team/rules/agents').glob('*.md'):
         assert (f.agents / path.name).resolve() == path.resolve(), path.name
-    dangling = f.codex_agents / 'fixture-retired.toml'
-    dangling.symlink_to(repo / 'team/rules/codex-agents/fixture-retired.toml')
-    log = f.install('--select', 'team,core', code=1)
-    assert dangling.is_symlink() and not dangling.exists()
-    assert 'codex' in log.lower() and 'fixture-retired' in log
+    log = f.install('--select', 'team,core')
+    assert f.codex_agents.is_symlink() and f.codex_agents.resolve() == source.resolve()
 
 
 def test_install_dry(f):
     before = snapshot(f.home)
     log = f.install('--select', 'team,core', '--dry-run')
     assert snapshot(f.home) == before
-    assert str(f.codex_agents / (role + '.toml')) in log
+    assert str(f.codex_agents) in log
 
 
 def test_install_without_team(f):

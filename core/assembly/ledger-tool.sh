@@ -178,8 +178,8 @@ ledger_scan() {
       if (np == 0) { printf "BAD\t%d 行目 %s の配置が空\n", NR, $2; exit }
       for (p = 1; p <= np; p++) {
         spec = places[p]
-        if ($1 != "part" || spec !~ /^(link|gen|run):\$HOME\/./ || ($2 ~ /\/$/ && spec !~ /^link:.*\/$/) || ($2 !~ /\/$/ && spec ~ /^(link|gen):.*\/$/)) {
-          printf "BAD\t%d 行目 %s の配置 %s が形式外（- か <link|gen|run>:$HOME/… の空白区切り・フォルダ単位の行は link:…/ だけ）\n", NR, $2, spec; exit
+        if ($1 != "part" || spec !~ /^(link|gen|run):\$HOME\/./ || ($2 ~ /\/$/ && spec !~ /^link:/) || ($2 !~ /\/$/ && spec ~ /^(link|gen):.*\/$/)) {
+          printf "BAD\t%d 行目 %s の配置 %s が形式外（- か <link|gen|run>:$HOME/… の空白区切り・フォルダ単位の行は link:…/（直下の各ファイル）か link:…（フォルダごと）だけ）\n", NR, $2, spec; exit
         }
       }
     }
@@ -232,7 +232,12 @@ placement() {
     how="${spec%%:*}"
     place="$HOME${spec#*:\$HOME}"
     case "$rel" in
-      */) for f in "$ROOT/$rel"*; do
+      # フォルダの行で配置先が / で終わらない＝フォルダごとリンク（Codex 職種：Codex は職種ファイル自体のリンクを拒否する）。
+      */) if [ "${place%/}" = "$place" ]; then
+            printf '%s\t%s\t%s\t%s\n' "$how" "$place" "$ROOT/${rel%/}" "$fn"
+            continue
+          fi
+          for f in "$ROOT/$rel"*; do
             [ -f "$f" ] && printf '%s\t%s%s\t%s\t%s\n' "$how" "$place" "${f##*/}" "$f" "$fn"
           done ;;
       *) printf '%s\t%s\t%s\t%s\n' "$how" "$place" "$ROOT/$rel" "$fn" ;;

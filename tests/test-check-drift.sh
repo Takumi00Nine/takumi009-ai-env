@@ -168,6 +168,9 @@ install_fake_home() {
   ln -s "$repo/core/connect/claude-code/prompt-answer.sh" "$home/.claude/hooks/code27-call-clear.sh"
   ln -s "$repo/team/rules/agents/sample-agent.md" "$home/.claude/agents/sample-agent.md"
   ln -s "$repo/team/connect/codex/AGENTS.md" "$home/.codex/AGENTS.md"
+  # Codex 職種はフォルダごとリンク（Codex は職種ファイル自体のリンクを拒否する・2026-11-04）。
+  mkdir -p "$repo/team/rules/codex-agents"
+  ln -sfn "$repo/team/rules/codex-agents" "$home/.codex/agents"
   ln -s "$repo/team/connect/codex/hooks.json" "$home/.codex/hooks.json"
   # install-main.sh の generate_config_toml() と同じくエスケープしてから置換する
   # （$home に # を含むテスト（1b）で、エスケープ無しだと置換自体が壊れて
@@ -427,8 +430,8 @@ test_codex_candidates() {
   mkdir -p "$REPO/team/rules/codex-agents" "$HOME_DIR/Data/obsidian/Preferences"
   cp "$REPO/ai-brain/data/vault-public/Preferences/sample.md" "$HOME_DIR/Data/obsidian/Preferences/sample.md"
   cp "$REPO_ROOT/team/rules/codex-agents/researcher.toml" "$REPO/team/rules/codex-agents/researcher.toml"
-  mkdir -p "$HOME_DIR/.codex/agents"
-  ln -s "$REPO/team/rules/codex-agents/researcher.toml" "$HOME_DIR/.codex/agents/researcher.toml"
+  mkdir -p "$HOME_DIR/.codex"
+  ln -sfn "$REPO/team/rules/codex-agents" "$HOME_DIR/.codex/agents"
   cp "$REPO/team/rules/agents/sample-agent.md" "$REPO/team/rules/agents/researcher.md"
   ln -s "$REPO/team/rules/agents/researcher.md" "$HOME_DIR/.claude/agents/researcher.md"
   cp "$REPO_ROOT/team/connect/claude-code/role_candidates.py" "$REPO/team/connect/claude-code/role_candidates.py"

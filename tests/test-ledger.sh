@@ -91,6 +91,10 @@ rc=0; out="$(bash "$TOOL" route call.alert)" || rc=$?
 assert_true "知らせの経路を照会できる" "$([[ "$rc" -eq 0 && -n "$out" ]] && echo 1 || echo 0)"
 rc=0; out="$(bash "$TOOL" placement --all)" || rc=$?
 assert_true "配置一覧は4列" "$([ "$rc" -eq 0 ] && printf '%s\n' "$out" | awk -F'\t' 'NF!=4 {bad=1} END{exit bad || NR==0}' && echo 1 || echo 0)"
+# Codex は職種ファイル自体のリンクを拒否する（0.166 の起動時再読込が末尾リンクを O_NOFOLLOW で拒む）。
+# 職種はフォルダごとリンクで配り、.codex/agents/ の中へファイルごとのリンクを置く行を出さない（2026-11-04）。
+assert_true "Codex 職種をファイルごとのリンクで配らない" "$([ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | awk -F'\t' '$1=="link" && $2 ~ /\/\.codex\/agents\//' | grep -q . && echo 1 || echo 0)"
+assert_true "Codex 職種の台帳行はフォルダごとリンク" "$(grep -q $'^part\tteam/rules/codex-agents/\t.*\tlink:\\$HOME/\\.codex/agents$' "$REPO_ROOT/core/data/ledger.tsv" && echo 1 || echo 0)"
 
 echo "=== 選択が照会と配置へ反映される ==="
 printf 'AIENV_COMPONENTS=core\n' > "$WORK/components.env"
