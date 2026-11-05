@@ -654,8 +654,10 @@ def launch(state, project, args):
         if not status.get("thread_id"):
             raise ValueError("no saved conversation to resume")
         if args.command == "recover":
-            if status["status"] != "unconfirmed" or project["recovery_attempted"]:
-                raise ValueError("recovery is allowed once, only for an unconfirmed execution")
+            # One recovery per failure: only a recovery that never completed blocks another.
+            if status["status"] != "unconfirmed" or (project["recovery_attempted"]
+                                                      and not project.get("recovery_complete")):
+                raise ValueError("recovery is allowed once per failure, only for an unconfirmed execution")
         elif status["status"] != "finished":
             raise ValueError("unconfirmed execution; recovery is required before new work")
     usage = Path(args.usage_ref).resolve()
