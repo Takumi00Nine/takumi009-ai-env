@@ -30,6 +30,7 @@ chmod +x "$FAKE_BIN/curl"
 
 cat > "$FAKE_BIN/security" <<'EOF'
 #!/usr/bin/env bash
+if [ -n "${STUB_SECURITY_FILE:-}" ]; then cat "$STUB_SECURITY_FILE"; exit 0; fi
 printf '%s' "${STUB_SECURITY_JSON:-}"
 exit 0
 EOF
@@ -76,7 +77,7 @@ load_entry_for() {
 
 reset_stubs() {
   unset STUB_CURL_STATUS STUB_CURL_BODY
-  unset STUB_SECURITY_JSON
+  unset STUB_SECURITY_JSON STUB_SECURITY_FILE
   unset STUB_CODEX_RESULT_LINE
 }
 
@@ -144,6 +145,45 @@ before="$(sha256_of "$CLAUDE_CACHE")"
 STUB_CURL_STATUS=429; STUB_CURL_BODY='{}'
 refresh_service claude >/dev/null
 assert_eq "429 は完全な no-op" "$before" "$(sha256_of "$CLAUDE_CACHE")"
+rm -rf "$E"
+
+echo "=== 期限切れのときだけ CLI で資格情報を更新して取り直す（2026-11-05） ==="
+E="$(new_env)"; load_entry_for "$E"; reset_stubs
+STUB_SECURITY_FILE="$E/creds.json"; export STUB_SECURITY_FILE
+printf '%s' '{"claudeAiOauth":{"accessToken":"tok-old","expiresAt":1000000000000}}' >"$STUB_SECURITY_FILE"
+cat > "$E/fake-claude" <<FAKE
+#!/usr/bin/env bash
+echo call >>"$E/cli-calls"
+printf '%s' '{"claudeAiOauth":{"accessToken":"tok-new","expiresAt":99999999999999}}' >"$STUB_SECURITY_FILE"
+FAKE
+chmod +x "$E/fake-claude"
+CLAUDE_TOKEN_REFRESH_CLI="$E/fake-claude"
+STUB_CURL_BODY="$(claude_success_body)"
+refresh_service claude >/dev/null
+assert_eq "期限切れで CLI を1回だけ呼ぶ" "1" "$(wc -l <"$E/cli-calls" | tr -d ' ')"
+if jq -e '.last_error == null and .fetched_at != null' "$CLAUDE_CACHE" >/dev/null 2>&1; then
+  pass "更新後に取り直してキャッシュを書く"
+else fail_case "更新後に取り直してキャッシュを書く"; fi
+unset CLAUDE_TOKEN_REFRESH_CLI STUB_SECURITY_FILE
+rm -rf "$E"
+
+echo "=== 更新に失敗したら期限切れのまま・間隔内は CLI を再び呼ばない ==="
+E="$(new_env)"; load_entry_for "$E"; reset_stubs
+STUB_SECURITY_JSON='{"claudeAiOauth":{"accessToken":"tok-old","expiresAt":1000000000000}}'
+cat > "$E/fake-claude" <<FAKE
+#!/usr/bin/env bash
+echo call >>"$E/cli-calls"
+exit 1
+FAKE
+chmod +x "$E/fake-claude"
+CLAUDE_TOKEN_REFRESH_CLI="$E/fake-claude"
+mkdir -p "$TMP_DIR"
+rc=0; fetch_claude_once "$E/out" "$E/err" || rc=$?
+assert_eq "更新失敗は従来どおり期限切れ（14）" "14" "$rc"
+assert_eq "期限切れの理由を残す" "token_expired" "$(cat "$E/err")"
+rc=0; fetch_claude_once "$E/out" "$E/err" || rc=$?
+assert_eq "間隔内の2回目は CLI を呼ばない" "1" "$(wc -l <"$E/cli-calls" | tr -d ' ')"
+unset CLAUDE_TOKEN_REFRESH_CLI
 rm -rf "$E"
 
 echo "結果: PASS=$PASS FAIL=$FAIL"

@@ -233,6 +233,36 @@ log_claude_rejection() {
   fi
 }
 
+# refresh_claude_credentials — 期限切れのときだけ、CLI を軽いモデルで1回短く動かして
+# 資格情報（キーチェーン／.credentials.json）を CLI 自身に更新させる（2026-11-05）。
+# 本体のセッションを Claude アプリへ移すと CLI が使われず、資格情報が切れて
+# 使用率が読めなくなるため。ログインの仕組みは自前で持たない。
+# 失敗が続いても毎分は試さない（CLAUDE_TOKEN_REFRESH_MIN_INTERVAL 秒に1回まで）。
+: "${CLAUDE_TOKEN_REFRESH_MIN_INTERVAL:=600}"
+: "${CLAUDE_TOKEN_REFRESH_TIMEOUT:=90}"
+refresh_claude_credentials() {
+  local stamp now last cli
+  stamp="$TMP_DIR/claude-token-refresh.stamp"
+  now="$(now_epoch)"
+  last="$(cat "$stamp" 2>/dev/null || echo 0)"
+  is_unsigned_int "$last" || last=0
+  if [ $(( now - last )) -lt "$CLAUDE_TOKEN_REFRESH_MIN_INTERVAL" ]; then
+    log "claude: token expired; refresh skipped (last attempt $(( now - last ))s ago)"
+    return 1
+  fi
+  printf '%s\n' "$now" >"$stamp" 2>/dev/null || true
+  cli="${CLAUDE_TOKEN_REFRESH_CLI:-claude}"
+  command -v "$cli" >/dev/null 2>&1 || { log "claude: token expired; CLI not found for refresh"; return 1; }
+  # 作業場所を一時フォルダにし、出力は捨てる（秘密を記録に残さない）。
+  if ( cd "$TMP_DIR" && perl -e 'alarm shift; exec @ARGV' "$CLAUDE_TOKEN_REFRESH_TIMEOUT" \
+        "$cli" -p --model haiku "ok とだけ返して" >/dev/null 2>&1 </dev/null ); then
+    log "claude: token expired; refreshed via CLI"
+    return 0
+  fi
+  log "claude: token expired; CLI refresh failed"
+  return 1
+}
+
 fetch_claude_once() {
   local out_file err_file creds_source token expires_at now_ms skew_ms response curl_status status body now transformed curl_config
   out_file="$1"
@@ -269,6 +299,14 @@ fetch_claude_once() {
       now_ms=$(( $(now_epoch) * 1000 ))
       skew_ms=$(( CLAUDE_TOKEN_EXPIRY_SKEW_SECONDS * 1000 ))
       if [ "$expires_at" -le $(( now_ms + skew_ms )) ]; then
+        if [ -z "${_claude_refresh_tried:-}" ] && refresh_claude_credentials; then
+          # 更新後に読み直して一度だけやり直す（再帰は1段まで）。
+          _claude_refresh_tried=1
+          fetch_claude_once "$out_file" "$err_file"
+          local retried=$?
+          unset _claude_refresh_tried
+          return "$retried"
+        fi
         printf '%s\n' 'token_expired' >"$err_file"
         return 14
       fi
