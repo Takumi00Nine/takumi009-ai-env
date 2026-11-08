@@ -1,6 +1,6 @@
 ---
 date: 2026-06-14
-updated: 2026-11-01
+updated: 2026-11-03
 tags: [preference, files, placement]
 project: meta
 related:
@@ -19,6 +19,7 @@ aliases:
 - 案件は「目的があり、終わる取り組み」。`Projects/<案件ノート名>/` に1つのフォルダを作る。中は `docs`・`work`・`output`。`docs` に置くのは4本だけ（`requirements.md`・`requirements-notes.md`・`design.md`・`design-notes.md`＝版番号を付けず書き直す）。`work` は使い捨てで、要点を案件ノートへ書いてから締めで消す（ゴミ箱へ）＝[[Decisions/2026-11-01-doc-management]]。
 - 成果物は、生まれた案件の `output` に置き、完成しても動かさない。案件の状態は案件ノート（Vault の Projects）で見分ける。
 - プログラムは `output/<名前>/` に一式で置く。git 保管庫なら、そこが保管庫のいちばん上になる。
+- **担当表と状態記録は締め後も残す（三段の体制）**＝プロジェクトリーダーの担当表と、機械可読の状態変化の履歴・最終形は、完成成果に付随する案件の記録として `output` に残す。プログラムの git 保管庫の外に置き、公開する成果と分ける。締めで消す `work` には置かず、案件ノートから参照する。体制節の要点は締めで案件ノートへ移し、受入テストの退役後も体制の経緯を追えるようにする。個々の依頼・返事・生ログを恒久保存する意味ではない（[[Decisions/2026-11-03-three-tier-team-stage1]]）。
 - 道具は、最初は生まれた案件の中に置く。2つ目の案件で使い始めたら `Tools/<名前>/` へ移す。環境全体を支える道具（takumi009-ai-env・dotfiles など）は、最初から `Tools` に置く。詳細＝[[Preferences/tools-folder]]。
 - 作業途中のもの（作業役への依頼文と返事、試作、調べた結果）は `/tmp`（scratchpad を含む）に置かず、案件の `work` に置く。
 - 新しい案件は、最初からこの形で作る。

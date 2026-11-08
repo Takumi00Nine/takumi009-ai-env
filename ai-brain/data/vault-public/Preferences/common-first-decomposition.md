@@ -1,6 +1,6 @@
 ---
 date: 2026-08-08
-updated: 2026-11-01
+updated: 2026-11-02
 tags: [preference, delegation, tools, decomposition]
 project: meta
 related:
@@ -23,7 +23,7 @@ aliases:
 **Why:** 1回しか使わない処理の部品化を避け、実際の重複が分かってから共通化するため。
 **How to apply:** 同じ処理の2回目で共通部分を切り出す。道具は生まれた案件に置き、2つ目の案件で使い始めたら `Tools/` へ移す（[[Preferences/file-placement]]）。
 
-- **実装形態の序列**（省力化が効く順）: ①決定的処理→**AIゼロの常設CLI**（`~/Workspace/Tools/` に配置・[[Knowledge/tools-inventory]] 登録で次回以降の発見可能性を確保）②半定型AIタスク→エージェント定義（frontmatter に model/effort）/スキル ③多体並列の定型→保存ワークフロー（`~/.claude/workflows/`・常設CLIを前提に組む。本人オプトイン済み 2026-07-21・詳細と solo-agent テンプレート=[[Knowledge/claude-workflow-tool]]）。
+- **実装形態の序列**（省力化が効く順）: ①決定的処理→**AIゼロの常設CLI**（`~/Workspace/Tools/` に配置・[[Knowledge/tools-inventory]] 登録で次回以降の発見可能性を確保）②半定型AIタスク→エージェント定義（frontmatter に model/effort）/スキル ③多体並列の定型→Claude Code のとき：保存ワークフロー（`~/.claude/workflows/`・常設CLIを前提に組む。本人オプトイン済み 2026-07-21・詳細と solo-agent テンプレート=[[Knowledge/claude-workflow-tool]]）。
 - **共通部品の受入条件は機械的検証にする**（例: 承認済み成果物をバイト一致で再現）＝実装のブレを構造的に禁止。
 - **終業時のスクリプト退避（2026-07-21 本人指示・明示ルール）**: ワーカーが作業中に書いたスクリプトは、タスク完了時に**必ず退避してから完了報告に一覧を含める**。素材フォルダや tmp への置き捨て禁止＝次のワーカーが再利用できない。退避先は2段階（本人指定の運用）:
   - **継続して使うもの** → 生まれた案件の中に用途コメント・README とともに置く。2つ目の案件で使い始めたら `~/Workspace/Tools/` へ移し、[[Knowledge/tools-inventory]] に登録する。
