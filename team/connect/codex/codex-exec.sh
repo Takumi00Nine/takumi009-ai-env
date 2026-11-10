@@ -16,9 +16,12 @@
 #   team/connect/codex/codex-exec.sh --role <職種名> --cwd <path> --sandbox read-only|workspace-write|danger-full-access \
 #     --out <path> --prompt-file <file>|- \
 #     [--search] [--resume <thread_id>] [--developer-instructions <file>] \
-#     [--model <model>] [--effort <effort>] [--image <path>]...
+#     [--model <model>] [--effort <effort>] [--image <path>]... [--add-dir <abs-dir>]...
 #
 # --image は繰り返し可（指定順に `codex exec -i <path>` として渡す。--resume でも有効）。
+# --add-dir は繰り返し可（指定順に `codex exec --add-dir <DIR>` として渡す。--resume・--project-leader でも有効）。
+# --sandbox workspace-write のとき --cwd に加えて書き込める場所を足す。存在する
+# ディレクトリの絶対パスでなければ codex を起動せず exit 2。
 # 親は --role の代わりに --project-leader を使う。切り離し・記録・回収の入口は
 # 同じフォルダの project-leader.py。--pid-file は管理CLIがCodexのPIDと開始時刻を受ける口。
 # 存在しないファイル・カンマを含むパスは不可（codex が -i の値をカンマで分割するため）で、
@@ -63,13 +66,14 @@ DEV_INSTR_FILE=""
 MODEL=""
 EFFORT=""
 IMAGES=()
+ADD_DIRS=()
 
 usage() {
   cat >&2 <<EOF
 使い方: $SCRIPT_NAME (--role <職種名> | --project-leader) --cwd <path> --sandbox read-only|workspace-write|danger-full-access \\
   --out <path> --prompt-file <file>|- \\
   [--search] [--resume <thread_id>] [--developer-instructions <file>] \\
-  [--model <model>] [--effort <effort>] [--image <path>]...   (パスにカンマ不可)
+  [--model <model>] [--effort <effort>] [--image <path>]... [--add-dir <abs-dir>]...   (--image はパスにカンマ不可)
 親の切り離し起動・回収: python3 $SCRIPT_DIR/project-leader.py --help
 EOF
 }
@@ -119,6 +123,9 @@ while [ $# -gt 0 ]; do
     --image)
       [ $# -ge 2 ] || fail_usage "--image には値が必要です"
       IMAGES+=("$2"); shift 2 ;;
+    --add-dir)
+      [ $# -ge 2 ] || fail_usage "--add-dir には値が必要です"
+      ADD_DIRS+=("$2"); shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -189,6 +196,20 @@ for img in ${IMAGES[@]+"${IMAGES[@]}"}; do
   IMAGE_OPTS+=(-i "$img_abs")
 done
 
+# --add-dir は存在するディレクトリの絶対パスのみ。違えば exit 2（codex を起動しない）。
+ADD_DIR_OPTS=()
+for d in ${ADD_DIRS[@]+"${ADD_DIRS[@]}"}; do
+  case "$d" in
+    /*) ;;
+    *) echo "[$SCRIPT_NAME] FAIL: --add-dir は絶対パスで指定してください: $d" >&2; exit 2 ;;
+  esac
+  if [ ! -d "$d" ]; then
+    echo "[$SCRIPT_NAME] FAIL: --add-dir のディレクトリが存在しません: $d" >&2
+    exit 2
+  fi
+  ADD_DIR_OPTS+=(--add-dir "$d")
+done
+
 if [ -n "$DEV_INSTR_FILE" ]; then
   [ -r "$DEV_INSTR_FILE" ] || fail_usage "--developer-instructions のファイルが読めません: $DEV_INSTR_FILE"
 fi
@@ -227,7 +248,7 @@ GLOBAL_OPTS=()
 [ "$SEARCH" = "1" ] && GLOBAL_OPTS+=(--search)
 
 # -i は num_args=1.. で後続の値まで取り込むため、必ず次のオプション（-s）の直前に置く。
-EXEC_OPTS=(--skip-git-repo-check ${IMAGE_OPTS[@]+"${IMAGE_OPTS[@]}"} -s "$SANDBOX" -C "$CWD" --json -o "$OUT")
+EXEC_OPTS=(--skip-git-repo-check ${IMAGE_OPTS[@]+"${IMAGE_OPTS[@]}"} ${ADD_DIR_OPTS[@]+"${ADD_DIR_OPTS[@]}"} -s "$SANDBOX" -C "$CWD" --json -o "$OUT")
 [ -n "$MODEL" ] && EXEC_OPTS+=(-m "$MODEL")
 [ -n "$EFFORT" ] && EXEC_OPTS+=(-c "model_reasoning_effort=$EFFORT")
 if [ -n "$DEV_INSTR_FILE" ]; then

@@ -221,6 +221,40 @@ EOF
 
   rm -rf "$WORK"
 }
+echo "=== 13. --add-dir: 指定順に渡る（新規・resume・--project-leader）／相対・不在は codex を起動せず exit 2 ==="
+{
+  WORK="$(mktemp -d)"
+  BINDIR="$WORK/bin"
+  LOG="$WORK/calls.log"
+  mkdir -p "$WORK/d1" "$WORK/d2"
+  : > "$LOG"
+  make_mock_codex "$BINDIR" "$LOG"
+  OUT="$WORK/out.md"
+
+  rc=0
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --role implementer --cwd "$WORK" --sandbox workspace-write --out "$OUT" \
+    --prompt-file - --add-dir "$WORK/d1" --add-dir "$WORK/d2" --resume thr-1 <<< "x" >/dev/null 2>&1 || rc=$?
+  assert_eq "--role＋--resume で指定順に渡る" "0:--add-dir,$WORK/d1,--add-dir,$WORK/d2" \
+    "$rc:$(grep -A1 -x -- '--add-dir' "$LOG" | grep -v -x -- '--' | paste -sd, -)"
+
+  for d in /nonexistent-adddir-$$ relative-dir; do
+    : > "$LOG"; rc=0
+    PATH="$BINDIR:$PATH" bash "$SCRIPT" --role implementer --cwd "$WORK" --sandbox workspace-write --out "$OUT" \
+      --prompt-file - --add-dir "$d" <<< "x" >/dev/null 2>&1 || rc=$?
+    assert_true "--add-dir $d は exit 2・codex 未起動" "$([ "$rc" -eq 2 ] && [ ! -s "$LOG" ] && echo 1 || echo 0)"
+  done
+
+  for n in absolute-rules core-conduct core-workflow coding-delegation worker-role-prompts vault-operation codex-exec-worker session-handoff project-tasks-format cmux-notifications; do
+    echo x > "$PREFS_WORK/$n.md"
+  done
+  : > "$LOG"; rc=0
+  PATH="$BINDIR:$PATH" bash "$SCRIPT" --project-leader --cwd "$WORK" --sandbox workspace-write --out "$OUT" \
+    --prompt-file - --add-dir "$WORK/d1" <<< "x" >/dev/null 2>&1 || rc=$?
+  assert_eq "--project-leader でも渡る" "0:--add-dir,$WORK/d1" \
+    "$rc:$(grep -A1 -x -- '--add-dir' "$LOG" | paste -sd, -)"
+
+  rm -rf "$WORK"
+}
 echo
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]
