@@ -19,13 +19,13 @@
 #     [--model <model>] [--effort <effort>] [--image <path>]... [--add-dir <abs-dir>]...
 #
 # --image は繰り返し可（指定順に `codex exec -i <path>` として渡す。--resume でも有効）。
+# --image の存在しないファイル・カンマを含むパスは不可（codex が -i の値をカンマで分割するため）で、
+# codex を起動せず exit 2。
 # --add-dir は繰り返し可（指定順に `codex exec --add-dir <DIR>` として渡す。--resume・--project-leader でも有効）。
 # --sandbox workspace-write のとき --cwd に加えて書き込める場所を足す。存在する
 # ディレクトリの絶対パスでなければ codex を起動せず exit 2。
 # 親は --role の代わりに --project-leader を使う。切り離し・記録・回収の入口は
 # 同じフォルダの project-leader.py。--pid-file は管理CLIがCodexのPIDと開始時刻を受ける口。
-# 存在しないファイル・カンマを含むパスは不可（codex が -i の値をカンマで分割するため）で、
-# codex を起動せず exit 2。
 #
 # Preferences は AIENV_PREFERENCES_DIR で変更できる。
 #
@@ -247,7 +247,7 @@ mkdir -p "$OUT_DIR" || fail_usage "--out の出力先ディレクトリを作成
 GLOBAL_OPTS=()
 [ "$SEARCH" = "1" ] && GLOBAL_OPTS+=(--search)
 
-# -i は num_args=1.. で後続の値まで取り込むため、必ず次のオプション（-s）の直前に置く。
+# -i は num_args=1.. で後続の値まで取り込む。-i と --add-dir は exec のオプションなので resume・-s より前に置く。
 EXEC_OPTS=(--skip-git-repo-check ${IMAGE_OPTS[@]+"${IMAGE_OPTS[@]}"} ${ADD_DIR_OPTS[@]+"${ADD_DIR_OPTS[@]}"} -s "$SANDBOX" -C "$CWD" --json -o "$OUT")
 [ -n "$MODEL" ] && EXEC_OPTS+=(-m "$MODEL")
 [ -n "$EFFORT" ] && EXEC_OPTS+=(-c "model_reasoning_effort=$EFFORT")

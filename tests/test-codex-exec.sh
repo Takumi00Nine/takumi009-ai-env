@@ -236,6 +236,7 @@ echo "=== 13. --add-dir: 指定順に渡る（新規・resume・--project-leader
     --prompt-file - --add-dir "$WORK/d1" --add-dir "$WORK/d2" --resume thr-1 <<< "x" >/dev/null 2>&1 || rc=$?
   assert_eq "--role＋--resume で指定順に渡る" "0:--add-dir,$WORK/d1,--add-dir,$WORK/d2" \
     "$rc:$(grep -A1 -x -- '--add-dir' "$LOG" | grep -v -x -- '--' | paste -sd, -)"
+  assert_true "--add-dir は resume より前に渡る" "$([ "$(grep -n -x -- '--add-dir' "$LOG" | tail -1 | cut -d: -f1)" -lt "$(grep -n -x -- 'resume' "$LOG" | head -1 | cut -d: -f1)" ] && echo 1 || echo 0)"
 
   for d in /nonexistent-adddir-$$ relative-dir; do
     : > "$LOG"; rc=0
