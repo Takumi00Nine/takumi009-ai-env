@@ -1,6 +1,6 @@
 ---
 date: 2026-09-03
-updated: 2026-11-03
+updated: 2026-11-10
 tags: [preference, codex, delegation, worker, exec]
 project: meta
 related:
@@ -52,6 +52,7 @@ aliases:
 - 依頼文には承認済み設計・担当ファイル範囲・受入条件・Vault 書込禁止を示す。新しいファイルを追加するときは、その repo の登録表（ai-env なら `core/data/ledger.tsv`）の更新も担当範囲に含める。報告の固有指定があれば添える。
 - 大きい作業は工程や成果物の区切りで分ける。継続するときはリーダーが `--resume` を明示する。
 - `--sandbox` は必須なので、`--sandbox danger-full-access` を明示する。既定方針は `danger-full-access`（[[Decisions/2026-10-10-codex-sandbox-full-access]]）。担当範囲は依頼文で指定する。
+- `--sandbox workspace-write` で `--cwd` 以外にも書かせたいときは `--add-dir <絶対パス>`（繰り返し可。例＝Obsidian）。直接起動のときだけ使え、project-leader.py からは渡らない（[[Decisions/2026-11-10-codex-exec-add-dir]]）。
 - 画像は `--image <path>`（繰り返し可・`--resume` 併用可）で渡す。Web裏取りが要るときは `--search` を付ける。
 - モデル・effort は配役表から選んだ候補を `--model`・`--effort` で渡す。
 - 依頼文の stdin 送信、開発指示の文字列符号化、ログ保存はラッパーが行う。
