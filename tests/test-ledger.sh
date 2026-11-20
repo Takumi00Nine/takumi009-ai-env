@@ -87,7 +87,8 @@ rc=0; out="$(AIENV_LEDGER="$WORK/bad-part.tsv" bash "$TOOL" lookup zz.missing 2>
 assert_true "実体異常は rc3・理由を示す" "$([[ "$rc" -eq 3 && -z "$out" ]] && grep -q '^LEDGER: part zz.missing ' "$WORK/lookup.err" && echo 1 || echo 0)"
 
 echo "=== route と placement の形 ==="
-rc=0; out="$(bash "$TOOL" route call.alert)" || rc=$?
+awk -F '\t' -v OFS='\t' '$1=="part" && $5=="macos" {$8="call.alert"} {print}' "$REPO_ROOT/core/data/ledger.tsv" > "$WORK/routed.tsv"
+rc=0; out="$(AIENV_LEDGER="$WORK/routed.tsv" bash "$TOOL" route call.alert)" || rc=$?
 assert_true "知らせの経路を照会できる" "$([[ "$rc" -eq 0 && -n "$out" ]] && echo 1 || echo 0)"
 rc=0; out="$(bash "$TOOL" placement --all)" || rc=$?
 assert_true "配置一覧は4列" "$([ "$rc" -eq 0 ] && printf '%s\n' "$out" | awk -F'\t' 'NF!=4 {bad=1} END{exit bad || NR==0}' && echo 1 || echo 0)"

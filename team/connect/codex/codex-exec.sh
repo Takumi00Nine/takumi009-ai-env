@@ -135,7 +135,7 @@ done
 
 if [ "$PROJECT_LEADER" = 1 ]; then
   [ -z "$ROLE" ] || fail_usage "--project-leader と --role は併用できません"
-  LEADER_NOTES=(absolute-rules core-conduct core-workflow coding-delegation worker-role-prompts vault-operation codex-exec-worker session-handoff project-tasks-format cmux-notifications)
+  LEADER_NOTES=(absolute-rules core-conduct core-workflow coding-delegation worker-role-prompts vault-operation codex-exec-worker session-handoff project-tasks-format)
   LEADER_PREFIX="着手前に次の文書を全文読み、従う。報告に読了文書名を載せる。"
   for note in "${LEADER_NOTES[@]}"; do
     path="$PREFERENCES_DIR/$note.md"

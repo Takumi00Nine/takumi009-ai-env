@@ -24,6 +24,9 @@ lf_mk_fx6 "$STUB"                      # 偽 launchctl・osascript・cmux（call
 export HOME="$WORK/home" PATH="$STUB:$PATH"
 mkdir -p "$HOME"
 NOTIFY_LOG="$HOME/.claude/logs/notify.tsv"
+# 本番の台帳は届け先なし（2026-11-20 本人決定＝通知は Claude アプリだけ）。配送の仕組みは経路つきの写しで確かめる。
+awk -F '\t' -v OFS='\t' '$1=="part" && $5=="cmux" {$8="call.ask"} $1=="part" && $5=="macos" {$8="call.alert,call.usage"} {print}' "$LEDGER_REAL" > "$WORK/routed.tsv"
+export AIENV_LEDGER="$WORK/routed.tsv"
 
 echo "=== 口から呼出が各届け先へ届く ==="
 rc=0
@@ -50,10 +53,16 @@ HANG_STUB="$WORK/hang-stub"; mkdir -p "$HANG_STUB"
 printf '#!/bin/bash\nsleep 30\n' > "$HANG_STUB/cmux"
 chmod +x "$HANG_STUB/cmux"
 rm -f "$STUB/calls.log" "$NOTIFY_LOG"
-awk -F '\t' -v OFS='\t' '$1=="part" && $5=="macos" {$8="call.ask"} {print}' "$LEDGER_REAL" > "$WORK/two-dest.tsv"
+awk -F '\t' -v OFS='\t' '$1=="part" && $5=="macos" {$8="call.ask"} {print}' "$WORK/routed.tsv" > "$WORK/two-dest.tsv"
 PATH="$HANG_STUB:$PATH" AIENV_LEDGER="$WORK/two-dest.tsv" AIENV_NOTIFY_WAIT_SECS=1 ZZ_DEST_LOG="$WORK/unused.log" "$NOTIFY" call ask 題 本文 >/dev/null 2>&1
 if grep -q osascript "$STUB/calls.log"; then pass "cmux 無応答でも macOS へ届く"; else fail_case "cmux 無応答でも macOS へ届く"; fi
 if grep -q cmux "$NOTIFY_LOG" && grep -q timeout "$NOTIFY_LOG"; then pass "無応答を記録して戻る"; else fail_case "無応答を記録して戻る"; fi
+
+echo "=== 本番の台帳は cmux・macOS へ送らない ==="
+rm -f "$STUB/calls.log"
+rc=0
+AIENV_LEDGER="$LEDGER_REAL" "$NOTIFY" call alert 題 本文 >/dev/null 2>&1 || rc=$?
+if [ "$rc" -ne 0 ] && ! grep -qE 'cmux notify|osascript' "$STUB/calls.log" 2>/dev/null; then pass "本番の台帳では届け先なし"; else fail_case "本番の台帳では届け先なし"; fi
 
 echo "=== summary: $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

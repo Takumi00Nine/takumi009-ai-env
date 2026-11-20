@@ -73,8 +73,8 @@ part	usage/assembly/com.takumi009.usage-fetch.plist	usage	assembly	-	-	LaunchAge
 
 # ===== Notify =====
 part	notify/executor/notify.sh	notify	executor	-	notify.send	口（呼出と応答を受ける）	-	-
-part	notify/connect/macos/deliver.sh	notify	connect	macos	-	macOS 通知の送り手	call.alert,call.usage	-
-part	notify/connect/cmux/deliver.sh	notify	connect	cmux	-	cmux 通知の送り手（CODE27 の発話は cmux 設定の連鎖）	call.ask	-
+part	notify/connect/macos/deliver.sh	notify	connect	macos	-	macOS 通知の送り手	-	-
+part	notify/connect/cmux/deliver.sh	notify	connect	cmux	-	cmux 通知の送り手（CODE27 の発話は cmux 設定の連鎖）	-	-
 part	notify/connect/code27/deliver.sh	notify	connect	code27	-	CODE27 取次の消去（応答だけ）	answer	-
 
 # ===== Dock =====
